@@ -136,24 +136,81 @@ def test_worker_instructions_do_not_reference_unsent_state() -> None:
 
 
 @pytest.mark.parametrize(
-    ("point", "question", "allowed"),
+    ("point", "question", "allowed", "expected"),
     [
-        ("D1", "clear", D1_CLEAR),
-        ("D3", "verdict", D3_VERDICT),
-        ("D4", "complexity", D4_COMPLEXITY),
-        ("D5", "action", D5_ACTION),
-        ("D6", "action", D6_ACTION),
-        ("D7", "learn", D7_LEARN),
+        (
+            "D1",
+            "clear",
+            D1_CLEAR,
+            {
+                "plan": "Plan the idea now.",
+                "ask_human": "Ask a human to clarify the idea before planning.",
+            },
+        ),
+        (
+            "D3",
+            "verdict",
+            D3_VERDICT,
+            {
+                "approve": "The plan is good enough to execute.",
+                "revise": "Send the plan back to the planner with the validator's issues.",
+                "escalate_human": "A human should decide.",
+            },
+        ),
+        (
+            "D4",
+            "complexity",
+            D4_COMPLEXITY,
+            {
+                "trivial": "A small, local change such as a rename, config tweak or one-line fix.",
+                "standard": "A typical feature or fix touching a few files.",
+                "hard": (
+                    "Cross-cutting or subtle work: many files, concurrency, security, "
+                    "migrations."
+                ),
+            },
+        ),
+        (
+            "D5",
+            "action",
+            D5_ACTION,
+            {
+                "done": "The task is complete and passed its checks.",
+                "retry": "Try again with the same worker, model and effort.",
+                "escalate": "Try again with a stronger model or more effort.",
+                "reassign": "Try again with a different worker.",
+                "human": "Stop and ask a human.",
+            },
+        ),
+        (
+            "D6",
+            "action",
+            D6_ACTION,
+            {
+                "ship": "The integrated result is ready to hand over.",
+                "fix_task": "Create a fix task for the failed tests or quality gate.",
+                "human": "Stop and ask a human.",
+            },
+        ),
+        (
+            "D7",
+            "learn",
+            D7_LEARN,
+            {
+                "learn": "Distill lessons from this run now (one extra model call).",
+                "skip": "Nothing worth learning; save the call.",
+            },
+        ),
     ],
 )
 def test_every_decision_answer_has_a_description(
-    point: str, question: str, allowed: list[str]
+    point: str, question: str, allowed: list[str], expected: dict[str, str]
 ) -> None:
-    """Ensure every request-contract answer has a non-empty description."""
+    """Ensure every request-contract answer keeps its specific description."""
     body = JevDispatcher().build_payload(point, {}, {question: allowed})
     criteria = body["questions"][question]["criteria"]
     assert list(criteria) == allowed
-    assert all(isinstance(description, str) and description for description in criteria.values())
+    assert criteria == expected
 
 
 @pytest.mark.parametrize("confidence", [float("nan"), float("inf"), float("-inf"), -0.01, 1.01])
