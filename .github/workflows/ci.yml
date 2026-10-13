@@ -33,3 +33,14 @@ jobs:
       - run: uv sync --locked --all-extras
       - run: uv run pytest
       - run: uv run jev --version
+
+  build:
+    # The wheel a release would publish: built, installed alone and run, so a packaging
+    # regression shows up on the PR, not at tag time.
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.3.0
+      - run: uv build
+      - run: uv run --isolated --no-project --with dist/*.whl jev --version
+      - run: uv run --isolated --no-project --with "$(ls dist/*.whl)[dashboard]" python -c "import jev_agent.dashboard.app"
