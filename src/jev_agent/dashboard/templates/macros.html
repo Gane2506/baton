@@ -1,5 +1,13 @@
 {% macro csrf_input() %}<input type="hidden" name="{{ csrf_field }}" value="{{ csrf }}">{% endmacro %}
 
-{% macro badge(text, cls=none) %}<span class="badge s-{{ cls if cls is not none else text }}">{{ text }}</span>{% endmacro %}
+{% macro badge(text, cls=none, live=false) %}<span class="badge{{ ' live' if live }} s-{{ cls if cls is not none else text }}">{{ text }}</span>{% endmacro %}
+
+{% macro state_badge(text) %}{{ badge(text, live=(text in ("RUNNING", "EXECUTING", "INTEGRATING", "SHIPPING"))) }}{% endmacro %}
+
+{% macro icon(name, cls="") %}<svg class="icon {{ cls }}" aria-hidden="true"><use href="#{{ name }}"></use></svg>{% endmacro %}
+
+{% macro copy_button(value, label="Copy") %}<button type="button" class="icon-btn copy" data-copy="{{ value }}" aria-label="{{ label }}">{{ icon("i-copy", "sm") }}</button>{% endmacro %}
+
+{% macro empty(title, text="", action="") %}<div class="empty">{{ icon("i-info", "") }}{% if title %}<div class="title">{{ title }}</div>{% endif %}{% if text %}<p>{{ text }}</p>{% endif %}{{ action }}</div>{% endmacro %}
 
 {% macro bars(chart, empty="No data yet.") %}{{ bar_chart_svg(chart, empty) }}{% endmacro %}

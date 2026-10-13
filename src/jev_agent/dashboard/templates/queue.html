@@ -1,73 +1,91 @@
 {% extends "base.html" %}
-{% from "macros.html" import badge, csrf_input with context %}
+{% from "macros.html" import badge, icon, csrf_input with context %}
 {% block title %}Queue{% endblock %}
 {% block content %}
-<h1>Queue</h1>
-<section class="card">
-  <h2>Scheduler</h2>
+<div class="page-head">
+  <div class="titles">
+    <h1>Queue</h1>
+    <p class="lede">Ideas waiting for <code>jev scheduler</code>, in the order it takes them.</p>
+  </div>
+</div>
+
+<section class="panel">
+  <div class="panel-head">
+    <h2>Scheduler</h2>
+    {% if q.scheduler %}{{ badge("running", live=true) }}{% else %}{{ badge("not running", "pending") }}{% endif %}
+  </div>
   {% if q.scheduler %}
-    <p>{{ badge("running") }} pid {{ q.scheduler.pid }} on <span class="mono">{{ q.scheduler.host }}</span>, since {{ q.scheduler.started_at | time }}
+    <p class="small">pid {{ q.scheduler.pid }} on <span class="mono">{{ q.scheduler.host }}</span>, since {{ q.scheduler.started_at | time }}
     {% if q.scheduler.current_item is not none %}; current item <strong>#{{ q.scheduler.current_item }}</strong>{% endif %}</p>
   {% else %}
-    <p>{{ badge("not running", "pending") }} Start it in a terminal: <code>jev scheduler start</code>.</p>
+    <p class="small muted">Start it in a terminal: <code>jev scheduler start</code>.</p>
   {% endif %}
   <p class="small muted">
-  {% for name, count in q.counts.items() %}{{ count }} {{ name }}{% if not loop.last %} · {% endif %}{% endfor %}
-  · spent today (UTC, all runs): {{ q.spent_today | usd }}</p>
+  {% for name, count in q.counts.items() %}{{ count }} {{ name }}{% if not loop.last %} / {% endif %}{% endfor %}
+  / spent today (UTC, all runs): {{ q.spent_today | usd }}</p>
 </section>
 
-<section class="card">
+<section class="panel">
   <h2>Add an idea</h2>
   <form method="post" action="/queue/add">
     {{ csrf_input() }}
-    <label class="muted small" for="idea">Idea</label>
+    <label class="muted" for="idea">Idea</label>
     <textarea id="idea" name="idea" required placeholder="What to build, in plain words"></textarea>
     <div class="form-grid">
-      <label>Priority
-        <select name="priority">{% for p in priorities %}<option value="{{ p }}"{% if p == "normal" %} selected{% endif %}>{{ p }}</option>{% endfor %}</select>
-      </label>
-      <label>Learning
-        <select name="learning">
+      <div>
+        <label for="priority">Priority</label>
+        <select id="priority" name="priority">{% for p in priorities %}<option value="{{ p }}"{% if p == "normal" %} selected{% endif %}>{{ p }}</option>{% endfor %}</select>
+      </div>
+      <div>
+        <label for="learning">Learning</label>
+        <select id="learning" name="learning">
           <option value="">repo setting</option>
           <option value="none">none (--no-learning)</option>
           {% for p in q.profiles %}<option value="{{ p.name }}">{{ p.name }} ({{ p.scope }})</option>{% endfor %}
         </select>
-      </label>
-      <label>Quality
-        <select name="quality">
+      </div>
+      <div>
+        <label for="quality">Quality</label>
+        <select id="quality" name="quality">
           <option value="">config level</option>
           {% for level in levels %}<option value="{{ level }}">{{ level }}</option>{% endfor %}
         </select>
-      </label>
-      <label>Workspace profile
-        <input type="text" name="profile" placeholder="(optional)" maxlength="80">
-      </label>
-      <label>After both votes approve
-        <select name="ship_mode">
+      </div>
+      <div>
+        <label for="profile">Workspace profile</label>
+        <input type="text" id="profile" name="profile" placeholder="(optional)" maxlength="80">
+      </div>
+      <div>
+        <label for="ship_mode">After both votes approve</label>
+        <select id="ship_mode" name="ship_mode">
           <option value="">config setting</option>
           <option value="merge">ship and merge (--auto-ship)</option>
           <option value="ask">ask me first (--ask-before-ship)</option>
         </select>
-      </label>
-      <label class="check"><input type="checkbox" name="plan_only"> plan only</label>
+      </div>
+      <div>
+        <label class="check"><input type="checkbox" name="plan_only"> plan only</label>
+      </div>
     </div>
-    <button class="primary" type="submit">Add to queue</button>
+    <button class="primary" type="submit">{{ icon("i-plus", "sm") }}Add to queue</button>
   </form>
 </section>
 
-<h2>Items</h2>
-<p class="small muted">In the order the scheduler takes them.
-{% if show_all %}<a href="/queue">Hide finished items</a>{% else %}{% if q.hidden %}{{ q.hidden }} finished item(s) hidden; {% endif %}<a href="/queue?all=1">show all</a>{% endif %}</p>
+<div class="panel-head">
+  <h2 class="section">Items</h2>
+  <p class="small muted">
+  {% if show_all %}<a href="/queue">Hide finished items</a>{% else %}{% if q.hidden %}{{ q.hidden }} finished item(s) hidden; {% endif %}<a href="/queue?all=1">show all</a>{% endif %}</p>
+</div>
 {% if q.rows %}
 <div class="table-wrap"><table>
   <thead><tr><th>id</th><th>priority</th><th>status</th><th>run</th><th>idea</th><th>flags</th><th>note</th><th>actions</th></tr></thead>
   <tbody>
   {% for r in q.rows %}
     <tr>
-      <td>{{ r.item.id }}</td>
+      <td class="mono">{{ r.item.id }}</td>
       <td>{{ r.item.priority }}</td>
       <td>{{ badge(r.status) }}</td>
-      <td class="mono small">{% if r.item.run_id %}<a href="/runs/{{ r.item.run_id }}">{{ r.item.run_id }}</a>{% else %}-{% endif %}</td>
+      <td class="mono">{% if r.item.run_id %}<a href="/runs/{{ r.item.run_id }}">{{ r.item.run_id }}</a>{% else %}-{% endif %}</td>
       <td class="wrap">{{ r.item.idea }}</td>
       <td class="small">{{ r.flags }}</td>
       <td class="wrap small">{{ r.item.note or "" }}</td>
@@ -92,6 +110,6 @@
   </tbody>
 </table></div>
 {% else %}
-<p class="muted">The queue is empty.</p>
+<div class="empty"><div class="title">The queue is empty</div><p>Add an idea above; the scheduler takes them one at a time, or run one directly with <code>jev run</code>.</p></div>
 {% endif %}
 {% endblock %}

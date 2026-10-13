@@ -16,7 +16,11 @@ os.environ["COLUMNS"] = "200"
 _UNSET_ENV = ("OPENROUTER_API_KEY", "TYPESAFE_API_KEY", "JEV_FAKE_WORKERS")
 
 # The dashboard tests need the `dashboard` extra (`uv sync --all-extras`, as CI does).
-collect_ignore = [] if find_spec("starlette") else ["unit/test_dashboard.py"]
+collect_ignore = (
+    []
+    if find_spec("starlette")
+    else ["unit/test_dashboard.py", "unit/test_dashboard_errors.py", "unit/test_dashboard_web.py"]
+)
 
 TEST_USER_CONFIG = '[dispatcher]\nprimary = "rules"\n'
 

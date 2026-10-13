@@ -1,9 +1,64 @@
 {% extends "base.html" %}
+{% from "macros.html" import csrf_input, icon with context %}
 {% block title %}Board{% endblock %}
 {% block content %}
-<h1>Board</h1>
-<p class="muted small">Queued ideas and every run by stage; updates every few seconds.
-{% if show_all %}<a href="/">Show the last 10 done runs</a>{% else %}<a href="/?all=1">Show every done run</a>{% endif %}</p>
+<div class="page-head">
+  <div class="titles">
+    <h1>Board</h1>
+    <p class="lede">Queued ideas and every run by stage; updates every few seconds.
+    {% if show_all %}<a href="/">Show the last 10 done runs</a>{% else %}<a href="/?all=1">Show every done run</a>{% endif %}</p>
+  </div>
+</div>
+
+<details class="panel">
+  <summary>Add an idea</summary>
+  <form method="post" action="/queue/add">
+    {{ csrf_input() }}
+    <label class="muted" for="idea">Idea</label>
+    <textarea id="idea" name="idea" required placeholder="What to build, in plain words"></textarea>
+    <div class="form-grid">
+      <div>
+        <label for="priority">Priority</label>
+        <select id="priority" name="priority">{% for p in priorities %}<option value="{{ p }}"{% if p == "normal" %} selected{% endif %}>{{ p }}</option>{% endfor %}</select>
+      </div>
+      <div>
+        <label for="learning">Learning</label>
+        <select id="learning" name="learning">
+          <option value="">repo setting</option>
+          <option value="none">none (--no-learning)</option>
+          {% for p in profiles %}<option value="{{ p.name }}">{{ p.name }} ({{ p.scope }})</option>{% endfor %}
+        </select>
+      </div>
+      <div>
+        <label for="quality">Quality</label>
+        <select id="quality" name="quality">
+          <option value="">config level</option>
+          {% for level in levels %}<option value="{{ level }}">{{ level }}</option>{% endfor %}
+        </select>
+      </div>
+      <div>
+        <label for="profile">Workspace profile</label>
+        <input type="text" id="profile" name="profile" placeholder="(optional)" maxlength="80">
+      </div>
+      <div>
+        <label for="ship_mode">After both votes approve</label>
+        <select id="ship_mode" name="ship_mode">
+          <option value="">config setting</option>
+          <option value="merge">ship and merge (--auto-ship)</option>
+          <option value="ask">ask me first (--ask-before-ship)</option>
+        </select>
+      </div>
+      <div>
+        <label class="check"><input type="checkbox" name="plan_only"> plan only</label>
+      </div>
+    </div>
+    <div class="actions">
+      <button type="submit" formaction="/runs/new">{{ icon("i-run", "sm") }}Run now</button>
+      <button class="primary" type="submit" formaction="/queue/add">{{ icon("i-plus", "sm") }}Add to queue</button>
+    </div>
+  </form>
+</details>
+
 <div id="board" data-live="/fragments/board{% if show_all %}?all=1{% endif %}" data-live-every="{{ refresh_ms }}">
 {% include "_board.html" %}
 </div>

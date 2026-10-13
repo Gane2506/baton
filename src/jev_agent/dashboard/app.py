@@ -14,7 +14,7 @@ from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from jinja2 import Environment, PackageLoader
 from starlette.applications import Starlette
@@ -38,8 +38,15 @@ from jev_agent.cli.board_cmds import format_age
 from jev_agent.cli.status_cmds import format_time
 from jev_agent.cli.wiring import CliError
 from jev_agent.config import ConfigError
+from jev_agent.config.schema import ShipMode
 from jev_agent.core.benchmarks import DEFAULT_LAST, format_value
-from jev_agent.core.chat import ChatError
+from jev_agent.core.chat import (
+    BACKENDS,
+    DEFAULT_BUDGET_USD,
+    BackendName,
+    ChatError,
+    ChatLearning,
+)
 from jev_agent.core.learning import (
     LearningError,
     disable_learning,
@@ -52,13 +59,15 @@ from jev_agent.core.pipeline import PipelineError, cancel_run
 from jev_agent.core.queue import Move, QueueError, add_idea, move_item, remove_item
 from jev_agent.core.ship import Gh, ShipError, ShipPlan, prepare_ship
 from jev_agent.core.store import QUEUE_PRIORITIES, NotFoundError
-from jev_agent.dashboard import views
+from jev_agent.dashboard import chat_ops, views
 from jev_agent.dashboard.render import render_bar_chart, render_markdown, render_trend_chart
 from jev_agent.dashboard.runner import (
+    ChatRunner,
     Executor,
     RunAction,
     RunLauncher,
     execute_run,
+    prepare_run,
     request_changes,
 )
 from jev_agent.dashboard.security import (
@@ -126,6 +135,7 @@ class Dashboard:
     def __init__(self, settings: DashboardSettings, launcher: RunLauncher) -> None:
         self.settings = settings
         self.launcher = launcher
+        self.chat_runner = ChatRunner()
         self.env = _environment()
         self._flash_lock = threading.Lock()
         self._flashes: dict[str, list[tuple[str, str]]] = {}
@@ -139,6 +149,10 @@ class Dashboard:
     def take_flashes(self, request: Request) -> list[tuple[str, str]]:
         with self._flash_lock:
             return self._flashes.pop(request.state.session, [])
+
+    def shutdown_jobs(self, timeout: float) -> list[str]:
+        """Cancel and join every background job (runs and chat turns), for the lifespan."""
+        return [*self.launcher.shutdown(timeout), *self.chat_runner.shutdown(timeout)]
 
     def render(
         self, request: Request, template: str, status_code: int = 200, **context: Any
@@ -163,6 +177,8 @@ class Dashboard:
                 context = build(repo)
         except ConfigError as exc:
             return self.render(request, "error.html", 500, title="Config error", message=str(exc))
+        except CliError as exc:
+            return self.render(request, "error.html", 500, title="State error", message=str(exc))
         except (NotFoundError, ChatError) as exc:
             return self.render(request, "error.html", 404, title="Not found", message=str(exc))
         return self.render(request, template, **context)
@@ -187,6 +203,7 @@ class Dashboard:
         try:
             message = await run_in_threadpool(work)
         except (
+            CliError,
             ConfigError,
             NotFoundError,
             PipelineError,
@@ -206,7 +223,13 @@ class Dashboard:
         return self.page(
             request,
             "board.html",
-            lambda repo: {"columns": views.board(repo, show_all), "show_all": show_all},
+            lambda repo: {
+                "columns": views.board(repo, show_all),
+                "show_all": show_all,
+                "priorities": QUEUE_PRIORITIES,
+                "levels": LEVELS,
+                "profiles": repo.learning.profiles(),
+            },
         )
 
     def board_fragment(self, request: Request) -> Response:
@@ -236,8 +259,11 @@ class Dashboard:
     def run_file(self, request: Request) -> Response:
         run_id = request.path_params["run_id"]
         relative = request.path_params["path"]
-        with views.open_repo(self.settings.root) as repo:
-            path = views.safe_run_file(repo, run_id, relative)
+        try:
+            with views.open_repo(self.settings.root) as repo:
+                path = views.safe_run_file(repo, run_id, relative)
+        except CliError as exc:
+            raise HTTPException(500, str(exc)) from exc
         if path is None:
             raise HTTPException(404, "no such file")
         # Served as plain text whatever the extension, so nothing in a log can run as a page.
@@ -273,18 +299,38 @@ class Dashboard:
         )
 
     def chats_page(self, request: Request) -> Response:
-        return self.page(request, "chats.html", lambda repo: {"chats": views.chats(repo)})
+        return self.page(
+            request,
+            "chats.html",
+            lambda repo: {
+                "chats": views.chats(repo),
+                "profiles": repo.learning.profiles(),
+                "backends": chat_ops.backend_readiness(repo.config),
+            },
+        )
 
-    def chat_page(self, request: Request) -> Response:
-        chat_id = request.path_params["chat_id"]
-
+    def _chat_context(self, chat_id: str) -> Callable[[views.Repo], dict[str, Any]]:
         def build(repo: views.Repo) -> dict[str, Any]:
             meta, entries = views.chat_transcript(repo, chat_id)
             if meta is None and not entries:
                 raise NotFoundError(f"no chat {chat_id}")
-            return {"chat_id": chat_id, "meta": meta, "entries": entries}
+            return {
+                "chat_id": chat_id,
+                "meta": meta,
+                "entries": entries,
+                "job": self.chat_runner.job(chat_id),
+                "busy": self.chat_runner.busy(chat_id),
+            }
 
-        return self.page(request, "chat.html", build)
+        return build
+
+    def chat_page(self, request: Request) -> Response:
+        chat_id = request.path_params["chat_id"]
+        return self.page(request, "chat.html", self._chat_context(chat_id))
+
+    def chat_fragment(self, request: Request) -> Response:
+        chat_id = request.path_params["chat_id"]
+        return self.page(request, "_chat_live.html", self._chat_context(chat_id))
 
     def spend_page(self, request: Request) -> Response:
         return self.page(request, "spend.html", lambda repo: {"s": views.spend_view(repo)})
@@ -294,7 +340,11 @@ class Dashboard:
             last = min(max(int(request.query_params.get("last", DEFAULT_LAST)), 1), 200)
         except ValueError:
             last = DEFAULT_LAST
-        return self.page(request, "kpis.html", lambda repo: {"k": views.kpi_view(repo, last)})
+        return self.page(
+            request,
+            "kpis.html",
+            lambda repo: {"k": views.kpi_view(repo, last), "rk": views.product_kpis(repo)},
+        )
 
     def settings_page(self, request: Request) -> Response:
         return self.page(
@@ -356,7 +406,7 @@ class Dashboard:
 
         try:
             problem = await run_in_threadpool(check)
-        except (NotFoundError, ConfigError) as exc:
+        except (CliError, NotFoundError, ConfigError) as exc:
             problem = str(exc)
         if problem is not None:
             self.flash(request, "error", problem)
@@ -403,7 +453,7 @@ class Dashboard:
 
         try:
             ready = await run_in_threadpool(plan)
-        except (ShipError, NotFoundError, ConfigError) as exc:
+        except (CliError, ShipError, NotFoundError, ConfigError) as exc:
             self.flash(request, "error", str(exc))
             return self.back(to)
         if form.get("confirm") != "yes":
@@ -418,6 +468,173 @@ class Dashboard:
         else:
             self.flash(request, "error", f"run {run_id} is already being worked on here")
         return self.back(to)
+
+    # ---- actions: chat and runs --------------------------------------------------------------
+
+    async def chats_new(self, request: Request) -> Response:
+        """A new browser chat: the same `core.chat` session `jev chat` starts."""
+        form = await checked_form(request)
+
+        def create() -> str:
+            with views.open_repo(self.settings.root) as repo:
+                worker = _chat_backend_name(_text(form, "worker"))
+                budget_text = _text(form, "budget_usd")
+                try:
+                    budget = DEFAULT_BUDGET_USD if not budget_text else float(budget_text)
+                except ValueError:
+                    raise ValueError("the budget must be a number of USD") from None
+                if budget <= 0:
+                    raise ValueError("the budget must be greater than zero")
+                return chat_ops.create_chat(
+                    repo.root,
+                    repo,
+                    worker,
+                    _text(form, "model") or None,
+                    _chat_learning(_text(form, "learning")),
+                    _text(form, "profile") or None,
+                    budget,
+                )
+
+        try:
+            chat_id = await run_in_threadpool(create)
+        except (ChatError, ConfigError, LearningError, ValueError) as exc:
+            self.flash(request, "error", str(exc))
+            return self.back("/chats")
+        self.flash(request, "ok", f"chat {chat_id} created; say what you want to build")
+        return self.back(f"/chats/{chat_id}")
+
+    async def chat_send(self, request: Request) -> Response:
+        chat_id: str = request.path_params["chat_id"]
+        form = await checked_form(request)
+        to = f"/chats/{chat_id}"
+        text = _text(form, "text") or ""
+        if not text:
+            self.flash(request, "error", "say something first")
+            return self.back(to)
+
+        def work() -> str:
+            return chat_ops.turn(self.settings.root, chat_id, text)
+
+        if not self.chat_runner.start(chat_id, work):
+            self.flash(request, "error", f"chat {chat_id} is already waiting for a reply")
+            return self.back(to)
+        self.flash(request, "ok", "sent; the reply appears here in a moment")
+        return self.back(to)
+
+    async def chat_brief(self, request: Request) -> Response:
+        chat_id: str = request.path_params["chat_id"]
+        await checked_form(request)
+        to = f"/chats/{chat_id}"
+
+        def work() -> str:
+            return chat_ops.brief(self.settings.root, chat_id)
+
+        if not self.chat_runner.start(chat_id, work):
+            self.flash(request, "error", f"chat {chat_id} is already waiting for a reply")
+            return self.back(to)
+        self.flash(request, "ok", "writing the brief...")
+        return self.back(to)
+
+    async def chat_start(self, request: Request) -> Response:
+        """`/plan` and `/run` from a chat: a real run, created from the chat's brief."""
+        chat_id: str = request.path_params["chat_id"]
+        form = await checked_form(request)
+        to = f"/chats/{chat_id}"
+        plan_only = (_text(form, "action") or "run") == "plan"
+
+        def start() -> str:
+            run_id = chat_ops.start_run_from_chat(self.settings.root, chat_id, plan_only=plan_only)
+            if not self.launcher.start(run_id, "start"):
+                raise PipelineError(f"run {run_id} is already being worked on here")
+            return run_id
+
+        try:
+            run_id = await run_in_threadpool(start)
+        except (
+            ChatError,
+            CliError,
+            ConfigError,
+            LearningError,
+            NotFoundError,
+            PipelineError,
+            RunInUseError,
+            ValueError,
+        ) as exc:
+            self.flash(request, "error", str(exc))
+            return self.back(to)
+        verb = "plan-only run" if plan_only else "run"
+        self.flash(request, "ok", f"{verb} {run_id} started from the chat's brief")
+        return self.back(f"/runs/{run_id}")
+
+    async def chat_queue(self, request: Request) -> Response:
+        chat_id: str = request.path_params["chat_id"]
+        form = await checked_form(request)
+        to = f"/chats/{chat_id}"
+        priority = _text(form, "priority") or "normal"
+
+        def queue() -> int:
+            return chat_ops.queue_from_chat(self.settings.root, chat_id, priority)
+
+        try:
+            item_id = await run_in_threadpool(queue)
+        except (
+            ChatError,
+            ConfigError,
+            LearningError,
+            NotFoundError,
+            QueueError,
+            ValueError,
+        ) as exc:
+            self.flash(request, "error", str(exc))
+            return self.back(to)
+        self.flash(request, "ok", f"queued item {item_id} from the chat's brief")
+        return self.back("/queue")
+
+    async def runs_new(self, request: Request) -> Response:
+        """`jev run` from the web: create the run, advance it in the background."""
+        form = await checked_form(request)
+        idea = _text(form, "idea") or ""
+        if not idea:
+            self.flash(request, "error", "an idea is required")
+            return self.back("/")
+        learning = _text(form, "learning")
+        plan_only = form.get("plan_only") == "on"
+        quality = _text(form, "quality") or None
+        profile = _text(form, "profile") or None
+        ship_choice = _text(form, "ship_mode")
+
+        def start() -> str:
+            with views.open_repo(self.settings.root) as repo:
+                mode = _ship_mode(repo, ship_choice)
+            run_id = prepare_run(
+                self.settings.root,
+                idea,
+                plan_only=plan_only,
+                learning=None if learning in (None, "", "none") else learning,
+                no_learning=learning == "none",
+                quality=quality,
+                profile=profile,
+                ship_mode=cast(ShipMode | None, mode),
+            )
+            if not self.launcher.start(run_id, "start"):
+                raise PipelineError(f"run {run_id} is already being worked on here")
+            return run_id
+
+        try:
+            run_id = await run_in_threadpool(start)
+        except (
+            CliError,
+            ConfigError,
+            LearningError,
+            PipelineError,
+            QueueError,
+            RunInUseError,
+            ValueError,
+        ) as exc:
+            self.flash(request, "error", str(exc))
+            return self.back("/")
+        self.flash(request, "ok", f"run {run_id} started; it shows on the board")
+        return self.back(f"/runs/{run_id}")
 
     # ---- actions: queue --------------------------------------------------------------------
 
@@ -501,7 +718,7 @@ class Dashboard:
 
             try:
                 lessons = await run_in_threadpool(count)
-            except LearningError as exc:
+            except (CliError, LearningError) as exc:
                 self.flash(request, "error", str(exc))
                 return self.back("/learning")
             return self.render(request, "confirm_flush.html", profile=name, lessons=lessons)
@@ -512,7 +729,7 @@ class Dashboard:
 
         try:
             deleted = await run_in_threadpool(flush)
-        except LearningError as exc:
+        except (CliError, LearningError) as exc:
             self.flash(request, "error", str(exc))
         else:
             self.flash(request, "ok", f"deleted {deleted} lesson(s) from {name}")
@@ -522,6 +739,22 @@ class Dashboard:
 def _text(form: FormData, name: str) -> str | None:
     value = form.get(name)
     return value.strip() if isinstance(value, str) else None
+
+
+def _chat_backend_name(value: str | None) -> BackendName:
+    """A form's worker value, or a `ChatError` (the form lists both backends)."""
+    if value in BACKENDS:
+        return value
+    raise ChatError("pick a chat backend: api or claude_code")
+
+
+def _chat_learning(value: str | None) -> ChatLearning:
+    """The New chat form's learning choice: empty is the repo default, "none" is off."""
+    if not value:
+        return ChatLearning()
+    if value == "none":
+        return ChatLearning(off=True)
+    return ChatLearning(profile=value)
 
 
 def _ship_mode(repo: views.Repo, value: str | None) -> str | None:
@@ -588,6 +821,7 @@ def create_app(
     routes = [
         Route("/", dash.board_page),
         Route("/fragments/board", dash.board_fragment),
+        Route("/runs/new", dash.runs_new, methods=["POST"]),
         Route("/runs/{run_id}", dash.run_page),
         Route("/runs/{run_id}/live", dash.run_fragment),
         Route("/runs/{run_id}/files/{path:path}", dash.run_file),
@@ -599,7 +833,13 @@ def create_app(
         Route("/learning", dash.learning_page),
         Route("/learning/{action}", dash.learning_action, methods=["POST"]),
         Route("/chats", dash.chats_page),
+        Route("/chats/new", dash.chats_new, methods=["POST"]),
         Route("/chats/{chat_id}", dash.chat_page),
+        Route("/chats/{chat_id}/live", dash.chat_fragment),
+        Route("/chats/{chat_id}/send", dash.chat_send, methods=["POST"]),
+        Route("/chats/{chat_id}/brief", dash.chat_brief, methods=["POST"]),
+        Route("/chats/{chat_id}/start", dash.chat_start, methods=["POST"]),
+        Route("/chats/{chat_id}/queue", dash.chat_queue, methods=["POST"]),
         Route("/spend", dash.spend_page),
         Route("/kpis", dash.kpis_page),
         Route("/settings", dash.settings_page),
@@ -619,7 +859,7 @@ def create_app(
         yield
         # The server is stopping (Ctrl-C, systemd): stop the jobs it started, so their agent
         # processes do not keep running and spending without anyone watching.
-        await run_in_threadpool(dash.launcher.shutdown, JOB_SHUTDOWN_TIMEOUT_S)
+        await run_in_threadpool(dash.shutdown_jobs, JOB_SHUTDOWN_TIMEOUT_S)
 
     app = Starlette(
         routes=routes,

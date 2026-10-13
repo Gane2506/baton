@@ -1,6 +1,13 @@
 {% extends "base.html" %}
+{% from "macros.html" import icon with context %}
 {% block title %}{{ title }}{% endblock %}
 {% block content %}
-<h1>{{ title }}</h1>
-<section class="card"><p>{{ message }}</p><p><a href="/">Back to the board</a></p></section>
+<div class="focus-page error-page">
+  <section class="panel">
+    {{ icon("i-alert", "lg") }}
+    <h1>{{ title }}</h1>
+    <p class="muted">{{ message }}</p>
+    <div class="actions"><a class="button" href="/">{{ icon("i-board", "sm") }}Back to the board</a></div>
+  </section>
+</div>
 {% endblock %}

@@ -181,6 +181,49 @@ def _learning(ctx: CliContext) -> Learning:
     return ctx.learning
 
 
+def create_run(
+    ctx: CliContext,
+    idea: str,
+    *,
+    plan_only: bool = False,
+    learning: str | None = None,
+    no_learning: bool = False,
+    quality: str | None = None,
+    profile: str | None = None,
+    ship_mode: ShipMode | None = None,
+) -> RunRecord:
+    """Create the run and record its flags, without advancing it (the front half of `jev run`;
+    `Pipeline.advance` continues it from its first state). Same errors as `start_run`.
+
+    Front ends that must show the run id at once (the dashboard, the chat) create a run this
+    way and advance it in the background.
+    """
+    workspace = effective_name(ctx.config, profile, ctx.root / STATE_DIRNAME)
+    if workspace is not None:
+        settings = get_profile(ctx.config, workspace)
+        if learning is None and not no_learning and settings.learning is not None:
+            if settings.learning is False:
+                no_learning = True
+            else:
+                learning = settings.learning
+        if quality is None and settings.quality is not None:
+            quality = settings.quality
+    level = ctx.config.quality.level if quality is None else parse_level(quality)
+    learning_profile = resolve_learning(
+        ctx.store, _learning(ctx), ctx.config, learning, no_learning
+    )
+    copy = None if workspace is None else snapshot(ctx.config, workspace)
+    run = ctx.store.create_run(
+        Idea(text=idea, repo_path=ctx.root),
+        learning_profile,
+        level,
+        plan_only=plan_only,
+        ship_mode=ship_mode,
+    )
+    write_run_profile(ctx.root / STATE_DIRNAME, run.id, copy)
+    return run
+
+
 async def start_run(
     ctx: CliContext,
     idea: str,
@@ -205,28 +248,17 @@ async def start_run(
     otherwise. ProfileError (a ValueError) for an unknown profile. `ship_mode` is what the
     run does after both votes approve at D6 (None: `[ship] after_approval`).
     """
-    workspace = effective_name(ctx.config, profile, ctx.root / STATE_DIRNAME)
-    if workspace is not None:
-        settings = get_profile(ctx.config, workspace)
-        if learning is None and not no_learning and settings.learning is not None:
-            if settings.learning is False:
-                no_learning = True
-            else:
-                learning = settings.learning
-        if quality is None and settings.quality is not None:
-            quality = settings.quality
-    level = None if quality is None else parse_level(quality)
-    learning_profile = resolve_learning(
-        ctx.store, _learning(ctx), ctx.config, learning, no_learning
-    )
-    return await ctx.pipeline.start(
-        Idea(text=idea, repo_path=ctx.root),
+    run = create_run(
+        ctx,
+        idea,
         plan_only=plan_only,
-        learning_profile=learning_profile,
-        quality=level,
-        profile=workspace,
+        learning=learning,
+        no_learning=no_learning,
+        quality=quality,
+        profile=profile,
         ship_mode=ship_mode,
     )
+    return await ctx.pipeline.advance(run.id)
 
 
 def set_run_profile(ctx: CliContext, run_id: str, profile: str | None) -> None:

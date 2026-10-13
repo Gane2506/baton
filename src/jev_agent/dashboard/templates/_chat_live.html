@@ -1,0 +1,44 @@
+{% if meta %}
+<section class="panel tight">
+  <div class="status-line">
+    <span>{{ meta.backend }}{% if meta.model %} / <span class="mono">{{ meta.model }}</span>{% endif %}</span>
+    <span>learning {{ meta.learning.describe() }}</span>
+    <span>spent <strong>{{ meta.spent_usd | usd }}</strong> of {{ meta.budget_usd | usd }}</span>
+    {% if meta.quality %}<span>quality {{ meta.quality }}</span>{% endif %}
+    <span class="faint">created {{ meta.created_at | time }}</span>
+  </div>
+  {% if meta.runs %}
+  <p class="small">Runs: {% for r in meta.runs %}<a class="mono" href="/runs/{{ r.run_id }}">{{ r.run_id }}</a> ({{ r.kind }}){% if not loop.last %}, {% endif %}{% endfor %}</p>
+  {% endif %}
+  {% if meta.queue_items %}
+  <p class="small">Queued: {% for q in meta.queue_items %}#{{ q.id }} ({{ q.priority }}){% if not loop.last %}, {% endif %}{% endfor %}</p>
+  {% endif %}
+</section>
+{% endif %}
+
+{% if job and job.state == "running" %}
+<p class="muted small">waiting for the model... (started {{ job.started_at | time }})</p>
+{% elif job and job.state == "failed" %}
+<p class="flash error">{{ job.message }}</p>
+{% elif job and job.state == "finished" %}
+<p class="muted small">{{ job.message }}</p>
+{% endif %}
+
+{% if meta and meta.brief %}
+<section class="panel">
+  <h2>Brief</h2>
+  <pre>{{ meta.brief }}</pre>
+</section>
+{% endif %}
+
+<h2 class="section">Transcript</h2>
+<section class="panel">
+{% for e in entries %}
+  <div class="turn {{ e.kind if e.kind in ('user', 'assistant') else 'other' }}">
+    <div class="who">{{ e.kind }} / {{ e.at | time }}</div>
+    <div class="body">{{ e.text }}</div>
+  </div>
+{% else %}
+<div class="empty"><div class="title">The transcript is empty</div><p>Send the first message above.</p></div>
+{% endfor %}
+</section>

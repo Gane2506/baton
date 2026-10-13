@@ -1,15 +1,67 @@
 {% extends "base.html" %}
+{% from "macros.html" import csrf_input, icon with context %}
 {% block title %}Chats{% endblock %}
 {% block content %}
-<h1>Chats</h1>
-<p class="small muted">Saved <code>jev chat</code> sessions (read-only). Start or continue one in a terminal with <code>jev chat</code>.</p>
+<div class="page-head">
+  <div class="titles">
+    <h1>Chats</h1>
+    <p class="lede">Talk an idea through in the browser, then start a run from its brief. A
+    browser chat is a normal <code>jev chat</code> session: same files, same budget, and the
+    CLI can continue it with <code>jev chat --resume</code>.</p>
+  </div>
+</div>
+
+{% set api_ok, api_note = backends["api"] %}
+{% set cc_ok, cc_note = backends["claude_code"] %}
+<section class="panel">
+  <h2>New chat</h2>
+  {% if not (api_ok or cc_ok) %}
+  <p class="flash error">{{ icon("i-alert", "sm") }}<span>No chat backend is ready: {{ api_note }}; {{ cc_note }}. Set a key or install a CLI.</span></p>
+  {% endif %}
+  <form method="post" action="/chats/new">
+    {{ csrf_input() }}
+    <div class="form-grid">
+      <div>
+        <label for="worker">Backend</label>
+        <select id="worker" name="worker">
+          <option value="api"{% if not api_ok %} disabled{% endif %}{% if api_ok %} selected{% endif %}>api (OpenRouter) - {{ api_note }}</option>
+          <option value="claude_code"{% if not cc_ok %} disabled{% endif %}{% if not api_ok and cc_ok %} selected{% endif %}>claude_code - {{ cc_note }}</option>
+        </select>
+      </div>
+      <div>
+        <label for="model">Model</label>
+        <input type="text" id="model" name="model" placeholder="worker default">
+      </div>
+      <div>
+        <label for="learning">Learning</label>
+        <select id="learning" name="learning">
+          <option value="">repo default</option>
+          <option value="none">none</option>
+          {% for p in profiles %}<option value="{{ p.name }}">{{ p.name }} ({{ p.scope }})</option>{% endfor %}
+        </select>
+      </div>
+      <div>
+        <label for="profile">Workspace profile</label>
+        <input type="text" id="profile" name="profile" placeholder="(optional)" maxlength="80">
+      </div>
+      <div>
+        <label for="budget_usd">Budget (USD)</label>
+        <input type="number" id="budget_usd" name="budget_usd" min="0.01" step="0.01" value="1.00">
+      </div>
+    </div>
+    <button class="primary" type="submit">{{ icon("i-plus", "sm") }}Create chat</button>
+    <p class="hint">The chat's spend is its own: it is capped by this budget and counts toward no run.</p>
+  </form>
+</section>
+
+<h2 class="section">Saved chats</h2>
 {% if chats %}
 <div class="table-wrap"><table>
   <thead><tr><th>chat</th><th>updated</th><th>backend</th><th>learning</th><th class="num">turns</th><th class="num">runs</th><th class="num">spent</th><th>brief</th></tr></thead>
   <tbody>
   {% for meta, title in chats %}
     <tr>
-      <td class="mono small"><a href="/chats/{{ meta.chat_id }}">{{ meta.chat_id }}</a></td>
+      <td class="mono"><a href="/chats/{{ meta.chat_id }}">{{ meta.chat_id }}</a></td>
       <td class="small">{{ meta.updated_at | time }}</td>
       <td>{{ meta.backend }}{% if meta.model %}<div class="muted small">{{ meta.model }}</div>{% endif %}</td>
       <td class="small">{{ meta.learning.describe() }}</td>
@@ -22,6 +74,6 @@
   </tbody>
 </table></div>
 {% else %}
-<p class="muted">No saved chats.</p>
+<div class="empty"><div class="title">No saved chats</div><p>Create one above, or in a terminal with <code>jev chat</code>.</p></div>
 {% endif %}
 {% endblock %}

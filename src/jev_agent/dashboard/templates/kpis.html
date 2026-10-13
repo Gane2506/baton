@@ -1,16 +1,50 @@
 {% extends "base.html" %}
-{% from "macros.html" import badge with context %}
+{% from "macros.html" import badge, icon with context %}
 {% block title %}KPIs{% endblock %}
 {% block content %}
-<h1>KPIs of shipped PRs</h1>
+<div class="page-head">
+  <div class="titles">
+    <h1>KPIs</h1>
+    <p class="lede">This repo's runs, and the pull requests <code>jev ship</code> opened.</p>
+  </div>
+</div>
+
+<h2 class="section">This repo</h2>
+<div class="stats">
+  <div class="stat"><div class="stat-label">Runs</div><div class="stat-value">{{ rk.total }}</div></div>
+  <div class="stat"><div class="stat-label">Done</div><div class="stat-value">{{ rk.done }}</div></div>
+  <div class="stat"><div class="stat-label">Stopped</div><div class="stat-value">{{ rk.stopped }}</div></div>
+  <div class="stat"><div class="stat-label">Median cost / run</div><div class="stat-value">{{ rk.median_cost_usd | usd }}</div></div>
+  <div class="stat"><div class="stat-label">Median run time</div><div class="stat-value">{{ fmt(rk.median_wall_clock_h, "hours") }}</div></div>
+  <div class="stat"><div class="stat-label">First-pass rate</div><div class="stat-value">{{ fmt(rk.median_first_pass, "percent") }}</div></div>
+  <div class="stat"><div class="stat-label">Rules fallback rate</div><div class="stat-value">{{ fmt(rk.fallback_rate, "percent") }}</div></div>
+  <div class="stat"><div class="stat-label">Quality pass rate</div><div class="stat-value">{{ fmt(rk.quality_pass_rate, "percent") }}</div></div>
+</div>
+<p class="hint">{% for name, count in rk.by_state %}{{ count }} {{ name }}{% if not loop.last %} / {% endif %}{% else %}No runs yet.{% endfor %}</p>
+{% if rk.latest %}
+<section class="panel">
+  <div class="panel-head"><h2>Latest finished run</h2><a class="small" href="/runs/{{ rk.latest.run.id }}">open run</a></div>
+  <dl class="facts">
+    <dt>Idea</dt><dd>{{ rk.latest.run.idea.text }}</dd>
+    <dt>Tasks</dt><dd>{{ rk.latest.tasks_done }} of {{ rk.latest.tasks }} done</dd>
+    <dt>Spent</dt><dd>{{ rk.latest.run.spend_usd | usd }}</dd>
+    <dt>Result branch</dt><dd><code>{{ rk.latest.branch }}</code></dd>
+    <dt>Quality</dt><dd>{{ rk.latest.quality or "-" }}</dd>
+  </dl>
+</section>
+{% endif %}
+
+<h2 class="section">Shipped PRs</h2>
 {% if not k.rows %}
-<section class="card">
-  <p>No shipped pull requests yet.</p>
-  <p>KPIs start with <code>jev ship RUN_ID</code>: it pushes a DONE run's result branch and opens
-  a GitHub pull request with your <code>gh</code> login (the run page has a <strong>Ship as PR</strong>
-  button too). <code>jev ship sync --all</code> then reads each PR's state, reviews and CI back for
-  this page and <code>jev kpi</code>.</p>
-  {% if not k.ship_enabled %}<p class="muted">Shipping is off in this repo: set <code>[ship] enabled = true</code> in jev.toml. See docs/ship.md.</p>{% endif %}
+<section class="panel">
+  <div class="empty">
+    <div class="title">No shipped pull requests yet</div>
+    <p>KPIs start with <code>jev ship RUN_ID</code>: it pushes a DONE run's result branch and opens
+    a GitHub pull request with your <code>gh</code> login (the run page has a <strong>Ship as PR</strong>
+    button too). <code>jev ship sync --all</code> then reads each PR's state, reviews and CI back for
+    this page and <code>jev kpi</code>.</p>
+  </div>
+  {% if not k.ship_enabled %}<p class="hint">Shipping is off in this repo: set <code>[ship] enabled = true</code> in jev.toml. See docs/ship.md.</p>{% endif %}
 </section>
 {% else %}
 {% set s = k.summary %}
@@ -19,27 +53,27 @@
   <div class="stat"><div class="stat-label">Median time to merge</div><div class="stat-value">{{ fmt(s.median_time_to_merge_h, "hours") }}</div></div>
   <div class="stat"><div class="stat-label">First-pass rate (median)</div><div class="stat-value">{{ fmt(s.median_first_pass_rate, "percent") }}</div></div>
   <div class="stat"><div class="stat-label">Rules fallback rate (median)</div><div class="stat-value">{{ fmt(s.median_fallback_rate, "percent") }}</div></div>
-  <div class="stat"><div class="stat-label">Merged</div><div class="stat-value">{{ fmt(s.merged_share, "percent") }} <span class="muted small">{{ s.merged }} of {{ s.prs }}</span></div></div>
+  <div class="stat"><div class="stat-label">Merged</div><div class="stat-value">{{ fmt(s.merged_share, "percent") }} <span class="unit">{{ s.merged }} of {{ s.prs }}</span></div></div>
 </div>
 
 {% if k.regressions %}
-<section class="card regressions">
-  <h2>Regressions in the latest PR</h2>
+<section class="panel alert-bad">
+  <h2>{{ icon("i-alert", "sm") }} Regressions in the latest PR</h2>
   <ul>{% for t in k.regressions %}<li>{{ t.message() }}</li>{% endfor %}</ul>
 </section>
 {% else %}
 <p class="muted small">No regressions: every KPI's latest value is within its threshold of the rolling median.</p>
 {% endif %}
 
-<h2>Shipped PRs (last {{ k.rows | length }})</h2>
+<h2 class="section">Shipped PRs (last {{ k.rows | length }})</h2>
 <div class="table-wrap"><table>
   <thead><tr><th>PR</th><th>run</th><th>title</th><th>state</th><th class="num">cost</th><th class="num">run time</th><th class="num">attempts / task</th><th class="num">first pass</th><th class="num">findings</th><th>CI</th><th class="num">merged in</th></tr></thead>
   <tbody>
   {% for row in k.rows %}
     {% set pr = row.pr %}
     <tr>
-      <td>{% if pr.url %}<a href="{{ pr.url }}" rel="noopener noreferrer">{{ row.label }}</a>{% else %}{{ row.label }}{% endif %}</td>
-      <td class="mono small"><a href="/runs/{{ pr.run_id }}">{{ pr.run_id }}</a></td>
+      <td class="nowrap">{% if pr.url %}<a href="{{ pr.url }}" rel="noopener noreferrer">{{ row.label }}</a>{% else %}{{ row.label }}{% endif %}</td>
+      <td class="mono"><a href="/runs/{{ pr.run_id }}">{{ pr.run_id }}</a></td>
       <td class="wrap">{{ pr.title }}</td>
       <td>{{ badge(pr.state, "ok" if pr.state == "merged" else ("fail" if pr.state == "closed" else "running")) }}{% if pr.reverted %} {{ badge("reverted", "fail") }}{% endif %}</td>
       <td class="num">{{ fmt(row.value("cost_usd"), "usd") }}</td>
@@ -54,12 +88,12 @@
   </tbody>
 </table></div>
 
-<h2>Trends</h2>
+<h2 class="section">Trends</h2>
 <p class="muted small">Oldest to newest over the last {{ k.last }} PRs. Solid: the value; dashed: the rolling median of 5;
-red points: worse than 1.5&times; (rates: 15 points past) the median of the PRs before.</p>
+red points: worse than 1.5x (rates: 15 points past) the median of the PRs before.</p>
 <div class="trends">
 {% for t in k.trends %}
-  <section class="card trend-card{% if t.regressed %} regressed{% endif %}">
+  <section class="panel trend-card{% if t.regressed %} regressed{% endif %}">
     <h3>{{ t.kpi.label }}{% if t.latest %} <span class="muted small">latest {{ t.kpi.format(t.latest.value) }}</span>{% endif %}</h3>
     {{ trend_chart_svg(t, "No data yet (sync with jev ship sync --all).") }}
   </section>

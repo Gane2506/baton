@@ -1,49 +1,56 @@
-{% from "macros.html" import badge, csrf_input with context %}
+{% from "macros.html" import badge, state_badge, icon, copy_button, csrf_input with context %}
 {% set run = v.run %}
-<section class="card">
-  <div class="actions">
-    {{ badge(run.state) }}
-    <span>column <strong>{{ v.column }}</strong></span>
-    <span>spent <strong>{{ run.spend_usd | usd }}</strong></span>
-    <span class="muted small">updated {{ run.updated_at | time }}</span>
+<section class="panel">
+  <div class="panel-head">
+    <div class="run-head">
+      {{ state_badge(run.state) }}
+      <span class="status-line">
+        <span>column <strong>{{ v.column }}</strong></span>
+        <span>spent <strong>{{ run.spend_usd | usd }}</strong></span>
+        <span class="faint">updated {{ run.updated_at | time }}</span>
+      </span>
+    </div>
+    <div class="run-actions">
+      {% if v.can_approve %}
+      <form class="inline" method="post" action="/runs/{{ run.id }}/approve" data-confirm="Approve this plan and start executing it?">
+        {{ csrf_input() }}<button class="primary" type="submit"{% if busy %} disabled{% endif %}>{{ icon("i-run", "sm") }}Approve and run</button>
+      </form>
+      {% endif %}
+      {% if v.can_resume and v.resume_risk %}
+      <form class="inline" method="post" action="/runs/{{ run.id }}/resume" data-confirm="Another jev process may be running this run ({{ v.resume_risk }}); resuming starts a second one on the same worktrees and can double the spend. Resume anyway?">
+        {{ csrf_input() }}<input type="hidden" name="force" value="1"><button class="danger" type="submit"{% if busy %} disabled{% endif %}>Force resume</button>
+      </form>
+      {% elif v.can_resume %}
+      <form class="inline" method="post" action="/runs/{{ run.id }}/resume" data-confirm="Resume this run from its saved state?">
+        {{ csrf_input() }}<button type="submit"{% if busy %} disabled{% endif %}>{{ icon("i-resume", "sm") }}Resume</button>
+      </form>
+      {% endif %}
+      {% if v.can_ship %}
+      <form class="inline" method="post" action="/runs/{{ run.id }}/ship">
+        {{ csrf_input() }}<button type="submit"{% if busy %} disabled{% endif %}>{{ icon("i-ship", "sm") }}Ship as PR</button>
+      </form>
+      {% endif %}
+      {% if v.can_cancel %}
+      <span class="sep"></span>
+      <form class="inline" method="post" action="/runs/{{ run.id }}/cancel" data-confirm="Cancel this run? Its branches and worktrees are kept.">
+        {{ csrf_input() }}<button class="danger" type="submit">{{ icon("i-stop", "sm") }}Cancel</button>
+      </form>
+      {% endif %}
+      {% if busy %}<span class="muted small">working in the background...</span>{% endif %}
+    </div>
   </div>
+
   {% if run.reason %}<p class="small">{{ run.reason }}</p>{% endif %}
-  {% if run.learning_outcome %}<p class="small">learning: {{ run.learning_outcome }}</p>{% endif %}
+  {% if run.learning_outcome %}<p class="small muted">learning: {{ run.learning_outcome }}</p>{% endif %}
   {% if job %}
-    <p class="small">Dashboard job: {{ job.action }} {{ badge(job.state) }}
+    <p class="small muted">Dashboard job: {{ job.action }} {{ badge(job.state) }}
       started {{ job.started_at | time }}{% if job.finished_at %}, ended {{ job.finished_at | time }}{% endif %}
       {% if job.message %}<br><span class="mono">{{ job.message }}</span>{% endif %}</p>
   {% endif %}
-  <div class="actions">
-    {% if v.can_approve %}
-    <form class="inline" method="post" action="/runs/{{ run.id }}/approve" data-confirm="Approve this plan and start executing it?">
-      {{ csrf_input() }}<button class="primary" type="submit"{% if busy %} disabled{% endif %}>Approve and run</button>
-    </form>
-    {% endif %}
-    {% if v.can_resume and v.resume_risk %}
-    <form class="inline" method="post" action="/runs/{{ run.id }}/resume" data-confirm="Another jev process may be running this run ({{ v.resume_risk }}); resuming starts a second one on the same worktrees and can double the spend. Resume anyway?">
-      {{ csrf_input() }}<input type="hidden" name="force" value="1"><button class="danger" type="submit"{% if busy %} disabled{% endif %}>Force resume</button>
-    </form>
-    {% elif v.can_resume %}
-    <form class="inline" method="post" action="/runs/{{ run.id }}/resume" data-confirm="Resume this run from its saved state?">
-      {{ csrf_input() }}<button type="submit"{% if busy %} disabled{% endif %}>Resume</button>
-    </form>
-    {% endif %}
-    {% if v.can_cancel %}
-    <form class="inline" method="post" action="/runs/{{ run.id }}/cancel" data-confirm="Cancel this run? Its branches and worktrees are kept.">
-      {{ csrf_input() }}<button class="danger" type="submit">Cancel</button>
-    </form>
-    {% endif %}
-    {% if v.can_ship %}
-    <form class="inline" method="post" action="/runs/{{ run.id }}/ship">
-      {{ csrf_input() }}<button type="submit"{% if busy %} disabled{% endif %}>Ship as PR</button>
-    </form>
-    {% endif %}
-    {% if busy %}<span class="muted small">working in the background...</span>{% endif %}
-  </div>
+
   {% if v.ship_preview %}{% set p = v.ship_preview %}
   <h3>Ready to ship: your call</h3>
-  <dl class="small">
+  <dl class="facts small">
     <dt>PR title</dt><dd>{{ p.title }}</dd>
     <dt>branch</dt><dd><code>{{ p.branch }}</code></dd>
     {% if p.diff %}<dt>diff</dt><dd>{{ p.diff.files }} files, +{{ p.diff.additions }} / -{{ p.diff.deletions }}</dd>{% endif %}
@@ -59,15 +66,12 @@
   </div>
   <form method="post" action="/runs/{{ run.id }}/modify">
     {{ csrf_input() }}
-    <label>Ask for changes (a new task for the coder; the votes run again)
-      <textarea name="notes" rows="3" maxlength="4000" required></textarea>
-    </label>
-    <button type="submit"{% if busy %} disabled{% endif %}>Modify</button>
+    <label for="notes">Ask for changes (a new task for the coder; the votes run again)</label>
+    <textarea id="notes" name="notes" rows="3" maxlength="4000" required></textarea>
+    <div class="actions"><button type="submit"{% if busy %} disabled{% endif %}>{{ icon("i-modify", "sm") }}Modify</button></div>
   </form>
   {% endif %}
-  {% if v.can_resume and v.resume_risk %}
-  <p class="small">Possibly still running: {{ v.resume_risk }}. Another jev process may be running this run; resuming starts a second one. Resume only if that process is gone.</p>
-  {% endif %}
+
   {% if v.shipped %}
   <p class="small">Pull request{{ "s" if v.shipped | length > 1 }}:
     {% for pr in v.shipped %}
@@ -78,21 +82,25 @@
   {% elif v.ship_enabled and v.ship_note and run.state == "DONE" %}
   <p class="small muted">Ship as PR: {{ v.ship_note }}</p>
   {% endif %}
+
+  {% if v.can_resume and v.resume_risk %}
+  <p class="small muted">Possibly still running: {{ v.resume_risk }}. Another jev process may be running this run; resuming starts a second one. Resume only if that process is gone.</p>
+  {% endif %}
 </section>
 
-<h2>Tasks</h2>
+<h2 class="section">Tasks</h2>
 {% if v.tasks %}
 <div class="table-wrap"><table>
-  <thead><tr><th>task</th><th>title</th><th>state</th><th>tries</th><th>worker</th><th>model</th><th>effort</th><th class="num">spent</th><th>note</th></tr></thead>
+  <thead><tr><th>task</th><th>title</th><th>state</th><th class="num">tries</th><th>worker</th><th>model</th><th>effort</th><th class="num">spent</th><th>note</th></tr></thead>
   <tbody>
   {% for t in v.tasks %}
     <tr>
-      <td>{{ t.id }}</td>
+      <td class="mono">{{ t.id }}</td>
       <td class="wrap">{{ t.card.title }}</td>
-      <td>{{ badge(t.state) }}</td>
-      <td>{{ t.attempts }}</td>
+      <td>{{ state_badge(t.state) }}</td>
+      <td class="num">{{ t.attempts }}</td>
       <td>{{ t.worker or "-" }}</td>
-      <td class="small">{{ t.model or "-" }}</td>
+      <td class="mono small">{{ t.model or "-" }}</td>
       <td>{{ t.effort or "-" }}</td>
       <td class="num">{{ t.spend_usd | usd }}</td>
       <td class="wrap small">{{ (t.note or "").splitlines()[0] if t.note else "" }}</td>
@@ -100,4 +108,6 @@
   {% endfor %}
   </tbody>
 </table></div>
-{% else %}<p class="muted">No tasks yet (the plan is not ready).</p>{% endif %}
+{% else %}
+<div class="empty"><div class="title">No tasks yet</div><p>The plan is not ready.</p></div>
+{% endif %}

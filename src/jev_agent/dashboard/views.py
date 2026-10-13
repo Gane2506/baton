@@ -9,6 +9,9 @@ from __future__ import annotations
 
 import os
 import re
+import sqlite3
+import statistics
+from collections import Counter
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -22,15 +25,16 @@ from jev_agent.cli.quality_cmds import review_text
 from jev_agent.cli.queue_cmds import item_flags
 from jev_agent.cli.status_cmds import format_answers, learning_line, quality_line
 from jev_agent.cli.text import short
-from jev_agent.cli.wiring import FAKE_WORKERS_ENV, STATE_DB_FILENAME
+from jev_agent.cli.wiring import FAKE_WORKERS_ENV, STATE_DB_FILENAME, CliError
 from jev_agent.config import STATE_DIRNAME, JevConfig, load_config
 from jev_agent.core.benchmarks import DEFAULT_LAST, Summary, Trend, summarize, trends
 from jev_agent.core.chat import ChatMeta, list_chats, read_transcript
 from jev_agent.core.harness import DEFAULT_TIMEOUT_S
-from jev_agent.core.kpi import PrKpis, load_pr_kpis
+from jev_agent.core.kpi import PrKpis, compute_run_kpis, load_pr_kpis
 from jev_agent.core.learning import Learning, LearningStatus, Lesson, Profile, learning_status
 from jev_agent.core.lease import describe_holder, live_holder
-from jev_agent.core.models import RunState
+from jev_agent.core.migrations import SchemaVersionError
+from jev_agent.core.models import RunState, TaskState
 from jev_agent.core.pipeline import STOPPED
 from jev_agent.core.queue import effective_status, queue_counts, run_states
 from jev_agent.core.scheduler import LockInfo, scheduler_lock, spent_today
@@ -68,14 +72,24 @@ class Repo:
 
 @contextmanager
 def open_repo(root: Path) -> Iterator[Repo]:
-    """Config, store and learning profiles for one request (the same files as the CLI)."""
+    """Config, store and learning profiles for one request (the same files as the CLI).
+
+    A state database this jev cannot read (written by a newer jev, or corrupt) becomes a
+    `CliError` with its message, like the CLI's own commands (issue #25), so the dashboard
+    renders a readable error page instead of a bare 500.
+    """
     config = load_config(root)
-    with Store.open(root / STATE_DIRNAME / STATE_DB_FILENAME) as store:
-        learning = Learning.for_store(store)
-        try:
-            yield Repo(root, config, store, learning)
-        finally:
-            learning.close()
+    try:
+        with Store.open(root / STATE_DIRNAME / STATE_DB_FILENAME) as store:
+            learning = Learning.for_store(store)
+            try:
+                yield Repo(root, config, store, learning)
+            finally:
+                learning.close()
+    except SchemaVersionError as exc:
+        raise CliError(str(exc)) from exc
+    except sqlite3.DatabaseError as exc:
+        raise CliError(f"cannot read the state database: {exc}") from exc
 
 
 def valid_run_id(run_id: str) -> bool:
@@ -90,6 +104,7 @@ class BoardCard:
     card: Card
     run_id: str | None  # None for queue items
     quality: str  # short gate status ("basic: passed"), or ""
+    item_id: int | None = None  # the queue item's id, for the board's Remove button
 
 
 def quality_badge(run: RunRecord, reports: list[QualityReportRecord]) -> str:
@@ -107,16 +122,18 @@ def quality_badge(run: RunRecord, reports: list[QualityReportRecord]) -> str:
 
 
 def board(repo: Repo, show_all: bool = False) -> list[tuple[str, list[BoardCard]]]:
-    """`jev board`'s columns, with each run card's quality status."""
+    """`jev board`'s columns, with each run card's quality status; queue cards carry their
+    item id so the board can remove them."""
     columns = load_board(repo.store, datetime.now(UTC), show_all=show_all, title_width=90)
     runs = {r.id: r for r in repo.store.list_runs()}
+    queue_ids = {f"queue #{item.id}": item.id for item in repo.store.list_queue()}
     out: list[tuple[str, list[BoardCard]]] = []
     for name in COLUMNS:
         cards: list[BoardCard] = []
         for card in columns[name]:
             run = runs.get(card.ref)
             if run is None:
-                cards.append(BoardCard(card, None, ""))
+                cards.append(BoardCard(card, None, "", queue_ids.get(card.ref)))
                 continue
             reports = repo.store.list_quality_reports(run.id)
             cards.append(BoardCard(card, run.id, quality_badge(run, reports)))
@@ -450,6 +467,92 @@ def chats(repo: Repo) -> list[tuple[ChatMeta, str]]:
     return [
         (meta, short(meta.brief or "", 70) if meta.brief else "") for meta in list_chats(repo.root)
     ]
+
+
+# ---- repo KPIs ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class LatestRun:
+    run: RunRecord
+    tasks_done: int
+    tasks: int
+    branch: str
+    quality: str
+
+
+@dataclass(frozen=True)
+class RepoKpis:
+    """The repo's own KPIs from every run (the KPIs page's "This repo" section)."""
+
+    total: int
+    done: int
+    stopped: int
+    by_state: list[tuple[str, int]]
+    median_cost_usd: float | None
+    median_wall_clock_h: float | None
+    median_first_pass: float | None
+    fallback_rate: float | None
+    quality_pass_rate: float | None
+    latest: LatestRun | None
+
+
+def product_kpis(repo: Repo) -> RepoKpis:
+    """Aggregates over all of the repo's runs; the PR KPIs (`jev kpi`) are a separate view."""
+    runs = repo.store.list_runs()
+    done = [r for r in runs if r.state is RunState.DONE]
+    stopped_states = {
+        RunState.NEEDS_HUMAN,
+        RunState.FAILED,
+        RunState.BUDGET_EXCEEDED,
+        RunState.CANCELLED,
+    }
+
+    def median(values: list[float]) -> float | None:
+        return float(statistics.median(values)) if values else None
+
+    first_pass: list[float] = []
+    for run in done:
+        value = compute_run_kpis(repo.store, run.id).first_pass_rate
+        if value is not None:
+            first_pass.append(float(value))
+    asked = fallbacks = 0
+    for run in runs:
+        for decision in repo.store.list_decisions(run.id):
+            asked += 1
+            fallbacks += 1 if decision.fallback_reason else 0
+    quality_runs = [r for r in runs if r.quality_level != "none"]
+    quality_ok = sum(
+        1
+        for r in quality_runs
+        if quality_badge(r, repo.store.list_quality_reports(r.id)).endswith("passed")
+    )
+    latest = None
+    if done:
+        newest = max(done, key=lambda r: r.updated_at)
+        tasks = repo.store.list_tasks(newest.id)
+        latest = LatestRun(
+            newest,
+            sum(1 for t in tasks if t.state is TaskState.DONE),
+            len(tasks),
+            result_branch(newest.id),
+            quality_badge(newest, repo.store.list_quality_reports(newest.id)),
+        )
+    counts = Counter(str(r.state) for r in runs)
+    return RepoKpis(
+        total=len(runs),
+        done=len(done),
+        stopped=sum(1 for r in runs if r.state in stopped_states),
+        by_state=sorted(counts.items(), key=lambda item: (-item[1], item[0])),
+        median_cost_usd=median([r.spend_usd for r in runs]),
+        median_wall_clock_h=median(
+            [(r.updated_at - r.created_at).total_seconds() / 3600 for r in runs]
+        ),
+        median_first_pass=median(first_pass),
+        fallback_rate=(fallbacks / asked) if asked else None,
+        quality_pass_rate=(quality_ok / len(quality_runs)) if quality_runs else None,
+        latest=latest,
+    )
 
 
 def chat_transcript(repo: Repo, chat_id: str) -> tuple[ChatMeta | None, list[dict[str, Any]]]:

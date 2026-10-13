@@ -1,10 +1,16 @@
 {% extends "base.html" %}
-{% from "macros.html" import badge with context %}
+{% from "macros.html" import badge, state_badge, icon, copy_button with context %}
 {% set run = v.run %}
 {% block title %}Run {{ run.id }}{% endblock %}
 {% block content %}
-<h1>Run <span class="mono">{{ run.id }}</span></h1>
-<section class="card">
+<div class="crumbs"><a href="/">Board</a>{{ icon("i-right", "sm") }}<span>run</span></div>
+<div class="page-head">
+  <div class="titles">
+    <h1 class="run-head"><span class="id">{{ run.id }}</span>{{ copy_button(run.id, "Copy run id") }}</h1>
+  </div>
+</div>
+
+<section class="panel">
   <dl class="facts">
     <dt>Idea</dt><dd>{{ run.idea.text }}</dd>
     {% if run.plan %}<dt>Plan (round {{ run.plan_round }})</dt><dd>{{ run.plan.summary }}</dd>{% endif %}
@@ -17,7 +23,7 @@
     {% endif %}
     <dt>Learning</dt><dd>{{ v.learning }}</dd>
     <dt>Quality</dt><dd>{{ v.quality }}</dd>
-    <dt>Result branch</dt><dd>{% if v.branch %}<code>{{ v.branch }}</code>{% else %}<span class="muted">none yet (made at integration)</span>{% endif %}</dd>
+    <dt>Result branch</dt><dd>{% if v.branch %}<code>{{ v.branch }}</code>{{ copy_button(v.branch, "Copy branch name") }}{% else %}<span class="muted">none yet (made at integration)</span>{% endif %}</dd>
     <dt>Created</dt><dd>{{ run.created_at | time }}</dd>
   </dl>
 </section>
@@ -26,14 +32,14 @@
 {% include "_run_live.html" %}
 </div>
 
-<h2>Decisions</h2>
+<h2 class="section">Decisions</h2>
 {% if v.decisions %}
 <div class="table-wrap"><table>
   <thead><tr><th>time</th><th>point</th><th>scope</th><th>dispatcher</th><th>answers (Jev confidence, Laya margin)</th><th>fallback reason</th><th class="num">cost</th><th class="num">latency</th></tr></thead>
   <tbody>
   {% for d in v.decisions %}
     <tr>
-      <td class="mono small">{{ d.at | time }}</td>
+      <td class="mono">{{ d.at | time }}</td>
       <td>{{ d.point }}</td>
       <td>{{ d.scope }}</td>
       <td>{{ d.dispatcher }}{% if d.model %}<div class="muted small">{{ d.model }}</div>{% endif %}</td>
@@ -45,21 +51,23 @@
   {% endfor %}
   </tbody>
 </table></div>
-{% else %}<p class="muted">No decisions yet.</p>{% endif %}
+{% else %}
+<div class="empty"><div class="title">No decisions yet</div><p>They appear here as the run moves through D1 to D8.</p></div>
+{% endif %}
 
-<h2>Attempts</h2>
+<h2 class="section">Attempts</h2>
 {% if v.attempts %}
 <div class="table-wrap"><table>
   <thead><tr><th>time</th><th>role</th><th>scope</th><th>#</th><th>worker</th><th>model</th><th>effort</th><th>status</th><th class="num">cost</th><th>lessons</th><th>log</th></tr></thead>
   <tbody>
   {% for a in v.attempts %}
     <tr>
-      <td class="mono small">{{ a.record.started_at | time }}</td>
+      <td class="mono">{{ a.record.started_at | time }}</td>
       <td>{{ a.record.role }}</td>
       <td>{{ a.record.task_id or "run" }}</td>
-      <td>{{ a.record.attempt_no }}</td>
+      <td class="num">{{ a.record.attempt_no }}</td>
       <td>{{ a.record.worker }}</td>
-      <td class="small">{{ a.record.model or "default" }}</td>
+      <td class="mono small">{{ a.record.model or "default" }}</td>
       <td>{{ a.record.effort or "default" }}</td>
       <td>{{ badge(a.status, "ok" if a.status == "success" else ("running" if a.status == "running" else "fail")) }}</td>
       <td class="num">{{ a.cost_usd | usd }}</td>
@@ -69,17 +77,25 @@
   {% endfor %}
   </tbody>
 </table></div>
-{% else %}<p class="muted">No attempts yet.</p>{% endif %}
+{% else %}
+<div class="empty"><div class="title">No attempts yet</div><p>Worker calls appear here with their model, effort, cost and log.</p></div>
+{% endif %}
 
-<h2 id="quality-review">Quality review</h2>
+<h2 class="section" id="quality-review">Quality review</h2>
 {% if v.review_html %}
 <section class="card markdown">{{ v.review_html }}</section>
-{% else %}<p class="muted">No quality gate has run for this run (level {{ run.quality_level }}).</p>{% endif %}
+{% else %}
+<div class="empty"><div class="title">No quality gate has run for this run</div><p>Level: {{ run.quality_level }}. Set <code>[quality] level</code> or pass <code>--quality</code> to gate work with checks and an AI review.</p></div>
+{% endif %}
 
-<h2>Files</h2>
+<h2 class="section">Files</h2>
 {% if v.files %}
-<ul class="small mono">
-{% for f in v.files %}<li><a href="/runs/{{ run.id }}/files/{{ f.path }}">{{ f.path }}</a> <span class="muted">({{ f.size }} bytes)</span></li>{% endfor %}
-</ul>
-{% else %}<p class="muted">No log files under <code>.jev/runs/{{ run.id }}/</code>.</p>{% endif %}
+<section class="panel"><ul class="log-list">
+{% for f in v.files %}
+  <li>{{ icon("i-log", "sm") }}<a class="name" href="/runs/{{ run.id }}/files/{{ f.path }}">{{ f.path }}</a><span class="size">{{ f.size }} B</span>{{ copy_button(f.path, "Copy file path") }}</li>
+{% endfor %}
+</ul></section>
+{% else %}
+<div class="empty"><div class="title">No log files</div><p>Nothing under <code>.jev/runs/{{ run.id }}/</code> yet.</p></div>
+{% endif %}
 {% endblock %}

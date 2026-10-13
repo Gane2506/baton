@@ -25,14 +25,15 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal, TypeVar
 
-from jev_agent.cli.run_cmds import approve_run, resume_run
+from jev_agent.cli.run_cmds import approve_run, create_run, resume_run
 from jev_agent.cli.ship_cmds import describe_pr
 from jev_agent.cli.wiring import NO_WORKERS_MESSAGE, open_cli_context, open_repo
+from jev_agent.config.schema import ShipMode
 from jev_agent.core.pipeline import PipelineError
 from jev_agent.core.ship import Gh, prepare_ship
 from jev_agent.core.ship import execute_ship as ship_now
 
-RunAction = Literal["approve", "resume", "ship", "stop"]
+RunAction = Literal["approve", "resume", "ship", "stop", "start"]
 JobState = Literal["running", "finished", "failed"]
 
 # (repo root, run id, action) -> a one-line outcome; raises on failure. Blocking.
@@ -110,7 +111,11 @@ def execute_run(root: Path, run_id: str, action: RunAction) -> str:
     if action == "ship":
         return execute_ship(root, run_id)
     with open_cli_context(root) as ctx:
-        if action == "approve":
+        if action == "start":
+            if not ctx.has_workers:
+                raise PipelineError(NO_WORKERS_MESSAGE)
+            record = run_job_coroutine(ctx.pipeline.advance(run_id))
+        elif action == "approve":
             record = run_job_coroutine(approve_run(ctx, run_id))
         elif action == "stop":
             record = run_job_coroutine(ctx.pipeline.stop_ship(run_id))
@@ -121,6 +126,36 @@ def execute_run(root: Path, run_id: str, action: RunAction) -> str:
         warnings = ctx.warnings if ctx.has_workers else []  # as `jev approve` / `resume` show
     outcome = f"run {record.state}" + (f": {record.reason}" if record.reason else "")
     return "; ".join([outcome, *(f"warning: {w}" for w in warnings)])
+
+
+def prepare_run(
+    root: Path,
+    idea: str,
+    *,
+    plan_only: bool = False,
+    learning: str | None = None,
+    no_learning: bool = False,
+    quality: str | None = None,
+    profile: str | None = None,
+    ship_mode: ShipMode | None = None,
+) -> str:
+    """Create a run exactly as `jev run` would (`cli.run_cmds.create_run` records its flags),
+    without advancing it: the caller starts a `start` job so the request stays fast. Returns
+    the run id. Same errors as `jev run` (CliError, LearningError, ValueError, PipelineError)."""
+    with open_cli_context(root) as ctx:
+        if not ctx.has_workers:
+            raise PipelineError(NO_WORKERS_MESSAGE)
+        run = create_run(
+            ctx,
+            idea,
+            plan_only=plan_only,
+            learning=learning,
+            no_learning=no_learning,
+            quality=quality,
+            profile=profile,
+            ship_mode=ship_mode,
+        )
+    return run.id
 
 
 @dataclass
@@ -218,3 +253,100 @@ class RunLauncher:
         if thread is not None:
             thread.join(timeout)
         return self.job(run_id)
+
+
+@dataclass
+class ChatJob:
+    chat_id: str
+    started_at: datetime
+    state: JobState = "running"
+    message: str = ""
+    finished_at: datetime | None = None
+
+
+class ChatRunner:
+    """Background chat turns, at most one per chat id (the shape of `RunLauncher`).
+
+    The work is a plain callable (a `dashboard.chat_ops` turn); it runs
+    `run_job_coroutine` inside, so `shutdown` can cancel a model call waiting on the network.
+    """
+
+    def __init__(self) -> None:
+        self._guard = threading.Lock()
+        self._locks: dict[str, threading.Lock] = {}
+        self._jobs: dict[str, ChatJob] = {}
+        self._threads: dict[str, threading.Thread] = {}
+        self._cancels: dict[str, _Cancel] = {}
+
+    def _lock_for(self, chat_id: str) -> threading.Lock:
+        with self._guard:
+            return self._locks.setdefault(chat_id, threading.Lock())
+
+    def busy(self, chat_id: str) -> bool:
+        return self._lock_for(chat_id).locked()
+
+    def start(self, chat_id: str, work: Callable[[], str]) -> bool:
+        """Run `work` in a thread; False when this chat already has a turn going."""
+        lock = self._lock_for(chat_id)
+        if not lock.acquire(blocking=False):
+            return False
+        job = ChatJob(chat_id, datetime.now(UTC))
+        cancel = _Cancel()
+        thread = threading.Thread(
+            target=self._work,
+            args=(job, lock, cancel, work),
+            name=f"jev-chat-{chat_id}",
+        )
+        with self._guard:
+            self._jobs[chat_id] = job
+            self._threads[chat_id] = thread
+            self._cancels[chat_id] = cancel
+        try:
+            thread.start()
+        except BaseException:
+            lock.release()
+            raise
+        return True
+
+    def _work(
+        self, job: ChatJob, lock: threading.Lock, cancel: _Cancel, work: Callable[[], str]
+    ) -> None:
+        _current_job.set(cancel)
+        try:
+            job.message = work()
+            job.state = "finished"
+        except asyncio.CancelledError:  # `shutdown` cancelled it
+            job.message = STOPPED_MESSAGE
+            job.state = "failed"
+        except Exception as exc:  # shown on the chat page; the transcript keeps its state
+            job.message = str(exc) or type(exc).__name__
+            job.state = "failed"
+        finally:
+            job.finished_at = datetime.now(UTC)
+            lock.release()
+
+    def shutdown(self, timeout: float = 30.0) -> list[str]:
+        """Cancel every running turn and wait for its thread (see `RunLauncher.shutdown`)."""
+        with self._guard:
+            running = [
+                (chat_id, thread, self._cancels[chat_id])
+                for chat_id, thread in self._threads.items()
+                if thread.is_alive()
+            ]
+        for _, _, cancel in running:
+            cancel.cancel()
+        for _, thread, _ in running:
+            thread.join(timeout)
+        return [chat_id for chat_id, thread, _ in running if thread.is_alive()]
+
+    def job(self, chat_id: str) -> ChatJob | None:
+        with self._guard:
+            return self._jobs.get(chat_id)
+
+    def wait(self, chat_id: str, timeout: float = 30.0) -> ChatJob | None:
+        """Block until the chat's current turn ends (tests, shutdown)."""
+        with self._guard:
+            thread = self._threads.get(chat_id)
+        if thread is not None:
+            thread.join(timeout)
+        return self.job(chat_id)
