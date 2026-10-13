@@ -49,7 +49,7 @@ No model calls, logins, or paid requests were made.
   - `429`: rate limited.
   - `529`: overloaded.
   The docs say to retry 429 and 529 with exponential backoff, and that the SDKs honor `retry-after`. The exact JSON error body schema is **UNVERIFIED**; the docs only say it "details the offending field".
-- The local script `/Users/ganesh/.jev/jev_route.py` matches the docs:
+- A local reference client script (`jev_route.py`) matches the docs:
   - It sends POST `/v1/systemone` with a Bearer key from `TYPESAFE_API_KEY`, `model: "jev-latest"`, one `choice` whose `criteria` is a dict of agent name to description string (9 entries), and one `noul` without criteria.
   - It reads `answers[x].choice`, `.confidence`, `.probabilities` and `answers[y].noul`, plus `usage.input_tokens` and `usage.output_tokens`.
   - Its 60 s timeout is generous. The SDK default is 10 s (https://docs.typesafe.ai/sdk/python/api/constants.md).

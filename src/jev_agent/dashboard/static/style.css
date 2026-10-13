@@ -57,7 +57,15 @@ header.top {
   background: var(--surface);
   border-bottom: 1px solid var(--border);
 }
-header.top .brand { font-weight: 700; text-decoration: none; color: var(--text); }
+header.top .brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 700;
+  text-decoration: none;
+  color: var(--text);
+}
+header.top .brand img { display: block; width: 24px; height: 24px; }
 header.top .brand small { color: var(--muted); font-weight: 400; }
 header.top nav { display: flex; flex-wrap: wrap; gap: 2px 4px; }
 header.top nav a {

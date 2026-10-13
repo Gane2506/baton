@@ -16,6 +16,10 @@ All notable changes to this project are documented here. The format is based on
   transcripts, spend per run and per day, and read-only settings with `jev doctor`. Binds
   127.0.0.1; any other host requires a token. CSRF-protected POST actions, strict CSP, no
   CDNs. See [docs/dashboard.md](docs/dashboard.md).
+- **Logo, dashboard screenshots.** A Baton mark and wordmark (`docs/images/`, light and dark),
+  a social preview image, the mark as the dashboard favicon and header logo, and dashboard
+  screenshots in the README and docs/dashboard.md, generated from illustrative demo data by
+  `examples/demo/seed_demo.py`.
 
 ### Changed
 

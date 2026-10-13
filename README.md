@@ -1,6 +1,12 @@
 <div align="center">
 
-<h1>Baton Agent Orchestrator</h1>
+<h1>
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/images/logo-wordmark-dark.svg">
+    <source media="(prefers-color-scheme: light)" srcset="docs/images/logo-wordmark-light.svg">
+    <img alt="Baton Agent Orchestrator" src="docs/images/logo-wordmark-light.svg" width="360">
+  </picture>
+</h1>
 
 <p><strong>Idea → reviewed, tested code. Jev dispatches the agents.</strong></p>
 
@@ -30,6 +36,10 @@
   <a href="docs/security.md">Security</a> ·
   <a href="CHANGELOG.md">Changelog</a> ·
   <a href="PLAN.md#14-roadmap-after-v01">Roadmap</a>
+</p>
+
+<p>
+  <img alt="The jev dashboard board: queued ideas and runs in Backlog, Planning, Awaiting approval, Running, Done and Blocked columns" src="docs/images/dashboard-board.png" width="900">
 </p>
 
 </div>
@@ -446,6 +456,19 @@ jev dashboard              # http://127.0.0.1:8765/, opens a browser (--no-open 
 - **Queue** (add, reorder, remove; scheduler status), **Learning** (profiles and lessons),
   **Chats** (read-only transcripts), **Spend** (per run and per day) and **Settings**
   (effective config, env var names, `jev doctor`).
+
+<table>
+  <tr>
+    <td width="50%"><img alt="Run detail page with tasks, Jev decisions and confidences" src="docs/images/dashboard-run.png"><br><sub><b>Run</b>: tasks, the decision timeline with Jev's confidences and a rules fallback, attempts.</sub></td>
+    <td width="50%"><img alt="Queue page with scheduler status and queued ideas" src="docs/images/dashboard-queue.png"><br><sub><b>Queue</b>: scheduler status, add an idea, reorder and remove items.</sub></td>
+  </tr>
+  <tr>
+    <td><img alt="Learning page with profiles and lessons" src="docs/images/dashboard-learning.png"><br><sub><b>Learning</b>: profiles and the lessons distilled from past runs.</sub></td>
+    <td><img alt="Spend page with per-day and per-run bar charts" src="docs/images/dashboard-spend.png"><br><sub><b>Spend</b>: per day and the costliest runs.</sub></td>
+  </tr>
+</table>
+
+<sub>Screenshots use illustrative demo data (<a href="examples/demo/seed_demo.py">examples/demo/seed_demo.py</a>); see <a href="docs/dashboard.md#screenshots">docs/dashboard.md</a>.</sub>
 
 It listens on 127.0.0.1 only. On a VPS keep it that way and use an SSH tunnel
 (`ssh -L 8765:127.0.0.1:8765 host`). Any other `--host` requires a token, which jev generates

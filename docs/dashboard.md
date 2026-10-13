@@ -41,6 +41,8 @@ with `jev resume <run>` (or the Resume button).
 
 ## Pages
 
+![The Board page](images/dashboard-board.png)
+
 - **Board** (`/`): the `jev board` columns (Backlog, Planning, Awaiting approval, Running, Done,
   Blocked). Cards show the idea, run id, current task and its state, spend, age and the quality
   gate status. Refreshes every few seconds. `?all=1` shows every done run.
@@ -79,6 +81,14 @@ Pages follow your OS light/dark setting and work on narrow screens. Nothing is l
 other origins: no CDN, no web fonts, no analytics. The only script is a small vendored
 `static/live.js` for the live regions and confirmation prompts; without JavaScript every page
 still works (reload to refresh).
+
+| Run | Queue |
+| --- | --- |
+| ![Run detail](images/dashboard-run.png) | ![Queue](images/dashboard-queue.png) |
+| **Learning** | **Spend** |
+| ![Learning](images/dashboard-learning.png) | ![Spend](images/dashboard-spend.png) |
+
+The Board in dark mode: [images/dashboard-board-dark.png](images/dashboard-board-dark.png).
 
 ## Security
 
@@ -128,3 +138,38 @@ ssh -L 8765:127.0.0.1:8765 user@host
 The traffic is encrypted by SSH, nothing listens on a public interface, and no token is
 needed. If you must bind a public address, use a long token, a firewall rule limiting who can
 connect, and preferably a TLS reverse proxy.
+
+## Screenshots
+
+The images above use made-up demo data, written straight into a scratch repo's `.jev/` by
+[`examples/demo/seed_demo.py`](../examples/demo/seed_demo.py); no agent or model runs. To
+regenerate them from a clone of this repo (macOS paths; any Chrome or Chromium works):
+
+```bash
+DEMO=$(mktemp -d /tmp/baton-demo.XXXX)
+cp -R examples/sample-repo/. "$DEMO"/
+git -C "$DEMO" init -q && git -C "$DEMO" add -A
+git -C "$DEMO" -c user.name=demo -c user.email=demo@example.com commit -qm "sample"
+(cd "$DEMO" && uv run --project "$OLDPWD" --all-extras jev init)
+sed -i '' 's/^primary = "jev"  /primary = "rules"/' "$DEMO/jev.toml"
+export XDG_DATA_HOME="$DEMO/.xdg"   # keep your own shared learning profiles out of the shots
+uv run --all-extras python examples/demo/seed_demo.py "$DEMO"
+(cd "$DEMO" && uv run --project "$OLDPWD" --all-extras jev dashboard --no-open --port 8799) &
+
+CHROME="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+shot() {  # shot WIDTH HEIGHT OUT.png PATH [light=1|dark=0]
+  profile=$(mktemp -d)   # a throwaway profile: never your own
+  "$CHROME" --headless=new --disable-gpu --hide-scrollbars --user-data-dir="$profile" \
+    --blink-settings=preferredColorScheme="${5:-1}" --window-size="$1,$2" \
+    --screenshot="$3" "http://127.0.0.1:8799$4"
+  rm -rf "$profile"
+}
+shot 1440 900 docs/images/dashboard-board.png /
+shot 1440 900 docs/images/dashboard-board-dark.png / 0
+shot 1440 1400 docs/images/dashboard-run.png /runs/RUN_ID   # the id the seed script prints
+shot 1440 900 docs/images/dashboard-queue.png /queue
+shot 1440 900 docs/images/dashboard-learning.png /learning
+shot 1440 1300 docs/images/dashboard-spend.png /spend
+
+kill %1 && rm -rf "$DEMO"
+```

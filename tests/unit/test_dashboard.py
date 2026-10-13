@@ -154,6 +154,10 @@ def test_security_headers_and_static(client: TestClient) -> None:
     assert "http://" not in response.text.split("<main>")[0]  # no external assets
     assert client.get("/static/live.js").status_code == 200
     assert "prefers-color-scheme: dark" in client.get("/static/style.css").text
+    assert '<link rel="icon" href="/static/favicon.svg"' in response.text
+    assert '<img src="/static/favicon.svg"' in response.text
+    favicon = client.get("/static/favicon.svg")
+    assert favicon.status_code == 200 and favicon.headers["content-type"].startswith("image/svg")
 
 
 def test_run_page_shows_plan_decisions_attempts_and_files(
@@ -195,7 +199,8 @@ def test_run_page_renders_quality_review_sanitized(
     text = client.get(f"/runs/{run_id}").text
     assert "<strong>bold</strong>" in text and "<table>" in text
     assert "<script>alert" not in text and "&lt;script&gt;" in text
-    assert "<img" not in text and 'href="javascript:' not in text
+    main = text.split("<main>", 1)[1]  # the header carries the logo <img>
+    assert "<img" not in main and "<img src=x" not in text and 'href="javascript:' not in text
     assert "basic: passed" in client.get("/").text  # quality status on the card
 
 
