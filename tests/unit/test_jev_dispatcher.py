@@ -7,7 +7,7 @@ import pytest
 
 from jev_agent.config.schema import JevConfig
 from jev_agent.core.assign import Assignment, fit_free
-from jev_agent.core.models import DecisionRequest
+from jev_agent.core.models import DecisionPoint, DecisionRequest
 from jev_agent.dispatch.base import Dispatcher, DispatchError
 from jev_agent.dispatch.jev import (
     GENERIC_INSTRUCTION,
@@ -204,7 +204,10 @@ def test_worker_instructions_do_not_reference_unsent_state() -> None:
     ],
 )
 def test_every_decision_answer_has_a_description(
-    point: str, question: str, allowed: list[str], expected: dict[str, str]
+    point: DecisionPoint,
+    question: str,
+    allowed: list[str],
+    expected: dict[str, str],
 ) -> None:
     """Ensure every request-contract answer keeps its specific description."""
     body = JevDispatcher().build_payload(point, {}, {question: allowed})
