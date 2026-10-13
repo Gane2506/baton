@@ -294,7 +294,7 @@ understand how it fails, and verify it without guessing?**
     interactions between components, not private helpers; a harmless refactor should not break
     a test. Integration tests run the whole pipeline against a real temporary git repo with
     fakes for agents. **Every external call is faked** and **no test touches the network or a
-    real CLI** (see [Testing](#testing)).
+    real CLI**, except the opt-in live tests in `tests/live/` (see [Testing](#testing)).
 11. **Tests are repeatable.** Control time, randomness, environment variables and temporary
     directories (`tmp_path`, `monkeypatch`; `tests/conftest.py` already isolates XDG dirs, keys
     and git config). A failure should point at a defect, never at test order or the machine.
