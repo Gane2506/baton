@@ -7,7 +7,7 @@ import pytest
 
 from jev_agent.config.schema import JevConfig
 from jev_agent.core.assign import Assignment, fit_free
-from jev_agent.core.models import DecisionRequest
+from jev_agent.core.models import DecisionPoint, DecisionRequest
 from jev_agent.dispatch.base import Dispatcher, DispatchError
 from jev_agent.dispatch.jev import (
     GENERIC_INSTRUCTION,
@@ -15,8 +15,18 @@ from jev_agent.dispatch.jev import (
     PRICE_PER_INPUT_TOKEN_USD,
     JevDispatcher,
     JevSettings,
+    parse_answers,
 )
-from jev_agent.dispatch.requests import RoleOptions, model_fits
+from jev_agent.dispatch.requests import (
+    D1_CLEAR,
+    D3_VERDICT,
+    D4_COMPLEXITY,
+    D5_ACTION,
+    D6_ACTION,
+    D7_LEARN,
+    RoleOptions,
+    model_fits,
+)
 
 FIXTURES = Path(__file__).parent.parent / "fixtures" / "jev"
 KEY = "sk-or-test-SECRET-1234567890"
@@ -110,6 +120,119 @@ async def test_payload_shape() -> None:
     assert list(effort) == ["low", "medium", "high"]
     assert all(isinstance(v, str) for v in effort.values())
     assert body["questions"]["model"]["criteria"] == dict.fromkeys(MODELS)
+
+
+def test_worker_instructions_do_not_reference_unsent_state() -> None:
+    """Ensure worker instructions do not mention state absent from the request contract."""
+    dispatcher = JevDispatcher()
+    generic = dispatcher.instruction_for("D1", "worker")
+    point_specific = dispatcher.build_payload("D4", {}, {"worker": ["claude_code"]})["questions"][
+        "worker"
+    ]["instructions"]
+
+    for instructions in (generic, point_specific):
+        assert "quota" not in instructions
+        assert "prior_attempts" not in instructions
+
+
+@pytest.mark.parametrize(
+    ("point", "question", "allowed", "expected"),
+    [
+        (
+            "D1",
+            "clear",
+            D1_CLEAR,
+            {
+                "plan": "Plan the idea now.",
+                "ask_human": "Ask a human to clarify the idea before planning.",
+            },
+        ),
+        (
+            "D3",
+            "verdict",
+            D3_VERDICT,
+            {
+                "approve": "The plan is good enough to execute.",
+                "revise": "Send the plan back to the planner with the validator's issues.",
+                "escalate_human": "A human should decide.",
+            },
+        ),
+        (
+            "D4",
+            "complexity",
+            D4_COMPLEXITY,
+            {
+                "trivial": "A small, local change such as a rename, config tweak or one-line fix.",
+                "standard": "A typical feature or fix touching a few files.",
+                "hard": (
+                    "Cross-cutting or subtle work: many files, concurrency, security, migrations."
+                ),
+            },
+        ),
+        (
+            "D5",
+            "action",
+            D5_ACTION,
+            {
+                "done": "The task is complete and passed its checks.",
+                "retry": "Try again with the same worker, model and effort.",
+                "escalate": "Try again with a stronger model or more effort.",
+                "reassign": "Try again with a different worker.",
+                "human": "Stop and ask a human.",
+            },
+        ),
+        (
+            "D6",
+            "action",
+            D6_ACTION,
+            {
+                "ship": "The integrated result is ready to hand over.",
+                "fix_task": "Create a fix task for the failed tests or quality gate.",
+                "human": "Stop and ask a human.",
+            },
+        ),
+        (
+            "D7",
+            "learn",
+            D7_LEARN,
+            {
+                "learn": "Distill lessons from this run now (one extra model call).",
+                "skip": "Nothing worth learning; save the call.",
+            },
+        ),
+    ],
+)
+def test_every_decision_answer_has_a_description(
+    point: DecisionPoint,
+    question: str,
+    allowed: list[str],
+    expected: dict[str, str],
+) -> None:
+    """Ensure every request-contract answer keeps its specific description."""
+    body = JevDispatcher().build_payload(point, {}, {question: allowed})
+    criteria = body["questions"][question]["criteria"]
+    assert list(criteria) == allowed
+    assert criteria == expected
+
+
+@pytest.mark.parametrize(
+    "confidence", [float("nan"), float("inf"), float("-inf"), -0.01, 1.01, 10**309]
+)
+def test_confidence_must_be_finite_and_in_range(confidence: float) -> None:
+    """Reject NaN, infinities, and values outside the inclusive confidence range."""
+    body = _fixture("d4_openrouter_success.json")
+    body["answers"]["worker"]["confidence"] = confidence
+    with pytest.raises(DispatchError, match="invalid confidence"):
+        parse_answers(body, _d4().questions)
+
+
+@pytest.mark.parametrize("confidence", [0.0, 1.0])
+def test_confidence_endpoints_are_accepted(confidence: float) -> None:
+    """Preserve both inclusive endpoints of the accepted confidence range."""
+    body = _fixture("d4_openrouter_success.json")
+    body["answers"]["worker"]["confidence"] = confidence
+    _, details = parse_answers(body, _d4().questions)
+    assert details["worker"]["confidence"] == confidence
 
 
 async def test_instruction_overrides_and_generic_fallback() -> None:

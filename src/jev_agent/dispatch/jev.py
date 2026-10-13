@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 import os
 import time
 from collections.abc import Awaitable, Callable
@@ -26,7 +27,15 @@ import httpx
 from jev_agent.config.schema import NATIVE_JEV_BASE_URL, OPENROUTER_BASE_URL, JevSettings
 from jev_agent.core.models import Decision, DecisionPoint, DecisionRequest
 from jev_agent.dispatch.base import DispatchError
-from jev_agent.dispatch.requests import model_fits
+from jev_agent.dispatch.requests import (
+    D1_CLEAR,
+    D3_VERDICT,
+    D4_COMPLEXITY,
+    D5_ACTION,
+    D6_ACTION,
+    D7_LEARN,
+    model_fits,
+)
 
 __all__ = ["NATIVE_BASE_URL", "OPENROUTER_BASE_URL", "JevDispatcher", "JevSettings"]
 
@@ -71,10 +80,7 @@ POINT_DESCRIPTIONS: dict[DecisionPoint, str] = {
 
 # Instructions per question name; (point, question) entries override the generic ones.
 QUESTION_INSTRUCTIONS: dict[str, str] = {
-    "worker": (
-        "Which worker should do this work? Prefer workers whose quota is ok and avoid ones "
-        "that already failed this work in `prior_attempts`."
-    ),
+    "worker": "Which worker should do this work? Choose a worker whose capabilities fit the role.",
     "model": (
         "Which model should the worker use? Match model strength to the difficulty of the "
         "work, prefer cheaper models for simple work, and stay well inside the remaining budget."
@@ -108,7 +114,8 @@ POINT_QUESTION_INSTRUCTIONS: dict[tuple[DecisionPoint, str], str] = {
         "a human. Escalate when rounds are nearly used up or issues need human judgement."
     ),
     ("D4", "worker"): (
-        "Which coding worker should implement this task? Avoid workers whose quota is low."
+        "Which coding worker should implement this task? "
+        "Choose a worker whose capabilities fit the task."
     ),
     ("D5", "action"): (
         "Given the attempt's test and review results, what next? Retry for flaky or small "
@@ -162,7 +169,7 @@ GENERIC_INSTRUCTION = (
 )
 
 # Descriptions for well-known answers, per question. Unknown answers are sent with null.
-OPTION_DESCRIPTIONS: dict[str, dict[str, str]] = {
+COMMON_OPTION_DESCRIPTIONS: dict[str, dict[str, str]] = {
     "effort": {
         "low": "Quick, mechanical work; little reasoning needed.",
         "medium": "Ordinary work with some design decisions.",
@@ -170,40 +177,82 @@ OPTION_DESCRIPTIONS: dict[str, dict[str, str]] = {
         "xhigh": "Very hard work; spend much more reasoning.",
         "max": "Hardest work only; maximum reasoning regardless of cost.",
     },
-    "complexity": {
-        "trivial": "A small, local change such as a rename, config tweak or one-line fix.",
-        "standard": "A typical feature or fix touching a few files.",
-        "hard": "Cross-cutting or subtle work: many files, concurrency, security, migrations.",
-    },
     "worker": {
         "claude_code": "Claude Code CLI agent; edits files and runs commands in a worktree.",
         "codex": "OpenAI Codex CLI agent; edits files and runs commands in a worktree.",
         "api": "Plain API model call; no file access, good for planning and reviewing text.",
     },
-    "clear": {
-        "yes": "The idea is clear enough to plan.",
-        "no": "The idea is too vague; ask the human first.",
-    },
-    "verdict": {
-        "approve": "The plan is good enough to execute.",
-        "revise": "Send the plan back to the planner with the validator's issues.",
-        "human": "A human should decide.",
-        "escalate": "A human should decide.",
-    },
-    "learn": {
-        "learn": "Distill lessons from this run now (one extra model call).",
-        "skip": "Nothing worth learning; save the call.",
-    },
-    "action": {
-        "done": "The task is complete and passed its checks.",
-        "retry": "Try again with the same worker, model and effort.",
-        "escalate": "Try again with a stronger model or more effort.",
-        "reassign": "Try again with a different worker.",
-        "human": "Stop and ask a human.",
-        "ship": "The integrated result is ready to hand over.",
-        "fix": "Create a fix task for the failures.",
-        "fix_task": "Create a fix task for the failures.",
-    },
+}
+
+# Descriptions for answers that are specific to a decision point. The option lists in
+# dispatch.requests are the source of truth, so each allowed answer gets a description.
+POINT_OPTION_DESCRIPTIONS: dict[tuple[DecisionPoint, str], dict[str, str]] = {
+    ("D1", "clear"): dict(
+        zip(
+            D1_CLEAR,
+            (
+                "Plan the idea now.",
+                "Ask a human to clarify the idea before planning.",
+            ),
+            strict=True,
+        )
+    ),
+    ("D3", "verdict"): dict(
+        zip(
+            D3_VERDICT,
+            (
+                "The plan is good enough to execute.",
+                "Send the plan back to the planner with the validator's issues.",
+                "A human should decide.",
+            ),
+            strict=True,
+        )
+    ),
+    ("D4", "complexity"): dict(
+        zip(
+            D4_COMPLEXITY,
+            (
+                "A small, local change such as a rename, config tweak or one-line fix.",
+                "A typical feature or fix touching a few files.",
+                "Cross-cutting or subtle work: many files, concurrency, security, migrations.",
+            ),
+            strict=True,
+        )
+    ),
+    ("D5", "action"): dict(
+        zip(
+            D5_ACTION,
+            (
+                "The task is complete and passed its checks.",
+                "Try again with the same worker, model and effort.",
+                "Try again with a stronger model or more effort.",
+                "Try again with a different worker.",
+                "Stop and ask a human.",
+            ),
+            strict=True,
+        )
+    ),
+    ("D6", "action"): dict(
+        zip(
+            D6_ACTION,
+            (
+                "The integrated result is ready to hand over.",
+                "Create a fix task for the failed tests or quality gate.",
+                "Stop and ask a human.",
+            ),
+            strict=True,
+        )
+    ),
+    ("D7", "learn"): dict(
+        zip(
+            D7_LEARN,
+            (
+                "Distill lessons from this run now (one extra model call).",
+                "Nothing worth learning; save the call.",
+            ),
+            strict=True,
+        )
+    ),
 }
 
 
@@ -270,6 +319,7 @@ class JevDispatcher:
     def build_payload(
         self, point: DecisionPoint, state: dict[str, Any], questions: dict[str, list[str]]
     ) -> dict[str, Any]:
+        """Build a Jev request payload from state and allowed answer choices."""
         context = {"id": point, "description": POINT_DESCRIPTIONS[point]}
         full_state = {"decision_point": context}
         full_state.update({k: v for k, v in state.items() if k != "decision_point"})
@@ -287,11 +337,16 @@ class JevDispatcher:
         )
 
         def describe(name: str, option: str) -> str | None:
+            """Return the description for one allowed answer, if known."""
             if name == "model" and option in free:
                 return FREE_UNKNOWN_OPTION if option in unknown else FREE_OPTION
-            return OPTION_DESCRIPTIONS.get(name, {}).get(option)
+            descriptions = POINT_OPTION_DESCRIPTIONS.get(
+                (point, name), COMMON_OPTION_DESCRIPTIONS.get(name, {})
+            )
+            return descriptions.get(option)
 
         def instruction(name: str) -> str:
+            """Build the prompt instructions for one decision question."""
             text = self.instruction_for(point, name)
             if prefer and name == "model":
                 text = f"{text} {PREFER_FREE_INSTRUCTION}"
@@ -315,6 +370,7 @@ class JevDispatcher:
         }
 
     def instruction_for(self, point: DecisionPoint, question: str) -> str:
+        """Return the most specific configured instruction for a question."""
         overrides = self.settings.instructions
         for text in (
             overrides.get(f"{point}.{question}"),
@@ -418,11 +474,17 @@ def parse_answers(
         confidence = answer.get("confidence")
         if not isinstance(confidence, int | float) or isinstance(confidence, bool):
             raise DispatchError(f"jev: answer for {name} has no confidence")
+        try:
+            confidence_value = float(confidence)
+        except OverflowError:
+            raise DispatchError(f"jev: answer for {name} has invalid confidence") from None
+        if not math.isfinite(confidence_value) or not 0.0 <= confidence_value <= 1.0:
+            raise DispatchError(f"jev: answer for {name} has invalid confidence")
         probabilities = answer.get("probabilities")
         answers[name] = choice
         details[name] = {
             "choice": choice,
-            "confidence": float(confidence),
+            "confidence": confidence_value,
             "probabilities": probabilities if isinstance(probabilities, dict) else {},
         }
     return answers, details
