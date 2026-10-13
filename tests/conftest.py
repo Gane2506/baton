@@ -18,6 +18,8 @@ _UNSET_ENV = ("OPENROUTER_API_KEY", "TYPESAFE_API_KEY", "JEV_FAKE_WORKERS")
 # The dashboard tests need the `dashboard` extra (`uv sync --all-extras`, as CI does).
 collect_ignore = [] if find_spec("starlette") else ["unit/test_dashboard.py"]
 
+TEST_USER_CONFIG = '[dispatcher]\nprimary = "rules"\n'
+
 GIT = [
     "git",
     "-c",
@@ -50,7 +52,8 @@ def _isolated_env(
 ) -> None:
     """Keep the developer's own config out of every test (issue #53).
 
-    The user config (`$XDG_CONFIG_HOME/jev/config.toml`, here `tmp_path / "xdg"`), shared
+    The user config (`$XDG_CONFIG_HOME/jev/config.toml`, here `tmp_path / "xdg"`, holding
+    only `TEST_USER_CONFIG`), shared
     learning profiles and caches live under tmp_path; git reads no global or system config
     (a `commit.gpgsign = true` there would break every commit) and commits as a test identity;
     API keys and `JEV_FAKE_WORKERS` are unset. Live tests (tests/live) keep the keys and the
@@ -59,6 +62,11 @@ def _isolated_env(
     live = "live" in request.node.path.relative_to(Path(__file__).parent).parts[:1]
     if not live:
         monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
+        # Tests never reach Jev, and without it the default consensus dispatcher stops every
+        # run, so the user config picks the rules dispatcher; a repo `jev.toml` overrides it.
+        user_config = tmp_path / "xdg" / "jev" / "config.toml"
+        user_config.parent.mkdir(parents=True)
+        user_config.write_text(TEST_USER_CONFIG)
         for name in _UNSET_ENV:
             monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "xdg-data"))

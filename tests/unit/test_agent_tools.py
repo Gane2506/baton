@@ -428,7 +428,8 @@ def git_repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     # guarded keys (servers, tools, permissions; docs/security.md).
     trust = tmp_path / "xdg" / "jev" / "config.toml"
     trust.parent.mkdir(parents=True, exist_ok=True)
-    trust.write_text('[trust]\nrepos = ["*"]\n')
+    with trust.open("a") as fh:  # keep the suite's user config (tests/conftest.py)
+        fh.write('[trust]\nrepos = ["*"]\n')
     repo = tmp_path / "repo"
     repo.mkdir(exist_ok=True)
     subprocess.run(["git", "init", "-q", str(repo)], check=True)

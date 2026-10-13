@@ -18,6 +18,7 @@ raises `NoConsensus`, and the run stops for a human. It never falls back to rule
 
 from __future__ import annotations
 
+import math
 import time
 from dataclasses import dataclass
 from typing import Any
@@ -285,7 +286,8 @@ def _parse_scores(
 
 
 def _is_number(value: object) -> bool:
-    return isinstance(value, int | float) and not isinstance(value, bool)
+    """A finite int or float (not a bool, NaN or infinity)."""
+    return isinstance(value, int | float) and not isinstance(value, bool) and math.isfinite(value)
 
 
 def _no_consensus_message(verdicts: dict[str, Verdict], rounds: int) -> str:

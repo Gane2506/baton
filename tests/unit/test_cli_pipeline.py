@@ -21,6 +21,7 @@ from jev_agent.config import JevConfig
 from jev_agent.core.models import RunState, ValidationResult
 from jev_agent.core.pipeline import cancel_run
 from jev_agent.core.store import Store
+from jev_agent.dispatch.consensus import ConsensusDispatcher
 from jev_agent.dispatch.jev import JevDispatcher
 from jev_agent.dispatch.rules import RulesDispatcher
 from jev_agent.workers.api import ApiWorker
@@ -58,6 +59,8 @@ def test_run_without_workers_explains(fixture_repo: Path) -> None:
 
 def test_fake_workers_full_flow(fixture_repo: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv(FAKE_WORKERS_ENV, "1")
+    # The jev dispatcher with its key unset: every decision falls back to rules, with a warning.
+    (fixture_repo / "jev.toml").write_text('[dispatcher]\nprimary = "jev"\n')
     code, output = _jev(fixture_repo, "run", "add search")
     assert code == 0, output
     assert "AWAITING_APPROVAL" in output
@@ -211,11 +214,17 @@ def test_build_dispatcher_from_config(monkeypatch: pytest.MonkeyPatch) -> None:
     )
     assert isinstance(rules, RulesDispatcher) and warnings == []
 
-    config = JevConfig.model_validate({"dispatcher": {"jev": {"min_confidence": 0.8}}})
+    config = JevConfig.model_validate(
+        {"dispatcher": {"primary": "jev", "jev": {"min_confidence": 0.8}}}
+    )
     jev, warnings = build_dispatcher(config)
     assert isinstance(jev, JevDispatcher)
     assert jev.settings.min_confidence == 0.8
-    assert len(warnings) == 1 and "OPENROUTER_API_KEY is not set" in warnings[0]
+    assert len(warnings) == 1 and "every decision will use the rules dispatcher" in warnings[0]
+
+    consensus, warnings = build_dispatcher(JevConfig())  # the default
+    assert isinstance(consensus, ConsensusDispatcher)
+    assert len(warnings) == 1 and "stop for a human at its first decision" in warnings[0]
 
     monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-v1-secret-value")
     jev, warnings = build_dispatcher(config)

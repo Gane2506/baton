@@ -19,6 +19,8 @@ All notable changes to this project are documented here. The format is based on
   - New `[dispatcher.laya]` table: `weights`, `min_margin` (0.2) and `follow_up_rounds` (2).
   - `[approval] require_plan_approval` is unset by default: off under `consensus` (the D3
     approve vote is the gate), on with `jev` and `rules`. An explicit `true` or `false` wins.
+  - `jev doctor` fails the dispatcher check under `consensus` when the Jev key env var is unset
+    (runs would stop at their first decision); with `jev` it stays a warning.
 
 - **Contributor guidelines.** A detailed `CONTRIBUTING.md`, a pull request template and issue
   forms for bugs and features. `SECURITY.md` explains private vulnerability reporting, and
