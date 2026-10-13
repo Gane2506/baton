@@ -29,7 +29,7 @@
 <h2>Decisions</h2>
 {% if v.decisions %}
 <div class="table-wrap"><table>
-  <thead><tr><th>time</th><th>point</th><th>scope</th><th>dispatcher</th><th>answers (confidence)</th><th>fallback reason</th><th class="num">cost</th><th class="num">latency</th></tr></thead>
+  <thead><tr><th>time</th><th>point</th><th>scope</th><th>dispatcher</th><th>answers (Jev confidence, Laya margin)</th><th>fallback reason</th><th class="num">cost</th><th class="num">latency</th></tr></thead>
   <tbody>
   {% for d in v.decisions %}
     <tr>
