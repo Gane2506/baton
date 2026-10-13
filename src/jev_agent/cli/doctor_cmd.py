@@ -390,13 +390,24 @@ def _prompt_checks(config: JevConfig, root: Path) -> list[Check]:
 
 
 def _dispatcher_check(config: JevConfig) -> Check:
-    """Which dispatcher decides, and whether Jev's key env var is set (never its value)."""
-    if config.dispatcher.primary == "rules":
+    """Which dispatcher decides, and whether Jev's key env var is set (never its value).
+
+    Without the key, consensus cannot decide at all (fail); jev falls back to rules (warn)."""
+    primary = config.dispatcher.primary
+    if primary == "rules":
         return Check("dispatcher", "ok", "rules")
     jev = config.dispatcher.jev
-    where = f"jev ({jev.model} at {jev.base_url})"
+    who = "consensus: Jev, then Laya" if primary == "consensus" else "jev"
+    where = f"{who} ({jev.model} at {jev.base_url})"
     if os.environ.get(jev.api_key_env, "").strip():
         return Check("dispatcher", "ok", f"{where}; {jev.api_key_env} is set")
+    if primary == "consensus":
+        return Check(
+            "dispatcher",
+            "fail",
+            f"{where}; {jev.api_key_env} is not set, so every run stops for a human at its "
+            'first decision (set it, or set `[dispatcher] primary = "rules"`)',
+        )
     return Check(
         "dispatcher",
         "warn",

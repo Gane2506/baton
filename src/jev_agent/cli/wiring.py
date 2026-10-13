@@ -1,7 +1,9 @@
 """Build a `Pipeline` for the CLI from the repo's config and state database.
 
-- Dispatcher: `[dispatcher] primary = "jev"` gives a `JevDispatcher`; the pipeline wraps it in
-  a `GuardedDispatcher` with the rules dispatcher as fallback. `"rules"` uses rules only.
+- Dispatcher: `[dispatcher] primary = "consensus"` (the default) gives a `ConsensusDispatcher`
+  (Jev, then Laya); the pipeline gives it no fallback, so a decision without agreement stops
+  the run for a human. `"jev"` gives a `JevDispatcher`, wrapped with the rules dispatcher as
+  fallback. `"rules"` uses rules only.
 - Workers: Claude Code, Codex and the API worker, each when enabled in `[workers.*]` and ready
   (`worker_readiness`, the same rule `jev doctor` reports): a CLI worker needs its command on
   PATH; the api worker needs its key env var and, per role, a model. Unready workers are left
@@ -36,6 +38,7 @@ from jev_agent.core.models import Role
 from jev_agent.core.pipeline import Pipeline, PipelineSettings, build_pipeline
 from jev_agent.core.store import SchemaVersionError, Store
 from jev_agent.dispatch.base import Dispatcher
+from jev_agent.dispatch.consensus import ConsensusDispatcher
 from jev_agent.dispatch.jev import JevDispatcher
 from jev_agent.dispatch.requests import API_WORKER, DEFAULT_MODEL, model_fits, role_options
 from jev_agent.dispatch.rules import RulesDispatcher
@@ -90,19 +93,28 @@ def pipeline_settings(config: JevConfig) -> PipelineSettings:
 def build_dispatcher(config: JevConfig) -> tuple[Dispatcher, list[str]]:
     """The primary dispatcher from `[dispatcher]`, plus warnings to show at run start.
 
-    Jev is built even when its key env var is unset: each decision then falls back to rules.
+    Jev is built even when its key env var is unset: each decision then falls back to rules
+    (`jev`), or stops the run for a human (`consensus`).
     """
-    if config.dispatcher.primary == "rules":
+    primary = config.dispatcher.primary
+    if primary == "rules":
         return RulesDispatcher(), []
     settings = config.dispatcher.jev
+    jev = JevDispatcher(settings)
     warnings: list[str] = []
     if not os.environ.get(settings.api_key_env, "").strip():
-        warnings.append(
-            f"{settings.api_key_env} is not set, so the Jev dispatcher cannot be reached; "
-            "every decision will use the rules dispatcher. Set it, or set "
-            '`[dispatcher] primary = "rules"` to silence this warning.'
+        outcome = (
+            "the run will stop for a human at its first decision"
+            if primary == "consensus"
+            else "every decision will use the rules dispatcher"
         )
-    return JevDispatcher(settings), warnings
+        warnings.append(
+            f"{settings.api_key_env} is not set, so Jev cannot be reached; {outcome}. Set it, "
+            'or set `[dispatcher] primary = "rules"` to silence this warning.'
+        )
+    if primary == "consensus":
+        return ConsensusDispatcher(jev, config.dispatcher.laya), warnings
+    return jev, warnings
 
 
 def free_roles(config: JevConfig) -> list[str]:

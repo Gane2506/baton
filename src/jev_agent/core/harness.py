@@ -155,11 +155,18 @@ class Harness:
     # ---- decisions -------------------------------------------------------------------------
 
     async def decide(self, run_id: str, task_id: str | None, req: DecisionRequest) -> Decision:
-        """Ask the dispatcher (with fallback), persist the decision and charge its cost."""
+        """Ask the dispatcher (with fallback), persist the decision and charge its cost.
+
+        Without a fallback (the consensus dispatcher) a missing decision stops the run for a
+        human, resumably: `jev resume` asks again once the cause is fixed. With one, both
+        dispatchers failed, which only an internal error can cause, so the run fails."""
         try:
             guarded = await self.dispatcher.decide(req)
         except DispatchError as exc:
-            raise Halt(RunState.FAILED, f"{req.point}: no valid decision: {exc}") from exc
+            reason = f"{req.point}: no valid decision: {exc}"
+            if self.dispatcher.fallback is None:
+                raise Halt(RunState.NEEDS_HUMAN, reason, resumable=True) from exc
+            raise Halt(RunState.FAILED, reason) from exc
         decision = guarded.decision
         self.store.record_decision(run_id, task_id, req, decision, guarded.fallback_reason)
         if decision.cost_usd:
