@@ -509,7 +509,7 @@ def _process_alive(pid: int) -> bool:
         return True
     try:  # a zombie still answers kill(0); it may also be reaped right now
         state = Path(f"/proc/{pid}/status").read_text()
-    except FileNotFoundError:
+    except (FileNotFoundError, ProcessLookupError):  # reaped between open and read
         return False
     return "\nState:\tZ" not in state
 
