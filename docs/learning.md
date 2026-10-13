@@ -66,10 +66,11 @@ Every role prompt gets a `lessons` variable (an empty list when the run does not
 built-in planner, validator, coder and reviewer templates show them in a short "Lessons from
 earlier runs in this repo" section, only when there are any.
 
-A lesson has: an id (`L12` in repo scope, `S3` in shared scope), its text (at most 300
-characters), the roles it applies to (planner, validator, coder, reviewer), tags (file paths,
-directories or keywords), the run and task it came from, when it was created, how often it was
-used, a score, and a retired flag.
+A lesson has: an id (`L12` in repo scope, `S3` in shared scope; an id is never handed out
+again once its lesson was deleted, so an old run's `L12` never names a newer lesson), its text
+(at most 300 characters), the roles it applies to (planner, validator, coder, reviewer), tags
+(file paths, directories or keywords), the run and task it came from, when it was created, how
+often it was used, a score, and a retired flag.
 
 Selection is simple and deterministic, no embeddings:
 
@@ -93,7 +94,11 @@ and not while waiting for approval), when the run has a profile:
    or reviewer attempts gets `uses + 1`, and `score + 1` if the task was DONE on its first
    attempt, or `score - 0.5` if it needed a retry, escalation or reassignment, or failed. A
    lesson whose score reaches -2 is retired automatically. Lessons that only went to the
-   planner or validator are not scored.
+   planner or validator are not scored. Only lessons of the run's own profile are touched (a
+   lesson flushed or deleted during the run is simply skipped). Each task is scored once: the
+   database that holds the lessons records the (run, task) pair in its `scored_tasks` table in
+   the same transaction as the scores, so a crash before the run records it does not count a
+   task twice on `jev resume`.
 2. **D7** (a dispatcher decision): `learn` or `skip`, and the learner's worker, model and
    effort from `[roles.learner]`. The rules dispatcher learns when the run had any plan
    revision, retry, escalation, reassignment, human hand-off, fix task, failure or
@@ -118,6 +123,10 @@ is resumed, it learns again when it ends.
 
 - Lessons, profiles and the scores live only on your machine: in `.jev/state.db` (repo scope,
   ignored by git through `.jev/`) or the shared database file. Nothing is uploaded by jev.
+- Upgrading: state.db schema version 9 and shared-database version 2 rebuild the `lessons`
+  table so ids are never reused (ids, scores and text are kept). Ids deleted before the
+  upgrade cannot be known, except repo-scope ids that recorded attempts still name; numbering
+  continues after the highest of those.
 - Lesson text and tags are redacted before they are stored (the same redaction as run logs:
   known key formats and the values of secret-looking environment variables).
 - Lessons are sent to the workers you configured, as part of their prompts. So is the run card,

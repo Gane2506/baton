@@ -309,11 +309,31 @@ async def test_timeout(tmp_path: Path) -> None:
     assert "5s" in out.result.summary
 
 
-async def test_network_error(tmp_path: Path) -> None:
-    rec = Recorder(httpx.ConnectError("connection refused"))
-    out = await _worker(rec).run(_job(tmp_path))
-    assert out.result.status == "error"
+@pytest.mark.parametrize(
+    ("exc", "status"),
+    [
+        # Transient transport problems: the attempt failed, trying again can help.
+        (httpx.ConnectError("connection refused"), "failure"),
+        (httpx.ReadError("connection reset"), "failure"),
+        (httpx.WriteError("broken pipe"), "failure"),
+        (httpx.RemoteProtocolError("server disconnected"), "failure"),
+        # Configuration problems: the worker cannot run as configured.
+        (httpx.ProxyError("407 proxy authentication required"), "error"),
+        (httpx.UnsupportedProtocol("unknown scheme"), "error"),
+        (httpx.LocalProtocolError("bad header"), "error"),
+        (httpx.TooManyRedirects("too many redirects"), "error"),
+    ],
+)
+async def test_network_error(tmp_path: Path, exc: Exception, status: str) -> None:
+    out = await _worker(Recorder(exc)).run(_job(tmp_path))
+    assert out.result.status == status
     assert "network error" in out.result.summary
+    assert type(exc).__name__ in out.result.summary
+
+
+async def test_connect_timeout_stays_a_timeout(tmp_path: Path) -> None:
+    out = await _worker(Recorder(httpx.ConnectTimeout("timed out"))).run(_job(tmp_path))
+    assert out.result.status == "timeout"
 
 
 async def test_missing_key(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

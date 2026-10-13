@@ -1,7 +1,11 @@
 # Configuration
 
 `jev init` writes a commented `jev.toml` to the root of your repository. Every key is optional;
-an empty file (or no file) gives the defaults below.
+an empty file (or no file) gives the defaults below. The template sets no values: each key is a
+commented-out line showing its built-in default (`# per_run_usd = 5.00`), so your user config
+still applies until you uncomment a line. A `jev.toml` written by an older `jev init` sets every
+key to the default of that time and so overrides your user config; delete the lines you did not
+mean to set.
 
 ## Where config comes from
 
@@ -22,6 +26,9 @@ Unknown keys are errors (to catch typos). Errors name the file and the field, fo
 /path/to/repo/jev.toml: budget.per_task_usd: must be greater than 0
 ```
 
+A repo file may not change the keys that decide where API keys go and what agents can run or
+reach unless your user config trusts that repository: see [`[trust]`](#trust-user-config-only).
+
 Run `jev doctor` to check that config loads, which worker CLIs are on `PATH`, which API key
 environment variables are set, and that every `prompt_file` exists and parses.
 
@@ -31,6 +38,34 @@ Config files never hold secrets. Any key whose name ends in `key` or contains `t
 or `password` is rejected, in any table (names you choose for MCP servers, skills, plugins and
 HTTP headers are exempt). Put the secret in an environment variable and name the variable with
 `api_key_env` (or, for MCP servers, `env_from`, `bearer_token_env` and `headers_from_env`).
+
+## `[trust]` (user config only)
+
+A `jev.toml` committed to a repository you cloned could otherwise point the API worker at
+someone else's host with your `GITHUB_TOKEN` as the key, or give an agent your servers. So a
+repo file may change these **guarded keys** only when your user config trusts the repository:
+
+- `[dispatcher.jev]` and `[workers.api]` `base_url` and `api_key_env`;
+- `[workers.claude_code]` `command`, `extra_args`, `permission_mode`,
+  `read_only_permission_mode`, `allowed_tools`, `skip_permissions`, `bare`;
+  `[workers.codex]` `command`, `extra_args`, `sandbox`;
+- `[tools]`, `[servers]`, `[browser]`, `[profiles]`, and `servers`, `mcp`, `skills`, `plugins`
+  under `[roles.<role>]`.
+
+A repo value equal to what the defaults and your user config already give is always accepted.
+Otherwise loading fails with an error that names each key and the `[trust]` lines to add.
+
+| Key | Default | Meaning |
+|---|---|---|
+| `repos` | `[]` | Repositories whose `jev.toml` may change guarded keys: absolute paths (`~` allowed), or `"*"` for every repository. |
+
+```toml
+# ~/.config/jev/config.toml
+[trust]
+repos = ["~/code/my-app"]
+```
+
+A repository's `jev.toml` cannot contain `[trust]`.
 
 ## `[dispatcher]`
 
@@ -96,6 +131,17 @@ task, or asks a human.
 | --- | --- | --- |
 | `test_command` | unset | Full test suite to run on the result branch, e.g. `"uv run pytest -q"`. Run through the shell. |
 | `max_fix_rounds` | `2` | Fix tasks D6 may add for failing integration tests before a human is asked (>= 0). Merge conflicts always go to a human. |
+
+## `[workspace]`
+
+jev commits each task attempt and merges task branches in git worktrees under `.jev/worktrees/`.
+Every git call has a timeout (1 minute; 10 minutes for commits, merges, worktree checkouts and
+pushes), so a hook or lock that hangs stops the run with an error instead of hanging it. A
+failed commit stops the run in NEEDS_HUMAN: fix the cause, then `jev resume`.
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `run_hooks` | `true` | Run the repository's git hooks (pre-commit, commit-msg, ...) on jev's commits and merges. `false` passes `--no-verify`. |
 
 ## `[approval]`
 
@@ -172,8 +218,9 @@ below for how they are chosen and what happens when one hits its rate limit.
 
 ## `[workers.claude_code]` and `[workers.codex]`
 
-Local agent CLIs. Both are registered whenever `enabled = true`; `jev doctor` warns if the
-command is not on `PATH`. See [security.md](security.md) for the permission model.
+Local agent CLIs. Each is used when `enabled = true` and its `command` is found on `PATH`;
+otherwise a run leaves it out with a warning at the start, and `jev doctor` warns too (see
+[Worker readiness](#worker-readiness)). See [security.md](security.md) for the permission model.
 
 Shared keys:
 
@@ -210,12 +257,26 @@ An OpenAI-compatible HTTP API.
 | `enabled` | `true` | Whether this worker may be used. |
 | `base_url` | `"https://openrouter.ai/api/v1"` | API base URL. |
 | `api_key_env` | `"OPENROUTER_API_KEY"` | Name of the environment variable holding the key. Must be a valid variable name. |
-| `default_model` | unset | Model used when the role's `models` pool is empty. If unset, a role that picks `api` without a model fails that attempt with an error. |
+| `default_model` | unset | Model used when the role's `models` pool is empty. If unset, `api` is not offered to a role whose pool is empty (and has no free models). |
 | `timeout_s` | `600` | Per-attempt timeout in seconds (> 0), retries included. |
 
 The API worker runs the planner, validator and reviewer roles (it cannot edit files, so never
-the coder). It is registered whenever `enabled = true`; a missing key makes its attempts fail
-with status `error`, which the pipeline handles like any other failed attempt.
+the coder). It is used when `enabled = true` and the `api_key_env` variable is set, and only
+for roles it has a model for; see [Worker readiness](#worker-readiness).
+
+### Worker readiness
+
+Runs and `jev doctor` use one rule to decide which enabled workers can run (in fake-worker mode,
+`JEV_FAKE_WORKERS=1`, every enabled worker is used):
+
+- `claude_code` and `codex`: the `command` is found on `PATH`.
+- `api`: the `api_key_env` variable is set, and, per role, a model it can run is available:
+  `default_model`, a `vendor/name` slug in the role's `models`, or free models (`"free"` or
+  `prefer_free` with a cached model list). It is never offered to the coder.
+
+A worker that is not ready is not offered to the dispatcher, with one warning at the start of a
+run (`api` that has a model for some roles only is offered to those). `jev doctor` shows the
+same result per worker and per role.
 
 ## `[roles.<role>]`
 
@@ -244,6 +305,25 @@ A `[roles.<role>]` table is layered on top of that role's defaults, so a table t
 
 `models` is ordered weakest to strongest: escalation moves to the next model once the effort is
 already at the highest level. An empty pool means "let the worker use its default model".
+
+### Workers and models
+
+A role's `models` pool is shared by all its `workers`, so jev checks each (worker, model) pair
+by the model's name:
+
+- a name with a `/` (an OpenRouter slug such as `anthropic/claude-sonnet-4.5`) runs only on
+  `api`;
+- a name without one (`sonnet`, `opus`, `claude-sonnet-4-6`, `gpt-5.2-codex`) runs only on
+  `claude_code` and `codex`;
+- the worker's default model (an empty pool) fits every worker.
+
+The rules dispatcher only picks runnable pairs. Jev answers worker and model separately (it is
+told the rule when the pool mixes both kinds); if the pair cannot run, jev keeps the worker and
+gives it its first runnable model in the pool, or its default model when there is none. The
+same applies on escalation (it skips models the worker cannot run) and when a task is
+reassigned to another worker. So a mixed pool such as `["sonnet", "anthropic/claude-sonnet-4.5"]`
+lets `claude_code` and `api` each run their own model. Codex with a custom `model_provider` whose
+model names contain `/` is not supported: the name is treated as an OpenRouter slug.
 
 Default `workers` per role:
 
@@ -330,7 +410,8 @@ prefer_free = false                       # this role keeps paying
 - **Where they apply.** Only on the `api` worker. A role whose `workers` do not include `api`
   (the coder, on Claude Code or Codex) ignores `prefer_free` and drops `"free"`; `jev doctor`
   notes this. A free model chosen for another worker is moved to `api`, or replaced by the
-  first paid model when the role cannot use `api`.
+  first model that worker can run when the role cannot use `api` (see
+  [Workers and models](#workers-and-models)).
 - **`"free"` in `models`** expands, when a run starts, to at most `free_models_limit` free
   models from the cached list. Roles that answer with JSON (planner, validator, reviewer,
   learner) skip models whose `supported_parameters` lack `structured_outputs`; models that
@@ -340,9 +421,10 @@ prefer_free = false                       # this role keeps paying
   pool has none). The rules dispatcher then picks the first free model on the api worker; Jev
   sees each free option described as "free (rate-limited)" and is told to prefer free models
   unless the task is hard or earlier attempts failed. Escalation from a free model goes to
-  the first paid model.
+  the first paid model the api worker can run.
 - **Rate limits.** A 429 from a free model counts as `quota_exhausted`. jev then tries the
-  next free model, then the first paid model in the pool, then one other worker of the role.
+  next free model, then the first paid model in the pool that the api worker can run, then one
+  other worker of the role (with its first runnable model).
   For the planner, validator, learner and reviewer this happens inside the same step; for a
   task it is the D5 decision (`retry` moves to the fallback model). Each try is an attempt.
 - **The model list** is cached in `.jev/cache/openrouter-models.json` and fetched again when

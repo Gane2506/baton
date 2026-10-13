@@ -19,12 +19,14 @@ from typing import Any
 from jev_agent.cli.board_cmds import COLUMN_FOR_STATE, COLUMNS, Card, load_board
 from jev_agent.cli.doctor_cmd import Check, run_checks
 from jev_agent.cli.quality_cmds import review_text
-from jev_agent.cli.queue_cmds import item_flags, short
+from jev_agent.cli.queue_cmds import item_flags
 from jev_agent.cli.status_cmds import format_answers, learning_line, quality_line
+from jev_agent.cli.text import short
 from jev_agent.cli.wiring import FAKE_WORKERS_ENV, STATE_DB_FILENAME
 from jev_agent.config import STATE_DIRNAME, JevConfig, load_config
 from jev_agent.core.benchmarks import DEFAULT_LAST, Summary, Trend, summarize, trends
 from jev_agent.core.chat import ChatMeta, list_chats, read_transcript
+from jev_agent.core.harness import DEFAULT_TIMEOUT_S
 from jev_agent.core.kpi import PrKpis, load_pr_kpis
 from jev_agent.core.learning import Learning, LearningStatus, Lesson, Profile, learning_status
 from jev_agent.core.models import RunState
@@ -33,6 +35,7 @@ from jev_agent.core.queue import effective_status, queue_counts, run_states
 from jev_agent.core.scheduler import LockInfo, scheduler_lock, spent_today
 from jev_agent.core.store import (
     AttemptRecord,
+    NotFoundError,
     QualityReportRecord,
     QueueItem,
     QueueStatus,
@@ -165,6 +168,9 @@ class RunView:
     can_resume: bool
     can_cancel: bool
     column: str
+    # Why another jev process may be running this run (issue #15); "" when nothing suggests
+    # it. While set, Resume needs an explicit force.
+    resume_risk: str = ""
     reports: list[QualityReportRecord] = field(default_factory=list)
     # `jev ship`: PRs opened for this run, and whether the "Ship as PR" button shows.
     shipped: list[ShippedPrRecord] = field(default_factory=list)
@@ -201,6 +207,54 @@ def can_resume(run: RunRecord) -> bool:
     if run.state is RunState.NEEDS_HUMAN:
         return run.resume_state is not None
     return run.state not in STOPPED
+
+
+# How long past its worker's timeout an attempt without a result still counts as running: the
+# harness kills the worker at the timeout, then records the result.
+RESUME_GRACE_S = 300
+
+
+def resume_risk(repo: Repo, run: RunRecord, now: datetime | None = None) -> str:
+    """Why another jev process (a terminal `jev run`/`jev resume`, the scheduler) may be
+    executing `run` right now, or "" when nothing suggests it. Resuming such a run starts a
+    second pipeline on the same worktrees, so the dashboard asks for an explicit force.
+
+    Signals (no run lease exists yet): an attempt without a result that started less than its
+    worker's timeout plus `RESUME_GRACE_S` ago (an older one is from a process that died), and
+    a live scheduler lock whose current queue item is this run's.
+    """
+    if run.state in STOPPED or run.state is RunState.AWAITING_APPROVAL:
+        return ""
+    now = now or datetime.now(UTC)
+    for attempt in repo.store.list_attempts(run.id):
+        if attempt.result is not None:
+            continue
+        settings = getattr(repo.config.workers, attempt.worker, None)
+        timeout = getattr(settings, "timeout_s", 0) or DEFAULT_TIMEOUT_S
+        age = (now - attempt.started_at).total_seconds()
+        if age < timeout + RESUME_GRACE_S:
+            where = f"task {attempt.task_id}" if attempt.task_id else "the run"
+            return (
+                f"{attempt.role} attempt for {where} on {attempt.worker} started "
+                f"{max(int(age), 0)} s ago and has no result yet "
+                f"(the worker timeout is {timeout} s)"
+            )
+    holder = scheduler_lock(repo.root).read()
+    if holder is not None and holder.current_item is not None:
+        try:
+            item = repo.store.get_queue_item(holder.current_item)
+        except NotFoundError:
+            return ""
+        claimed = item.updated_at.replace(microsecond=0)
+        if item.status == "running" and (
+            item.run_id == run.id
+            or (item.run_id is None and item.idea == run.idea.text and run.created_at >= claimed)
+        ):
+            return (
+                f"the scheduler (pid {holder.pid} on {holder.host}) is working on "
+                f"queue item #{item.id}, which started this run"
+            )
+    return ""
 
 
 def run_view(repo: Repo, run_id: str) -> RunView:
@@ -255,6 +309,7 @@ def run_view(repo: Repo, run_id: str) -> RunView:
         files=log_files(base),
         can_approve=run.state is RunState.AWAITING_APPROVAL,
         can_resume=can_resume(run),
+        resume_risk=resume_risk(repo, run),
         can_cancel=run.state not in STOPPED,
         column=COLUMN_FOR_STATE[run.state],
         reports=reports,

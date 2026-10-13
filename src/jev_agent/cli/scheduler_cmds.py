@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Annotated, Any
+from typing import Annotated
 
 import typer
 from rich.console import Console
@@ -33,23 +33,18 @@ scheduler_app = typer.Typer(
 )
 
 
-def apply_profile(item: QueueItem) -> dict[str, Any]:
-    """Extra keyword arguments for `start_run` that apply the item's workspace profile
-    (docs/servers.md). Items without one use the repo default, like `jev run`; an unknown
-    profile fails the item (ProfileError), never runs it with other access."""
-    return {} if item.profile is None else {"profile": item.profile}
-
-
 async def start_item(ctx: CliContext, item: QueueItem) -> RunRecord:
-    """Start the run for a queue item: the same code path as `jev run`."""
+    """Start the run for a queue item: the same code path as `jev run`. An item without a
+    workspace profile uses the repo default (docs/servers.md); an unknown profile fails the
+    item (ProfileError), never runs it with other access."""
     return await start_run(
         ctx,
         item.idea,
         plan_only=item.plan_only,
         learning=item.learning_profile,
         no_learning=item.no_learning,
-        **({"quality": item.quality} if item.quality else {}),
-        **apply_profile(item),
+        quality=item.quality,
+        profile=item.profile,
     )
 
 

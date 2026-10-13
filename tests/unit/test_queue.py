@@ -7,7 +7,15 @@ import pytest
 
 from jev_agent.core.migrations import MIGRATIONS, SCHEMA_VERSION
 from jev_agent.core.models import Idea, RunState
-from jev_agent.core.queue import QueueError, effective_status, move_item, run_states, status_for_run
+from jev_agent.core.queue import (
+    QueueError,
+    effective_status,
+    move_item,
+    remove_item,
+    run_states,
+    status_for_run,
+)
+from jev_agent.core.scheduler import SchedulerLock
 from jev_agent.core.store import NotFoundError, QueueItem, QueueStatus, Store, StoreError
 
 
@@ -170,3 +178,55 @@ def test_run_states(store: Store, tmp_path: Path) -> None:
     store.set_queue_status(a.id, "waiting", run_id=run.id)
     store.add_queue_item("b")
     assert run_states(store, store.list_queue()) == {run.id: RunState.INTAKE}
+
+
+# ---- remove vs the scheduler (#38, #39) ------------------------------------------------------
+
+
+def _lock(tmp_path: Path) -> SchedulerLock:
+    return SchedulerLock(tmp_path / ".jev" / "scheduler.lock")
+
+
+def test_remove_running_item_only_without_live_scheduler(store: Store, tmp_path: Path) -> None:
+    item = store.add_queue_item("a")
+    assert store.claim_queue_item(item.id)
+    lock = _lock(tmp_path)
+    lock.acquire()
+    with pytest.raises(QueueError, match="running"):
+        remove_item(store, item.id)
+    assert store.get_queue_item(item.id).status == "running"
+    lock.release()
+    remove_item(store, item.id)  # orphaned: its scheduler is gone
+    assert store.list_queue() == []
+    with pytest.raises(QueueError, match="not found"):
+        remove_item(store, item.id)
+
+
+def test_remove_does_not_delete_an_item_claimed_meanwhile(
+    store: Store, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    item = store.add_queue_item("a")
+    lock = _lock(tmp_path)
+    lock.acquire()
+    original = Store.delete_queue_item
+
+    def claim_then_delete(self: Store, item_id: int, **kwargs: bool) -> bool:
+        self.claim_queue_item(item_id)  # the scheduler claims it after remove checked it
+        return original(self, item_id, **kwargs)
+
+    monkeypatch.setattr(Store, "delete_queue_item", claim_then_delete)
+    with pytest.raises(QueueError, match="running"):
+        remove_item(store, item.id)
+    monkeypatch.undo()
+    assert store.get_queue_item(item.id).status == "running"
+    lock.release()
+
+
+def test_delete_queue_item_can_keep_running(store: Store) -> None:
+    item = store.add_queue_item("a")
+    assert store.claim_queue_item(item.id)
+    assert store.delete_queue_item(item.id, keep_running=True) is False
+    assert store.get_queue_item(item.id).status == "running"
+    assert store.delete_queue_item(item.id) is True
+    with pytest.raises(NotFoundError):
+        store.delete_queue_item(item.id, keep_running=True)

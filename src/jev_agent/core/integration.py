@@ -12,6 +12,7 @@ counted.
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 
 from jev_agent.core.commands import CommandResult
@@ -63,7 +64,7 @@ async def run_integration(
 ) -> IntegrationOutcome:
     """Merge the tasks in `order`, run the tests on the result, then (unless the level is
     "none") the quality gate. Raises `WorkspaceError`."""
-    result = h.workspace.integrate(run_id, [card.id for card in order])
+    result = await asyncio.to_thread(h.workspace.integrate, run_id, [card.id for card in order])
     if not result.clean:
         return IntegrationOutcome(result, "skipped")
     commands = [card.test_command for card in order if card.test_command]
@@ -87,7 +88,7 @@ async def run_integration(
         task=None,
         number=round_no,
         workdir=result.workdir,
-        diff=h.workspace.result_diff(run_id),
+        diff=await asyncio.to_thread(h.workspace.result_diff, run_id),
         passed_commands=commands,
     )
     return IntegrationOutcome(result, tests, quality=gate)

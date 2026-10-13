@@ -26,6 +26,7 @@ import httpx
 from jev_agent.config.schema import NATIVE_JEV_BASE_URL, OPENROUTER_BASE_URL, JevSettings
 from jev_agent.core.models import Decision, DecisionPoint, DecisionRequest
 from jev_agent.dispatch.base import DispatchError
+from jev_agent.dispatch.requests import model_fits
 
 __all__ = ["NATIVE_BASE_URL", "OPENROUTER_BASE_URL", "JevDispatcher", "JevSettings"]
 
@@ -113,6 +114,9 @@ POINT_QUESTION_INSTRUCTIONS: dict[tuple[DecisionPoint, str], str] = {
         "Given the attempt's test and review results, what next? Retry for flaky or small "
         "failures, escalate after repeated failures, reassign if this worker seems stuck, and "
         "ask a human when attempts are nearly used up or the task is unclear. "
+        "`worker_status` `error` means the worker could not run at all (CLI missing, not "
+        "logged in, bad key): reassign at once (a human if `can_reassign` is false); `failure` "
+        "means it ran but the work failed. "
         "`quality_failed` means the quality gate blocked the attempt (see "
         "`quality_findings`): never answer done then; retry first (the findings go to the "
         "coder), escalate if it blocks again."
@@ -142,6 +146,12 @@ PREFER_FREE_INSTRUCTION = (
     "rate-limited and run only on the api worker."
 )
 FREE_WORKER_INSTRUCTION = "Free models run only on the api worker: pick api to use one."
+# Appended to the worker and model instructions when some allowed pair cannot run
+# (`requests.model_fits`); the harness swaps such a model for the worker's first runnable one.
+PAIRING_INSTRUCTION = (
+    "Models named vendor/name run only on the api worker; other model names only on "
+    "claude_code and codex."
+)
 # Criteria description for a free model, and for one whose structured-output support is unknown.
 FREE_OPTION = "free (rate-limited)"
 FREE_UNKNOWN_OPTION = "free (rate-limited); structured output support unknown"
@@ -270,6 +280,11 @@ class JevDispatcher:
             set(free_info.get("structured_output_unknown", [])),
         )
         prefer = bool(free_info.get("prefer_free")) and bool(free)
+        mismatch = any(
+            not model_fits(worker, model)
+            for worker in questions.get("worker", [])
+            for model in questions.get("model", [])
+        )
 
         def describe(name: str, option: str) -> str | None:
             if name == "model" and option in free:
@@ -282,6 +297,8 @@ class JevDispatcher:
                 text = f"{text} {PREFER_FREE_INSTRUCTION}"
             elif free and name == "worker":
                 text = f"{text} {FREE_WORKER_INSTRUCTION}"
+            if mismatch and name in ("worker", "model"):
+                text = f"{text} {PAIRING_INSTRUCTION}"
             return text
 
         return {

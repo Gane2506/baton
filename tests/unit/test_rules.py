@@ -185,3 +185,44 @@ def test_quality_state_is_compact() -> None:
     assert len(req.state["quality_findings"]) == 5
     assert all(len(f) <= 200 for f in req.state["quality_findings"])
     assert "quality" not in _d5().state
+
+
+# ---- runnable (worker, model) pairs (issue #33) -------------------------------------------------
+
+SLUG = "anthropic/claude-sonnet-4.5"
+
+
+@pytest.mark.parametrize(
+    ("workers", "models", "pair"),
+    [
+        (["claude_code", "api"], [SLUG], ("api", SLUG)),  # an OpenRouter slug runs only on api
+        (["api", "claude_code"], ["sonnet"], ("claude_code", "sonnet")),  # an alias: CLI only
+        (["claude_code", "api"], [SLUG, "sonnet"], ("claude_code", "sonnet")),
+        (["api", "codex"], ["gpt-5.2-codex", SLUG], ("api", SLUG)),
+    ],
+)
+async def test_assignments_pair_workers_with_models_they_can_run(
+    tmp_path: Path, workers: list[str], models: list[str], pair: tuple[str, str]
+) -> None:
+    opts = _opts("planner", workers=workers, models=models)
+    d1 = await _answers(r.d1_intake(Idea(text="x", repo_path=tmp_path), opts))
+    assert (d1["worker"], d1["model"]) == pair
+    d4 = await _answers(r.d4_task(CARD, _opts("coder", workers=workers, models=models), 0, 1))
+    assert (d4["worker"], d4["model"]) == pair
+
+
+async def test_d2_vendor_switch_keeps_pairs_runnable() -> None:
+    opts = _opts("validator", workers=["claude_code", "api"], models=["sonnet", "openai/gpt-5"])
+    req = r.d2_validator(PLAN, 1, opts, "planner", "claude_code", "sonnet")  # avoid anthropic
+    assert {k: v for k, v in (await _answers(req)).items() if k != "effort"} == {
+        "worker": "api",
+        "model": "openai/gpt-5",
+    }
+
+
+@pytest.mark.parametrize("attempt", [1, 2, 3])
+async def test_d5_error_reassigns_at_once(attempt: int) -> None:
+    """`error`: the worker could not run (missing CLI, not logged in), so retrying it is futile."""
+    assert await _answers(_d5(worker_status="error", attempt=attempt)) == {"action": "reassign"}
+    lone = _d5(worker_status="error", attempt=attempt, can_reassign=False)
+    assert await _answers(lone) == {"action": "human"}

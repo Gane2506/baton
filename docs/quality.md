@@ -31,6 +31,24 @@ and a missing required tool counts as a failure. Everything else is **reported, 
 blocking**: minor findings, a failing advisory check (for example coverage at `medium`), a
 skipped check.
 
+### When a tool breaks
+
+A check whose tool is installed but gives no usable answer reports status **`error`**, not
+`skipped` and not findings: the tool crashed or exited with an unexpected code, timed out
+(`[quality] timeout_s`), printed output that could not be parsed, or (bandit, Semgrep) listed
+errors in its JSON report, meaning the scan is incomplete. A check that raises an exception is
+an `error` too. An `error` **blocks when the check is required** at this level (its level is
+reached, as for types at `production`, or its tool is in `required_tools`), with the reason
+`<check> could not run: ...`; otherwise it is reported. It never becomes a finding, so the coder
+is not asked to fix a broken tool; the logs have the tool's output. `skipped` means only that
+the tool is not installed (and not required) or that the check does not apply. The full test
+suite is the exception: a suite that fails or times out is a test failure (`fail`, with a
+finding), since the code under test is the usual cause.
+
+gitleaks exiting 1 means it found leaks: when its output cannot be parsed into a list, the
+check fails with one **critical** finding ("gitleaks reported leaks that could not be listed"),
+which blocks at every level like any found secret.
+
 Setting the level, highest precedence first:
 
 1. `jev run --quality LEVEL` / `jev resume --quality LEVEL` (changes a run's level from now on),
@@ -78,7 +96,7 @@ command) is not run twice.
 - `.jev/runs/<run_id>/quality/review.md`: the run's review, rebuilt after every gate from the
   latest gate of each task and of the integration: Summary (one row per gate), Walkthrough
   (one row per file), Findings grouped by severity with `file:line` and suggestions, a Checks
-  table (pass / fail / skipped and why), and from `production` a Security checklist, from
+  table (pass / fail / skipped / error and why), and from `production` a Security checklist, from
   `scalable` a Scalability checklist and a Threat model.
 - Tool output is in the run's logs (`.jev/runs/<run_id>/<task>/<n>.quality.<check>.log`),
   redacted. Reports are redacted too.
@@ -141,7 +159,8 @@ for `[roles.code_reviewer]` to keep it small.
   and the coder may push back by fixing nothing, after which D5 escalates and finally asks a
   human. Lower the level or remove the cause if that happens often.
 - **Tools only check what they check.** Parsing of tool output is best-effort; when a tool's
-  output cannot be parsed, the check reports the tail of its output instead of findings.
+  output cannot be parsed, the check reports status `error` with the tail of its output instead
+  of findings (see [When a tool breaks](#when-a-tool-breaks)).
 - **Not a substitute for a human security review.** Treat `production` and `scalable` as a
   safety net for automated work, not as a sign-off.
 - Licence checks only cover new Python dependencies. Coverage is only measured for Python with

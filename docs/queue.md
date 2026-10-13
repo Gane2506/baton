@@ -23,7 +23,7 @@ only on your machine. There are no new config keys: scheduler settings are comma
 | `jev queue add "idea" [--priority high\|normal\|low] [--plan-only] [--learning NAME \| --no-learning] [--profile NAME] [--quality LEVEL]` | Append an idea. The flags are stored with it and used when its run starts. |
 | `jev queue list [--all]` | The queue in the order the scheduler takes it: id, priority, status, run, idea, flags, note. Without `--all`, only `queued`, `running` and `waiting` items. |
 | `jev queue move ID --up\|--down\|--top` | Move a queued item one place, or to the front. |
-| `jev queue remove ID` | Delete an item (not while it is running). Its run, if any, is kept. |
+| `jev queue remove ID` | Delete an item (not while a live scheduler is running it). Its run, if any, is kept. |
 | `jev queue clear --yes` | Delete every `queued` item. Items that already have a run are kept. |
 
 **Order.** Priority first (`high`, `normal`, `low`), then position (the order you added them).
@@ -33,11 +33,13 @@ item is `high`, and says so.
 
 **Flags.** `--plan-only`, `--learning` and `--no-learning` mean what they mean on `jev run`
 (see [learning.md](learning.md)); a `--learning` profile must exist when you add the item.
-`--profile` names a workspace profile and is stored and passed to the run as is. If this jev
-cannot yet apply workspace profiles to runs, the scheduler marks such an item `failed` with a
-note rather than running it with different access than you asked for. `--quality LEVEL` sets
-the run's quality gate level ([quality.md](quality.md)); without it the run gets
-`[quality] level` from the config at the time it starts.
+`--profile` names a workspace profile ([servers.md](servers.md#workspace-profiles)); it must
+exist when you add the item, and the scheduler starts the run with it, so the run gets that
+profile's servers, browser, learning and quality. An item without one uses the repo default
+(`jev profile use`), like `jev run`. If the profile is gone by the time the scheduler picks
+the item, the item is marked `failed` with a note instead of running with other access.
+`--quality LEVEL` sets the run's quality gate level ([quality.md](quality.md)); without it the
+run gets `[quality] level` from the config at the time it starts.
 
 **Statuses.**
 
@@ -81,10 +83,12 @@ jev scheduler status
   per-run cap (`[budget] per_run_usd`).
 
 **One scheduler per repo.** `start` takes `.jev/scheduler.lock` (JSON: pid, host, start time,
-current item) and refuses to start while another live scheduler holds it. A lock whose pid is
-no longer running on this host, or that cannot be read, is stale and is taken over. A lock
-written on another host (a repo on a shared disk) is respected; delete the file by hand if you
-know that scheduler is gone.
+current item) and holds an exclusive `flock` on it while it runs, so a second `start` is
+refused, and two starters racing for a stale lock never both win. The kernel drops the
+`flock` when the scheduler's process ends, even when it is killed, so a dead scheduler never
+blocks the next start. A lock file written by an older jev (no `flock`) keeps the old rules:
+it is stale when its pid is no longer running on this host or it cannot be read; one written
+on another host is respected (delete the file by hand if you know that scheduler is gone).
 
 `status` shows whether a scheduler is running (pid, host, since when), the item it is on, the
 count of items in each status, and today's spend.
@@ -95,6 +99,16 @@ but the run's state is saved, so `jev resume RUN` continues it later. The item b
 `waiting` with the note `interrupted; continue with jev resume RUN`. The scheduler does not
 resume it by itself. If the interrupt came before the run was created, the item goes back to
 `queued`.
+
+**A scheduler that died** (killed, crashed, machine off) leaves its item `running`. The item
+is linked to its run in the same database write that creates the run, so the next
+`jev scheduler start` can settle it, before it takes anything new: an item whose run was in
+progress becomes `waiting` with the note `the scheduler stopped; continue with jev resume
+RUN`; an item whose run had already stopped takes that run's status; an item without a run
+goes back to `queued`. Until then, `jev queue remove` (and the dashboard's Remove) can delete
+such an item: a `running` item is refused only while a live scheduler holds the lock. A remove
+never deletes an item the scheduler claims at the same moment, and if an item disappears
+while its run goes on (removed by hand), the scheduler notes it and carries on with the queue.
 
 ### Approvals and unattended runs
 

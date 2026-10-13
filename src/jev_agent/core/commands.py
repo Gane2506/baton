@@ -2,22 +2,24 @@
 
 from __future__ import annotations
 
-import asyncio
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
 from jev_agent.runlog import write_log
+from jev_agent.workers.subprocess_runner import run_command
 
 
 @dataclass(frozen=True)
 class CommandResult:
-    exit_code: int  # -1 when the command timed out
-    output: str  # combined stdout and stderr
+    exit_code: int  # -1 when the process could not be reaped
+    output: str  # combined stdout and stderr, in order
+    timed_out: bool = False
 
     @property
     def ok(self) -> bool:
-        return self.exit_code == 0
+        return self.exit_code == 0 and not self.timed_out
 
 
 class CommandRunner(Protocol):
@@ -27,23 +29,22 @@ class CommandRunner(Protocol):
 
 
 class ShellCommandRunner:
+    """Runs the command with `sh -c` through `run_command`, which owns the process lifecycle:
+    its own process group, killed on timeout or cancellation, so a test command that starts
+    children (`uv run pytest`, `npm test`) cannot outlive its timeout."""
+
     async def run(self, command: str, cwd: Path, log_path: Path, timeout_s: int) -> CommandResult:
-        proc = await asyncio.create_subprocess_shell(
-            command,
-            cwd=cwd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.STDOUT,
-        )
-        try:
-            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout_s)
-        except TimeoutError:
-            proc.kill()
-            await proc.wait()
-            result = CommandResult(-1, f"timed out after {timeout_s}s")
-        else:
-            assert proc.returncode is not None
-            result = CommandResult(proc.returncode, stdout.decode(errors="replace"))
-        write_log(log_path, f"$ {command}\n{result.output}\n[exit code {result.exit_code}]\n")
+        # `exec 2>&1` makes the shell send stderr to stdout for everything it runs, so the
+        # output keeps the order in which the two streams were written.
+        script = f"exec 2>&1\n{command}"
+        proc = await run_command(["/bin/sh", "-c", script], cwd, dict(os.environ), timeout_s)
+        output = proc.stdout + proc.stderr  # stderr only holds the shell's own early errors
+        if proc.timed_out:
+            output += f"\n[timed out after {timeout_s}s]"
+        exit_code = -1 if proc.exit_code is None else proc.exit_code
+        result = CommandResult(exit_code, output, timed_out=proc.timed_out)
+        status = "timed out" if result.timed_out else f"exit code {result.exit_code}"
+        write_log(log_path, f"$ {command}\n{result.output}\n[{status}]\n")
         return result
 
 

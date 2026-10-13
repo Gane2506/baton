@@ -242,7 +242,11 @@ class ApiWorker:
                 "timeout", f"request timed out after {job.timeout_s}s ({type(exc).__name__})"
             ) from exc
         except httpx.HTTPError as exc:
-            raise _RequestFailed("error", f"network error: {type(exc).__name__}: {exc}") from exc
+            # A dropped or refused connection is transient: this attempt failed. Anything else
+            # (proxy, URL scheme, redirects, our own request) is configuration: an error.
+            transient = isinstance(exc, httpx.NetworkError | httpx.RemoteProtocolError)
+            kind: WorkerStatus = "failure" if transient else "error"
+            raise _RequestFailed(kind, f"network error: {type(exc).__name__}: {exc}") from exc
         raise AssertionError("unreachable")  # pragma: no cover
 
     async def _post(
@@ -280,9 +284,7 @@ class ApiWorker:
             return fail("error", "response has no message content")
         if job.output_schema is None:
             log.add("result", "status: success")
-            return WorkerOutput(
-                result=self._result(job, "success", content[:SUMMARY_CHARS], cost, tokens)
-            )
+            return WorkerOutput(result=self._result(job, "success", content, cost, tokens))
         try:
             parsed = job.output_schema.model_validate(parse_json_content(content))
         except json.JSONDecodeError as exc:
@@ -308,7 +310,7 @@ class ApiWorker:
     ) -> WorkerResult:
         return WorkerResult(
             status=status,
-            summary=redact(summary),
+            summary=redact(summary)[:SUMMARY_CHARS],  # redact first: a cut can split a secret
             cost_usd=cost,
             tokens=tokens,
             raw_log_path=job.log_path,

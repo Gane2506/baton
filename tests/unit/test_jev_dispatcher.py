@@ -6,14 +6,17 @@ import httpx
 import pytest
 
 from jev_agent.config.schema import JevConfig
+from jev_agent.core.assign import Assignment, fit_free
 from jev_agent.core.models import DecisionRequest
 from jev_agent.dispatch.base import Dispatcher, DispatchError
 from jev_agent.dispatch.jev import (
     GENERIC_INSTRUCTION,
+    PAIRING_INSTRUCTION,
     PRICE_PER_INPUT_TOKEN_USD,
     JevDispatcher,
     JevSettings,
 )
+from jev_agent.dispatch.requests import RoleOptions, model_fits
 
 FIXTURES = Path(__file__).parent.parent / "fixtures" / "jev"
 KEY = "sk-or-test-SECRET-1234567890"
@@ -116,7 +119,8 @@ async def test_instruction_overrides_and_generic_fallback() -> None:
     await jev.decide(_d4())
     questions = rec.payload()["questions"]
     assert questions["effort"]["instructions"] == "custom effort"
-    assert questions["worker"]["instructions"] == "custom worker"
+    # The pairing rule is a fact about the allowed answers, appended even to an override.
+    assert questions["worker"]["instructions"] == f"custom worker {PAIRING_INSTRUCTION}"
     assert jev.instruction_for("D2", "mystery") == GENERIC_INSTRUCTION.format(name="mystery")
 
 
@@ -328,3 +332,52 @@ def test_settings_come_from_dispatcher_config() -> None:
     assert JevDispatcher(settings).settings.model == "typesafe/jev-1.13"
     assert settings.min_confidence == 0.7
     assert settings.base_url == "https://openrouter.ai/api/v1"
+
+
+# ---- runnable (worker, model) pairs (issue #33) -------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("models", "pair"),
+    [
+        # Jev answers worker and model separately: claude_code with an OpenRouter slug.
+        (MODELS, ("claude_code", None)),
+        (["sonnet", *MODELS], ("claude_code", "sonnet")),
+    ],
+)
+async def test_mismatched_answers_become_a_runnable_pair(
+    models: list[str], pair: tuple[str, str | None]
+) -> None:
+    rec = Recorder(_ok("d4_openrouter_success.json"))
+    jev, _ = _dispatcher(rec)
+    decision = await jev.decide(_d4())
+    assert (decision.answers["worker"], decision.answers["model"]) == (
+        "claude_code",
+        "anthropic/claude-sonnet-4.6",
+    )
+    options = RoleOptions("coder", ["claude_code", "codex", "api"], models, ["medium"])
+    fitted = fit_free(Assignment.from_answers(decision.answers), options)
+    assert (fitted.worker, fitted.model) == pair
+    assert model_fits(fitted.worker, fitted.model)
+
+
+async def test_api_answer_with_a_cli_alias_becomes_a_runnable_pair() -> None:
+    options = RoleOptions("planner", ["claude_code", "api"], ["sonnet", "openai/gpt-5"], ["low"])
+    answers = {"worker": "api", "model": "sonnet", "effort": "low"}
+    fitted = fit_free(Assignment.from_answers(answers), options)
+    assert (fitted.worker, fitted.model) == ("api", "openai/gpt-5")
+
+
+def test_payload_states_the_pairing_rule_only_when_pairs_can_mismatch() -> None:
+    body = JevDispatcher().build_payload("D4", _d4().state, _d4().questions)
+    assert PAIRING_INSTRUCTION in body["questions"]["worker"]["instructions"]
+    assert PAIRING_INSTRUCTION in body["questions"]["model"]["instructions"]
+    questions = {**_d4().questions, "worker": ["api"]}
+    body = JevDispatcher().build_payload("D4", _d4().state, questions)
+    assert PAIRING_INSTRUCTION not in body["questions"]["worker"]["instructions"]
+    assert PAIRING_INSTRUCTION not in body["questions"]["model"]["instructions"]
+
+
+def test_d5_instruction_separates_error_from_failure() -> None:
+    text = JevDispatcher().instruction_for("D5", "action")
+    assert "`error`" in text and "reassign" in text

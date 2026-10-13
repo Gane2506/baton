@@ -2,8 +2,12 @@
 
 Fields: `time` (UTC, ISO 8601), `run_id`, `role`, `server`, `access`, `action` (`run_command`,
 `read_file`, `write_file`, `upload`, `browser_install`, `connect`), `command` (or the path),
-`allowed`, `reason`, `exit_code`, `duration_s`. Every line is redacted before it is written
-(`jev_agent.runlog.redact`). File contents are never logged, only their size.
+`allowed`, `reason`, `exit_code`, `duration_s`, `phase`. An allowed operation gets two lines:
+`phase` "started" before ssh runs and "finished" (with the exit code) after it returns, so a
+command whose process was killed meanwhile is still on record; refused operations and other
+writers (`jev doctor --connect`) write one line with an empty `phase`. Every line is redacted
+before it is written (`jev_agent.runlog.redact`). File contents are never logged, only their
+size.
 """
 
 from __future__ import annotations
@@ -36,6 +40,7 @@ class AuditEntry:
     reason: str = ""
     exit_code: int | None = None
     duration_s: float | None = None
+    phase: str = ""  # "started" / "finished" for allowed operations, "" otherwise
     time: str = ""
 
 

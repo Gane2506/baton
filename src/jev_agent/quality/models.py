@@ -13,7 +13,7 @@ from pydantic import BaseModel, Field
 from jev_agent.quality.levels import QualityLevel
 from jev_agent.roles.schemas import SEVERITIES, Category, QualityReview, Severity
 
-CheckStatus = Literal["pass", "fail", "skipped"]
+CheckStatus = Literal["pass", "fail", "skipped", "error"]
 GateScope = Literal["task", "integration"]
 ReviewStatus = Literal["done", "skipped", "error"]
 AI_REVIEW = "ai-review"  # `Finding.source` of findings from the code reviewer
@@ -52,9 +52,11 @@ class Finding(BaseModel):
 
 
 class CheckResult(BaseModel):
-    """What one check reported. `status` is `pass`, `fail` or `skipped` (with the reason in
-    `detail`). The gate fills in `name`, `tool` and `required` (a failure blocks at this
-    level: the check's `gate_from` is reached or its tool is in `required_tools`)."""
+    """What one check reported. `status` is `pass`, `fail`, `skipped` (not installed or not
+    applicable) or `error` (the tool is installed but crashed, timed out or printed output that
+    could not be parsed, or the check itself raised), with the reason in `detail`. The gate
+    fills in `name`, `tool` and `required` (a failure or an error blocks at this level: the
+    check's `gate_from` is reached or its tool is in `required_tools`)."""
 
     status: CheckStatus
     detail: str = ""
@@ -134,12 +136,14 @@ class GateResult(BaseModel):
         return lines[:limit]
 
     def summary_line(self) -> str:
-        """`blocked (2 critical, 1 major); checks 3 pass, 1 fail, 2 skipped`."""
+        """`blocked (2 critical, 1 major); checks 3 pass, 1 fail, 2 skipped, 1 error`."""
         counts = self.counts()
         found = ", ".join(f"{n} {sev}" for sev, n in counts.items() if n)
         statuses = [c.status for c in self.checks]
         checks = ", ".join(
-            f"{statuses.count(s)} {s}" for s in ("pass", "fail", "skipped") if s in statuses
+            f"{statuses.count(s)} {s}"
+            for s in ("pass", "fail", "skipped", "error")
+            if s in statuses
         )
         verdict = "blocked" if self.blocked else "passed"
         line = f"{verdict} ({found or 'no findings'})"

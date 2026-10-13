@@ -2,6 +2,109 @@
 
 Deviations from [PLAN.md](../PLAN.md) and choices it left open. Newest first.
 
+## 2026-10-13: Fixes from the full code review (batches A to E)
+
+Tracking issue #59. Each design choice below was decided with the `jev-decide` skill
+(`.claude/skills/jev-decide/`): Jev's direct pick plus a gated weighted matrix; disagreements go
+back to Jev, which arbitrates. Decision logs are kept with the review notes, not in the repo.
+
+- **Process lifecycle (#11, #12, #13, #49).** `workers.subprocess_runner.run_command` is the one
+  owner of child processes: it kills the process group on timeout *and* on cancellation.
+  `ShellCommandRunner` delegates to it with `sh -c "exec 2>&1\n<command>"` (Jev: ARBITRATED 0.88
+  over a `merge_stderr` flag on `run_command`), so test commands keep their stream order and
+  their timeout holds when they start children. The dashboard's `RunLauncher` owns its jobs: a
+  Starlette lifespan calls `shutdown()`, which cancels each job's coroutine through
+  `run_job_coroutine` (Jev: AGREE, sync executors with a cancel hook, over async executors and
+  over jobs as subprocesses). Server commands run under the server's `timeout -k 2 N sh -c`,
+  without a limit where `timeout` is missing (Jev: ARBITRATED 0.70 over requiring it).
+- **Trusted repository config (#16).** A repo `jev.toml` may change `config.loader.GUARDED_KEYS`
+  (endpoints, credential variables, worker commands and permissions, tools, servers, browser,
+  profiles, role grants) only when the user config's `[trust] repos` lists the repo; a value
+  equal to the user/default value is always accepted, and a repo cannot contain `[trust]`.
+  Jev: AGREE over a host allowlist for endpoints only, and over warnings (which failed the
+  gate). `prompt_file` is not guarded: custom prompts are an ordinary repo feature.
+- **One credential-pattern list (#27).** `runlog.redact.CREDENTIAL_PATTERNS` (kind, pattern,
+  replacement) is used for redaction, by the quality gate's secret scan (plus its
+  code-only "hard-coded credential" heuristic) and by the config check for literal secrets.
+  Text is redacted before it is truncated.
+- **Cancellation wins; plan-only is stored (#14, #22).** `Store.set_run_state(..., unless=)`
+  is a conditional update; the pipeline writes with `unless={CANCELLED}` and `cancel_run`
+  with `unless=STOPPED`, so neither a running step nor a cancel can overwrite the other
+  between a check and the write (Jev, during the review: ARBITRATED 0.46 for guarded writes
+  over a full transition table). Stopping the running worker on cancel is still a follow-up.
+  `runs.plan_only` (migration 8) replaces the per-call `Pipeline._plan_only` attribute.
+- **Resume while running (#15).** The dashboard treats a run as possibly running when it has an
+  attempt with no result younger than its worker's `timeout_s` plus 300 s, or when the live
+  scheduler lock's current queue item started it; plain Resume is then refused and Force
+  resume needs a confirmation (Jev: ARBITRATED 0.72 for attempt age over "any open attempt"
+  and over ownership only). A run lease (pid, host, heartbeat) remains the real fix.
+- **D5 done preconditions (#21).** Worker success, tests not failed and an unblocked quality
+  gate are hard preconditions for `done`; otherwise the action becomes `retry`, with the
+  reason in the task note (Jev: ARBITRATED 0.16 for retry over the rules dispatcher's answer).
+- **Worker readiness and the init template (#19, #20).** One predicate
+  (`cli.wiring.worker_readiness`) for runs and `jev doctor`: CLI workers need their command on
+  PATH; api needs its key and, per role, a runnable model, and never runs the coder. Unready
+  workers are dropped with a warning; api without a model for some roles is hidden from those
+  roles via `WorkerRegistry.names(role)` (Jev: ARBITRATED 0.66, per role over per worker). The
+  `jev init` template comments out every value, so defaults < user < repo holds again.
+- **Runnable (worker, model) pairs; error vs failure (#33, #34).** `requests.model_fits` infers
+  compatibility from the name (`/` means api only, otherwise CLI only, the default fits all);
+  `assign.fit_free` repairs dispatcher answers, escalation and reassignment by keeping the
+  worker and taking its first runnable pool model or its default (Jev: ARBITRATED 0.92 over a
+  per-worker model list). Codex custom providers with `/` names are unsupported. Exit 127/126
+  without output is `error`, and D5 rules reassign on `error` at once (Jev: ARBITRATED 0.97);
+  the api worker maps `httpx.NetworkError` and `RemoteProtocolError` to `failure`, other
+  transport errors to `error` (Jev: ARBITRATED 0.33).
+- **Git timeouts and repo hooks (#24).** `workspace.run_git` runs git in its own process group
+  with no terminal and closed stdin; 60 s for quick calls, 600 s for commit, merge, worktree and
+  push (Jev: AGREE). `jev ship` sets `GIT_TERMINAL_PROMPT=0` and an empty `GIT_ASKPASS`
+  (ARBITRATED 0.30). Git runs off the event loop through `asyncio.to_thread` at the call sites;
+  the `Workspace` protocol stays synchronous (ARBITRATED 0.31). Repo hooks run by default;
+  `[workspace] run_hooks = false` adds `--no-verify` (ARBITRATED 0.09). A failed commit or diff
+  halts NEEDS_HUMAN resumably, keeping the worktree (ARBITRATED 0.83 over FAILED and over a
+  failed attempt).
+- **`init --migrate` (#29).** Only pre-checks raise; the DB is migrated right after the
+  directory rename; failed ref renames and steps are reported, and a rerun completes them.
+- **Exit codes (#28).** One code, 3, for every stop short of DONE, not one per state (Jev:
+  ARBITRATED 0.34; the matrix leaned to distinct codes). 1 stays a command error, 2 usage.
+- **Queue items and a dying scheduler (#38, #39).** The scheduler links an item to its run with
+  a per-connection TEMP trigger on `runs`, inside the run's insert (ARBITRATED 0.94 over editing
+  `create_run` and over a callback through the pipeline). On start it recovers `running` items;
+  `remove_item` refuses only while a live scheduler holds the lock (ARBITRATED 0.80). Deleting
+  is one conditional statement. The lock is an `fcntl.flock` held for the scheduler's lifetime
+  (ARBITRATED 0.82); unmarked lock files from older versions keep the pid/host rules.
+- **Lesson ids and scoring (#40).** `lessons` is rebuilt with AUTOINCREMENT in state.db
+  (migration 9, numbering after `L` ids attempts still name) and in the shared DB (shared
+  migration 2); writes to a lesson also match its profile. Scoring is recorded in a
+  `scored_tasks` ledger in the database that holds the scores, in the same transaction
+  (ARBITRATED 0.95). Ids deleted before the upgrade in the shared DB cannot be recovered.
+- **MCP server survives bad input (#47).** `servers/mcp.py` accepts only finite numbers;
+  out-of-range values are still clamped by `ServerService` (Jev: ARBITRATED 0.04, "finite only"
+  over also refusing out-of-range values). A tool exception becomes an `isError` result with the
+  traceback logged to stderr; any other failing line gets a -32603 reply and serving continues.
+- **Server policy hardening (#44, #45, #46, #48).** Recursive `grep` only inside
+  workdir/allowed_paths, with `--exclude`/`--exclude-dir` for credential names and `-R`
+  refused (Jev: ARBITRATED 0.35). `docker inspect` and `systemctl show` are dropped rather than
+  filtered, since `--format` filters are easy to get around (Jev: ARBITRATED 0.82); `ps e`,
+  `git show REV:path` and `git diff --no-index` are closed too. Recursive `cp` only from inside
+  allowed_paths (Jev: ARBITRATED 0.20); a credential file that lives there can still be copied
+  (documented). Writes go through a fresh `mktemp` file. `.git` paths are never writable, and
+  every git command runs with `core.hooksPath=/dev/null` and `core.fsmonitor=false`.
+  `pip install -r` stays allowed and is documented instead: medium access already means code
+  execution as the server account (Jev: ARBITRATED 0.76). The audit log gets a `phase` field:
+  a `started` line before ssh runs (nothing runs if it cannot be written) and a `finished`
+  line after (Jev: ARBITRATED 0.78). Not covered: implicit bare repositories inside
+  allowed_paths, and tokens in remote URLs readable at basic (docs/servers.md, known limits).
+- **Quality tool errors are a status (#18, #17).** `CheckStatus` gains `error`: the tool is
+  installed but crashed, timed out, printed unparseable output, or (bandit, Semgrep) reported
+  scan errors; a check that raises is `error` too. One helper (`quality.base.tool_error`)
+  builds it; it blocks only when the check is required, otherwise it is reported. Jev:
+  ARBITRATED 0.22 for `error` over "fail without findings" and over "skipped plus a flag" (the
+  direct pick was `error` in every round). Stored `quality_reports` JSON still parses. A
+  failing or timed-out test suite stays `fail`: the code under test is the usual cause.
+  gitleaks exiting 1 with nothing parsed fails with a critical finding (Jev: ARBITRATED 0.92
+  over `error` and over switching to its JSON report).
+
 ## 2026-10-13: Servers over SSH, virtual browser, workspace profiles
 
 Code: `src/jev_agent/servers/` (policy, ssh, audit, service, mcp, access, profiles, browser),
@@ -46,7 +149,8 @@ Verification: [verification.md](verification.md) section 9.
   `BatchMode=yes`, `StrictHostKeyChecking=yes` (never `no`/`accept-new`: the user accepts a
   host key once by hand), `ConnectTimeout=10`, `ControlMaster=auto` with `%C` sockets under
   `.jev/ssh/` (0700, `ControlPersist=60`; off when the socket path would be too long). Files go
-  through `head -c` and `cat > tmp && mv`, so no scp/sftp. `SSH_AUTH_SOCK` is forwarded to the
+  through `head -c` and `cat > "$(mktemp DIR/.jev-tmp.XXXXXXXXXX)" && mv` (a fresh temp file since
+  the review fixes, #45), so no scp/sftp. `SSH_AUTH_SOCK` is forwarded to the
   MCP process because MCP clients start stdio servers with a reduced environment.
 - **No migrations.** Issue #8 owns the store this cycle, so state lives in files: the repo's
   default profile in `.jev/profile`, the run's copy of its profile in
@@ -269,7 +373,8 @@ Code: `core/chat.py`, `cli/chat_cmds.py`, `roles/chat/prompt.md`; tests in
   "with learning" on the start screen or `/learning on` creates the active profile, as
   `jev learning enable` would. Lessons are selected for the planner role.
 - **Workspace profile**: same PROFILE HOOK as the scheduler. Passed to `start_run` only if its
-  signature has `profile`; otherwise `/plan` and `/run` refuse rather than drop it.
+  signature has `profile`; otherwise `/plan` and `/run` refuse rather than drop it. *(Superseded 2026-10-13: the chat
+  passes the profile directly and it is applied to the runs it starts, #31.)*
 - **Chat cost is separate**: checked against `--budget-usd` (default $1.00) before each model
   call, shown by `/cost`, never added to a run. A check-before-call budget can end slightly
   above the cap; Claude Code calls also get `--max-budget-usd` with what is left.
@@ -337,8 +442,8 @@ Code: `core/queue.py`, `core/scheduler.py`, queue methods in `core/store.py` (mi
   is interrupted where it is (as with `jev run`), its item becomes `waiting` with a
   `jev resume` note, and nothing restarts it automatically. The scheduler finds the run it
   started by idea text and start time when `start_run` did not return.
-- **Lock file, not a database row**: `.jev/scheduler.lock` with pid and host, taken with
-  `O_CREAT | O_EXCL`; a dead pid on this host (or an unreadable file) is stale and taken over;
+- **Lock file, not a database row** *(since #39 also held with `fcntl.flock`)*:
+  `.jev/scheduler.lock` with pid and host, taken with `O_CREAT | O_EXCL`; a dead pid on this host (or an unreadable file) is stale and taken over;
   another host's lock is respected because its pid cannot be checked.
 - **Daily budget** counts every run created today (UTC), not only queue runs, and is checked
   between runs, so it can be overshot by up to one run's cap.
@@ -346,7 +451,8 @@ Code: `core/queue.py`, `core/scheduler.py`, queue methods in `core/store.py` (mi
 - **Workspace profiles**: the item's `profile` is stored and passed to `start_run` as
   `profile=` when that function accepts it (`scheduler_cmds.apply_profile`, the hook for the
   profile feature). Until then an item naming a profile fails with a note instead of running
-  with access it did not ask for.
+  with access it did not ask for. *(Superseded 2026-10-13: `start_run` always takes `profile`
+  and `quality`; the scheduler passes them directly and profiles are applied, #31.)*
 - **Board**: `build_board` is a pure function (tested without rendering); columns side by side
   from 140 columns, stacked panels below. Done shows the last 10 runs unless `--all`.
 

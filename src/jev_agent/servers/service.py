@@ -1,9 +1,11 @@
-"""The server tools agents call: policy check, then SSH, then an audit line (always).
+"""The server tools agents call: policy check, an audit line, SSH, then the result line.
 
 `ServerService` serves only the servers it was granted (`access.allowed_grants`), each at its
 granted level; the MCP server (`servers/mcp.py`) maps tool calls onto these methods. Results
 are plain text, clipped and redacted. Nothing here raises for a refused or failed operation:
-it returns a `ToolResult` with `is_error`, which the agent sees.
+it returns a `ToolResult` with `is_error`, which the agent sees. Every allowed operation is
+audited twice (issue #48): a "started" line before ssh runs (if it cannot be written, nothing
+runs) and a "finished" line after; an audit write that fails becomes an error result.
 
 Content read from a server is untrusted (it may contain instructions aimed at the agent); the
 tool descriptions say so, and docs/servers.md warns about it.
@@ -87,9 +89,10 @@ class ServerService:
     def _unknown(self, name: str, action: str, command: str) -> ToolResult | None:
         if name in self.grants:
             return None
-        self._log(name, "-", action, command, False, "server not granted to this agent")
+        problem = self._log(name, "-", action, command, False, "server not granted to this agent")
         allowed = ", ".join(self.grants) or "none"
-        return ToolResult(f"server {name!r} is not available here (available: {allowed})", True)
+        text = f"server {name!r} is not available here (available: {allowed})"
+        return ToolResult(text + _audit_note(problem), True)
 
     def _log(
         self,
@@ -100,27 +103,49 @@ class ServerService:
         allowed: bool,
         reason: str = "",
         result: SshResult | None = None,
-    ) -> None:
-        self.audit.write(
-            AuditEntry(
-                run_id=self.run_id,
-                role=self.role,
-                server=server,
-                access=access,
-                action=action,
-                command=command,
-                allowed=allowed,
-                reason=reason,
-                exit_code=None if result is None else result.exit_code,
-                duration_s=None if result is None else result.duration_s,
+        phase: str = "",
+    ) -> str | None:
+        """Append an audit line; why it could not be written, or None."""
+        try:
+            self.audit.write(
+                AuditEntry(
+                    run_id=self.run_id,
+                    role=self.role,
+                    server=server,
+                    access=access,
+                    action=action,
+                    command=command,
+                    allowed=allowed,
+                    reason=reason,
+                    exit_code=None if result is None else result.exit_code,
+                    duration_s=None if result is None else result.duration_s,
+                    phase=phase,
+                )
             )
-        )
+        except OSError as exc:
+            return redact(f"{type(exc).__name__}: {exc}")
+        return None
+
+    def _started(self, name: str, action: str, command: str) -> ToolResult | None:
+        """The "started" line before ssh runs; an error result (run nothing) if it failed."""
+        problem = self._log(name, self.grants[name], action, command, True, phase="started")
+        if problem is None:
+            return None
+        return ToolResult(f"not run: cannot write the audit log ({problem})", True)
+
+    def _finished(
+        self, name: str, action: str, command: str, result: SshResult, text: str, error: bool
+    ) -> ToolResult:
+        """The "finished" line after ssh returned; the result, an error if the line failed."""
+        problem = self._log(name, self.grants[name], action, command, True, "", result, "finished")
+        if problem is None:
+            return ToolResult(text, error)
+        return ToolResult(text + _audit_note(problem, ran=True), True)
 
     def _denied(self, name: str, action: str, command: str, decision: Decision) -> ToolResult:
-        self._log(name, self.grants[name], action, command, False, decision.reason)
-        return ToolResult(
-            f"refused by jev's {self.grants[name]} access policy: {decision.reason}", True
-        )
+        problem = self._log(name, self.grants[name], action, command, False, decision.reason)
+        text = f"refused by jev's {self.grants[name]} access policy: {decision.reason}"
+        return ToolResult(text + _audit_note(problem), True)
 
     @staticmethod
     def _timeout(value: float | None) -> float:
@@ -161,12 +186,14 @@ class ServerService:
         decision = check_command(command, self.context(name))
         if not decision.allowed:
             return self._denied(name, "run_command", command, decision)
+        if (failed := self._started(name, "run_command", decision.command)) is not None:
+            return failed
         server = self.config.servers[name]
         result = self.transport(name).run(
             decision.command, cwd=server.workdir, timeout_s=self._timeout(timeout_s)
         )
-        self._log(name, self.grants[name], "run_command", decision.command, True, "", result)
-        return ToolResult(format_result(result), not result.ok)
+        text = format_result(result)
+        return self._finished(name, "run_command", decision.command, result, text, not result.ok)
 
     def read_file(self, name: str, path: str, max_bytes: int | None = None) -> ToolResult:
         if (refused := self._unknown(name, "read_file", path)) is not None:
@@ -177,21 +204,24 @@ class ServerService:
             return self._denied(name, "read_file", path, decision)
         real, error = self._realpath(name, decision.path)
         if real is None:
-            self._log(name, ctx.access, "read_file", decision.path, False, error)
-            return ToolResult(f"cannot read {decision.path}: {error}", True)
+            problem = self._log(name, ctx.access, "read_file", decision.path, False, error)
+            return ToolResult(f"cannot read {decision.path}: {error}" + _audit_note(problem), True)
         if problem := sensitive(real):
             return self._denied(name, "read_file", real, Decision.deny(problem))
         cap = MAX_READ_BYTES if not max_bytes else max(1, min(int(max_bytes), MAX_READ_BYTES))
+        if (failed := self._started(name, "read_file", real)) is not None:
+            return failed
         result = self.transport(name).read(real, cap)
-        self._log(name, ctx.access, "read_file", real, True, "", result)
-        if not result.ok:
-            return ToolResult(format_result(result), True)
         data = result.stdout
-        if b"\x00" in data[:cap]:
-            return ToolResult(f"{real} looks binary; only text files can be read", True)
-        text, _ = clip(data[:cap], cap)
-        note = f"\n[truncated at {cap} bytes]" if len(data) > cap else ""
-        return ToolResult(redact(text) + note)
+        if not result.ok:
+            out, is_error = format_result(result), True
+        elif b"\x00" in data[:cap]:
+            out, is_error = f"{real} looks binary; only text files can be read", True
+        else:
+            text, _ = clip(data[:cap], cap)
+            note = f"\n[truncated at {cap} bytes]" if len(data) > cap else ""
+            out, is_error = redact(text) + note, False
+        return self._finished(name, "read_file", real, result, out, is_error)
 
     def write_file(self, name: str, path: str, content: str) -> ToolResult:
         data = content.encode("utf-8")
@@ -247,8 +277,8 @@ class ServerService:
             return self._denied(name, action, summary, Decision.deny(f"more than {limit} bytes"))
         real, error = self._realpath(name, decision.path)
         if real is None:
-            self._log(name, ctx.access, action, summary, False, error)
-            return ToolResult(f"cannot write {decision.path}: {error}", True)
+            problem = self._log(name, ctx.access, action, summary, False, error)
+            return ToolResult(f"cannot write {decision.path}: {error}" + _audit_note(problem), True)
         if real != decision.path:  # a symlink: check where it really points
             recheck = check_write_path(real, ctx)
             if not recheck.allowed:
@@ -257,11 +287,22 @@ class ServerService:
             return self._denied(
                 name, action, summary, Decision.deny(f"{real} is outside allowed_paths")
             )
+        if (failed := self._started(name, action, summary)) is not None:
+            return failed
         result = self.transport(name).write(real, data)
-        self._log(name, ctx.access, action, summary, True, "", result)
         if not result.ok:
-            return ToolResult(format_result(result), True)
-        return ToolResult(f"wrote {len(data)} bytes to {real}")
+            return self._finished(name, action, summary, result, format_result(result), True)
+        return self._finished(
+            name, action, summary, result, f"wrote {len(data)} bytes to {real}", False
+        )
+
+
+def _audit_note(problem: str | None, *, ran: bool = False) -> str:
+    """What the agent is told when an audit line could not be written."""
+    if problem is None:
+        return ""
+    done = "it ran, but " if ran else ""
+    return f"\n[{done}the audit log could not be written: {problem}]"
 
 
 def format_result(result: SshResult) -> str:

@@ -15,6 +15,7 @@ from jev_agent.config.servers_schema import (
     check_servers_config,
 )
 from jev_agent.quality.levels import QualityLevel
+from jev_agent.runlog.redact import SECRET_PATTERNS
 
 DispatcherName = Literal["jev", "rules"]
 Selection = Literal["dispatcher", "fixed"]
@@ -128,6 +129,15 @@ class IntegrationConfig(_Strict):
     test_command: str | None = Field(default=None, min_length=1)
     # Fix tasks D6 may add after failing integration tests before a human is asked.
     max_fix_rounds: int = Field(default=2, ge=0)
+
+
+class WorkspaceConfig(_Strict):
+    """`[workspace]`: the git worktrees jev commits and merges task work in."""
+
+    # Run the repository's git hooks (pre-commit, commit-msg, ...) on jev's own commits and
+    # merges. Off: jev passes `--no-verify`. Hooks are a quality signal, but a hook that hangs
+    # stops the run (git calls time out, issue #24).
+    run_hooks: bool = True
 
 
 class ApprovalConfig(_Strict):
@@ -283,13 +293,15 @@ class WorkersConfig(_Strict):
 # --- agent tools: MCP servers, skills, plugins (docs/config.md "Agent tools") ---------------
 
 _TOOL_NAME = r"^[A-Za-z0-9][A-Za-z0-9_-]*$"
-# Literal credentials that must never sit in a config file (args, URLs).
-_LITERAL_SECRET = re.compile(
-    r"\bsk-[A-Za-z0-9_-]{8,}|\bgh[pousr]_[A-Za-z0-9]{8,}|\bgithub_pat_[A-Za-z0-9_]{8,}"
-    r"|\bxox[abpr]-[A-Za-z0-9-]{8,}|\bBearer\s+\S{8,}|://[^/@\s]+:[^/@\s]+@"
-    r"|[?&](?:api_?key|key|token|access_token|secret|password)=",
-    re.IGNORECASE,
-)
+# Credentials in a URL's query string; the other literal credentials that must never sit in a
+# config file (args, URLs) are the shapes every log redacts (`runlog.redact`).
+_SECRET_QUERY = re.compile(r"[?&](?:api_?key|key|token|access_token|secret|password)=", re.I)
+
+
+def _literal_secret(value: str) -> bool:
+    return bool(_SECRET_QUERY.search(value)) or any(p.search(value) for p in SECRET_PATTERNS)
+
+
 McpTransport = Literal["http", "sse"]
 
 
@@ -334,7 +346,7 @@ class McpServerConfig(_Strict):
             if not re.match(_ENV_NAME, name):
                 raise ValueError(f"{name!r} is not an environment variable name")
         for value in [*(self.args), self.url or "", self.command or ""]:
-            if _LITERAL_SECRET.search(value):
+            if _literal_secret(value):
                 raise ValueError(
                     "looks like a literal credential; pass it through an environment variable "
                     "(`env_from`, `bearer_token_env` or `headers_from_env`)"
@@ -451,11 +463,19 @@ def role_can_use_free(config: JevConfig, role: str) -> bool:
     return "api" in getattr(config.roles, role).workers and config.workers.api.enabled
 
 
+class TrustConfig(_Strict):
+    """`[trust]` (user config only): repositories whose jev.toml may change the guarded keys
+    (`config.loader.GUARDED_KEYS`): absolute paths, or `"*"` for every repository."""
+
+    repos: list[str] = Field(default_factory=list)
+
+
 class JevConfig(_Strict):
     dispatcher: DispatcherConfig = Field(default_factory=DispatcherConfig)
     budget: BudgetConfig = Field(default_factory=BudgetConfig)
     approval: ApprovalConfig = Field(default_factory=ApprovalConfig)
     integration: IntegrationConfig = Field(default_factory=IntegrationConfig)
+    workspace: WorkspaceConfig = Field(default_factory=WorkspaceConfig)
     review: ReviewConfig = Field(default_factory=ReviewConfig)
     quality: QualityConfig = Field(default_factory=QualityConfig)
     learning: LearningConfig = Field(default_factory=LearningConfig)
@@ -468,6 +488,7 @@ class JevConfig(_Strict):
     servers: dict[str, ServerConfig] = Field(default_factory=dict)
     browser: BrowserConfig = Field(default_factory=BrowserConfig)
     profiles: dict[str, WorkspaceProfileConfig] = Field(default_factory=dict)
+    trust: TrustConfig = Field(default_factory=TrustConfig)
 
     @model_validator(mode="before")
     @classmethod

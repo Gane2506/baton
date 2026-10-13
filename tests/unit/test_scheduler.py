@@ -1,8 +1,10 @@
+import contextlib
 import json
 import os
 import socket
 import subprocess
 import sys
+import time
 from collections.abc import Iterator
 from datetime import UTC, datetime
 from pathlib import Path
@@ -11,6 +13,7 @@ import pytest
 
 from jev_agent.core.models import Idea, RunState
 from jev_agent.core.scheduler import (
+    LockInfo,
     Scheduler,
     SchedulerLock,
     SchedulerLocked,
@@ -233,3 +236,168 @@ def test_scheduler_records_current_item_in_lock(store: Store, tmp_path: Path) ->
     holder = lock.read()
     assert seen == [item.id] and holder is not None and holder.current_item is None
     lock.release()
+
+
+# ---- killed schedulers, vanished items, lock races (#38, #39) ---------------------------------
+
+
+def test_run_is_linked_at_creation_not_by_idea(store: Store, tmp_path: Path) -> None:
+    """A concurrent `jev run` of the same idea is never taken for the item's run."""
+    item = store.add_queue_item("boom twice")
+    own: list[str] = []
+
+    async def start(queued: QueueItem) -> RunRecord:
+        own.append(store.create_run(Idea(text=queued.idea, repo_path=tmp_path)).id)
+        with Store.open(tmp_path / ".jev" / "state.db") as other:  # another process
+            other.create_run(Idea(text=queued.idea, repo_path=tmp_path))
+        raise RuntimeError("worker exploded")
+
+    Scheduler(store, start, SchedulerOptions(once=True)).run()
+    got = store.get_queue_item(item.id)
+    assert got.status == "failed" and got.run_id == own[0]
+
+
+_KILLED_CHILD = """
+import asyncio, os, signal, sys
+from pathlib import Path
+from jev_agent.core.models import Idea
+from jev_agent.core.scheduler import Scheduler, SchedulerLock, SchedulerOptions
+from jev_agent.core.store import Store
+
+db = Path(sys.argv[1])
+store = Store.open(db)
+lock = SchedulerLock(db.parent / "scheduler.lock")
+lock.acquire()
+
+async def start(item):
+    store.create_run(Idea(text=item.idea, repo_path=db.parent.parent))
+    os.kill(os.getpid(), signal.SIGKILL)
+
+Scheduler(store, start, SchedulerOptions(once=True), lock=lock).run()
+"""
+
+
+def test_killed_scheduler_is_recovered(store: Store, tmp_path: Path) -> None:
+    killed = store.add_queue_item("done killed")
+    store.add_queue_item("done next")
+    db = tmp_path / ".jev" / "state.db"
+    child = subprocess.run([sys.executable, "-c", _KILLED_CHILD, str(db)], check=False)
+    assert child.returncode == -9
+    orphan = store.get_queue_item(killed.id)
+    assert orphan.status == "running" and orphan.run_id is not None  # linked when created
+    lock = SchedulerLock(db.parent / "scheduler.lock")
+    assert lock.read() is None  # the dead holder no longer counts
+    lock.acquire()
+    logs: list[str] = []
+    summary = Scheduler(
+        store, FakeStarter(store, tmp_path), SchedulerOptions(once=True), lock=lock, log=logs.append
+    ).run()
+    lock.release()
+    got = store.get_queue_item(killed.id)
+    assert got.status == "waiting" and got.run_id == orphan.run_id
+    assert f"jev resume {orphan.run_id}" in (got.note or "")
+    assert summary.runs == 1 and _statuses(store)["done next"] == "done"
+    assert any(f"queue item {killed.id}" in line and "recovered" in line for line in logs)
+
+
+def test_recovery_requeues_item_without_run(store: Store, tmp_path: Path) -> None:
+    item = store.add_queue_item("done again")
+    assert store.claim_queue_item(item.id)  # killed before its run was created
+    summary = _scheduler(store, FakeStarter(store, tmp_path), once=True).run()
+    assert summary.runs == 1
+    got = store.get_queue_item(item.id)
+    assert got.status == "done" and got.run_id == summary.outcomes[0][1]
+
+
+def test_recovery_follows_a_finished_run(store: Store, tmp_path: Path) -> None:
+    item = store.add_queue_item("x")
+    assert store.claim_queue_item(item.id)
+    with store.link_new_run(item.id):
+        run = store.create_run(Idea(text="x", repo_path=tmp_path))
+    store.set_run_state(run.id, RunState.AWAITING_APPROVAL, "plan ready")
+    _scheduler(store, FakeStarter(store, tmp_path), once=True).run()
+    got = store.get_queue_item(item.id)
+    assert (got.status, got.run_id) == ("waiting", run.id)
+
+
+def test_link_new_run_links_only_the_first_run(store: Store, tmp_path: Path) -> None:
+    item = store.add_queue_item("x")
+    assert store.claim_queue_item(item.id)
+    with store.link_new_run(item.id):
+        first = store.create_run(Idea(text="x", repo_path=tmp_path))
+        store.create_run(Idea(text="x", repo_path=tmp_path))
+    store.create_run(Idea(text="x", repo_path=tmp_path))
+    assert store.get_queue_item(item.id).run_id == first.id
+
+
+def test_vanished_item_is_logged_and_queue_continues(store: Store, tmp_path: Path) -> None:
+    gone = store.add_queue_item("done gone")
+    store.add_queue_item("done next")
+    starter = FakeStarter(store, tmp_path)
+
+    async def start(item: QueueItem) -> RunRecord:
+        record = await starter(item)
+        if item.id == gone.id:  # removed while it ran
+            store.connection.execute("DELETE FROM queue WHERE id = ?", (item.id,))
+        return record
+
+    logs: list[str] = []
+    summary = Scheduler(
+        store, start, SchedulerOptions(max_runs=2), sleep=_no_sleep, log=logs.append
+    ).run()
+    assert summary.runs == 2 and "max-runs" in summary.stopped_because
+    assert _statuses(store) == {"done next": "done"}
+    assert any(f"queue item {gone.id}" in line and "removed" in line for line in logs)
+
+
+def test_lock_with_flock_marker_and_no_holder_is_stale(tmp_path: Path) -> None:
+    """A lock written by a flock holder that died is stale even if its pid was reused."""
+    path = tmp_path / "scheduler.lock"
+    path.write_text(
+        json.dumps(
+            {"pid": os.getpid(), "host": socket.gethostname(), "started_at": "t", "flock": True}
+        )
+    )
+    assert SchedulerLock(path).read() is None
+    lock = SchedulerLock(path)
+    lock.acquire()
+    lock.release()
+
+
+def test_concurrent_stale_takeover_has_one_winner(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import threading
+
+    path = tmp_path / "scheduler.lock"
+    path.write_text(json.dumps({"pid": _dead_pid(), "host": socket.gethostname()}))
+    barrier = threading.Barrier(2)
+    original = SchedulerLock.read
+
+    def slow_read(self: SchedulerLock) -> LockInfo | None:
+        holder = original(self)
+        # Both starters see the stale lock; one acts on it at once, the other a bit later.
+        with contextlib.suppress(threading.BrokenBarrierError):
+            if barrier.wait(timeout=1) == 0:
+                time.sleep(0.3)
+        return holder
+
+    monkeypatch.setattr(SchedulerLock, "read", slow_read)
+    locks = [SchedulerLock(path), SchedulerLock(path)]
+    results: list[str] = []
+
+    def take(lock: SchedulerLock) -> None:
+        try:
+            lock.acquire()
+            results.append("won")
+        except SchedulerLocked:
+            results.append("refused")
+
+    threads = [threading.Thread(target=take, args=(lock,)) for lock in locks]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert sorted(results) == ["refused", "won"]
+    for lock in locks:
+        lock.release()

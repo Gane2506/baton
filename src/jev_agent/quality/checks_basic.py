@@ -8,12 +8,12 @@ from jev_agent.quality.base import (
     JS_SUFFIXES,
     PY_SUFFIXES,
     BaseCheck,
-    failed_without_findings,
     has_any,
     is_python,
     package_json,
     parse_lines,
     pyproject,
+    tool_error,
 )
 from jev_agent.quality.models import CheckResult
 from jev_agent.quality.tools import ToolRunner, normalize, quote, tail
@@ -42,6 +42,9 @@ class RuffCheck(BaseCheck):
             "ruff-check", f"{ruff} check --output-format=concise {quote(files)}"
         )
         fmt = await runner.run("ruff-format", f"{ruff} format --check {quote(files)}")
+        for result in (lint, fmt):  # 0: clean, 1: problems, anything else: ruff failed
+            if result.timed_out or result.exit_code not in (0, 1):
+                return tool_error(self, result)
         findings = [
             self.finding("minor", "maintainability", msg, file, line)
             for file, line, msg in parse_lines(lint.output, workdir)
@@ -57,7 +60,7 @@ class RuffCheck(BaseCheck):
         if lint.exit_code == 0 and fmt.exit_code == 0:
             return CheckResult(status="pass", detail=f"{len(files)} file(s) clean")
         if not findings:
-            return failed_without_findings(self, lint.exit_code or fmt.exit_code, lint.output)
+            return tool_error(self, lint if lint.exit_code else fmt)
         return CheckResult(status="fail", detail=f"{len(findings)} problem(s)", findings=findings)
 
 
@@ -91,12 +94,14 @@ class EslintCheck(BaseCheck):
         result = await runner.run("eslint", f"{eslint} --format unix {quote(files)}")
         if result.ok:
             return CheckResult(status="pass", detail=f"{len(files)} file(s) clean")
+        if result.timed_out or result.exit_code != 1:  # 1: lint errors, 2: ESLint failed
+            return tool_error(self, result)
         findings = [
             self.finding("minor", "maintainability", msg, file, line)
             for file, line, msg in parse_lines(result.output, workdir)
         ]
         if not findings:
-            return failed_without_findings(self, result.exit_code, result.output)
+            return tool_error(self, result)
         return CheckResult(status="fail", detail=f"{len(findings)} problem(s)", findings=findings)
 
 
@@ -120,6 +125,8 @@ class PrettierCheck(BaseCheck):
         result = await runner.run("prettier", f"{prettier} --check {quote(files)}")
         if result.ok:
             return CheckResult(status="pass", detail=f"{len(files)} file(s) formatted")
+        if result.timed_out or result.exit_code != 1:  # 1: unformatted, 2: Prettier failed
+            return tool_error(self, result)
         findings = [
             self.finding(
                 "minor",
@@ -132,7 +139,7 @@ class PrettierCheck(BaseCheck):
             if raw.startswith("[warn] ") and not raw.startswith("[warn] Code style issues")
         ]
         if not findings:
-            return failed_without_findings(self, result.exit_code, result.output)
+            return tool_error(self, result)
         return CheckResult(status="fail", detail=f"{len(findings)} file(s)", findings=findings)
 
 
@@ -196,7 +203,7 @@ class TestSuiteCheck(BaseCheck):
         result = await runner.run("tests", command)
         if result.ok:
             return CheckResult(status="pass", detail=f"`{command}` passed")
-        timed_out = " (timed out)" if result.exit_code == -1 else ""
+        timed_out = " (timed out)" if result.timed_out else ""
         return CheckResult(
             status="fail",
             detail=f"`{command}` failed with exit code {result.exit_code}{timed_out}: "

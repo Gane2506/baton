@@ -45,7 +45,13 @@ Names (after two renames — don't rename again without being asked):
 - **GitHub issues as the public progress log:** before starting any feature/fix, open an
   issue (or comment on the existing one) with the plan, label it `in progress`, post progress
   comments as pieces land, and close it from the commit (`Closes #N`). Labels in use:
-  `enhancement`, `bug`, `in progress`, `priority: low`, `priority: next`, `needs decision`.
+  `enhancement`, `bug`, `in progress`, `priority: low`, `priority: medium`, `priority: next`,
+  `needs decision`. After a review, file **every** finding as an issue before fixing any of them.
+- **Decisions:** for non-trivial choices (design options, keep/refactor/rewrite, ranking
+  findings) use the `jev-decide` skill (`.claude/skills/jev-decide/`). Jev decides: its direct
+  pick plus gates/weighted matrix; disagreements go back to Jev automatically (follow-up
+  rounds, then Jev's arbitration). Act on the result; never override it. Outward-facing steps
+  still need the maintainer's approval.
 - **Ask first** before outward-facing or hard-to-reverse steps not yet approved: publishing
   to PyPI, making any repo public/private, tagging releases (ask; the last two tags were
   approved per-release), enabling `access = "full"`, anything that costs real money (live
@@ -80,7 +86,7 @@ Names (after two renames — don't rename again without being asked):
   dispatcher/workers/pipeline from config (`cli_context`, `start_run(profile=, learning=,
   quality=)`).
 - `core/` — `models.py` (pydantic), `store.py` + `migrations.py` (SQLite `.jev/state.db`,
-  **schema version 7**: runs, tasks, attempts, decisions, learning, queue, quality_reports,
+  **schema version 9** (shared learning DB: 2): runs (incl. plan_only), tasks, attempts, decisions, learning, queue, quality_reports,
   shipped_prs/run_kpis), `pipeline.py` (run state machine INTAKE→PLANNING→VALIDATING→
   AWAITING_APPROVAL→EXECUTING→INTEGRATING→DONE), `tasks.py`, `harness.py` (dumb: stores,
   asks dispatcher, executes; enforces budgets/limits), `workspace.py` (git worktrees,
@@ -141,6 +147,10 @@ shapes unverified); the release workflow on the new action versions.
 ## 7. Open items / where we left off
 
 Open issues on Gane2506/baton:
+- **#59** tracking issue for the 2026-10-13 full code review: 48 findings filed as #11-#58,
+  priorities set by Jev (30 next, 10 medium, 8 low). Fix only what the maintainer approves.
+- **#10** (medium, needs decision): semantic cache for model calls (exact-match first;
+  semantic match opt-in, never for the coder).
 - **#9** (low): dashboard Settings — left sidebar, typed editors (toggle, enum, number+unit,
   tags, key/value, path, secret-ref, model picker, per-role matrix), validated save with diff,
   repo vs user target, comment-preserving (tomlkit), reset-to-default, search.

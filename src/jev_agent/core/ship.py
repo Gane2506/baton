@@ -35,7 +35,14 @@ from jev_agent.core.kpi import (
 )
 from jev_agent.core.models import RunState
 from jev_agent.core.store import NotFoundError, ShippedPrRecord, Store
-from jev_agent.core.workspace import result_branch, start_ref
+from jev_agent.core.workspace import (
+    GIT_QUICK_TIMEOUT_S,
+    GIT_SLOW_TIMEOUT_S,
+    result_branch,
+    run_git,
+    start_ref,
+    timeout_message,
+)
 from jev_agent.quality.report import cell, latest_per_gate
 from jev_agent.roles.schemas import SEVERITIES
 from jev_agent.runlog.redact import redact
@@ -56,15 +63,15 @@ class ShipError(Exception):
 # ---- running git and gh ------------------------------------------------------------------
 
 
-def _git(root: Path, *args: str) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(["git", *args], cwd=root, capture_output=True, text=True, check=False)
-
-
-def _git_out(root: Path, *args: str) -> str:
-    proc = _git(root, *args)
-    if proc.returncode != 0:
-        raise ShipError(f"git {' '.join(args)} failed: {redact(proc.stderr.strip())}")
-    return proc.stdout.strip()
+def _git(root: Path, *args: str, slow: bool = False) -> subprocess.CompletedProcess[str]:
+    """Run git without ever prompting (no terminal, no askpass program; credential helpers
+    still work), bounded by a timeout: `slow` (the push) gets GIT_SLOW_TIMEOUT_S."""
+    timeout_s = GIT_SLOW_TIMEOUT_S if slow else GIT_QUICK_TIMEOUT_S
+    env = os.environ | {"GIT_TERMINAL_PROMPT": "0", "GIT_ASKPASS": ""}
+    try:
+        return run_git(args, root, timeout_s, env=env)
+    except subprocess.TimeoutExpired as exc:
+        raise ShipError(timeout_message(args, timeout_s)) from exc
 
 
 class Gh:
@@ -485,7 +492,13 @@ def execute_ship(plan: ShipPlan, store: Store, root: Path, gh: Gh | None = None)
     """Push the branch, open the PR and record it (with the run's KPI snapshot)."""
     gh = gh or Gh(root)
     if not plan.skip_push:
-        proc = _git(root, *plan.push_command()[1:])
+        try:
+            proc = _git(root, *plan.push_command()[1:], slow=True)
+        except ShipError as exc:
+            raise ShipError(
+                f"{exc}. Nothing was opened; the branch may have reached {plan.remote}: run "
+                f"`jev ship {plan.run_id}` again (the push is skipped if it did)"
+            ) from exc
         if proc.returncode != 0:
             raise ShipError(f"git push failed (nothing was opened): {redact(proc.stderr.strip())}")
     with tempfile.TemporaryDirectory(prefix="jev-ship-") as tmp:

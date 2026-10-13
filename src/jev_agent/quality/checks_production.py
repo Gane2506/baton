@@ -7,13 +7,13 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+from jev_agent.core.commands import CommandResult
 from jev_agent.quality.base import (
     JS_SUFFIXES,
     PY_SUFFIXES,
     PYRIGHT_LINE,
     TSC_LINE,
     BaseCheck,
-    failed_without_findings,
     from_level,
     iac_files,
     int_or_none,
@@ -22,24 +22,26 @@ from jev_agent.quality.base import (
     parse_lines,
     pyproject,
     read_text,
+    tool_error,
 )
 from jev_agent.quality.models import CheckResult, Finding
-from jev_agent.quality.tools import ToolRunner, added_lines, normalize, quote, tail
+from jev_agent.quality.tools import ToolRunner, added_lines, normalize, quote
 from jev_agent.roles.schemas import Severity
 
 # ---- production: types, licences ----------------------------------------------------------
 
 
 def _filtered_type_result(
-    check: BaseCheck, runner: ToolRunner, found: list[tuple[str, int, str]], exit_code: int
+    check: BaseCheck, runner: ToolRunner, found: list[tuple[str, int, str]], result: CommandResult
 ) -> CheckResult:
-    """Type errors in the changed files fail the check; others are only counted."""
+    """Type errors in the changed files fail the check; others are only counted. A timeout,
+    or a non-zero exit with no errors listed, is a tool error."""
+    if result.timed_out or (result.exit_code != 0 and not found):
+        return tool_error(check, result, f"{check.tool} failed with no errors listed")
     mine = [(f, line, msg) for f, line, msg in found if runner.is_changed(f)]
     others = len(found) - len(mine)
     note = f"; {others} error(s) in files this work did not change" if others else ""
     if not mine:
-        if exit_code != 0 and not found:
-            return CheckResult(status="fail", detail=f"exit code {exit_code} with no errors listed")
         return CheckResult(status="pass", detail=f"no type errors in changed files{note}")
     findings = [check.finding("major", "bug", msg, f, line) for f, line, msg in mine]
     return CheckResult(status="fail", detail=f"{len(mine)} type error(s){note}", findings=findings)
@@ -77,7 +79,7 @@ class MypyCheck(BaseCheck):
             for f, line, msg in parse_lines(result.output, workdir)
             if msg.startswith("error:")
         ]
-        return _filtered_type_result(self, runner, found, result.exit_code)
+        return _filtered_type_result(self, runner, found, result)
 
 
 class PyrightCheck(BaseCheck):
@@ -106,7 +108,7 @@ class PyrightCheck(BaseCheck):
             if match and match.group("sev") == "error":
                 file = normalize(match.group("file"), workdir)
                 found.append((file, int(match.group("line")), match.group("msg")))
-        return _filtered_type_result(self, runner, found, result.exit_code)
+        return _filtered_type_result(self, runner, found, result)
 
 
 class TscCheck(BaseCheck):
@@ -128,7 +130,7 @@ class TscCheck(BaseCheck):
             return CheckResult(status="pass", detail="no JS/TS files changed")
         result = await runner.run("tsc", f"{tsc} --noEmit --pretty false")
         found = parse_lines(result.output, workdir, TSC_LINE)
-        return _filtered_type_result(self, runner, found, result.exit_code)
+        return _filtered_type_result(self, runner, found, result)
 
 
 _REQ_LINE = re.compile(r"^(?P<name>[A-Za-z0-9][A-Za-z0-9._-]*)")
@@ -176,10 +178,8 @@ class LicenseCheck(BaseCheck):
             return runner.missing("pip-licenses", self.hint)
         result = await runner.run("licenses", f"{tool} --format=json --packages {quote(new)}")
         data = load_json(result.output)
-        if not isinstance(data, list):
-            return CheckResult(
-                status="skipped", detail=f"pip-licenses error: {tail(result.output, 300)}"
-            )
+        if result.timed_out or not isinstance(data, list):
+            return tool_error(self, result)
         findings: list[Finding] = []
         seen = set()
         for item in data:
@@ -243,8 +243,8 @@ class TrivyCheck(BaseCheck):
             "trivy", f"{trivy} fs --scanners misconfig,secret --format json --quiet ."
         )
         data = load_json(result.output)
-        if not isinstance(data, dict):
-            return CheckResult(status="skipped", detail=f"trivy error (exit {result.exit_code})")
+        if result.timed_out or not isinstance(data, dict):
+            return tool_error(self, result)
         findings: list[Finding] = []
         for target in data.get("Results", []) or []:
             if not isinstance(target, dict):
@@ -288,11 +288,13 @@ class HadolintCheck(BaseCheck):
         if not files:
             return CheckResult(status="pass", detail="no Dockerfiles changed")
         result = await runner.run("hadolint", f"{hadolint} -f json {quote(files)}")
+        if result.timed_out:
+            return tool_error(self, result)
         data = load_json(result.output)
         if not isinstance(data, list):
             if result.ok:
                 return CheckResult(status="pass", detail="no issues")
-            return failed_without_findings(self, result.exit_code, result.output)
+            return tool_error(self, result)
         level: dict[str, Severity] = {"error": "major", "warning": "minor"}
         findings = [
             self.finding(
@@ -326,6 +328,8 @@ class CheckovCheck(BaseCheck):
         if checkov is None:
             return runner.missing("checkov", self.hint)
         result = await runner.run("checkov", f"{checkov} -d . --quiet --compact -o json")
+        if result.timed_out:
+            return tool_error(self, result)
         data = load_json(result.output)
         reports = data if isinstance(data, list) else [data]
         findings: list[Finding] = []
@@ -349,7 +353,7 @@ class CheckovCheck(BaseCheck):
                     )
                 )
         if data is None and not result.ok:
-            return CheckResult(status="skipped", detail=f"checkov error (exit {result.exit_code})")
+            return tool_error(self, result)
         if not findings:
             return CheckResult(status="pass", detail="no failed checks")
         return CheckResult(

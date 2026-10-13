@@ -15,6 +15,7 @@ Each step reads the run from the store, does one unit of work and persists the n
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -66,6 +67,9 @@ STOPPED = frozenset(
         RunState.CANCELLED,
     }
 )
+# Writes by a running pipeline never replace a cancellation made meanwhile by `jev cancel` or
+# the dashboard (issue #14): the store checks it in the same statement as the update.
+KEEP_CANCELLED = frozenset({RunState.CANCELLED})
 
 
 class PipelineError(Exception):
@@ -75,10 +79,8 @@ class PipelineError(Exception):
 def cancel_run(store: Store, run_id: str) -> RunRecord:
     """Cancel a run (`jev cancel`, the dashboard): it only touches the store, so front ends
     that have no pipeline can call it. Its branches and worktrees are kept."""
-    run = store.get_run(run_id)
-    if run.state in STOPPED:
-        raise PipelineError(f"run {run_id} is already {run.state}")
-    store.set_run_state(run_id, RunState.CANCELLED, "cancelled by user")
+    if not store.set_run_state(run_id, RunState.CANCELLED, "cancelled by user", unless=STOPPED):
+        raise PipelineError(f"run {run_id} is already {store.get_run(run_id).state}")
     return store.get_run(run_id)
 
 
@@ -96,7 +98,6 @@ class Pipeline:
         self.h = harness
         self.store = harness.store
         self.settings = settings or PipelineSettings()
-        self._plan_only = False
 
     # ---- commands --------------------------------------------------------------------------
 
@@ -112,20 +113,21 @@ class Pipeline:
 
         `learning_profile` (see `core.learning.resolve_learning`) is recorded on the run, so a
         resumed run keeps using it; None means no learning. `quality` is the run's quality gate
-        level (None: `[quality] level`), also recorded on the run.
+        level (None: `[quality] level`), also recorded on the run, like `plan_only`.
         """
         level = self.h.config.quality.level if quality is None else quality
         # Workspace profile (docs/servers.md): copied to .jev/runs/<id>/profile.json, so a
         # resumed run reaches the same servers. ProfileError (a ValueError) if unknown.
         copy = None if profile is None else snapshot(self.h.config, profile)
-        run = self.store.create_run(idea, learning_profile, level)
+        run = self.store.create_run(idea, learning_profile, level, plan_only=plan_only)
         write_run_profile(self.h.state_dir, run.id, copy)
-        return await self.advance(run.id, plan_only=plan_only)
+        return await self.advance(run.id)
 
     async def approve(self, run_id: str, execute: bool = True) -> RunRecord:
         """Pass the human approval gate; then execute the plan unless `execute` is False."""
         self._require_state(run_id, {RunState.AWAITING_APPROVAL}, "approve")
-        self.store.set_run_state(run_id, RunState.EXECUTING)
+        if not self.store.set_run_state(run_id, RunState.EXECUTING, unless=STOPPED):
+            raise PipelineError(f"cannot approve run {run_id}: it was stopped meanwhile")
         if not execute:
             return self.store.get_run(run_id)
         return await self.advance(run_id)
@@ -137,7 +139,8 @@ class Pipeline:
         if run.state is RunState.AWAITING_APPROVAL:
             raise PipelineError(f"run {run_id} is awaiting approval; use `jev approve {run_id}`")
         if run.state is RunState.NEEDS_HUMAN and run.resume_state is not None:
-            self.store.set_run_state(run_id, run.resume_state)
+            if not self.store.set_run_state(run_id, run.resume_state, unless=KEEP_CANCELLED):
+                raise PipelineError(f"run {run_id} was cancelled; it cannot be resumed")
             self.store.set_run_learning_outcome(run_id, None)  # learn again when it ends
         elif run.state in STOPPED:
             raise PipelineError(f"run {run_id} is {run.state}; it cannot be resumed")
@@ -147,9 +150,8 @@ class Pipeline:
     def cancel(self, run_id: str) -> RunRecord:
         return cancel_run(self.store, run_id)
 
-    async def advance(self, run_id: str, plan_only: bool = False) -> RunRecord:
+    async def advance(self, run_id: str) -> RunRecord:
         """Run steps until the run stops, waits for approval or finishes."""
-        self._plan_only = plan_only
         steps: Mapping[RunState, Callable[[RunRecord], Awaitable[None]]] = {
             RunState.INTAKE: self._intake,
             RunState.PLANNING: self._plan,
@@ -166,11 +168,14 @@ class Pipeline:
                 self.h.check_prompts()
                 await step(run)
             except Halt as halt:
+                # Guarded: a run cancelled while this step ran stays CANCELLED.
                 if halt.resumable:
                     reason = f"{halt.reason}; fix it, then run `jev resume {run_id}`"
-                    self.store.set_run_state(run_id, halt.state, reason, resume_state=run.state)
+                    self.store.set_run_state(
+                        run_id, halt.state, reason, resume_state=run.state, unless=KEEP_CANCELLED
+                    )
                 else:
-                    self.store.set_run_state(run_id, halt.state, halt.reason)
+                    self.store.set_run_state(run_id, halt.state, halt.reason, unless=KEEP_CANCELLED)
                 break
         return await self._finish(run_id)
 
@@ -277,12 +282,13 @@ class Pipeline:
             self._move(run.id, RunState.PLANNING)
             return
         self.store.upsert_tasks(run.id, plan)
-        gate = self._plan_only or h.config.approval.require_plan_approval
+        gate = run.plan_only or h.config.approval.require_plan_approval
         self._move(run.id, RunState.AWAITING_APPROVAL if gate else RunState.EXECUTING)
 
     async def _execute(self, run: RunRecord) -> None:
         try:
-            self.h.workspace.start_commit(run.id)  # pin the base of every branch of the run
+            # Pin the base of every branch of the run. Git runs off the event loop (#24).
+            await asyncio.to_thread(self.h.workspace.start_commit, run.id)
         except WorkspaceError as exc:
             raise Halt(RunState.FAILED, f"cannot record the start commit: {exc}") from exc
         runner = TaskRunner(self.h, self.settings.test_timeout_s)
@@ -324,7 +330,7 @@ class Pipeline:
             action = "fix_task"  # the gate is a hard limit: never ship while it blocks
         if action == "ship":
             self._move(run.id, RunState.DONE, f"result on branch {result.branch}")
-            self._cleanup(run.id)
+            await self._cleanup(run.id)
         elif action == "fix_task" and outcome.fixable and rounds < max_rounds:
             self._add_fix_task(run, outcome)
             self._move(run.id, RunState.EXECUTING)
@@ -365,14 +371,14 @@ class Pipeline:
         self.store.set_run_plan(run.id, plan, run.plan_round)
         self.store.upsert_tasks(run.id, plan)
 
-    def _cleanup(self, run_id: str) -> None:
+    async def _cleanup(self, run_id: str) -> None:
         """Remove a finished run's worktrees. A failure here does not undo DONE."""
         try:
-            self.h.workspace.cleanup(run_id)
+            await asyncio.to_thread(self.h.workspace.cleanup, run_id)
         except WorkspaceError as exc:
             run = self.store.get_run(run_id)
             reason = f"{run.reason}; worktree cleanup failed: {exc}"
-            self.store.set_run_state(run_id, run.state, reason)
+            self.store.set_run_state(run_id, run.state, reason, unless=KEEP_CANCELLED)
 
     def _task_order(self, run_id: str) -> list[TaskCard]:
         cards = [task.card for task in self.store.list_tasks(run_id)]
@@ -382,8 +388,8 @@ class Pipeline:
             raise Halt(RunState.FAILED, f"plan rejected: {exc}") from exc
 
     def _move(self, run_id: str, state: RunState, reason: str | None = None) -> None:
-        self.h.check_running(run_id)  # never overwrite a cancellation
-        self.store.set_run_state(run_id, state, reason)
+        if not self.store.set_run_state(run_id, state, reason, unless=KEEP_CANCELLED):
+            self.h.check_running(run_id)  # cancelled meanwhile: stop the run here (Halt)
 
     def _require_state(self, run_id: str, allowed: set[RunState], command: str) -> None:
         run = self.store.get_run(run_id)
@@ -458,7 +464,7 @@ def build_pipeline(
         state_dir=state_dir,
         dispatcher=GuardedDispatcher(dispatcher or RulesDispatcher(), RulesDispatcher()),
         workers=workers,
-        workspace=workspace or GitWorkspace(repo, state_dir),
+        workspace=workspace or GitWorkspace(repo, state_dir, run_hooks=config.workspace.run_hooks),
         commands=commands or ShellCommandRunner(),
         learning=learning or Learning.for_store(store),
         catalog=catalog,
