@@ -31,6 +31,7 @@ DECISION_QUESTIONS: dict[str, tuple[str, ...]] = {
     "D5": ("action",),
     "D6": ("action",),
     "D7": ("learn", "worker", "model", "effort"),
+    "D8": ("worker", "model", "effort"),
 }
 
 # Effort levels each worker passes on (docs/verification.md); any other level is ignored by
@@ -285,8 +286,10 @@ class ModelsConfig(_Strict):
 
 
 class ReviewConfig(_Strict):
-    # Off by default in v0.1 (an open decision in PLAN.md section 17; see docs/decisions.md).
-    enabled: bool = False
+    # Review each task's diff after its tests pass. Unset: on under the consensus dispatcher,
+    # so a task is done only when both votes accept a reviewed attempt, and off otherwise
+    # (issue #67).
+    enabled: bool | None = None
 
 
 _TOOL_NAME_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9_.-]*$"
@@ -609,6 +612,12 @@ class JevConfig(_Strict):
         """Whether a validated plan waits for a human (`[approval] require_plan_approval`)."""
         required = self.approval.require_plan_approval
         return self.dispatcher.primary != "consensus" if required is None else required
+
+    @property
+    def review_enabled(self) -> bool:
+        """Whether the reviewer checks each task's diff (`[review] enabled`)."""
+        enabled = self.review.enabled
+        return self.dispatcher.primary == "consensus" if enabled is None else enabled
 
     @model_validator(mode="before")
     @classmethod

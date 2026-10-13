@@ -58,6 +58,7 @@ ONE_TASK = Plan(summary="one task", tasks=[_card("T1")])
 def _config(**overrides: Any) -> JevConfig:
     data: dict[str, Any] = {
         "approval": {"require_plan_approval": False},
+        "review": {"enabled": False},
         "roles": {
             "coder": {"workers": ["claude_code", "codex"], "models": ["coder-small", "coder-large"]}
         },
@@ -422,6 +423,33 @@ async def test_review_stage_when_enabled(make_env: Any) -> None:
     assert len(reviews) == 2
     assert "jev_fake_T1.txt" in reviews[0].prompt  # the reviewer saw the diff
     assert "missing docstring" in env.jobs("coder", "T1")[1].prompt
+    # D8 picks the reviewer before each review; D5 then sees the review's verdict.
+    assert env.points(run.id)[3:] == ["D4", "D8", "D5", "D8", "D5", "D6"]
+    d5 = [d.request.state for d in env.store.list_decisions(run.id) if d.request.point == "D5"]
+    assert [state["review"] for state in d5] == ["revise", "approve"]
+    d8 = [d for d in env.store.list_decisions(run.id) if d.request.point == "D8"]
+    assert d8[0].request.state["coder"]["worker"] == "claude_code"
+    assert [a.worker for a in env.store.list_attempts(run.id) if a.role == "reviewer"] == [
+        d.decision.answers["worker"] for d in d8
+    ]
+
+
+async def test_reviewer_prefers_a_different_vendor_than_the_coder(make_env: Any) -> None:
+    config = _config(
+        review={"enabled": True},
+        roles={
+            "coder": {"workers": ["claude_code"]},
+            "reviewer": {
+                "workers": ["claude_code", "codex"],
+                "prefer_different_vendor_than": "coder",
+            },
+        },
+    )
+    env: Env = make_env({"planner": FakeStep(parsed=ONE_TASK)}, config)
+    run = await env.pipeline.start(_idea(env.repo))
+    assert run.state is RunState.DONE, run.reason
+    reviewers = [a.worker for a in env.store.list_attempts(run.id) if a.role == "reviewer"]
+    assert reviewers == ["codex"]
 
 
 async def test_cancel(make_env: Any) -> None:
@@ -895,6 +923,37 @@ async def test_consensus_approval_replaces_the_human_plan_gate(make_env: Any) ->
     env = make_env({"planner": FakeStep(parsed=ONE_TASK)}, explicit, _Consensus("none"))
     run = await env.pipeline.start(_idea(env.repo))
     assert run.state is RunState.AWAITING_APPROVAL
+
+
+async def test_consensus_reviews_every_task_by_default(make_env: Any) -> None:
+    config = JevConfig.model_validate({"approval": {}})  # [review] enabled unset
+    env: Env = make_env({"planner": FakeStep(parsed=ONE_TASK)}, config, _Consensus("none"))
+    run = await env.pipeline.start(_idea(env.repo))
+    assert run.state is RunState.DONE, run.reason
+    assert env.points(run.id)[3:] == ["D4", "D8", "D5", "D6"]
+    d5 = next(d for d in env.store.list_decisions(run.id) if d.request.point == "D5")
+    assert d5.request.state["review"] == "approve" and d5.decision.dispatcher == "consensus"
+
+    off = JevConfig.model_validate({"approval": {}, "review": {"enabled": False}})
+    env = make_env({"planner": FakeStep(parsed=ONE_TASK)}, off, _Consensus("none"))
+    run = await env.pipeline.start(_idea(env.repo))
+    assert run.state is RunState.DONE, run.reason
+    assert "D8" not in env.points(run.id) and env.jobs("reviewer") == []
+
+
+async def test_consensus_without_agreement_on_the_reviewer_stops_for_a_human(
+    make_env: Any,
+) -> None:
+    config = JevConfig.model_validate({"approval": {}})
+    env: Env = make_env({"planner": FakeStep(parsed=ONE_TASK)}, config, _Consensus("D8"))
+    run = await env.pipeline.start(_idea(env.repo))
+    assert run.state is RunState.NEEDS_HUMAN
+    assert run.reason is not None and "D8: no valid decision" in run.reason
+    assert env.jobs("reviewer") == []
+
+    run = await env.pipeline.resume(run.id)
+    assert run.state is RunState.DONE, run.reason
+    assert len(env.jobs("reviewer")) == 1
 
 
 def test_plan_approval_default_depends_on_the_dispatcher() -> None:

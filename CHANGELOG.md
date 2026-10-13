@@ -22,6 +22,13 @@ All notable changes to this project are documented here. The format is based on
   - `jev doctor` fails the dispatcher check under `consensus` when the Jev key env var is unset
     (runs would stop at their first decision); with `jev` it stays a warning.
 
+- **The dispatcher picks the task reviewer** ([#67](https://github.com/Gane2506/baton/issues/67)).
+  A new decision point, D8, chooses the reviewer's worker, model and effort before each review
+  (the rules dispatcher keeps the old first worker, first model, middle effort).
+  `[review] enabled` is unset by default: on under `consensus`, so a task is done only when Jev
+  and Laya accept a reviewed attempt, and off with `jev` and `rules`. An explicit value wins.
+  `[roles.reviewer] prefer_different_vendor_than` now works (`"coder"`: this attempt's coder).
+
 - **Contributor guidelines.** A detailed `CONTRIBUTING.md`, a pull request template and issue
   forms for bugs and features. `SECURITY.md` explains private vulnerability reporting, and
   `CODE_OF_CONDUCT.md` is the Contributor Covenant 2.1.

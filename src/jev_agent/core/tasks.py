@@ -1,6 +1,7 @@
 """The per-task state machine (PLAN.md section 3).
 
-PENDING/READY -> (D4) DISPATCHED -> RUNNING -> TESTING -> REVIEWING -> (D5) DONE, or
+PENDING/READY -> (D4) DISPATCHED -> RUNNING -> TESTING -> REVIEWING (D8 picks the reviewer)
+-> (D5) DONE, or
 RETRY/ESCALATE/REASSIGN -> DISPATCHED for another attempt. The task's state, attempt count,
 assignment and feedback note are persisted after every step, so a resumed run picks up where it
 stopped. An attempt interrupted in RUNNING/TESTING/REVIEWING is re-run as a new attempt; the
@@ -22,10 +23,10 @@ from jev_agent.core.assign import Assignment, can_reassign, escalate, quota_fall
 from jev_agent.core.commands import CommandResult
 from jev_agent.core.harness import DEFAULT_TIMEOUT_S, Halt, Harness
 from jev_agent.core.models import RunState, TaskState
-from jev_agent.core.store import TaskRecord
+from jev_agent.core.store import AttemptRecord, TaskRecord
 from jev_agent.core.taskgraph import topological_order
 from jev_agent.core.workspace import MergeConflict, WorkspaceError
-from jev_agent.dispatch.requests import clip, d4_task, d5_after_attempt
+from jev_agent.dispatch.requests import clip, d4_task, d5_after_attempt, d8_reviewer, diff_card
 from jev_agent.quality.gate import latest_task_gate, run_gate
 from jev_agent.roles import ReviewResult
 from jev_agent.runlog import log_path
@@ -220,46 +221,71 @@ class TaskRunner:
                 passed_commands=[card.test_command] if card.test_command else [],
             )
             quality, findings = ("failed" if gate.blocked else "passed"), gate.top_findings()
-        if quality == "failed" or not h.config.review.enabled:
+        if quality == "failed" or not h.config.review_enabled:
             return AttemptOutcome(
                 output, tests, test_result, quality=quality, quality_findings=findings
             )
 
         h.store.set_task_state(run_id, task.id, TaskState.REVIEWING)
-        review, issues = await self._review(run_id, task, attempt, workdir, test_result)
+        diff = await self._git(task, "git diff", h.workspace.task_diff, run_id, task.id)
+        reviewer = await self._pick_reviewer(run_id, task, a, attempt, tests, quality, diff)
+        review, issues = await self._review(
+            run_id, task, reviewer, attempt, workdir, diff, test_result
+        )
         return AttemptOutcome(output, tests, test_result, review, issues, quality, findings)
+
+    async def _pick_reviewer(
+        self,
+        run_id: str,
+        task: TaskRecord,
+        coder: Assignment,
+        attempt: int,
+        tests: str,
+        quality: str,
+        diff: str,
+    ) -> Assignment:
+        """D8: the reviewer's worker, model and effort for this attempt."""
+        h = self.h
+        options = h.require_options("reviewer")
+        avoid_role = h.config.roles.reviewer.prefer_different_vendor_than
+        avoid: Assignment | AttemptRecord | None = None
+        if avoid_role == "coder":
+            avoid = coder  # this attempt's coder, not the run's latest coder attempt
+        elif avoid_role is not None:
+            avoid = h.last_attempt(run_id, avoid_role)
+        req = d8_reviewer(
+            task.card,
+            attempt=attempt,
+            coder=coder.as_dict(),
+            tests=tests,
+            quality=quality,
+            diff=diff_card(diff),
+            reviewer=options,
+            avoid_role=avoid_role,
+            avoid_worker=None if avoid is None else avoid.worker,
+            avoid_model=None if avoid is None else avoid.model,
+        )
+        return h.assignment("reviewer", (await h.decide(run_id, task.id, req)).answers)
 
     async def _review(
         self,
         run_id: str,
         task: TaskRecord,
+        a: Assignment,
         attempt: int,
         workdir: Path,
+        diff: str,
         test_result: CommandResult | None,
     ) -> tuple[str, list[str]]:
-        """Reviewer on the task's diff. It uses the role's first worker, model and middle effort.
-
-        TODO: let the dispatcher choose the reviewer (no decision point covers it yet).
-        """
+        """Reviewer `a` on the task's diff."""
         h = self.h
-        options = h.require_options("reviewer")
-        a = h.assignment(
-            "reviewer",
-            {
-                "worker": options.workers[0],
-                "model": options.models[0],
-                "effort": options.efforts[(len(options.efforts) - 1) // 2],
-            },
-        )
         h.check_budget(run_id, task.id)
         lessons = h.lessons_for(run_id, "reviewer", [task.card.description], [task.card])
         prompt = h.prompt(
             "reviewer",
             lessons,
             task=task.card,
-            diff=clip(
-                await self._git(task, "git diff", h.workspace.task_diff, run_id, task.id), 20_000
-            ),
+            diff=clip(diff, 20_000),
             test_output=None if test_result is None else clip(test_result.output, 4_000),
         )
         output = await h.run_worker_with_fallback(

@@ -113,5 +113,14 @@ def test_decision_questions_match_the_requests(tmp_path: Path) -> None:
         ),
         r.d6_integration(1, True, [], "passed", fix_rounds=0, max_fix_rounds=2),
         r.d7_learn("done", [], 1, 0, opts, 0.1, 5.0),
+        r.d8_reviewer(
+            card,
+            attempt=1,
+            coder={"worker": "codex", "model": None, "effort": "low"},
+            tests="passed",
+            quality="skipped",
+            diff={"files": 1, "lines_changed": 2},
+            reviewer=opts,
+        ),
     ]
     assert {req.point: tuple(req.questions) for req in requests} == DECISION_QUESTIONS

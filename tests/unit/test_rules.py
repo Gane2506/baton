@@ -56,6 +56,35 @@ async def test_d2_without_preference_takes_first() -> None:
     assert (await _answers(req))["worker"] == "codex"
 
 
+def _d8(reviewer: r.RoleOptions, avoid_worker: str | None = None) -> DecisionRequest:
+    return r.d8_reviewer(
+        CARD,
+        attempt=1,
+        coder={"worker": "claude_code", "model": None, "effort": "medium"},
+        tests="passed",
+        quality="skipped",
+        diff={"files": 2, "lines_changed": 10},
+        reviewer=reviewer,
+        avoid_role=None if avoid_worker is None else "coder",
+        avoid_worker=avoid_worker,
+    )
+
+
+async def test_d8_takes_the_first_reviewer_and_middle_effort() -> None:
+    # Same as the hard-coded reviewer before D8 existed: `primary = "rules"` reviews as before.
+    assert await _answers(_d8(_opts("reviewer"))) == {
+        "worker": "api",
+        "model": "default",
+        "effort": "medium",
+    }
+
+
+async def test_d8_prefers_a_different_vendor_than_the_coder() -> None:
+    opts = _opts("reviewer", workers=["claude_code", "codex"])
+    assert (await _answers(_d8(opts)))["worker"] == "claude_code"
+    assert (await _answers(_d8(opts, avoid_worker="claude_code")))["worker"] == "codex"
+
+
 @pytest.mark.parametrize(
     ("verdict", "round_", "expected"),
     [("approve", 1, "approve"), ("revise", 1, "revise"), ("revise", 3, "escalate_human")],

@@ -191,7 +191,7 @@ def test_partial_role_table_keeps_role_defaults() -> None:
 
 
 def test_review_and_prompt_file_options(repo: Path, user_cfg: Path) -> None:
-    assert JevConfig().review.enabled is False
+    assert JevConfig().review.enabled is None
     _write(repo / "jev.toml", '[review]\nenabled = true\n[roles.coder]\nprompt_file = "p.md"\n')
     cfg = load_config(repo, user_cfg)
     assert cfg.review.enabled is True
@@ -478,3 +478,17 @@ def test_trust_error_prints_the_table_verbatim(
     result = CliRunner().invoke(app, ["status"])
     assert result.exit_code == 1
     assert "[trust]" in result.output and "workers.codex.command" in result.output
+
+
+def test_review_default_depends_on_the_dispatcher() -> None:
+    assert JevConfig().review_enabled is True  # consensus is the default
+    for primary in ("jev", "rules"):
+        assert (
+            JevConfig.model_validate({"dispatcher": {"primary": primary}}).review_enabled is False
+        )
+    for primary in ("consensus", "jev", "rules"):
+        for explicit in (True, False):
+            config = JevConfig.model_validate(
+                {"dispatcher": {"primary": primary}, "review": {"enabled": explicit}}
+            )
+            assert config.review_enabled is explicit
