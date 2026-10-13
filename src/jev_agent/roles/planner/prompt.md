@@ -29,6 +29,12 @@ Previous plan:
 Issues raised by the validator:
 {% for issue in validation_issues %}- {{ issue }}
 {% endfor %}{% endif %}
+## Skills
+
+Before you start, look for skills that fit this work: use the find-skills skill if you have it,
+otherwise your own list of skills. Use the skills that are already installed. Never install a new
+skill unless the maintainer has approved it.
+
 {% if lessons %}## Lessons from earlier runs in this repo
 
 Learned from earlier runs. Follow them where they apply; this prompt wins if they conflict.

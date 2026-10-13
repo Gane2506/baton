@@ -9,6 +9,7 @@ All notable changes to this project are documented here. The format is based on
 
 ### Added
 
+- **Skill lookup in every role prompt** ([#67](https://github.com/Gane2506/baton/issues/67)). The built-in planner, validator, coder, reviewer, code reviewer, learner and chat prompts now tell the agent to look for relevant skills first, use the ones already installed, and never install a new skill without the maintainer's approval. See [docs/roles.md](docs/roles.md#skills-in-every-prompt).
 - **Servers over SSH, virtual browser, workspace profiles**
   ([#3](https://github.com/Gane2506/baton/issues/3), first version: `basic` and `medium`).
   `[servers.<name>]` (host or `~/.ssh/config` alias, `access = "basic" | "medium"`, `workdir`,
