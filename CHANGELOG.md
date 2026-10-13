@@ -15,6 +15,8 @@ All notable changes to this project are documented here. The format is based on
   - `CONTRIBUTING.md` covers finding work, the CI check command, a pre-PR checklist, branch and
     commit style, the docs that change with code, and review and merge.
   - Its module map now lists every module (#55).
+  - It now sets out the 16-point code-quality bar review applies, and the rules for changes
+    written with a coding agent; the pull request template asks about both (#71).
 
 - **Servers over SSH, virtual browser, workspace profiles**
   ([#3](https://github.com/Gane2506/baton/issues/3), first version: `basic` and `medium`).
