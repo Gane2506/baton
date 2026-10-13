@@ -1,0 +1,276 @@
+# CodeRabbit configuration for Baton Agent Orchestrator (the `jev` CLI).
+# Schema: https://coderabbit.ai/integrations/schema.v2.json
+#
+# The posture was decided with Jev (see docs/decisions.md): an assertive review. CodeRabbit never
+# requests changes by itself. Pre-merge checks warn, except two hard rules that fail the check:
+# no secrets in the diff, and no network or real CLIs in the tests. CI (.github/workflows/ci.yml)
+# owns formatting, lint, types and tests, so the review leaves those to it.
+language: en-US
+tone_instructions: >-
+  Be direct and specific. Cite file:line. Say what breaks, for which input, and the smallest fix.
+  Mark each comment as blocking or optional. Skip style nits ruff and mypy already catch.
+early_access: false
+
+reviews:
+  profile: assertive
+  request_changes_workflow: false
+  high_level_summary: true
+  high_level_summary_instructions: >-
+    Summarise user-visible behaviour changes first: CLI output and exit codes, jev.toml keys,
+    state DB schema version, and what agents may do. Then list internal changes. Name the issues
+    the PR closes.
+  review_status: true
+  review_details: false
+  commit_status: true
+  fail_commit_status: false
+  collapse_walkthrough: true
+  changed_files_summary: true
+  sequence_diagrams: false
+  estimate_code_review_effort: true
+  assess_linked_issues: true
+  related_issues: true
+  related_prs: true
+  suggested_labels: true
+  auto_apply_labels: false
+  labeling_instructions:
+    - label: bug
+      instructions: The PR fixes incorrect behaviour.
+    - label: enhancement
+      instructions: The PR adds or improves a feature, docs or tooling without fixing a bug.
+    - label: security
+      instructions: >-
+        The PR touches secret handling, redaction, the repo-config trust gate, server (SSH)
+        policy, worker permissions, the dashboard's auth, CSRF or host checks, or the quality
+        gate's secret scan.
+  suggested_reviewers: true
+  poem: false
+  in_progress_fortune: false
+  abort_on_close: true
+
+  path_filters:
+    - "!uv.lock"
+    - "!docs/images/**"
+    - "!**/*.svg"
+    - "!**/*.png"
+    - "!tests/fixtures/**/*.json"
+    - "!tests/fixtures/**/*.jsonl"
+    - "!tests/fixtures/**/*.txt"
+
+  path_instructions:
+    - path: "**/*.py"
+      instructions: >-
+        Python 3.11+, mypy strict, ruff with line length 100. Flag new `type: ignore` comments,
+        broad `except Exception` that hides a failure's meaning, and errors that lose their cause
+        (no `from exc`). Comments should explain why, not what. Prefer plain functions and
+        clear names over class hierarchies.
+    - path: "src/jev_agent/core/**"
+      instructions: >-
+        The harness stays dumb: code in core/ must not choose a worker, model or effort. That
+        belongs to dispatch/. Run-state writes must use the guarded `Store.set_run_state(...,
+        unless=...)` so a cancel is never overwritten. Every blocking git or subprocess call needs a
+        timeout and must run off the event loop (asyncio.to_thread or the async runner). Check
+        that cancellation and timeouts clean up child processes and worktrees.
+    - path: "src/jev_agent/core/migrations.py"
+      instructions: >-
+        Migrations are append-only and numbered. Never edit an applied script. A new script must
+        bump the schema version, and it must run under BEGIN IMMEDIATE with user_version
+        re-checked inside the transaction. Backfills must be idempotent. CLAUDE.md and the docs
+        that state the schema version must be updated in the same PR.
+    - path: "src/jev_agent/dispatch/**"
+      instructions: >-
+        Jev answers are untrusted input. Every answer must be validated against the allowed
+        options for its decision point (D1-D7). Confidence must be a finite number in 0..1. Any
+        failure must raise DispatchError so GuardedDispatcher falls back to the rules dispatcher.
+        Option descriptions and instructions must match what dispatch/requests.py actually sends.
+        The whole Jev call is bounded by timeout_s.
+    - path: "src/jev_agent/workers/**"
+      instructions: >-
+        Workers run agent CLIs through workers/subprocess_runner.run_command, never shell=True.
+        Secrets reach the agent only through the environment, never argv, the prompt or a log.
+        Failures map to a status in one place (success, failure, error, quota_exhausted, timeout)
+        and never raise. Read-only roles (planner, validator, reviewer) must not get write access.
+    - path: "src/jev_agent/servers/**"
+      instructions: >-
+        Security-critical: these are SSH server tools that agents call. Check path confinement,
+        symlink handling, the credential-file rules, always-denied commands, the audit log being
+        written before a command runs, and remote timeouts. Access "full" must stay rejected
+        (issue #3). Treat any widening of what an agent may run as blocking.
+    - path: "src/jev_agent/runlog/**"
+      instructions: >-
+        Redaction must cover every format in CREDENTIAL_PATTERNS, and it must happen before text
+        is truncated. Secrets must never reach logs, PR bodies or the dashboard.
+    - path: "src/jev_agent/quality/**"
+      instructions: >-
+        A required check that crashes, times out or prints unparseable output must report
+        `error`, which blocks the gate. It must never report "skipped" or "passed".
+    - path: "src/jev_agent/config/**"
+      instructions: >-
+        Every new or renamed schema field must be documented in docs/config.md (a test enforces
+        this). The `jev init` template in defaults.py must stay identical to examples/jev.toml.
+        Keys that can send data elsewhere or widen permissions belong in GUARDED_KEYS (the repo
+        trust gate). Unknown keys and typos must be errors, not silently ignored.
+    - path: "src/jev_agent/cli/**"
+      instructions: >-
+        User-facing errors go through CliError or fail(): stderr, rich markup escaped, exit code
+        1. Runs that stop short of DONE exit 3. Read-only commands use the light RepoContext and
+        must not build workers, fetch the model list or create .jev/.
+    - path: "src/jev_agent/dashboard/**"
+      instructions: >-
+        Security-critical: check the host check, token, CSRF and security headers. Actions must
+        call the same functions as the CLI. Background jobs must be cancellable on shutdown and
+        must show the real error message.
+    - path: "src/jev_agent/roles/**"
+      instructions: >-
+        Prompt templates render with Jinja2 StrictUndefined. Every variable used must be passed
+        by the harness and documented in docs/roles.md. The "Output" section must match the
+        role's schema in roles/schemas.py. The coder template must keep the summary-marker block.
+    - path: "tests/**"
+      instructions: >-
+        No test may hit the network or run a real agent CLI (claude, codex, gh, ssh, npx, a
+        browser). Use the fakes: FakeWorker, FakeCommandRunner, httpx.MockTransport,
+        tests/fixtures/gh/fake_gh.py, and local bare git remotes. Flag skipped, xfailed or weakened
+        tests, sleeps used for synchronisation, and tests that depend on the developer's config or
+        on order. Fake credentials must be obvious fakes and, for provider formats secret scanners
+        recognise, must be built at runtime.
+    - path: "tests/live/**"
+      instructions: >-
+        Live tests call real services. They must be skipped unless JEV_LIVE_TESTS=1, and they must
+        keep spending small.
+    - path: ".github/workflows/**"
+      instructions: >-
+        Pin third-party actions to a full commit SHA with a version comment (setup-uv has no
+        floating major tags). Keep `permissions` minimal, with read-only defaults. Never
+        interpolate untrusted event data into `run:` steps.
+    - path: "docs/**"
+      instructions: >-
+        Docs must match the code they describe: commands, flags, config keys and file paths.
+        docs/decisions.md is newest first, with dated `##` headings, and superseded entries are
+        marked rather than deleted. Write in plain, concrete language with no marketing tone.
+    - path: "CHANGELOG.md"
+      instructions: >-
+        Use the Keep a Changelog format. New entries go under [Unreleased] in Added, Fixed or
+        Changed, and reference the issue numbers.
+
+  auto_review:
+    enabled: true
+    auto_incremental_review: true
+    drafts: false
+    base_branches:
+      - main
+    ignore_title_keywords:
+      - WIP
+      - "[skip review]"
+
+  finishing_touches:
+    docstrings:
+      enabled: true
+    unit_tests:
+      enabled: true
+    simplify:
+      enabled: false
+
+  pre_merge_checks:
+    docstrings:
+      mode: "off"
+    title:
+      mode: warning
+      requirements: >-
+        A short imperative summary of the change, about 72 characters at most, starting with a
+        capital letter and with no trailing period, for example "Validate Jev option
+        descriptions". A conventional prefix such as "fix:" is allowed.
+    description:
+      mode: warning
+    issue_assessment:
+      mode: warning
+    custom_checks:
+      - name: No secrets or personal data
+        mode: error
+        instructions: >-
+          Fail if the diff adds a real-looking credential (an API key, token, private key or
+          password), a home-directory path such as /Users/<name> or /home/<name>, or a personal
+          email address. Obvious test fakes are allowed when they are built at runtime or clearly
+          fake, and so are noreply and example.com addresses.
+      - name: No network or real CLIs in tests
+        mode: error
+        instructions: >-
+          Fail if a test outside tests/live/ makes a real network call or starts a real agent or
+          tool CLI (claude, codex, gh, ssh, npx, a browser) instead of the repo's fakes or
+          injectable runners.
+      - name: Tests cover behaviour changes
+        mode: warning
+        instructions: >-
+          Warn if src/ behaviour changes, or a bug is fixed, without a test that would fail on the
+          old code.
+      - name: Docs updated with the code
+        mode: warning
+        instructions: >-
+          Warn if the PR changes config fields without docs/config.md, changes the jev init
+          template without examples/jev.toml, changes the state DB schema without updating the
+          schema version in CLAUDE.md, or changes user-visible behaviour without a CHANGELOG.md
+          entry under [Unreleased].
+
+  tools:
+    ruff:
+      enabled: true
+    gitleaks:
+      enabled: true
+    trufflehog:
+      enabled: true
+    actionlint:
+      enabled: true
+    zizmor:
+      enabled: true
+    yamllint:
+      enabled: true
+    shellcheck:
+      enabled: true
+    osvScanner:
+      enabled: true
+    semgrep:
+      enabled: true
+    github-checks:
+      enabled: true
+    markdownlint:
+      enabled: false
+    languagetool:
+      enabled: false
+    pylint:
+      enabled: false
+    flake8:
+      enabled: false
+
+chat:
+  auto_reply: true
+  art: false
+
+knowledge_base:
+  opt_out: false
+  web_search:
+    enabled: true
+  code_guidelines:
+    enabled: true
+    filePatterns:
+      - CLAUDE.md
+      - CONTRIBUTING.md
+      - docs/security.md
+  learnings:
+    scope: local
+  issues:
+    scope: local
+  pull_requests:
+    scope: local
+
+code_generation:
+  docstrings:
+    path_instructions:
+      - path: "**/*.py"
+        instructions: >-
+          Write a short docstring that says what the function returns or does, and why when it
+          is not obvious. Use no Args/Returns boilerplate, and do not restate the type hints.
+  unit_tests:
+    path_instructions:
+      - path: "tests/**"
+        instructions: >-
+          Write pytest tests (pytest-asyncio auto mode). Use the repo's fakes and fixtures
+          (fixture_repo, FakeWorker, FakeCommandRunner, httpx.MockTransport, fake_gh.py) and no
+          network calls. Each test should fail on the code before the fix.
