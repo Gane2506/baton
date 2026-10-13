@@ -160,6 +160,7 @@ def test_ship_pushes_the_result_branch_and_opens_a_draft_pr(
     body = gh.body()
     for heading in ("## Idea", "## Plan", "## Quality", "## KPIs", "## Decisions"):
         assert heading in body
+    assert "by Jev (with Laya under consensus)" in body
     assert "| T1 |" in body and "Opened by Baton Agent Orchestrator (`jev ship`)" in body
 
     with _store(repo) as store:

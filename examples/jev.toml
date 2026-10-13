@@ -9,7 +9,7 @@
 # Never put secrets in this file: keys are read from environment variables.
 
 [dispatcher]
-# primary = "jev"                  # "jev" | "rules"
+# primary = "consensus"            # "consensus" | "jev" | "rules"
 
 # Jev via OpenRouter. For native TypeSafe use base_url = "https://api.typesafe.ai/v1",
 # model = "jev-latest" and api_key_env = "TYPESAFE_API_KEY".
@@ -23,6 +23,19 @@
 # [dispatcher.jev.instructions]    # optional: replace the instruction for a question
 # "D4.effort" = "..."              # at one decision point
 # model = "..."                    # at every decision point
+
+# Laya's vote under primary = "consensus": Jev scores every allowed answer 1-5 on six weighted
+# criteria. Both must agree confidently; otherwise the run stops for a human.
+[dispatcher.laya]
+# min_margin = 0.2                 # Laya's lead over the runner-up, on the 1-5 weighted scale
+# follow_up_rounds = 2             # extra rounds before the run stops for a human
+# [dispatcher.laya.weights]        # must name all six criteria and add up to 1
+# correctness = 0.30
+# safety = 0.20
+# simplicity = 0.15
+# maintainability = 0.15
+# tool_fit = 0.10
+# user_preference = 0.10
 
 [budget]
 # per_run_usd = 5.00               # hard cap for one run
@@ -39,7 +52,7 @@
 # run_hooks = true                 # run the repo's git hooks on jev's task commits and merges
 
 [approval]
-# require_plan_approval = true     # human gate after plan validation
+# require_plan_approval = true     # human gate after plan validation; unset: off under "consensus"
 
 [review]
 # enabled = false                  # run the reviewer on each task's diff after its tests pass

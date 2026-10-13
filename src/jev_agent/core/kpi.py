@@ -103,6 +103,10 @@ def _mean(values: Sequence[float]) -> float | None:
     return statistics.fmean(values) if values else None
 
 
+# Dispatchers whose decisions carry Jev's vote (the consensus one adds Laya's on top).
+JEV_DISPATCHERS = ("jev", "consensus")
+
+
 def _confidences(details: Mapping[str, Any]) -> list[float]:
     answers = details.get("answers")
     if not isinstance(answers, dict):
@@ -143,7 +147,7 @@ def compute_run_kpis(store: Store, run_id: str, diff: DiffStat | None = None) ->
         for severity, count in gate.counts().items():
             findings[severity] += count
 
-    jev = [d for d in decisions if d.decision.dispatcher == "jev"]
+    jev = [d for d in decisions if d.decision.dispatcher in JEV_DISPATCHERS]
     fallbacks = [d for d in decisions if d.fallback_reason]
     asked_jev = len(jev) + len(fallbacks)
     confidences = [c for d in jev for c in _confidences(d.decision.details)]

@@ -31,7 +31,8 @@ def _isolate(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     # guarded keys (servers, tools, permissions; docs/security.md).
     trust = tmp_path / "xdg" / "jev" / "config.toml"
     trust.parent.mkdir(parents=True, exist_ok=True)
-    trust.write_text('[trust]\nrepos = ["*"]\n')
+    with trust.open("a") as fh:  # keep the suite's user config (tests/conftest.py)
+        fh.write('[trust]\nrepos = ["*"]\n')
     monkeypatch.setenv(FAKE_WORKERS_ENV, "1")
 
 

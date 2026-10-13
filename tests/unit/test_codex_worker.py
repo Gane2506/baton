@@ -331,12 +331,13 @@ def test_git_is_available_for_porcelain_parsing(tmp_path: Path) -> None:
     """Sanity check of `parse_porcelain` against real git output (git only, no agent CLI)."""
     from jev_agent.workers.summary import parse_porcelain
 
-    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
-    (tmp_path / "a b.txt").write_text("x")
-    (tmp_path / "d").mkdir()
-    (tmp_path / "d" / "c.py").write_text("x")
+    repo = tmp_path / "repo"
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    (repo / "a b.txt").write_text("x")
+    (repo / "d").mkdir()
+    (repo / "d" / "c.py").write_text("x")
     out = subprocess.run(
-        ["git", "-C", str(tmp_path), "status", "--porcelain", "--untracked-files=all"],
+        ["git", "-C", str(repo), "status", "--porcelain", "--untracked-files=all"],
         check=True,
         capture_output=True,
         text=True,

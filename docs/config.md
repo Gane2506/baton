@@ -71,16 +71,38 @@ A repository's `jev.toml` cannot contain `[trust]`.
 
 | Key | Default | Meaning |
 | --- | --- | --- |
-| `primary` | `"jev"` | Dispatcher asked first: `"jev"` or `"rules"`. |
+| `primary` | `"consensus"` | Dispatcher asked first: `"consensus"`, `"jev"` or `"rules"`. |
+
+With `primary = "consensus"` (the default), every decision needs two votes that agree. Jev votes
+first. Laya votes second: Jev scores every allowed answer from 1 to 5 on six weighted criteria
+(see [`[dispatcher.laya]`](#dispatcherlaya)) and the highest weighted total is Laya's pick. The
+two are asked separately, and Laya does not see Jev's vote in the first round. A question is
+settled only when all three hold:
+
+- Jev's confidence is at least `[dispatcher.jev] min_confidence`;
+- Laya ranks the same answer first;
+- Laya's lead over the runner-up is at least `min_margin` even after each score Laya was unsure
+  about (confidence below `min_confidence`) is moved one level against it.
+
+If a question is not settled, it is asked again, up to `follow_up_rounds` more times, with the
+reasons of the earlier rounds in the state. If it is still not settled, the run stops in
+`NEEDS_HUMAN` and `jev resume` continues it once you have looked. The consensus dispatcher
+never falls back to rules, so a missing key, a network error or an answer outside the allowed
+values also stops the run instead of being decided without Jev. The saved decision records
+both votes, Laya's totals and the reason of every unsettled round. Questions with a single
+allowed value are not asked.
 
 With `primary = "jev"`, every decision goes to Jev first. If the call fails (key unset, network
 or HTTP error, an answer outside the allowed values, low confidence, oversized state), the rules
 dispatcher answers that decision instead, and `jev log` shows the reason after `FALLBACK:`. If
 the key variable is unset, `jev run`, `approve` and `resume` print one warning at the start and
-every decision uses rules. `jev doctor` reports the dispatcher and whether its key is set.
+every decision uses rules. With `primary = "rules"`, only the deterministic rules decide and no
+model is called for decisions. `jev doctor` reports the dispatcher and whether its key is set.
 
-The rules dispatcher is always the fallback. The old `fallback` key is deprecated: `fallback =
-"rules"` is still accepted and ignored, any other value is an error.
+With `"jev"` and `"rules"`, the rules dispatcher is always the fallback. The old `fallback` key
+is deprecated: `fallback = "rules"` is still accepted and ignored, any other value is an error.
+
+Plan approval follows the dispatcher: see [`[approval]`](#approval).
 
 ## `[dispatcher.jev]`
 
@@ -109,6 +131,48 @@ Native TypeSafe does not report a cost, so jev estimates it from input tokens at
 `jev log` shows Jev's confidence per answer, e.g. `effort=high (0.91)`. Answers with no
 confidence were either given by the rules dispatcher or had only one allowed value (Jev is not
 asked those).
+
+## `[dispatcher.laya]`
+
+Laya's vote in the consensus dispatcher (`primary = "consensus"`). Laya is Jev with the Laya CDA
+decision matrix on top: it reaches Jev with the `[dispatcher.jev]` settings, so there is no
+second key or model to configure. The table is ignored with `"jev"` and `"rules"`.
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `weights` | see below | Table of the six criteria and their weights. It must name exactly those six and add up to 1; weights may be 0 but not negative. |
+| `min_margin` | `0.2` | Between 0 and 4. The winner's weighted total (on the 1-5 scale) must lead the runner-up by at least this much, also after every low-confidence score is moved one level against it. |
+| `follow_up_rounds` | `2` | From 0 to 5. Extra rounds after a first round without agreement, before the run stops for a human. `0` stops at the first disagreement. |
+
+The default weights are the Laya CDA matrix:
+
+| Criterion | Default weight | Asks |
+| --- | --- | --- |
+| `correctness` | `0.30` | Will it solve the problem? |
+| `safety` | `0.20` | Does it avoid harmful changes? |
+| `simplicity` | `0.15` | Is it the least complex solution? |
+| `maintainability` | `0.15` | Is it readable and sound long-term? |
+| `tool_fit` | `0.10` | Does it use the available tools and budget well? |
+| `user_preference` | `0.10` | Does it align with the stated intent? |
+
+```toml
+[dispatcher.laya]
+min_margin = 0.3
+follow_up_rounds = 1
+
+[dispatcher.laya.weights]   # to change a weight, give all six
+correctness = 0.40
+safety = 0.20
+simplicity = 0.10
+maintainability = 0.10
+tool_fit = 0.10
+user_preference = 0.10
+```
+
+Each round makes two Jev calls, one for the votes and one for Laya's scores (every allowed
+answer on every criterion, in one call), so a decision costs about twice as much as with
+`primary = "jev"`. Follow-up rounds ask only the questions still unsettled and re-score only
+the uncertain cells; a new score replaces the old one when it is at least as confident.
 
 ## `[budget]`
 
@@ -149,7 +213,12 @@ failed commit stops the run in NEEDS_HUMAN: fix the cause, then `jev resume`.
 
 | Key | Default | Meaning |
 | --- | --- | --- |
-| `require_plan_approval` | `true` | Stop for human approval after the plan is validated. |
+| `require_plan_approval` | unset | Stop for human approval after the plan is validated. Unset follows the dispatcher: off with `primary = "consensus"`, on with `"jev"` and `"rules"`. `true` or `false` always wins. |
+
+Under `consensus`, Jev and Laya's agreement on the D3 verdict is the gate: a plan they both
+approve goes straight to execution, and a plan they cannot agree on stops the run in
+`NEEDS_HUMAN`. Set `require_plan_approval = true` to also stop for yourself after every
+validated plan. `--plan-only` always stops at the plan, whatever the setting.
 
 ## `[review]`
 

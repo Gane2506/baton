@@ -17,6 +17,7 @@ def _isolate_user_config(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Non
     # guarded keys (servers, tools, permissions; docs/security.md).
     trust = tmp_path / "xdg" / "jev" / "config.toml"
     trust.parent.mkdir(parents=True, exist_ok=True)
+    # Replaces the suite's user config (tests/conftest.py): doctor checks the real defaults.
     trust.write_text('[trust]\nrepos = ["*"]\n')
 
 
@@ -156,10 +157,15 @@ def test_doctor_reports_jev_dispatcher_key(git_repo: Path, monkeypatch: pytest.M
     monkeypatch.setenv("OPENROUTER_API_KEY", "sk-super-secret-value")
     check = {c.name: c for c in doctor_cmd.run_checks(git_repo)}["dispatcher"]
     assert check.status == "ok"
+    assert "consensus: Jev, then Laya" in check.detail
     assert "~typesafe/jev-latest" in check.detail and "OPENROUTER_API_KEY is set" in check.detail
     assert "sk-super-secret-value" not in check.detail
 
     monkeypatch.delenv("OPENROUTER_API_KEY")
+    check = {c.name: c for c in doctor_cmd.run_checks(git_repo)}["dispatcher"]
+    assert check.status == "fail" and "stops for a human" in check.detail
+
+    (git_repo / "jev.toml").write_text('[dispatcher]\nprimary = "jev"\n')
     check = {c.name: c for c in doctor_cmd.run_checks(git_repo)}["dispatcher"]
     assert check.status == "warn" and "fall back to the rules dispatcher" in check.detail
 

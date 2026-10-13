@@ -76,6 +76,8 @@ def _store(repo: Path) -> Store:
 @pytest.fixture
 def planned(fixture_repo: Path) -> tuple[Path, str]:
     """A repo with one run awaiting approval (planned by the fake workers)."""
+    # The jev dispatcher with its key unset: every decision falls back to rules, with a warning.
+    (fixture_repo / "jev.toml").write_text('[dispatcher]\nprimary = "jev"\n')
     _jev(fixture_repo, "run", "add <b>search</b> & filters")
     with _store(fixture_repo) as store:
         run = store.list_runs()[0]
@@ -1077,7 +1079,7 @@ def test_job_message_includes_run_start_warnings(
     assert job is not None and job.state == "finished", job and job.message
     assert job.message.startswith("run ")
     assert "; warning: " in job.message
-    assert "is not set, so the Jev dispatcher cannot be reached" in job.message
+    assert "is not set, so Jev cannot be reached" in job.message
 
 
 def test_resume_needs_force_while_another_process_holds_the_lease(

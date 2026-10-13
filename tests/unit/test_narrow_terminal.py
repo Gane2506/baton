@@ -40,6 +40,8 @@ def _jev(repo: Path, *args: str) -> tuple[int, str]:
 
 def test_run_outcome_and_hints_survive(fixture_repo: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv(FAKE_WORKERS_ENV, "1")
+    # The jev dispatcher with its key unset: every decision falls back to rules, with a warning.
+    (fixture_repo / "jev.toml").write_text('[dispatcher]\nprimary = "jev"\n')
     code, output = _jev(fixture_repo, "run", "add search")
     assert code == 0, output
     with Store.open(fixture_repo / ".jev" / "state.db") as store:

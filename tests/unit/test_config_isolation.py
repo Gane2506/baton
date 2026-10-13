@@ -12,7 +12,9 @@ def test_user_config_and_data_live_under_tmp_path(tmp_path: Path) -> None:
     assert os.environ["XDG_DATA_HOME"] == str(tmp_path / "xdg-data")
     repo = tmp_path / "repo"
     repo.mkdir()
-    assert load_config(repo) == JevConfig()  # no developer config (e.g. prefer_free = true)
+    # Only the suite's own user config (tests/conftest.py), no developer config (prefer_free...).
+    expected = JevConfig.model_validate({"dispatcher": {"primary": "rules"}})
+    assert load_config(repo) == expected
 
 
 def test_credentials_and_fake_workers_are_unset() -> None:

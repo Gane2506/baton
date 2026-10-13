@@ -98,7 +98,8 @@ TRUST_ALL = '[trust]\nrepos = ["*"]\n'
 def _isolate(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     user_config = tmp_path / "xdg" / "jev" / "config.toml"
     user_config.parent.mkdir(parents=True, exist_ok=True)
-    user_config.write_text(TRUST_ALL)  # these tests model the user's own repo (issue #16)
+    with user_config.open("a") as fh:  # keep the suite's user config (tests/conftest.py)
+        fh.write(TRUST_ALL)  # these tests model the user's own repo (issue #16)
     monkeypatch.setenv(FAKE_WORKERS_ENV, "1")
 
 

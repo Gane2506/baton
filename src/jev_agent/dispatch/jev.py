@@ -7,7 +7,8 @@ whose `criteria` keys are exactly the allowed answers.
 
 This module never falls back by itself: any problem (network, HTTP error, bad or
 low-confidence answer, oversized state) raises `DispatchError`, and the harness's guard falls
-back to the rules dispatcher. The API key is read from the environment on each call and never
+back to the rules dispatcher (the consensus dispatcher, `dispatch/consensus.py`, stops the run
+for a human instead). The API key is read from the environment on each call and never
 appears in messages or `Decision.details`. Settings come from `[dispatcher.jev]`
 (`jev_agent.config.schema.JevSettings`).
 """
@@ -288,12 +289,7 @@ class JevDispatcher:
                 details={"direct": sorted(direct), "answers": {}, "usage": None},
             )
 
-        key = os.environ.get(self.settings.api_key_env, "").strip()
-        if not key:
-            raise DispatchError(f"jev: API key env var {self.settings.api_key_env} is not set")
-        payload = self.build_payload(req.point, req.state, asked)
-        check_size(payload)
-        body = await self._post(payload, key)
+        body = await self.post(self.build_payload(req.point, req.state, asked))
         answers, details = parse_answers(body, asked)
         usage = body.get("usage") if isinstance(body.get("usage"), dict) else None
 
@@ -381,6 +377,14 @@ class JevDispatcher:
             if text:
                 return text
         return GENERIC_INSTRUCTION.format(name=question)
+
+    async def post(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Send one System One request (`{state, model, questions}`) and return the body."""
+        key = os.environ.get(self.settings.api_key_env, "").strip()
+        if not key:
+            raise DispatchError(f"jev: API key env var {self.settings.api_key_env} is not set")
+        check_size(payload)
+        return await self._post(payload, key)
 
     async def _post(self, payload: dict[str, Any], key: str) -> dict[str, Any]:
         """POST once, retrying once; `timeout_s` bounds the whole call, retry and backoff

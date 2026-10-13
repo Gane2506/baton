@@ -54,6 +54,7 @@ from jev_agent.core.taskgraph import CycleError, topological_order
 from jev_agent.core.tasks import TaskRunner
 from jev_agent.core.workspace import GitWorkspace, Workspace, WorkspaceError
 from jev_agent.dispatch.base import Dispatcher
+from jev_agent.dispatch.consensus import ConsensusDispatcher
 from jev_agent.dispatch.guard import GuardedDispatcher
 from jev_agent.dispatch.requests import d1_intake, d2_validator, d3_after_validation, d6_integration
 from jev_agent.dispatch.rules import RulesDispatcher
@@ -298,7 +299,7 @@ class Pipeline:
             self._move(run.id, RunState.PLANNING)
             return
         self.store.upsert_tasks(run.id, plan)
-        gate = run.plan_only or h.config.approval.require_plan_approval
+        gate = run.plan_only or h.config.plan_approval_required
         self._move(run.id, RunState.AWAITING_APPROVAL if gate else RunState.EXECUTING)
 
     async def _execute(self, run: RunRecord) -> None:
@@ -451,6 +452,13 @@ def _integration_stop_reason(outcome: IntegrationOutcome, rounds: int, max_round
     return f"D6: integration tests fail (`{failure.command}`); a human should review {branch}"
 
 
+def guarded_dispatcher(primary: Dispatcher) -> GuardedDispatcher:
+    """`primary` behind the answer guard, with the rules dispatcher as fallback unless the
+    primary is the consensus dispatcher, which must never be overruled by rules."""
+    fallback = None if primary.name == ConsensusDispatcher.name else RulesDispatcher()
+    return GuardedDispatcher(primary, fallback)
+
+
 def build_pipeline(
     repo: Path,
     config: JevConfig,
@@ -470,7 +478,8 @@ def build_pipeline(
     is the cached OpenRouter model list that free models come from (None: no free models
     except `:free` slugs listed by name).
 
-    The rules dispatcher is always the fallback, whatever the primary is.
+    The rules dispatcher is the fallback, except for the consensus dispatcher: a decision
+    Jev and Laya do not agree on stops the run for a human instead (issue #66).
     """
     state_dir = state_dir or repo / STATE_DIRNAME
     harness = Harness(
@@ -478,7 +487,7 @@ def build_pipeline(
         config=config,
         repo=repo,
         state_dir=state_dir,
-        dispatcher=GuardedDispatcher(dispatcher or RulesDispatcher(), RulesDispatcher()),
+        dispatcher=guarded_dispatcher(dispatcher or RulesDispatcher()),
         workers=workers,
         workspace=workspace or GitWorkspace(repo, state_dir, run_hooks=config.workspace.run_hooks),
         commands=commands or ShellCommandRunner(),
