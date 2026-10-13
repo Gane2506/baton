@@ -38,10 +38,10 @@ def user_cfg(tmp_path: Path) -> Path:
 
 def test_empty_config_is_valid_with_plan_defaults() -> None:
     cfg = JevConfig()
-    assert cfg.dispatcher.primary == "jev"
+    assert cfg.dispatcher.primary == "consensus"
     assert cfg.budget.per_run_usd == 5.0
     assert cfg.budget.per_task_usd == 1.5
-    assert cfg.approval.require_plan_approval is True
+    assert cfg.approval.require_plan_approval is None
     assert cfg.workers.claude_code.command == "claude"
     assert cfg.workers.api.api_key_env == "OPENROUTER_API_KEY"
     assert cfg.workers.api.default_model is None
@@ -167,7 +167,9 @@ def test_prefer_different_vendor_must_name_another_role(
 
 def test_invalid_dispatcher_name(repo: Path, user_cfg: Path) -> None:
     _write(repo / "jev.toml", '[dispatcher]\nprimary = "gpt"\n')
-    with pytest.raises(ConfigError, match=r"dispatcher\.primary: must be 'jev' or 'rules'"):
+    with pytest.raises(
+        ConfigError, match=r"dispatcher\.primary: must be 'consensus', 'jev' or 'rules'"
+    ):
         load_config(repo, user_cfg)
 
 

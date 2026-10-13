@@ -112,15 +112,19 @@ while its run goes on (removed by hand), the scheduler notes it and carries on w
 
 ### Approvals and unattended runs
 
-`[approval] require_plan_approval` is `true` by default, so a run stops at
-`AWAITING_APPROVAL` once its plan is validated, and nothing is built until you approve it.
-The scheduler respects that: an unattended scheduler plans every idea in the queue and leaves
-each one `waiting` for your review. That is a good default for a night run: you come back to
-validated plans, read them with `jev status RUN`, and approve the ones you want (`jev approve
-RUN` executes it in your terminal).
+`[approval] require_plan_approval` is unset by default, and then follows the dispatcher. With the
+default `consensus` dispatcher it is off: Jev and Laya's D3 approve vote is the gate, so a run
+whose plan they both approve goes straight to execution, and one they cannot agree on stops in
+`NEEDS_HUMAN` and leaves its item `waiting` ([config.md](config.md#dispatcherlaya)). With
+`primary = "jev"` or `"rules"` it is on, and a run stops at `AWAITING_APPROVAL` once its plan is
+validated, with nothing built until you approve it. The scheduler respects both: an unattended
+scheduler leaves every stopped idea `waiting` for you. You come back to the validated plans (or
+the questions Jev and Laya could not settle), read them with `jev status RUN`, and approve with
+`jev approve RUN` or continue with `jev resume RUN` in your terminal.
 
-To let queued runs go all the way through without you, set `require_plan_approval = false` in
-`jev.toml`. Only do this for ideas and repos where you are happy for agents to write code
+To review every plan yourself under `consensus`, set `require_plan_approval = true` in
+`jev.toml`. To let queued runs go all the way through without you under `jev` or `rules`, set it
+to `false`. Only do this for ideas and repos where you are happy for agents to write code
 unreviewed (always on separate branches and worktrees; jev never pushes unless you
 `jev ship` a run). `--plan-only` on an item always stops at the plan, whatever the setting.
 
