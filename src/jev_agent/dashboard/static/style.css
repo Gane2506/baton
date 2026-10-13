@@ -545,7 +545,12 @@ svg.trend .pt.bad { fill: var(--bad); stroke: var(--surface); stroke-width: 1.5;
   .nav-group { display: flex; align-items: center; gap: 4px; margin-bottom: 0; }
   .nav-label { display: none; }
   .sidebar nav a { white-space: nowrap; }
-  .sidebar-foot { display: none; }
+  .sidebar-foot {
+    display: flex; align-items: center; justify-content: flex-end; gap: var(--s3);
+    border-top: 0; padding: 0;
+  }
+  .sidebar-foot > div { display: none; } /* the repo path; the Theme picker stays reachable */
+  .theme-pick { margin-bottom: 0; }
   .content-inner { padding: var(--s5) var(--s4) 56px; }
 }
 
