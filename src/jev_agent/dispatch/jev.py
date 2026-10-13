@@ -68,6 +68,10 @@ POINT_DESCRIPTIONS: dict[DecisionPoint, str] = {
         "The run ended: distill lessons for future runs now (one extra model call), or skip; "
         "and which learner worker, model and effort."
     ),
+    "D8": (
+        "A task attempt passed its tests (and the quality gate, if on): pick the reviewer "
+        "worker, model and effort to check its diff before the task can be done."
+    ),
 }
 
 # Instructions per question name; (point, question) entries override the generic ones.
@@ -139,6 +143,19 @@ POINT_QUESTION_INSTRUCTIONS: dict[tuple[DecisionPoint, str], str] = {
         "is a short summarizing job."
     ),
     ("D7", "effort"): "How much reasoning effort should the learner spend? Usually low.",
+    ("D8", "worker"): (
+        "Which worker should review this attempt's diff? It only reads. Prefer a different "
+        "vendor than the coder (`coder`, and `prefer_different_vendor_than` when set), so the "
+        "review is independent."
+    ),
+    ("D8", "model"): (
+        "Which model should review the diff? Match its strength to the size (`diff`) and "
+        "complexity of the task; a large or subtle change needs a stronger model."
+    ),
+    ("D8", "effort"): (
+        "How much reasoning effort should the reviewer spend? Low for a small mechanical diff, "
+        "high for a large, cross-cutting or security-relevant one, or a later attempt."
+    ),
 }
 
 # Appended to the model (and worker) instructions when `state.models.prefer_free` is set.

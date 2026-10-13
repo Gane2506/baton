@@ -103,3 +103,63 @@ def test_d3_without_challenges() -> None:
         "validation"
     ]
     assert (validation["challenge_count"], validation["failed_challenges"]) == (0, [])
+
+
+DIFF = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,2 +1,2 @@
+-old = 1
++new = 1
+ same = 2
+diff --git a/y.py b/y.py
+new file mode 100644
+--- /dev/null
++++ b/y.py
+@@ -0,0 +1 @@
++added = 3
+"""
+
+
+def test_diff_card_counts_files_and_changed_lines() -> None:
+    assert r.diff_card(DIFF) == {"files": 2, "lines_changed": 3}
+    assert r.diff_card("") == {"files": 0, "lines_changed": 0}
+
+
+def test_d8_reviewer_state() -> None:
+    card = TaskCard(id="T1", title="t", description="d", files_hint=["x.py"])
+    opts = r.role_options(_config(), "reviewer", ALL)
+    coder = {"worker": "claude_code", "model": None, "effort": "medium"}
+    req = r.d8_reviewer(
+        card,
+        attempt=2,
+        coder=coder,
+        tests="passed",
+        quality="skipped",
+        diff=r.diff_card(DIFF),
+        reviewer=opts,
+        avoid_role="coder",
+        avoid_worker="claude_code",
+    )
+    assert req.point == "D8"
+    assert req.questions == {
+        "worker": ["api", "codex"],
+        "model": ["default"],
+        "effort": opts.efforts,
+    }
+    assert req.state["task"]["id"] == "T1" and req.state["attempt"] == 2
+    assert req.state["coder"] == coder and req.state["tests"] == "passed"
+    assert req.state["diff"] == {"files": 2, "lines_changed": 3}
+    assert req.state["prefer_different_vendor_than"]["vendor"] == "anthropic"
+    assert "quality" not in req.state  # only sent when the gate ran
+    gated = r.d8_reviewer(
+        card,
+        attempt=1,
+        coder=coder,
+        tests="skipped",
+        quality="passed",
+        diff=r.diff_card(""),
+        reviewer=opts,
+    )
+    assert gated.state["quality"] == "passed"
+    assert gated.state["prefer_different_vendor_than"] is None

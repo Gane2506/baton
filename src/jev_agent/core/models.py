@@ -8,7 +8,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-DecisionPoint = Literal["D1", "D2", "D3", "D4", "D5", "D6", "D7"]
+DecisionPoint = Literal["D1", "D2", "D3", "D4", "D5", "D6", "D7", "D8"]
 # `learner` distills lessons at the end of a run (docs/learning.md); `code_reviewer` reviews
 # diffs for the quality gate (docs/quality.md); the others build the code.
 Role = Literal["planner", "validator", "coder", "reviewer", "code_reviewer", "learner"]

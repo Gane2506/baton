@@ -24,6 +24,31 @@ take, the planner's reason and whether that reason holds (`ChoiceChallenge` in
 - **Compatibility.** `challenges` defaults to empty; runs stored before this load unchanged,
   and the rules dispatcher still reads only the (now enforced) verdict.
 
+## 2026-10-13: The dispatcher picks the task reviewer (#67)
+
+The task reviewer ran with the role's first worker and model and its middle effort, and was off
+by default. The maintainer's flow asks for every finished task to be rated and for Jev and Laya
+to choose who does each piece of work.
+
+- **A new decision point, D8.** Asked before each review with the same worker, model and effort
+  questions as D2, over adding reviewer questions to D4 (jev-decide with the Laya CDA matrix:
+  Jev and the matrix agree, Jev 0.72). D4 failed the "old runs keep working" gate: D4 records
+  stored before the change have no reviewer answers, and prefixed question names would bypass
+  the generic worker, model and effort handling (free models, worker/model pairing). D8 also
+  sees what D4 cannot: the diff's size and the test and quality results.
+- **State.** Task card, attempt, the coder's assignment, tests, quality (when the gate ran),
+  diff size (`files`, `lines_changed`), and `prefer_different_vendor_than` when
+  `[roles.reviewer]` sets it. That key did nothing for the reviewer before; `"coder"` means
+  this attempt's coder.
+- **Rules.** D8 is answered like D2: first worker and model, middle effort, a different vendor
+  when asked. With `primary = "rules"` or the rules fallback, the review runs as before.
+- **Default.** `[review] enabled` is tri-state like `require_plan_approval`: unset means on
+  under `consensus` and off with `jev` and `rules`; an explicit value wins. D5 already carries
+  the review verdict and needs both votes under `consensus`, so a task is done only when Jev
+  and Laya accept a reviewed attempt. This changes the default for repos that use `consensus`
+  and do not set the key: each attempt that passes its tests costs one more decision (two Jev
+  calls) and one reviewer call.
+
 ## 2026-10-13: Consensus dispatcher, Jev then Laya (#66)
 
 `[dispatcher] primary = "consensus"` is the new default. Every decision needs two votes that

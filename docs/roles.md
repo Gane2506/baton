@@ -140,9 +140,12 @@ failed attempt and the dispatcher (D5) decides what happens next.
 
 ## Reviewer
 
-**Purpose.** Check one task's diff against its acceptance criteria. Off by default; turn it on
-with `[review] enabled = true`. It runs after the task's tests pass, with the role's first
-worker and model and its middle effort level.
+**Purpose.** Check one task's diff against its acceptance criteria. On by default with the
+consensus dispatcher, off with `jev` and `rules` (`[review] enabled` sets it either way). It
+runs after the task's tests pass and the quality gate, if on, lets the attempt through, with
+the worker, model and effort the dispatcher picks at D8 (see
+[config.md](config.md#review)). The rules dispatcher picks the role's first worker and model
+and its middle effort level.
 
 **Template variables.**
 

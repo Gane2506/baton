@@ -97,8 +97,9 @@ def _d1(req: DecisionRequest) -> Answers:
     return {"clear": "plan", **_assignment(req.questions, state=req.state)}
 
 
-def _d2(req: DecisionRequest) -> Answers:
-    """Prefer a worker and model from a different vendor than the role to avoid."""
+def _different_vendor(req: DecisionRequest) -> Answers:
+    """D2 and D8: first worker and model, middle effort, but prefer a worker and model from a
+    different vendor than the role to avoid (`prefer_different_vendor_than`)."""
     q = req.questions
     answers = _assignment(q, state=req.state)
     avoid: dict[str, Any] | None = req.state.get("prefer_different_vendor_than")
@@ -209,12 +210,13 @@ def _d7(req: DecisionRequest) -> Answers:
 
 _RULES: dict[str, Callable[[DecisionRequest], Answers]] = {
     "D1": _d1,
-    "D2": _d2,
+    "D2": _different_vendor,
     "D3": _d3,
     "D4": _d4,
     "D5": _d5,
     "D6": _d6,
     "D7": _d7,
+    "D8": _different_vendor,
 }
 
 

@@ -41,6 +41,7 @@ LEARNED = FakeStep(
 def _config(**overrides: Any) -> JevConfig:
     data: dict[str, Any] = {
         "approval": {"require_plan_approval": False},
+        "review": {"enabled": False},
         "learning": {"enabled": True},
     }
     for section, values in overrides.items():

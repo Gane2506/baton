@@ -61,7 +61,7 @@ DEFAULT_CONFIG_TOML = """\
 # require_plan_approval = true     # human gate after plan validation; unset: off under "consensus"
 
 [review]
-# enabled = false                  # run the reviewer on each task's diff after its tests pass
+# enabled = true                   # reviewer on each task's diff; unset: on under "consensus"
 
 # Quality and security gate (docs/quality.md), after each task and at integration. Levels are
 # cumulative: "none" (task tests only) | "basic" (lint, full tests, AI code review) | "medium"
