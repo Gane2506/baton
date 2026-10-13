@@ -80,10 +80,7 @@ POINT_DESCRIPTIONS: dict[DecisionPoint, str] = {
 
 # Instructions per question name; (point, question) entries override the generic ones.
 QUESTION_INSTRUCTIONS: dict[str, str] = {
-    "worker": (
-        "Which worker should do this work? Prefer workers whose quota is ok and avoid ones "
-        "that already failed this work in `prior_attempts`."
-    ),
+    "worker": "Which worker should do this work? Choose a worker whose capabilities fit the role.",
     "model": (
         "Which model should the worker use? Match model strength to the difficulty of the "
         "work, prefer cheaper models for simple work, and stay well inside the remaining budget."
@@ -117,7 +114,7 @@ POINT_QUESTION_INSTRUCTIONS: dict[tuple[DecisionPoint, str], str] = {
         "a human. Escalate when rounds are nearly used up or issues need human judgement."
     ),
     ("D4", "worker"): (
-        "Which coding worker should implement this task? Avoid workers whose quota is low."
+        "Which coding worker should implement this task? Choose a worker whose capabilities fit the task."
     ),
     ("D5", "action"): (
         "Given the attempt's test and review results, what next? Retry for flaky or small "
@@ -321,6 +318,7 @@ class JevDispatcher:
     def build_payload(
         self, point: DecisionPoint, state: dict[str, Any], questions: dict[str, list[str]]
     ) -> dict[str, Any]:
+        """Build a Jev request payload from state and allowed answer choices."""
         context = {"id": point, "description": POINT_DESCRIPTIONS[point]}
         full_state = {"decision_point": context}
         full_state.update({k: v for k, v in state.items() if k != "decision_point"})
@@ -338,11 +336,13 @@ class JevDispatcher:
         )
 
         def describe(name: str, option: str) -> str | None:
+            """Return the description for one allowed answer, if known."""
             if name == "model" and option in free:
                 return FREE_UNKNOWN_OPTION if option in unknown else FREE_OPTION
             return POINT_OPTION_DESCRIPTIONS.get((point, name), COMMON_OPTION_DESCRIPTIONS.get(name, {})).get(option)
 
         def instruction(name: str) -> str:
+            """Build the prompt instructions for one decision question."""
             text = self.instruction_for(point, name)
             if prefer and name == "model":
                 text = f"{text} {PREFER_FREE_INSTRUCTION}"
@@ -366,6 +366,7 @@ class JevDispatcher:
         }
 
     def instruction_for(self, point: DecisionPoint, question: str) -> str:
+        """Return the most specific configured instruction for a question."""
         overrides = self.settings.instructions
         for text in (
             overrides.get(f"{point}.{question}"),
