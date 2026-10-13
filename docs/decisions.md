@@ -2,6 +2,43 @@
 
 Deviations from [PLAN.md](../PLAN.md) and choices it left open. Newest first.
 
+## 2026-10-13: Consensus dispatcher, Jev then Laya (#66)
+
+`[dispatcher] primary = "consensus"` is the new default. Every decision needs two votes that
+agree; when they cannot, a person decides. Jev and Laya are not two models: the Laya model's
+weights could not be reached from the cloud environment (huggingface.co is blocked), so Laya
+here is Jev scoring inside the Laya CDA decision matrix. That keeps one API and one key, and
+makes the second vote a different kind of question rather than a second sample of the first.
+
+- **Votes.** Jev votes first with the existing choice call. Laya votes second: Jev scores every
+  allowed answer 1-5 on correctness 0.30, safety 0.20, simplicity 0.15, maintainability 0.15,
+  tool/resource fit 0.10 and user preference 0.10 (`[dispatcher.laya] weights`). The highest
+  weighted total is Laya's pick. The 18-question CDA grader was not used: it routes and
+  grades, it does not choose between options. Laya does not see Jev's vote in the first round.
+- **Settled** means Jev is confident (`min_confidence`), Laya ranks the same answer first, and
+  Laya's lead is at least `min_margin` (0.2 on the 1-5 scale) after every score Laya was unsure
+  about is moved one level against it. A lead that exists only because of a guess does not
+  count as agreement.
+- **Follow-up.** An unsettled question is asked again (`follow_up_rounds`, default 2), with the
+  reasons of the earlier rounds in the state. Jev votes again; Laya re-scores only the
+  uncertain cells, and a new score replaces the old one only when it is at least as confident,
+  so a retry cannot quietly lower the evidence.
+- **Stop for a human.** After the last round the run stops in `NEEDS_HUMAN` and `jev resume`
+  continues it. It does not fall back to the rules dispatcher, as `primary = "jev"` does: a
+  fallback would decide exactly the questions the two votes found hard, with the least
+  information. A failed call (key unset, network, an answer outside the allowed values) stops
+  the run the same way, because a decision made without Jev is not a consensus. Questions with
+  one allowed value are not asked, as before.
+- **Plan approval.** `[approval] require_plan_approval` is now tri-state and unset by default:
+  off under `consensus`, whose D3 approve vote is the gate, and on with `jev` and `rules`,
+  where nothing else checks the plan. An explicit `true` or `false` always wins, and
+  `--plan-only` still stops at the plan. This changes the default for new and existing repos
+  that do not set the key: with `consensus` a plan both votes approve is built without a human
+  step. To keep the old behavior, set `primary = "jev"` or `require_plan_approval = true`.
+- **Cost.** Each round is two Jev calls, so a decision costs about twice as much as with
+  `primary = "jev"`; follow-up rounds ask only what is still unsettled.
+- **Kept.** `primary = "jev"` and `"rules"` behave as before, including the rules fallback.
+
 ## 2026-10-13: Run lease (#61)
 
 Two processes (the dashboard and a terminal `jev resume`, say) could drive the same run at once.

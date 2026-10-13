@@ -9,6 +9,17 @@ All notable changes to this project are documented here. The format is based on
 
 ### Added
 
+- **Consensus dispatcher: Jev votes, then Laya** ([#66](https://github.com/Gane2506/baton/issues/66)).
+  `[dispatcher] primary = "consensus"` is the new default; `"jev"` and `"rules"` still work.
+  - Every decision needs Jev and Laya to agree confidently. Laya is Jev scoring each allowed
+    answer 1-5 on the Laya CDA matrix (correctness 0.30, safety 0.20, simplicity 0.15,
+    maintainability 0.15, tool fit 0.10, user preference 0.10).
+  - Without agreement the question is asked again up to `follow_up_rounds` times, then the run
+    stops in `NEEDS_HUMAN` and `jev resume` continues it. It never falls back to rules.
+  - New `[dispatcher.laya]` table: `weights`, `min_margin` (0.2) and `follow_up_rounds` (2).
+  - `[approval] require_plan_approval` is unset by default: off under `consensus` (the D3
+    approve vote is the gate), on with `jev` and `rules`. An explicit `true` or `false` wins.
+
 - **Contributor guidelines.** A detailed `CONTRIBUTING.md`, a pull request template and issue
   forms for bugs and features. `SECURITY.md` explains private vulnerability reporting, and
   `CODE_OF_CONDUCT.md` is the Contributor Covenant 2.1.
