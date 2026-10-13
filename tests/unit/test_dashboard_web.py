@@ -186,3 +186,12 @@ def test_kpis_page_shows_the_current_build(client: TestClient) -> None:
     assert "This repo" in page.text and "Median cost / run" in page.text
     assert "No runs yet." in page.text
     assert "No shipped pull requests yet" in page.text  # the PR section keeps its empty state
+
+
+def test_theme_control_and_stylesheet(client: TestClient) -> None:
+    page = client.get("/")
+    assert '<script src="/static/theme.js">' in page.text
+    assert 'id="theme"' in page.text and "Auto (OS)" in page.text
+    assert client.get("/static/theme.js").status_code == 200
+    css = client.get("/static/style.css").text
+    assert ':root[data-theme="dark"]' in css and "prefers-color-scheme: dark" in css

@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="referrer" content="same-origin">
+<script src="/static/theme.js"></script>
 <title>Baton · {% block title %}Board{% endblock %}</title>
 <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="/static/style.css">
@@ -69,7 +70,16 @@
       </div>
       {% endfor %}
     </nav>
-    <div class="sidebar-foot">{{ root }}</div>
+    <div class="sidebar-foot">
+      <label class="theme-pick" for="theme">Theme
+        <select id="theme">
+          <option value="auto">Auto (OS)</option>
+          <option value="light">Light</option>
+          <option value="dark">Dark</option>
+        </select>
+      </label>
+      <div>{{ root }}</div>
+    </div>
   </aside>
 
   <div class="content">
