@@ -1,0 +1,21 @@
+{% macro csrf_input() %}<input type="hidden" name="{{ csrf_field }}" value="{{ csrf }}">{% endmacro %}
+
+{% macro badge(text, cls=none) %}<span class="badge s-{{ cls if cls is not none else text }}">{{ text }}</span>{% endmacro %}
+
+{% macro bars(chart, empty="No data yet.") %}
+{% if chart.bars %}
+<svg class="chart" viewBox="0 0 {{ chart.width }} {{ chart.height }}" role="img" aria-label="bar chart">
+{% for bar in chart.bars %}
+  <g>
+  {% if bar.href %}<a href="{{ bar.href }}">{% endif %}
+    <text class="label" x="0" y="{{ bar.y + chart.row * 0.68 }}">{{ bar.label }}</text>
+  {% if bar.href %}</a>{% endif %}
+    <rect class="bar" x="{{ chart.label_width }}" y="{{ bar.y + 3 }}" width="{{ '%.1f' % bar.width }}" height="{{ chart.row - 6 }}" rx="2"><title>{{ bar.label }}: ${{ '%.2f' % bar.value }}</title></rect>
+    <text class="value" x="{{ chart.label_width + bar.width + 6 }}" y="{{ bar.y + chart.row * 0.68 }}">${{ '%.2f' % bar.value }}</text>
+  </g>
+{% endfor %}
+</svg>
+{% else %}
+<p class="muted">{{ empty }}</p>
+{% endif %}
+{% endmacro %}

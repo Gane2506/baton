@@ -68,6 +68,10 @@ pushed.
     <td><b>Learns from past runs</b><br>Recursive learning profiles turn mistakes into lessons for later runs. <a href="docs/learning.md">Learning</a></td>
     <td><b>Quality and security gate</b><br>Levels from <code>basic</code> to <code>scalable</code>: lint, tests, scanners, AI review. <a href="docs/quality.md">Quality</a></td>
   </tr>
+  <tr>
+    <td><b>Web dashboard</b><br><code>jev dashboard</code>: live board, run details, approve/resume, queue, learning, spend. <a href="#dashboard">Dashboard</a></td>
+    <td><b>Local first</b><br>The dashboard binds 127.0.0.1; off loopback it needs a token. Use an SSH tunnel on a VPS. <a href="docs/dashboard.md">Security</a></td>
+  </tr>
 </table>
 
 ## How it works
@@ -165,6 +169,13 @@ uv tool install baton-agent-orchestrator
 ```
 
 The package installs the command `jev` and a long alias, `baton-agent-orchestrator`.
+
+The web dashboard (`jev dashboard`) is an optional extra, so the CLI stays small:
+
+```bash
+uv tool install 'baton-agent-orchestrator[dashboard] @ git+https://github.com/Gane2506/baton'
+# once on PyPI: uv tool install 'baton-agent-orchestrator[dashboard]'
+```
 
 **Upgrading to v0.2.0.** The project was renamed to Baton Agent Orchestrator: the PyPI name is
 now `baton-agent-orchestrator` and the long alias `jev-agent-orchestrator` is now
@@ -420,6 +431,26 @@ Runs still stop for plan approval by default, so an unattended scheduler leaves 
 `waiting` with a validated plan for you to `jev approve`. Details:
 [docs/queue.md](docs/queue.md).
 
+## Dashboard
+
+A small web UI over the same state as the CLI, for one repo:
+
+```bash
+jev dashboard              # http://127.0.0.1:8765/, opens a browser (--no-open to skip)
+```
+
+- **Board**: the Kanban columns, refreshed every few seconds.
+- **Run**: plan, validation, tasks, the decision timeline (with Jev's confidences and fallback
+  reasons), attempts, learning, the quality review and log files; **Approve**, **Resume** and
+  **Cancel** buttons (runs execute in the background, one at a time per run).
+- **Queue** (add, reorder, remove; scheduler status), **Learning** (profiles and lessons),
+  **Chats** (read-only transcripts), **Spend** (per run and per day) and **Settings**
+  (effective config, env var names, `jev doctor`).
+
+It listens on 127.0.0.1 only. On a VPS keep it that way and use an SSH tunnel
+(`ssh -L 8765:127.0.0.1:8765 host`). Any other `--host` requires a token, which jev generates
+and prints. Details: [docs/dashboard.md](docs/dashboard.md).
+
 ## Safety defaults
 
 - Coder tasks run in separate git worktrees under `.jev/worktrees/`, never on your branch.
@@ -459,6 +490,7 @@ caps: jev's budget does not limit Codex spend, only `max_task_attempts` and the 
 - [docs/quality.md](docs/quality.md): the quality and security gate, levels, tools, reports
 - [docs/queue.md](docs/queue.md): idea queue, scheduler and kanban board
 - [docs/chat.md](docs/chat.md): talking an idea through before a run
+- [docs/dashboard.md](docs/dashboard.md): the web dashboard and its security model
 - [docs/security.md](docs/security.md): isolation, permissions, keys, terms of use
 - [docs/decisions.md](docs/decisions.md): design decisions and deviations from the plan
 - [CHANGELOG.md](CHANGELOG.md): what changed in each release
@@ -469,8 +501,8 @@ caps: jev's budget does not limit Codex spend, only `max_task_attempts` and the 
 
 ```bash
 git clone https://github.com/Gane2506/baton
-cd baton-agent-orchestrator
-uv sync
+cd baton
+uv sync --all-extras
 uv run jev --version
 uv run pytest
 uv run ruff format --check . && uv run ruff check . && uv run mypy

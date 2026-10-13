@@ -7,6 +7,25 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+
+- **`jev dashboard`.** A local web dashboard (optional `dashboard` extra: Starlette, uvicorn,
+  python-multipart, markdown-it-py): live Kanban board, run details (plan, decisions with Jev
+  confidences, attempts, learning, quality review, log files) with Approve / Resume / Cancel,
+  the queue (add, reorder, remove, scheduler status), learning profiles and lessons, chat
+  transcripts, spend per run and per day, and read-only settings with `jev doctor`. Binds
+  127.0.0.1; any other host requires a token. CSRF-protected POST actions, strict CSP, no
+  CDNs. See [docs/dashboard.md](docs/dashboard.md).
+
+### Changed
+
+- Logic that lived inside CLI commands is now reusable by the dashboard: `core.queue.add_idea`,
+  `remove_item`, `queue_counts`; `core.learning.use_profile`, `enable_learning`,
+  `disable_learning`, `delete_profile`; `core.pipeline.cancel_run`;
+  `cli.run_cmds.approve_run`, `resume_run`; `core.scheduler.scheduler_lock`;
+  `core.chat.read_transcript`. CLI behaviour is unchanged.
+- CI installs every extra (`uv sync --locked --all-extras`).
+
 ## [0.2.0] - 2026-10-12
 
 ### Added

@@ -1,0 +1,10 @@
+{% extends "base.html" %}
+{% block title %}Board{% endblock %}
+{% block content %}
+<h1>Board</h1>
+<p class="muted small">Queued ideas and every run by stage; updates every few seconds.
+{% if show_all %}<a href="/">Show the last 10 done runs</a>{% else %}<a href="/?all=1">Show every done run</a>{% endif %}</p>
+<div id="board" data-live="/fragments/board{% if show_all %}?all=1{% endif %}" data-live-every="{{ refresh_ms }}">
+{% include "_board.html" %}
+</div>
+{% endblock %}

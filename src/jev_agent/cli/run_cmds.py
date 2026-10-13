@@ -127,6 +127,27 @@ def set_run_learning(ctx: CliContext, run_id: str, learning: str | None, no_lear
         ctx.store.set_run_learning(run_id, learning)
 
 
+async def approve_run(ctx: CliContext, run_id: str) -> RunRecord:
+    """Approve the run's plan and execute it when workers are available (the body of
+    `jev approve`; the dashboard runs it in a background thread)."""
+    return await ctx.pipeline.approve(run_id, execute=ctx.has_workers)
+
+
+async def resume_run(
+    ctx: CliContext,
+    run_id: str,
+    *,
+    learning: str | None = None,
+    no_learning: bool = False,
+    quality: QualityLevel | None = None,
+) -> RunRecord:
+    """Apply the resume flags, then continue the run (the body of `jev resume`)."""
+    set_run_learning(ctx, run_id, learning, no_learning)
+    if quality is not None:
+        ctx.store.set_run_quality(run_id, quality)
+    return await ctx.pipeline.resume(run_id)
+
+
 def run(
     idea: Annotated[str, typer.Argument(help="What to build, in plain words.")],
     plan_only: Annotated[
@@ -167,7 +188,7 @@ def approve(run_id: RunId, repo: RepoOption = Path(".")) -> None:
         if ctx.has_workers:
             print_warnings(ctx)
         try:
-            record = asyncio.run(ctx.pipeline.approve(run_id, execute=ctx.has_workers))
+            record = asyncio.run(approve_run(ctx, run_id))
         except (NotFoundError, PipelineError) as exc:
             raise fail(str(exc)) from exc
         if not ctx.has_workers:
@@ -192,10 +213,9 @@ def resume(
             raise fail(NO_WORKERS_MESSAGE)
         print_warnings(ctx)
         try:
-            set_run_learning(ctx, run_id, learning, no_learning)
-            if level is not None:
-                ctx.store.set_run_quality(run_id, level)
-            record = asyncio.run(ctx.pipeline.resume(run_id))
+            record = asyncio.run(
+                resume_run(ctx, run_id, learning=learning, no_learning=no_learning, quality=level)
+            )
         except (NotFoundError, PipelineError, LearningError) as exc:
             raise fail(str(exc)) from exc
         print_outcome(record)

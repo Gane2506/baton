@@ -1,0 +1,57 @@
+{% from "macros.html" import badge, csrf_input with context %}
+{% set run = v.run %}
+<section class="card">
+  <div class="actions">
+    {{ badge(run.state) }}
+    <span>column <strong>{{ v.column }}</strong></span>
+    <span>spent <strong>{{ run.spend_usd | usd }}</strong></span>
+    <span class="muted small">updated {{ run.updated_at | time }}</span>
+  </div>
+  {% if run.reason %}<p class="small">{{ run.reason }}</p>{% endif %}
+  {% if run.learning_outcome %}<p class="small">learning: {{ run.learning_outcome }}</p>{% endif %}
+  {% if job %}
+    <p class="small">Dashboard job: {{ job.action }} {{ badge(job.state) }}
+      started {{ job.started_at | time }}{% if job.finished_at %}, ended {{ job.finished_at | time }}{% endif %}
+      {% if job.message %}<br><span class="mono">{{ job.message }}</span>{% endif %}</p>
+  {% endif %}
+  <div class="actions">
+    {% if v.can_approve %}
+    <form class="inline" method="post" action="/runs/{{ run.id }}/approve" data-confirm="Approve this plan and start executing it?">
+      {{ csrf_input() }}<button class="primary" type="submit"{% if busy %} disabled{% endif %}>Approve and run</button>
+    </form>
+    {% endif %}
+    {% if v.can_resume %}
+    <form class="inline" method="post" action="/runs/{{ run.id }}/resume" data-confirm="Resume this run from its saved state?">
+      {{ csrf_input() }}<button type="submit"{% if busy %} disabled{% endif %}>Resume</button>
+    </form>
+    {% endif %}
+    {% if v.can_cancel %}
+    <form class="inline" method="post" action="/runs/{{ run.id }}/cancel" data-confirm="Cancel this run? Its branches and worktrees are kept.">
+      {{ csrf_input() }}<button class="danger" type="submit">Cancel</button>
+    </form>
+    {% endif %}
+    {% if busy %}<span class="muted small">working in the background...</span>{% endif %}
+  </div>
+</section>
+
+<h2>Tasks</h2>
+{% if v.tasks %}
+<div class="table-wrap"><table>
+  <thead><tr><th>task</th><th>title</th><th>state</th><th>tries</th><th>worker</th><th>model</th><th>effort</th><th class="num">spent</th><th>note</th></tr></thead>
+  <tbody>
+  {% for t in v.tasks %}
+    <tr>
+      <td>{{ t.id }}</td>
+      <td class="wrap">{{ t.card.title }}</td>
+      <td>{{ badge(t.state) }}</td>
+      <td>{{ t.attempts }}</td>
+      <td>{{ t.worker or "-" }}</td>
+      <td class="small">{{ t.model or "-" }}</td>
+      <td>{{ t.effort or "-" }}</td>
+      <td class="num">{{ t.spend_usd | usd }}</td>
+      <td class="wrap small">{{ (t.note or "").splitlines()[0] if t.note else "" }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table></div>
+{% else %}<p class="muted">No tasks yet (the plan is not ready).</p>{% endif %}

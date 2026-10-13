@@ -20,13 +20,13 @@ from rich.table import Table
 from jev_agent.cli.repo import RepoOption
 from jev_agent.cli.wiring import CliContext, cli_context, fail
 from jev_agent.core.learning import (
-    SETTING_PROFILE,
     Learning,
     LearningError,
-    check_profile_name,
+    delete_profile,
+    disable_learning,
+    enable_learning,
     learning_status,
-    set_active_profile,
-    set_repo_learning,
+    use_profile,
 )
 
 console = Console()
@@ -142,9 +142,7 @@ def create(
 def use(name: ProfileArg, repo: RepoOption = Path(".")) -> None:
     """Make a profile the active one for this repo."""
     with _context(repo) as (ctx, learning):
-        if learning.get(check_profile_name(name)) is None:
-            raise LearningError(f"no learning profile named {name!r}; create it first")
-        set_active_profile(ctx.store, name)
+        use_profile(ctx.store, learning, name)
         status = learning_status(ctx.store, ctx.config)
         note = "" if status.enabled else " Learning is off; `jev learning enable` turns it on."
         console.print(f"Active profile: {escape(name)}.{note}")
@@ -154,17 +152,13 @@ def use(name: ProfileArg, repo: RepoOption = Path(".")) -> None:
 def enable(name: OptionalProfileArg = None, repo: RepoOption = Path(".")) -> None:
     """Turn learning on for this repo (no NAME), or re-enable one profile."""
     with _context(repo) as (ctx, learning):
+        active = enable_learning(ctx.store, ctx.config, learning, name)
         if name is None:
-            active = _active(ctx)
-            learning.ensure(active)
-            learning.set_enabled(active, True)
-            set_repo_learning(ctx.store, True)
             console.print(
                 f"Learning is on for this repo, with profile {escape(active)}. Each run now "
                 "ends with one learner call when it has something to learn."
             )
         else:
-            learning.set_enabled(name, True)
             console.print(f"Profile {escape(name)} is enabled.")
 
 
@@ -172,11 +166,10 @@ def enable(name: OptionalProfileArg = None, repo: RepoOption = Path(".")) -> Non
 def disable(name: OptionalProfileArg = None, repo: RepoOption = Path(".")) -> None:
     """Turn learning off for this repo (no NAME), or disable one profile."""
     with _context(repo) as (ctx, learning):
+        disable_learning(ctx.store, learning, name)
         if name is None:
-            set_repo_learning(ctx.store, False)
             console.print("Learning is off for this repo. Lessons are kept.")
         else:
-            learning.set_enabled(name, False)
             console.print(
                 f"Profile {escape(name)} is disabled: runs only use it with --learning {name}."
             )
@@ -203,9 +196,7 @@ def delete(name: ProfileArg, yes: YesOption = False, repo: RepoOption = Path("."
         learning.db_for(name)
         if not yes and not typer.confirm(f"Delete profile {name} and all its lessons?"):
             raise typer.Exit(1)
-        learning.delete(name)
-        if ctx.store.get_setting(SETTING_PROFILE) == name:
-            set_active_profile(ctx.store, None)  # back to jev.toml / the default
+        delete_profile(ctx.store, learning, name)
         console.print(f"Deleted profile {escape(name)}.")
 
 

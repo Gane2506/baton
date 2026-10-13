@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% from "macros.html" import badge with context %}
+{% block title %}Settings{% endblock %}
+{% block content %}
+<h1>Settings</h1>
+<p class="small muted">Read-only. Change settings in <code>jev.toml</code> or with the CLI; see docs/config.md.</p>
+
+<section class="card">
+  <h2>Effective config</h2>
+  <div class="table-wrap"><table>
+    <tbody>
+    {% for key, value in summary %}<tr><th class="mono small">{{ key }}</th><td class="wrap">{{ value }}</td></tr>{% endfor %}
+    </tbody>
+  </table></div>
+</section>
+
+<section class="card">
+  <h2>Environment variables</h2>
+  <p class="small muted">Names only; values are never shown.</p>
+  <div class="table-wrap"><table>
+    <thead><tr><th>variable</th><th>set</th><th>used for</th></tr></thead>
+    <tbody>
+    {% for var in env_vars %}<tr><td class="mono">{{ var.name }}</td><td>{{ badge("set", "ok") if var.is_set else badge("not set", "pending") }}</td><td class="small">{{ var.used_for }}</td></tr>{% endfor %}
+    </tbody>
+  </table></div>
+</section>
+
+<section class="card">
+  <h2>Doctor</h2>
+  <p class="small muted">The checks of <code>jev doctor</code> (local only).</p>
+  <div class="table-wrap"><table>
+    <thead><tr><th>check</th><th>status</th><th>detail</th></tr></thead>
+    <tbody>
+    {% for c in checks %}<tr><td>{{ c.name }}</td><td>{{ badge(c.status) }}</td><td class="wrap small">{{ c.detail }}</td></tr>{% endfor %}
+    </tbody>
+  </table></div>
+</section>
+
+<section class="card">
+  <h2>This dashboard</h2>
+  <dl class="facts">
+    <dt>Listening on</dt><dd class="mono">{{ settings.host }}:{{ settings.port }}</dd>
+    <dt>Access</dt><dd>{% if settings.token %}token required{% else %}loopback only, no token{% endif %}</dd>
+  </dl>
+</section>
+{% endblock %}

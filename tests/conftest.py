@@ -1,5 +1,6 @@
 import os
 import subprocess
+from importlib.util import find_spec
 from pathlib import Path
 
 import pytest
@@ -7,6 +8,9 @@ import pytest
 # The CLI's rich consoles are created at import time and size themselves from COLUMNS. Pin a
 # wide terminal so output does not wrap differently on narrow CI runners.
 os.environ["COLUMNS"] = "200"
+
+# The dashboard tests need the `dashboard` extra (`uv sync --all-extras`, as CI does).
+collect_ignore = [] if find_spec("starlette") else ["unit/test_dashboard.py"]
 
 GIT = [
     "git",

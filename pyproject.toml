@@ -28,6 +28,14 @@ dependencies = [
 jev = "jev_agent.cli.app:main"
 baton-agent-orchestrator = "jev_agent.cli.app:main"
 
+[project.optional-dependencies]
+dashboard = [
+    "markdown-it-py>=3.0",
+    "python-multipart>=0.0.18",
+    "starlette>=0.40",
+    "uvicorn>=0.30",
+]
+
 [dependency-groups]
 dev = [
     "pytest>=8",
@@ -62,3 +70,7 @@ mypy_path = "src"
 testpaths = ["tests"]
 asyncio_mode = "auto"
 addopts = "-ra"
+filterwarnings = [
+    # Starlette 1.x prefers httpx2 for its test client; httpx (a core dependency) works.
+    "ignore:Using `httpx` with `starlette.testclient`",
+]

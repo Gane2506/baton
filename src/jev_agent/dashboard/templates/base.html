@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="same-origin">
+<title>{% block title %}jev{% endblock %} · Baton dashboard</title>
+<link rel="stylesheet" href="/static/style.css">
+<script src="/static/live.js" defer></script>
+</head>
+<body>
+<header class="top">
+  <a class="brand" href="/">Baton <small>jev {{ version }}</small></a>
+  <nav>
+  {% for href, label in nav %}
+    <a href="{{ href }}"{% if path == href or (href != "/" and path.startswith(href)) or (href == "/" and path.startswith("/runs/")) %} class="active"{% endif %}>{{ label }}</a>
+  {% endfor %}
+  </nav>
+  <span class="repo mono">{{ root }}</span>
+</header>
+<main>
+{% for kind, text in flashes %}
+  <div class="flash {{ kind }}" role="status">{{ text }}</div>
+{% endfor %}
+{% block content %}{% endblock %}
+</main>
+</body>
+</html>

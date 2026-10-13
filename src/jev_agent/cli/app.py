@@ -6,6 +6,7 @@ from rich.console import Console
 from jev_agent import __version__
 from jev_agent.cli.board_cmds import board
 from jev_agent.cli.chat_cmds import chat
+from jev_agent.cli.dashboard_cmd import dashboard
 from jev_agent.cli.doctor_cmd import doctor
 from jev_agent.cli.init_cmd import init
 from jev_agent.cli.learning_cmds import learning_app
@@ -60,6 +61,7 @@ app.add_typer(quality_app, name="quality")
 app.add_typer(scheduler_app, name="scheduler")
 app.command("board")(board)
 app.command("chat")(chat)
+app.command("dashboard")(dashboard)
 
 
 def main() -> None:

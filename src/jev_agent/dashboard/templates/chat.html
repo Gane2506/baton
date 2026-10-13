@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% block title %}Chat {{ chat_id }}{% endblock %}
+{% block content %}
+<h1>Chat <span class="mono">{{ chat_id }}</span></h1>
+{% if meta %}
+<section class="card">
+  <dl class="facts">
+    <dt>Backend</dt><dd>{{ meta.backend }}{% if meta.model %} ({{ meta.model }}){% endif %}</dd>
+    <dt>Learning</dt><dd>{{ meta.learning.describe() }}</dd>
+    <dt>Spent</dt><dd>{{ meta.spent_usd | usd }} of {{ meta.budget_usd | usd }}</dd>
+    <dt>Created</dt><dd>{{ meta.created_at | time }}</dd>
+    {% if meta.runs %}<dt>Runs</dt><dd>{% for r in meta.runs %}<a class="mono" href="/runs/{{ r.run_id }}">{{ r.run_id }}</a> ({{ r.kind }}){% if not loop.last %}, {% endif %}{% endfor %}</dd>{% endif %}
+    {% if meta.queue_items %}<dt>Queued</dt><dd>{% for q in meta.queue_items %}#{{ q.id }} ({{ q.priority }}){% if not loop.last %}, {% endif %}{% endfor %}</dd>{% endif %}
+    {% if meta.brief %}<dt>Brief</dt><dd><pre>{{ meta.brief }}</pre></dd>{% endif %}
+  </dl>
+</section>
+{% endif %}
+<h2>Transcript</h2>
+{% for e in entries %}
+  <div class="turn {{ e.kind if e.kind in ('user', 'assistant') else 'other' }}">
+    <div class="who">{{ e.kind }} · {{ e.at | time }}</div>
+    <pre>{{ e.text }}</pre>
+  </div>
+{% else %}
+  <p class="muted">The transcript is empty.</p>
+{% endfor %}
+{% endblock %}

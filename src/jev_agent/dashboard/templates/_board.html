@@ -1,0 +1,20 @@
+<div class="board">
+{% for name, cards in columns %}
+  <div class="column c-{{ name | lower | replace(' ', '-') }}">
+    <h2><span>{{ name }}</span><span class="muted">{{ cards | length }}</span></h2>
+    {% for c in cards %}
+      {% if c.run_id %}<a class="kcard" href="/runs/{{ c.run_id }}">{% else %}<div class="kcard">{% endif %}
+        <div class="title">{{ c.card.title }}</div>
+        <div class="meta mono">{{ c.card.ref }}</div>
+        {% if c.card.detail %}<div class="small">{{ c.card.detail }}</div>{% endif %}
+        <div class="meta">
+          {% if c.card.spend_usd is not none %}{{ c.card.spend_usd | usd }} · {% endif %}{{ c.card.age }}
+          {% if c.quality %} · quality {{ c.quality }}{% endif %}
+        </div>
+      {% if c.run_id %}</a>{% else %}</div>{% endif %}
+    {% else %}
+      <div class="empty">-</div>
+    {% endfor %}
+  </div>
+{% endfor %}
+</div>

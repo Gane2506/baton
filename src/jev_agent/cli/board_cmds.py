@@ -131,14 +131,18 @@ def build_board(
     return board
 
 
-def load_board(store: Store, now: datetime, show_all: bool = False) -> dict[str, list[Card]]:
+def load_board(
+    store: Store, now: datetime, show_all: bool = False, title_width: int = 48
+) -> dict[str, list[Card]]:
     runs = store.list_runs()
     tasks = {
         r.id: store.list_tasks(r.id)
         for r in runs
         if COLUMN_FOR_STATE[r.state] in ("Planning", "Running", "Awaiting approval")
     }
-    return build_board(runs, tasks, store.list_queue(["queued"]), now, show_all=show_all)
+    return build_board(
+        runs, tasks, store.list_queue(["queued"]), now, show_all=show_all, title_width=title_width
+    )
 
 
 def _card_text(card: Card) -> Text:

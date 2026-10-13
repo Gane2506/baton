@@ -2,6 +2,57 @@
 
 Deviations from [PLAN.md](../PLAN.md) and choices it left open. Newest first.
 
+## 2026-10-12: Web dashboard (`jev dashboard`)
+
+Code: `src/jev_agent/dashboard/` (app, views, security, runner, render, templates, static),
+`cli/dashboard_cmd.py`; tests in `tests/unit/test_dashboard.py`. User docs:
+[dashboard.md](dashboard.md). Issue #1; PLAN.md's roadmap had "small FastAPI server + web
+dashboard".
+
+- **Starlette, not FastAPI.** The dashboard is server-rendered HTML and form POSTs; it needs
+  no OpenAPI schema, request models or dependency injection. Starlette is the layer FastAPI is
+  built on, with fewer moving parts, and its routes are a plain list in `create_app`.
+  Templates are plain Jinja2 (already a core dependency) with `autoescape=True`; uvicorn
+  serves it; python-multipart parses forms; markdown-it-py (already pulled in by rich) renders
+  `review.md` with raw HTML disabled.
+- **An optional extra, not core dependencies.** `[project.optional-dependencies] dashboard`.
+  Most installs (CI machines, headless VPS runners) never open a browser, and an ASGI server
+  is not small. `jev dashboard` checks with `importlib.util.find_spec` and prints
+  `uv tool install 'baton-agent-orchestrator[dashboard]'` when something is missing. CI and
+  release workflows use `uv sync --locked --all-extras`; contributors `uv sync --all-extras`.
+- **No htmx.** The plan suggested vendoring htmx; the dashboard only needs "replace this
+  element with the HTML at this URL every few seconds" and "confirm before submitting", so a
+  40-line `static/live.js` does that (`data-live`, `data-confirm`). No third-party JavaScript to
+  vendor, audit or update; it works under a strict CSP with no inline script; pages work
+  without JavaScript.
+- **Same functions as the CLI.** Logic that lived inside Typer commands moved to reusable
+  functions, used by both: `core.queue.add_idea` / `remove_item` / `queue_counts`,
+  `core.learning.use_profile` / `enable_learning` / `disable_learning` / `delete_profile`,
+  `core.pipeline.cancel_run` (no pipeline needed to cancel), `cli.run_cmds.approve_run` /
+  `resume_run`, `core.scheduler.scheduler_lock`, `cli.quality_cmds.review_text`,
+  `core.chat.read_transcript`; `cli.board_cmds.load_board` takes a title width. Read-only
+  pages reuse `load_board`/`build_board`, `format_answers`, `learning_line`, `quality_line`,
+  `item_flags`, `effective_status`, `spent_today`, `run_checks` (doctor).
+- **Runs execute in a background thread.** Approve and resume call `execute_run`, which is
+  `jev approve` / `jev resume` (`cli_context` + `approve_run` / `resume_run`) in a daemon
+  thread with its own store connection (SQLite connections are per thread) and event loop.
+  `RunLauncher` keeps a per-run `threading.Lock`, held for the whole job, so one dashboard
+  never runs two jobs for one run. A cross-process lock (dashboard vs. a terminal) is out of
+  scope, as it already is between two terminals. Tests inject the executor.
+- **Security model.** Loopback bind by default with a Host-header allowlist (DNS rebinding).
+  Non-loopback binds refuse to start without a token (`DashboardConfigError`); `jev dashboard`
+  generates one. Token via cookie, `X-Jev-Token` or `?token=` (swapped for an HttpOnly,
+  SameSite=Strict cookie by a redirect). CSRF: POST only, same-origin check (`Sec-Fetch-Site`,
+  `Origin`, `Referer`) plus a per-session form token, HMAC(session cookie, per-process secret).
+  Strict CSP, no framing, `no-store`. Run files are served as `text/plain` only from inside
+  `.jev/runs/<id>/` (resolved path must stay inside; symlinks out refused). Settings shows env
+  var names and set/unset, never values. Flushing a profile needs a confirmation page.
+- **No new config keys.** Options are flags; the token can also come from
+  `JEV_DASHBOARD_TOKEN` (documented in config.md's environment variables), so it need not
+  appear in the process list.
+- **Scheduler start stays in the terminal.** The queue page shows the lock holder and current
+  item; starting a long-lived scheduler from a web request was left out.
+
 ## 2026-10-12: Rename to Baton Agent Orchestrator
 
 The project is now **Baton Agent Orchestrator** (v0.2.0). Why: the maintainer's choice. Only

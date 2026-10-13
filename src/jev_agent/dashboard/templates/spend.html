@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% from "macros.html" import bars, badge with context %}
+{% block title %}Spend{% endblock %}
+{% block content %}
+<h1>Spend</h1>
+<p>Total reported spend over {{ s.runs | length }} run(s): <strong>{{ s.total | usd }}</strong>.
+<span class="muted small">Codex reports no cost, so its attempts count $0.</span></p>
+
+<section class="card">
+  <h2>Per day (last {{ s.days }} days, UTC, by run start)</h2>
+  {{ bars(s.by_day) }}
+</section>
+
+<section class="card">
+  <h2>Costliest runs</h2>
+  {{ bars(s.by_run, "No runs yet.") }}
+</section>
+
+<h2>Every run</h2>
+{% if s.runs %}
+<div class="table-wrap"><table>
+  <thead><tr><th>run</th><th>state</th><th>created</th><th>idea</th><th class="num">spent</th></tr></thead>
+  <tbody>
+  {% for r in s.runs %}
+    <tr>
+      <td class="mono small"><a href="/runs/{{ r.id }}">{{ r.id }}</a></td>
+      <td>{{ badge(r.state) }}</td>
+      <td class="small">{{ r.created_at | time }}</td>
+      <td class="wrap">{{ r.idea.text }}</td>
+      <td class="num">{{ r.spend_usd | usd }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table></div>
+{% else %}<p class="muted">No runs yet.</p>{% endif %}
+{% endblock %}

@@ -1,0 +1,90 @@
+{% extends "base.html" %}
+{% from "macros.html" import badge, csrf_input with context %}
+{% block title %}Queue{% endblock %}
+{% block content %}
+<h1>Queue</h1>
+<section class="card">
+  <h2>Scheduler</h2>
+  {% if q.scheduler %}
+    <p>{{ badge("running") }} pid {{ q.scheduler.pid }} on <span class="mono">{{ q.scheduler.host }}</span>, since {{ q.scheduler.started_at | time }}
+    {% if q.scheduler.current_item is not none %}; current item <strong>#{{ q.scheduler.current_item }}</strong>{% endif %}</p>
+  {% else %}
+    <p>{{ badge("not running", "pending") }} Start it in a terminal: <code>jev scheduler start</code>.</p>
+  {% endif %}
+  <p class="small muted">
+  {% for name, count in q.counts.items() %}{{ count }} {{ name }}{% if not loop.last %} · {% endif %}{% endfor %}
+  · spent today (UTC, all runs): {{ q.spent_today | usd }}</p>
+</section>
+
+<section class="card">
+  <h2>Add an idea</h2>
+  <form method="post" action="/queue/add">
+    {{ csrf_input() }}
+    <label class="muted small" for="idea">Idea</label>
+    <textarea id="idea" name="idea" required placeholder="What to build, in plain words"></textarea>
+    <div class="form-grid">
+      <label>Priority
+        <select name="priority">{% for p in priorities %}<option value="{{ p }}"{% if p == "normal" %} selected{% endif %}>{{ p }}</option>{% endfor %}</select>
+      </label>
+      <label>Learning
+        <select name="learning">
+          <option value="">repo setting</option>
+          <option value="none">none (--no-learning)</option>
+          {% for p in q.profiles %}<option value="{{ p.name }}">{{ p.name }} ({{ p.scope }})</option>{% endfor %}
+        </select>
+      </label>
+      <label>Quality
+        <select name="quality">
+          <option value="">config level</option>
+          {% for level in levels %}<option value="{{ level }}">{{ level }}</option>{% endfor %}
+        </select>
+      </label>
+      <label>Workspace profile
+        <input type="text" name="profile" placeholder="(optional)" maxlength="80">
+      </label>
+      <label class="check"><input type="checkbox" name="plan_only"> plan only</label>
+    </div>
+    <button class="primary" type="submit">Add to queue</button>
+  </form>
+</section>
+
+<h2>Items</h2>
+<p class="small muted">In the order the scheduler takes them.
+{% if show_all %}<a href="/queue">Hide finished items</a>{% else %}{% if q.hidden %}{{ q.hidden }} finished item(s) hidden; {% endif %}<a href="/queue?all=1">show all</a>{% endif %}</p>
+{% if q.rows %}
+<div class="table-wrap"><table>
+  <thead><tr><th>id</th><th>priority</th><th>status</th><th>run</th><th>idea</th><th>flags</th><th>note</th><th>actions</th></tr></thead>
+  <tbody>
+  {% for r in q.rows %}
+    <tr>
+      <td>{{ r.item.id }}</td>
+      <td>{{ r.item.priority }}</td>
+      <td>{{ badge(r.status) }}</td>
+      <td class="mono small">{% if r.item.run_id %}<a href="/runs/{{ r.item.run_id }}">{{ r.item.run_id }}</a>{% else %}-{% endif %}</td>
+      <td class="wrap">{{ r.item.idea }}</td>
+      <td class="small">{{ r.flags }}</td>
+      <td class="wrap small">{{ r.item.note or "" }}</td>
+      <td>
+        <div class="actions">
+        {% if r.movable %}
+          {% for direction, label in (("top", "Top"), ("up", "Up"), ("down", "Down")) %}
+          <form class="inline" method="post" action="/queue/{{ r.item.id }}/move">
+            {{ csrf_input() }}<input type="hidden" name="direction" value="{{ direction }}"><button class="small" type="submit">{{ label }}</button>
+          </form>
+          {% endfor %}
+        {% endif %}
+        {% if r.item.status != "running" %}
+          <form class="inline" method="post" action="/queue/{{ r.item.id }}/remove" data-confirm="Remove item {{ r.item.id }} from the queue? Its run, if any, is kept.">
+            {{ csrf_input() }}<button class="small danger" type="submit">Remove</button>
+          </form>
+        {% endif %}
+        </div>
+      </td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table></div>
+{% else %}
+<p class="muted">The queue is empty.</p>
+{% endif %}
+{% endblock %}

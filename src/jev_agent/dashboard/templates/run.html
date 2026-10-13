@@ -1,0 +1,85 @@
+{% extends "base.html" %}
+{% from "macros.html" import badge with context %}
+{% set run = v.run %}
+{% block title %}Run {{ run.id }}{% endblock %}
+{% block content %}
+<h1>Run <span class="mono">{{ run.id }}</span></h1>
+<section class="card">
+  <dl class="facts">
+    <dt>Idea</dt><dd>{{ run.idea.text }}</dd>
+    {% if run.plan %}<dt>Plan (round {{ run.plan_round }})</dt><dd>{{ run.plan.summary }}</dd>{% endif %}
+    {% if run.plan and run.plan.risks %}<dt>Risks</dt><dd><ul>{% for r in run.plan.risks %}<li>{{ r }}</li>{% endfor %}</ul></dd>{% endif %}
+    {% if run.validation %}
+      <dt>Validation</dt>
+      <dd>{{ badge(run.validation.verdict, "ok" if run.validation.verdict == "approve" else "warn") }}
+        {% if run.validation.issues %}<ul>{% for issue in run.validation.issues %}<li>{{ issue }}</li>{% endfor %}</ul>{% endif %}
+      </dd>
+    {% endif %}
+    <dt>Learning</dt><dd>{{ v.learning }}</dd>
+    <dt>Quality</dt><dd>{{ v.quality }}</dd>
+    <dt>Result branch</dt><dd>{% if v.branch %}<code>{{ v.branch }}</code>{% else %}<span class="muted">none yet (made at integration)</span>{% endif %}</dd>
+    <dt>Created</dt><dd>{{ run.created_at | time }}</dd>
+  </dl>
+</section>
+
+<div id="run-live" data-live="/runs/{{ run.id }}/live" data-live-every="{{ refresh_ms }}">
+{% include "_run_live.html" %}
+</div>
+
+<h2>Decisions</h2>
+{% if v.decisions %}
+<div class="table-wrap"><table>
+  <thead><tr><th>time</th><th>point</th><th>scope</th><th>dispatcher</th><th>answers (confidence)</th><th>fallback reason</th><th class="num">cost</th><th class="num">latency</th></tr></thead>
+  <tbody>
+  {% for d in v.decisions %}
+    <tr>
+      <td class="mono small">{{ d.at | time }}</td>
+      <td>{{ d.point }}</td>
+      <td>{{ d.scope }}</td>
+      <td>{{ d.dispatcher }}{% if d.model %}<div class="muted small">{{ d.model }}</div>{% endif %}</td>
+      <td class="wrap mono small">{{ d.answers }}</td>
+      <td class="wrap small">{{ d.fallback_reason or "" }}</td>
+      <td class="num">{{ d.cost_usd | usd }}</td>
+      <td class="num">{{ d.latency_ms }} ms</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table></div>
+{% else %}<p class="muted">No decisions yet.</p>{% endif %}
+
+<h2>Attempts</h2>
+{% if v.attempts %}
+<div class="table-wrap"><table>
+  <thead><tr><th>time</th><th>role</th><th>scope</th><th>#</th><th>worker</th><th>model</th><th>effort</th><th>status</th><th class="num">cost</th><th>lessons</th><th>log</th></tr></thead>
+  <tbody>
+  {% for a in v.attempts %}
+    <tr>
+      <td class="mono small">{{ a.record.started_at | time }}</td>
+      <td>{{ a.record.role }}</td>
+      <td>{{ a.record.task_id or "run" }}</td>
+      <td>{{ a.record.attempt_no }}</td>
+      <td>{{ a.record.worker }}</td>
+      <td class="small">{{ a.record.model or "default" }}</td>
+      <td>{{ a.record.effort or "default" }}</td>
+      <td>{{ badge(a.status, "ok" if a.status == "success" else ("running" if a.status == "running" else "fail")) }}</td>
+      <td class="num">{{ a.cost_usd | usd }}</td>
+      <td class="small">{{ a.record.lesson_ids | join(", ") }}</td>
+      <td class="small">{% if a.log %}<a href="/runs/{{ run.id }}/files/{{ a.log }}">{{ a.log }}</a>{% else %}-{% endif %}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table></div>
+{% else %}<p class="muted">No attempts yet.</p>{% endif %}
+
+<h2>Quality review</h2>
+{% if v.review_html %}
+<section class="card markdown">{{ v.review_html }}</section>
+{% else %}<p class="muted">No quality gate has run for this run (level {{ run.quality_level }}).</p>{% endif %}
+
+<h2>Files</h2>
+{% if v.files %}
+<ul class="small mono">
+{% for f in v.files %}<li><a href="/runs/{{ run.id }}/files/{{ f.path }}">{{ f.path }}</a> <span class="muted">({{ f.size }} bytes)</span></li>{% endfor %}
+</ul>
+{% else %}<p class="muted">No log files under <code>.jev/runs/{{ run.id }}/</code>.</p>{% endif %}
+{% endblock %}

@@ -10,22 +10,28 @@ from __future__ import annotations
 
 from typing import Literal
 
+from jev_agent.core.learning import Learning, LearningError, check_profile_name
 from jev_agent.core.models import RunState
 from jev_agent.core.store import (
     QUEUE_PRIORITIES,
+    QUEUE_STATUSES,
     NotFoundError,
     QueueItem,
     QueuePriority,
     QueueStatus,
     Store,
 )
+from jev_agent.quality.levels import parse_level
 
 __all__ = [
     "ACTIVE_STATUSES",
     "QueueError",
+    "add_idea",
     "effective_status",
     "move_item",
     "priority_rank",
+    "queue_counts",
+    "remove_item",
     "status_for_run",
 ]
 
@@ -117,3 +123,80 @@ def move_item(store: Store, item_id: int, move: Move) -> QueueItem:
     priorities[item_id] = QUEUE_PRIORITIES[rank]
     store.set_queue_order([(q.id, priorities[q.id], pos) for pos, q in enumerate(order)])
     return store.get_queue_item(item_id)
+
+
+def add_idea(
+    store: Store,
+    learning: Learning,
+    idea: str,
+    priority: str = "normal",
+    *,
+    plan_only: bool = False,
+    learning_profile: str | None = None,
+    no_learning: bool = False,
+    profile: str | None = None,
+    quality: str | None = None,
+) -> QueueItem:
+    """Check the options and add an idea to the queue (`jev queue add`, the dashboard).
+
+    Raises `QueueError` with a user-facing message for an empty idea, both learning options,
+    an unknown learning profile, an empty workspace profile, or an unknown priority or level.
+    """
+    text = idea.strip()
+    if not text:
+        raise QueueError("the idea is empty")
+    if learning_profile is not None and no_learning:
+        raise QueueError("--learning and --no-learning cannot be used together")
+    if learning_profile is not None:
+        try:
+            check_profile_name(learning_profile)
+        except LearningError as exc:
+            raise QueueError(str(exc)) from exc
+        if learning.get(learning_profile) is None:
+            raise QueueError(
+                f"no learning profile named {learning_profile!r}; "
+                f"create it with `jev learning create {learning_profile}`"
+            )
+    if profile is not None and not profile.strip():
+        raise QueueError("--profile needs a name")
+    rank = next((p for p in QUEUE_PRIORITIES if p == priority), None)
+    if rank is None:
+        raise QueueError(f"unknown priority {priority!r} (use {', '.join(QUEUE_PRIORITIES)})")
+    try:
+        level = None if quality is None else parse_level(quality)
+    except ValueError as exc:
+        raise QueueError(str(exc)) from exc
+    return store.add_queue_item(
+        text,
+        rank,
+        plan_only=plan_only,
+        learning_profile=learning_profile,
+        no_learning=no_learning,
+        profile=profile,
+        quality=level,
+    )
+
+
+def remove_item(store: Store, item_id: int) -> None:
+    """Remove an item (`jev queue remove`, the dashboard); a running item stays. Its run, if it
+    has one, is kept."""
+    try:
+        item = store.get_queue_item(item_id)
+    except NotFoundError as exc:
+        raise QueueError(str(exc)) from exc
+    if item.status == "running":
+        raise QueueError(
+            f"queue item {item_id} is running; stop the scheduler (Ctrl-C) first, "
+            "or cancel its run with `jev cancel`"
+        )
+    store.delete_queue_item(item_id)
+
+
+def queue_counts(store: Store) -> dict[QueueStatus, int]:
+    """How many items have each status, with their runs' states folded in."""
+    items = store.list_queue()
+    states = run_states(store, items)
+    counts = dict.fromkeys(QUEUE_STATUSES, 0)
+    for item in items:
+        counts[effective_status(item, states.get(item.run_id or ""))] += 1
+    return counts

@@ -71,6 +71,16 @@ class PipelineError(Exception):
     """A command does not apply to the run in its current state. The message is user-facing."""
 
 
+def cancel_run(store: Store, run_id: str) -> RunRecord:
+    """Cancel a run (`jev cancel`, the dashboard): it only touches the store, so front ends
+    that have no pipeline can call it. Its branches and worktrees are kept."""
+    run = store.get_run(run_id)
+    if run.state in STOPPED:
+        raise PipelineError(f"run {run_id} is already {run.state}")
+    store.set_run_state(run_id, RunState.CANCELLED, "cancelled by user")
+    return store.get_run(run_id)
+
+
 @dataclass(frozen=True)
 class PipelineSettings:
     """Pipeline knobs; the CLI fills them from `[budget]` and `[integration]` (cli/wiring.py)."""
@@ -129,11 +139,7 @@ class Pipeline:
         return await self.advance(run_id)
 
     def cancel(self, run_id: str) -> RunRecord:
-        run = self.store.get_run(run_id)
-        if run.state in STOPPED:
-            raise PipelineError(f"run {run_id} is already {run.state}")
-        self.store.set_run_state(run_id, RunState.CANCELLED, "cancelled by user")
-        return self.store.get_run(run_id)
+        return cancel_run(self.store, run_id)
 
     async def advance(self, run_id: str, plan_only: bool = False) -> RunRecord:
         """Run steps until the run stops, waits for approval or finishes."""

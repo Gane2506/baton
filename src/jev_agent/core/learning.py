@@ -474,6 +474,45 @@ def set_active_profile(store: Store, name: str | None) -> None:
     store.set_setting(SETTING_PROFILE, name)
 
 
+def use_profile(store: Store, learning: Learning, name: str) -> None:
+    """Make an existing profile the repo's active one (`jev learning use`)."""
+    if learning.get(check_profile_name(name)) is None:
+        raise LearningError(f"no learning profile named {name!r}; create it first")
+    set_active_profile(store, name)
+
+
+def enable_learning(
+    store: Store, config: JevConfig, learning: Learning, name: str | None = None
+) -> str:
+    """`jev learning enable [NAME]`: without a name, turn learning on for the repo (creating
+    and enabling the active profile); with one, re-enable that profile. Returns the profile."""
+    if name is not None:
+        learning.set_enabled(name, True)
+        return name
+    active = learning_status(store, config).profile
+    learning.ensure(active)
+    learning.set_enabled(active, True)
+    set_repo_learning(store, True)
+    return active
+
+
+def disable_learning(store: Store, learning: Learning, name: str | None = None) -> None:
+    """`jev learning disable [NAME]`: learning off for the repo, or one profile disabled.
+    Lessons are kept either way."""
+    if name is None:
+        set_repo_learning(store, False)
+    else:
+        learning.set_enabled(name, False)
+
+
+def delete_profile(store: Store, learning: Learning, name: str) -> None:
+    """Delete a profile and its lessons; the repo falls back to the configured profile when it
+    was the active one."""
+    learning.delete(name)
+    if store.get_setting(SETTING_PROFILE) == name:
+        set_active_profile(store, None)
+
+
 # ---- selection ---------------------------------------------------------------------------
 
 

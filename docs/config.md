@@ -359,5 +359,6 @@ fails when a skill or plugin path is missing, and notes tools a role's workers c
 | --- | --- |
 | `JEV_FAKE_WORKERS=1` | Testing hook: register a scripted fake worker under every enabled worker name (replacing the real ones), so `jev run` can be tried end to end without any agent CLI or API key. The fake plans one task and writes a file `jev_fake_T1.txt` on its branch. |
 | `JEV_REDACT_NAMES` | Set by jev for the agent CLIs it starts: comma-separated names of environment variables (the MCP servers' `env_from`, header and bearer variables) whose values are scrubbed from every log. You can set it yourself to redact more. |
+| `JEV_DASHBOARD_TOKEN` | Access token for `jev dashboard` (same as `--token`, but not visible in the process list). Required when the dashboard listens on a non-loopback address; generated when unset ([dashboard.md](dashboard.md)). |
 | `XDG_DATA_HOME` | Where shared learning profiles live: `$XDG_DATA_HOME/jev/learning.db`, else `~/.local/share/jev/learning.db` ([learning.md](learning.md)). |
 | `OPENROUTER_API_KEY` | Default key variable for both Jev (`[dispatcher.jev] api_key_env`) and the API worker (`[workers.api] api_key_env`). |

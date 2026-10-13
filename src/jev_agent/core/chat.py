@@ -658,6 +658,23 @@ def list_chats(root: Path) -> list[ChatMeta]:
     return found
 
 
+def read_transcript(root: Path, chat_id: str) -> list[dict[str, Any]]:
+    """Every entry of a saved chat's transcript (already redacted), oldest first; lines that
+    cannot be parsed are skipped. Raises `ChatError` for a malformed id."""
+    path = chat_dir(root, chat_id) / TRANSCRIPT_FILE
+    entries: list[dict[str, Any]] = []
+    if not path.is_file():
+        return entries
+    for line in path.read_text(encoding="utf-8").splitlines():
+        try:
+            entry = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(entry, dict):
+            entries.append(entry)
+    return entries
+
+
 class ChatSession:
     """One chat: its metadata, transcript and backend. Every change is saved at once."""
 

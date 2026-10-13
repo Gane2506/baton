@@ -14,12 +14,13 @@ from rich.table import Table
 from jev_agent.cli.repo import RepoOption
 from jev_agent.cli.run_cmds import QualityOption, quality_level
 from jev_agent.cli.wiring import cli_context, fail
-from jev_agent.core.learning import LearningError, check_profile_name
 from jev_agent.core.queue import (
     ACTIVE_STATUSES,
     QueueError,
+    add_idea,
     effective_status,
     move_item,
+    remove_item,
     run_states,
 )
 from jev_agent.core.store import NotFoundError, QueueItem
@@ -88,32 +89,21 @@ def add(
     """Add an idea to the queue."""
     level = quality_level(quality)
     with cli_context(repo) as ctx:
-        if not idea.strip():
-            raise fail("the idea is empty")
-        if learning is not None and no_learning:
-            raise fail("--learning and --no-learning cannot be used together")
-        if learning is not None:
-            assert ctx.learning is not None
-            try:
-                check_profile_name(learning)
-            except LearningError as exc:
-                raise fail(str(exc)) from exc
-            if ctx.learning.get(learning) is None:
-                raise fail(
-                    f"no learning profile named {learning!r}; "
-                    f"create it with `jev learning create {learning}`"
-                )
-        if profile is not None and not profile.strip():
-            raise fail("--profile needs a name")
-        item = ctx.store.add_queue_item(
-            idea.strip(),
-            priority.value,
-            plan_only=plan_only,
-            learning_profile=learning,
-            no_learning=no_learning,
-            profile=profile,
-            quality=level,
-        )
+        assert ctx.learning is not None
+        try:
+            item = add_idea(
+                ctx.store,
+                ctx.learning,
+                idea,
+                priority.value,
+                plan_only=plan_only,
+                learning_profile=learning,
+                no_learning=no_learning,
+                profile=profile,
+                quality=level,
+            )
+        except QueueError as exc:
+            raise fail(str(exc)) from exc
         console.print(
             f"queued item [bold]{item.id}[/bold] ({item.priority}): {escape(short(item.idea, 60))}"
         )
@@ -185,14 +175,8 @@ def remove(item_id: ItemId, repo: RepoOption = Path(".")) -> None:
     """Remove an item from the queue. Its run, if it has one, is kept."""
     with cli_context(repo) as ctx:
         try:
-            item = ctx.store.get_queue_item(item_id)
-            if item.status == "running":
-                raise fail(
-                    f"queue item {item_id} is running; stop the scheduler (Ctrl-C) first, "
-                    "or cancel its run with `jev cancel`"
-                )
-            ctx.store.delete_queue_item(item_id)
-        except NotFoundError as exc:
+            remove_item(ctx.store, item_id)
+        except QueueError as exc:
             raise fail(str(exc)) from exc
         console.print(f"removed item {item_id}")
 

@@ -9,8 +9,8 @@ You need Python 3.11+, git and [uv](https://docs.astral.sh/uv/).
 
 ```bash
 git clone https://github.com/Gane2506/baton
-cd baton-agent-orchestrator
-uv sync                 # creates .venv with the package and dev tools
+cd baton
+uv sync --all-extras    # creates .venv with the package, the dashboard extra and dev tools
 uv run jev --version
 uv run pytest
 ```
@@ -35,6 +35,7 @@ src/jev_agent/
   cli/        typer commands
   config/     config schema, layered loading, the `jev init` template
   core/       models, run and task state machines, store, budgets, git worktrees
+  dashboard/  `jev dashboard`: Starlette app, Jinja2 templates, static CSS/JS (optional extra)
   dispatch/   dispatcher interface, Jev and rules dispatchers, answer guard
   roles/      prompt templates and output schemas, one folder per role
   runlog/     run log files and secret redaction
@@ -58,6 +59,11 @@ Module by module:
 | `cli/run_cmds.py` | `jev run`, `approve`, `resume`, `cancel`. |
 | `cli/status_cmds.py` | `jev status` and `jev log` (read-only views of the store). |
 | `cli/wiring.py` | Build the dispatcher, workers and pipeline from config. |
+| `cli/dashboard_cmd.py` | `jev dashboard`: check the extra is installed, pick a token, start uvicorn. |
+| `dashboard/app.py` | The dashboard's routes and actions; actions call the same functions as the CLI. |
+| `dashboard/views.py` | What each page shows, read from the store with the CLI's helpers. |
+| `dashboard/security.py` | Host check, token, CSRF, security headers ([docs/dashboard.md](docs/dashboard.md)). |
+| `dashboard/runner.py` | Approve/resume in a background thread, one job per run. |
 | `cli/repo.py` | Find the target git repository. |
 | `config/schema.py` | Pydantic config schema. Unknown keys and secret-looking keys are errors. |
 | `config/loader.py` | Layering: defaults < user config < repo `jev.toml`. |

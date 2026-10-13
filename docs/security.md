@@ -69,6 +69,15 @@ give agents extra tools. They are opt-in per role, and they widen what an agent 
   `allowed_tools` you list for the plugin.
 - The API worker gets no tools.
 
+## Web dashboard
+
+`jev dashboard` ([dashboard.md](dashboard.md)) can approve and resume runs, so access to it is
+as powerful as a shell in the repo. It binds 127.0.0.1 by default and checks the `Host`
+header; any other address requires a token. Actions are POST-only with a same-origin check and
+a CSRF token; pages are autoescaped under a strict Content-Security-Policy; only files inside
+`.jev/runs/<id>/` are served, as plain text. It speaks plain HTTP: on a server, keep the
+default and use `ssh -L 8765:127.0.0.1:8765 host`.
+
 ## Keys and redaction
 
 - Config files never hold secrets: any key named like `*key`, `*token*`, `*secret*` or

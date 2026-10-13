@@ -14,17 +14,16 @@ from rich.markup import escape
 from jev_agent.cli.repo import RepoOption
 from jev_agent.cli.run_cmds import print_warnings, start_run
 from jev_agent.cli.wiring import NO_WORKERS_MESSAGE, CliContext, cli_context, fail
-from jev_agent.config import STATE_DIRNAME
-from jev_agent.core.queue import effective_status, run_states
+from jev_agent.core.queue import queue_counts
 from jev_agent.core.scheduler import (
-    LOCK_FILENAME,
     Scheduler,
     SchedulerLock,
     SchedulerLocked,
     SchedulerOptions,
+    scheduler_lock,
     spent_today,
 )
-from jev_agent.core.store import QUEUE_STATUSES, QueueItem, RunRecord
+from jev_agent.core.store import QueueItem, RunRecord
 
 console = Console()
 
@@ -71,7 +70,7 @@ async def start_item(ctx: CliContext, item: QueueItem) -> RunRecord:
 
 
 def lock_for(ctx: CliContext) -> SchedulerLock:
-    return SchedulerLock(ctx.root / STATE_DIRNAME / LOCK_FILENAME)
+    return scheduler_lock(ctx.root)
 
 
 @scheduler_app.command("start")
@@ -152,11 +151,7 @@ def status(repo: RepoOption = Path(".")) -> None:
             )
             if holder.current_item is not None:
                 console.print(f"  current item: {holder.current_item}")
-        items = ctx.store.list_queue()
-        states = run_states(ctx.store, items)
-        counts = dict.fromkeys(QUEUE_STATUSES, 0)
-        for item in items:
-            counts[effective_status(item, states.get(item.run_id or ""))] += 1
+        counts = queue_counts(ctx.store)
         console.print("queue: " + ", ".join(f"{count} {name}" for name, count in counts.items()))
         console.print(
             f"spent today (UTC, all runs): ${spent_today(ctx.store, datetime.now(UTC)):.2f}"

@@ -23,6 +23,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from jev_agent.config.defaults import STATE_DIRNAME
 from jev_agent.core.queue import status_for_run
 from jev_agent.core.store import QueueItem, QueueStatus, RunRecord, Store
 
@@ -34,6 +35,7 @@ __all__ = [
     "SchedulerLocked",
     "SchedulerOptions",
     "SchedulerSummary",
+    "scheduler_lock",
     "spent_today",
 ]
 
@@ -138,6 +140,11 @@ class SchedulerLock:
             with contextlib.suppress(FileNotFoundError):
                 self.path.unlink()
         self._info = None
+
+
+def scheduler_lock(root: Path) -> SchedulerLock:
+    """The repo's scheduler lock (`.jev/scheduler.lock`); `read()` shows who holds it."""
+    return SchedulerLock(root / STATE_DIRNAME / LOCK_FILENAME)
 
 
 def spent_today(store: Store, now: datetime | None = None) -> float:

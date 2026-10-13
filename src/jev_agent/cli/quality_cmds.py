@@ -13,7 +13,7 @@ from jev_agent.cli.repo import RepoOption, find_git_root
 from jev_agent.cli.run_cmds import RunId
 from jev_agent.cli.wiring import cli_context, fail
 from jev_agent.config import STATE_DIRNAME, ConfigError, JevConfig, load_config
-from jev_agent.core.store import NotFoundError
+from jev_agent.core.store import NotFoundError, QualityReportRecord, RunRecord
 from jev_agent.quality import tools
 from jev_agent.quality.checks import CHECKS, QualityCheck
 from jev_agent.quality.gate import RUN_REVIEW_FILENAME, quality_dir
@@ -27,6 +27,19 @@ quality_app = typer.Typer(
     help="The quality and security gate: reports and available checks.",
     no_args_is_help=True,
 )
+
+
+def review_path(root: Path, run_id: str) -> Path:
+    """`.jev/runs/<run_id>/quality/review.md`."""
+    return quality_dir(root / STATE_DIRNAME, run_id) / RUN_REVIEW_FILENAME
+
+
+def review_text(root: Path, run: RunRecord, reports: list[QualityReportRecord]) -> str:
+    """The run's review.md (Markdown), rebuilt from the database if the file was removed."""
+    path = review_path(root, run.id)
+    if path.is_file():
+        return path.read_text(encoding="utf-8")
+    return render_run_review(run.id, run.quality_level, [r.result for r in reports])
 
 
 @quality_app.command("show")
@@ -44,11 +57,8 @@ def show(run_id: RunId, repo: RepoOption = Path(".")) -> None:
                 "Set a level with `jev run --quality LEVEL` or `[quality] level`."
             )
             return
-        path = quality_dir(ctx.root / STATE_DIRNAME, run_id) / RUN_REVIEW_FILENAME
-        if path.is_file():
-            text = path.read_text(encoding="utf-8")
-        else:  # removed by hand: rebuild it from the database
-            text = render_run_review(run_id, run.quality_level, [r.result for r in reports])
+        path = review_path(ctx.root, run_id)
+        text = review_text(ctx.root, run, reports)
         console.print(text, markup=False, highlight=False, soft_wrap=True)
         console.print(f"(per-gate reports: {path.parent})", markup=False, highlight=False)
 
