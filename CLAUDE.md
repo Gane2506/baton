@@ -45,7 +45,8 @@ Names (after two renames — don't rename again without being asked):
 - **GitHub issues as the public progress log:** before starting any feature/fix, open an
   issue (or comment on the existing one) with the plan, label it `in progress`, post progress
   comments as pieces land, and close it from the commit (`Closes #N`). Labels in use:
-  `enhancement`, `bug`, `in progress`, `priority: low`, `priority: next`, `needs decision`.
+  `enhancement`, `bug`, `in progress`, `priority: low`, `priority: medium`, `priority: next`,
+  `needs decision`. After a review, file **every** finding as an issue before fixing any of them.
 - **Decisions:** for non-trivial choices (design options, keep/refactor/rewrite, ranking
   findings) use the `jev-decide` skill (`.claude/skills/jev-decide/`): Jev's direct pick plus
   Jev scoring must-have gates and a weighted matrix, in one TypeSafe call. Act on AGREE; on
@@ -145,6 +146,8 @@ shapes unverified); the release workflow on the new action versions.
 ## 7. Open items / where we left off
 
 Open issues on Gane2506/baton:
+- **#10** (medium, needs decision): semantic cache for model calls (exact-match first;
+  semantic match opt-in, never for the coder).
 - **#9** (low): dashboard Settings — left sidebar, typed editors (toggle, enum, number+unit,
   tags, key/value, path, secret-ref, model picker, per-role matrix), validated save with diff,
   repo vs user target, comment-preserving (tomlkit), reset-to-default, search.
