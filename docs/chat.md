@@ -115,6 +115,11 @@ marked `failed`) instead of running with other access. The chat itself gets no s
 
 ## Saved chats and cost
 
+One process has a chat at a time (a lock file, `chat.lock`, in its folder): while `jev chat`
+has it open in a terminal, a message sent from the dashboard fails with "open elsewhere", and
+`jev chat --resume` refuses a chat the dashboard is answering. Neither can overwrite the
+other's saved state.
+
 Each chat lives in `.jev/chats/<chat_id>/` (ids look like `c-20261012-153012-ab12`):
 
 - `transcript.jsonl`: one JSON object per line (`at`, `kind`, `text`): your messages, the

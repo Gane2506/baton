@@ -1,15 +1,87 @@
 {% extends "base.html" %}
-{% from "macros.html" import badge, icon with context %}
+{% from "macros.html" import badge, csrf_input, icon with context %}
 {% block title %}Settings{% endblock %}
 {% block content %}
 <div class="page-head">
   <div class="titles">
     <h1>Settings</h1>
-    <p class="lede">Read-only. Change settings in <code>jev.toml</code> or with the CLI; see docs/config.md.</p>
+    <p class="lede">Edit this repository's <code>jev.toml</code>. You see the diff before anything is written.</p>
   </div>
 </div>
+<div class="settings-layout">
+<nav class="settings-nav" aria-label="Setting sections">
+  <p class="settings-nav-label">jev.toml</p>
+  <ul>
+  {% for section in sections %}<li><a href="#s-{{ section.id }}">{{ section.title }}</a></li>{% endfor %}
+  </ul>
+  <p class="settings-nav-label">Read-only</p>
+  <ul>
+    <li><a href="#effective">Effective config</a></li>
+    <li><a href="#env">Environment variables</a></li>
+    <li><a href="#doctor">Doctor</a></li>
+    <li><a href="#dashboard">This dashboard</a></li>
+  </ul>
+</nav>
+<div class="settings-main">
+<p class="hint settings-intro">Changes go to this repository's <code>jev.toml</code> (comments and layout are kept) after you
+check the diff. Each field shows where its value comes from: the built-in <em>default</em>, your <em>user config</em>,
+or <em>jev.toml</em>. <em>Reset</em> removes the key from <code>jev.toml</code>, so your user config or the default
+applies again. Keys that decide where API keys go and what agents can run, and your user config, are not editable
+here (docs/security.md).</p>
 
-<section class="panel">
+{% if plan and plan.errors %}
+<div class="flash error" role="alert">{{ icon("i-alert", "sm") }}<div>Not saved, nothing was written:{% for e in plan.errors %}<pre>{{ e }}</pre>{% endfor %}</div></div>
+{% elif plan and plan.field_errors %}
+<div class="flash error" role="alert">{{ icon("i-alert", "sm") }}<span>Not saved, nothing was written: fix the fields marked below.</span></div>
+{% endif %}
+
+<form method="post" action="/settings/preview" class="settings-form">
+  {{ csrf_input() }}
+  {% for section in sections %}
+  <section class="panel" id="s-{{ section.id }}">
+    <h2>{{ section.title }}</h2>
+    {% for f in section.fields %}
+    {% set id = "f-" ~ f.spec.key | replace(".", "-") %}
+    <div class="setting{% if f.error %} has-error{% endif %}">
+      <div class="setting-head">
+        <label for="{{ id }}">{{ f.spec.label }}</label>
+        <code class="small muted">{{ f.spec.key }}</code>
+        {{ badge(f.source, "set" if f.source == "jev.toml" else "src") }}
+      </div>
+      <div class="setting-control">
+      {% if f.spec.kind == "toggle" and not f.spec.auto %}
+        <input type="hidden" name="{{ f.spec.key }}" value="false">
+        <label class="check"><input type="checkbox" id="{{ id }}" name="{{ f.spec.key }}" value="true"{% if f.value == "true" %} checked{% endif %}> on</label>
+      {% elif f.spec.kind in ("toggle", "choice") %}
+        <select id="{{ id }}" name="{{ f.spec.key }}">
+          {% if f.spec.auto %}<option value=""{% if f.value == "" %} selected{% endif %}>auto: {{ f.spec.auto }}</option>{% endif %}
+          {% for value, text in f.spec.options %}<option value="{{ value }}"{% if f.value == value %} selected{% endif %}>{{ text }}</option>{% endfor %}
+        </select>
+      {% elif f.spec.kind in ("number", "integer") %}
+        <input type="number" id="{{ id }}" name="{{ f.spec.key }}" value="{{ f.value }}" min="0" step="{{ 'any' if f.spec.kind == 'number' else '1' }}" inputmode="decimal">
+        {% if f.spec.unit %}<span class="small muted">{{ f.spec.unit }}</span>{% endif %}
+      {% else %}
+        <input type="text" id="{{ id }}" name="{{ f.spec.key }}" value="{{ f.value }}"{% if f.spec.kind == "names" %} placeholder="(empty)"{% endif %}>
+      {% endif %}
+      {% if f.in_repo %}
+        <label class="check small"><input type="checkbox" name="{{ reset_field }}" value="{{ f.spec.key }}"{% if f.reset %} checked{% endif %}> reset</label>
+      {% endif %}
+      </div>
+      <p class="hint">{{ f.spec.help }}</p>
+      {% if f.note %}<p class="small warn-text">{{ f.note }}</p>{% endif %}
+      {% if f.error %}<p class="small error-text" role="alert">{{ f.error }}</p>{% endif %}
+    </div>
+    {% endfor %}
+  </section>
+  {% endfor %}
+  <div class="actions settings-save">
+    <button class="primary" type="submit">Review changes</button>
+    <a class="button" href="/settings">Discard</a>
+    <span class="hint">Shows the <code>jev.toml</code> diff first; nothing is written until you confirm.</span>
+  </div>
+</form>
+
+<section class="panel" id="effective">
   <h2>Effective config</h2>
   <div class="table-wrap"><table>
     <tbody>
@@ -18,7 +90,7 @@
   </table></div>
 </section>
 
-<section class="panel">
+<section class="panel" id="env">
   <h2>Environment variables</h2>
   <p class="hint">Names only; values are never shown.</p>
   <div class="table-wrap"><table>
@@ -29,7 +101,7 @@
   </table></div>
 </section>
 
-<section class="panel">
+<section class="panel" id="doctor">
   <h2>Doctor</h2>
   <p class="hint">The checks of <code>jev doctor</code> (local only).</p>
   <div class="table-wrap"><table>
@@ -40,12 +112,13 @@
   </table></div>
 </section>
 
-<section class="panel">
+<section class="panel" id="dashboard">
   <h2>This dashboard</h2>
   <dl class="facts">
     <dt>Listening on</dt><dd class="mono">{{ settings.host }}:{{ settings.port }}</dd>
     <dt>Access</dt><dd>{% if settings.token %}token required{% else %}loopback only, no token{% endif %}</dd>
-    <dt>Refresh</dt><dd>{{ settings.refresh_s }}s for live regions</dd>
   </dl>
 </section>
+</div>
+</div>
 {% endblock %}

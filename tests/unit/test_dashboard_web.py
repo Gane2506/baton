@@ -17,6 +17,7 @@ import pytest
 from starlette.testclient import TestClient
 
 from jev_agent.cli.wiring import FAKE_WORKERS_ENV
+from jev_agent.core.chat import META_FILE, hold_chat
 from jev_agent.core.models import RunState
 from jev_agent.core.store import Store
 from jev_agent.dashboard.app import create_app
@@ -151,6 +152,29 @@ def test_chat_actions_refuse_without_a_brief(client: TestClient) -> None:
     assert _post(client, f"/chats/{chat_id}/start", {"action": "run"}).status_code == 303
     page = client.get(f"/chats/{chat_id}")
     assert "no brief yet" in page.text
+
+
+@pytest.mark.parametrize("budget", ["inf", "nan", "-1", "0"])
+def test_new_chat_refuses_a_budget_that_is_not_a_finite_amount(
+    client: TestClient, fixture_repo: Path, budget: str
+) -> None:
+    response = _post(client, "/chats/new", {"worker": "api", "learning": "", "budget_usd": budget})
+    assert response.status_code == 303 and "/chats/c-" not in response.headers["location"]
+    assert "finite number of USD above zero" in client.get("/chats").text
+    assert not (fixture_repo / ".jev" / "chats").exists() or not any(
+        (fixture_repo / ".jev" / "chats").iterdir()
+    )
+
+
+def test_a_chat_open_in_a_terminal_is_not_changed(client: TestClient, fixture_repo: Path) -> None:
+    chat_id = _new_chat(client)
+    meta = fixture_repo / ".jev" / "chats" / chat_id / META_FILE
+    before = meta.read_text()
+    with hold_chat(fixture_repo, chat_id):  # `jev chat --resume` has it
+        assert _post(client, f"/chats/{chat_id}/send", {"text": "hello"}).status_code == 303
+        job = _dashboard(client).chat_runner.wait(chat_id)
+    assert job is not None and job.state == "failed" and "is open elsewhere" in job.message
+    assert meta.read_text() == before
 
 
 def test_board_adds_and_removes_queue_items(client: TestClient, fixture_repo: Path) -> None:

@@ -94,9 +94,22 @@ Resume button). A Ship job cannot be cancelled mid-step; shutdown waits for it.
   regressions in the latest PR, and one server-rendered SVG trend chart per KPI with its
   rolling median and red regression points. Without shipped PRs it explains `jev ship`. See
   [ship.md](ship.md).
-- **Settings** (`/settings`): the effective config (read-only), the environment variables the
-  config names with whether each is set (names only, never values), and the `jev doctor`
-  checks (local checks only).
+- **Settings** (`/settings`): a list of sections on the left (sticky on wide windows) and an
+  editor for common settings in this repository's `jev.toml`: `[dispatcher] primary`, the
+  budgets (`per_run_usd`, `per_task_usd`, `max_task_attempts`), `[approval]
+  require_plan_approval`, `[review] enabled`, `[quality] level`, `[ship] enabled` and
+  `after_approval`, `[learning] enabled` and `profile`, `[models] prefer_free`, and each
+  role's `workers` and `models`. Each field shows where its value comes from (default, user
+  config or `jev.toml`); **reset** removes the key from `jev.toml`, so the user config or the
+  default applies again. **Review changes** checks the new file exactly as `jev` loads it
+  (schema, your user config, trust) and shows a unified diff; nothing is written until you
+  confirm, and an invalid value comes back on its field with nothing written. Confirming
+  writes `jev.toml` atomically, keeping its comments and layout, and only if the file has not
+  changed since the diff was shown (otherwise you get the new diff). The server rebuilds the
+  file from these fields on every step: a request can never write a guarded key
+  ([security.md](security.md)), `[trust]` or your user config. Below the editor, read-only: the
+  effective config, the environment variables the config names with whether each is set (names
+  only, never values), and the `jev doctor` checks (local checks only).
 
 Pages follow your OS light/dark setting and work on narrow screens. Nothing is loaded from
 other origins: no CDN, no web fonts, no analytics. The only script is a small vendored
@@ -108,8 +121,8 @@ still works (reload to refresh).
 | ![Run detail](images/dashboard-run.png) | ![Queue](images/dashboard-queue.png) |
 | **Learning** | **Spend** |
 | ![Learning](images/dashboard-learning.png) | ![Spend](images/dashboard-spend.png) |
-| **KPIs** | |
-| ![KPIs](images/dashboard-kpis.png) | |
+| **KPIs** | **Settings** |
+| ![KPIs](images/dashboard-kpis.png) | ![Settings editor with its section list](images/dashboard-settings.png) |
 
 The Board in dark mode: [images/dashboard-board-dark.png](images/dashboard-board-dark.png).
 

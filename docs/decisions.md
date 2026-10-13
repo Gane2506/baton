@@ -2,6 +2,19 @@
 
 Deviations from [PLAN.md](../PLAN.md) and choices it left open. Newest first.
 
+## 2026-10-13: Settings editor and a shared chat lock (#9)
+
+- **A curated settings editor for the repo `jev.toml`** (jev-decide, AGREE). Only fields
+  outside `GUARDED_KEYS` are editable, enforced on the server; editing every field or raw TOML
+  failed the safety gate. `tomlkit` keeps comments; `load_config` was split so the editor
+  validates a candidate file with the loader's own checks (`config_from_layers`). Repo/user
+  target selection and search from #9 are left for later.
+- **One process per chat** (from review). The dashboard's per-chat lock only covered its own
+  process, so a terminal `jev chat --resume` and a dashboard reply could both load and save the
+  same `meta.json`. `core.chat.hold_chat` takes an exclusive `flock` on the chat's `chat.lock`
+  (the kernel drops it if the holder dies); a terminal holds it for its session, a dashboard
+  turn for one turn. The second comer fails at once instead of waiting, so neither blocks.
+
 ## 2026-10-13: Screenshots from the running app, with Playwright (#83)
 
 - **Playwright as a dev dependency**, not more Chrome command-line flags: the quality image is

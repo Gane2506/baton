@@ -60,16 +60,29 @@ def load_config(repo_path: Path, user_config_path: Path | None = None) -> JevCon
     Missing files are skipped. Each file is validated after it is merged, so an error names
     the file that caused it. A repo file may change `GUARDED_KEYS` only in a trusted repo."""
     user_path = user_config_path or default_user_config_path()
+    return config_from_layers(
+        repo_path, user_path, _read_toml(user_path), _read_toml(repo_path / CONFIG_FILENAME)
+    )
+
+
+def config_from_layers(
+    repo_path: Path,
+    user_path: Path,
+    user: dict[str, Any] | None,
+    repo: dict[str, Any] | None,
+) -> JevConfig:
+    """`load_config` on already parsed layers (None: the file is missing). The dashboard checks
+    a candidate jev.toml with it before writing the file."""
     repo_file = repo_path / CONFIG_FILENAME
     merged: dict[str, Any] = {}
     config = JevConfig()
-    user = _read_layer(user_path)
     if user is not None:
+        _check_secrets(user_path, user)
         merged = user
         config = _validate(user_path, merged)
-    repo = _read_layer(repo_file)
     if repo is None:
         return config
+    _check_secrets(repo_file, repo)
     if "trust" in repo:
         raise ConfigError(
             f"{repo_file}: [trust] belongs in your user config ({user_path}); a repository "
@@ -125,13 +138,10 @@ def _untrusted_message(repo_file: Path, repo_path: Path, user_path: Path, keys: 
     )
 
 
-def _read_layer(path: Path) -> dict[str, Any] | None:
-    data = _read_toml(path)
-    if data is not None:
-        secrets = find_secret_keys(data)
-        if secrets:
-            raise ConfigError(f"{path}: {secret_keys_message(secrets)}")
-    return data
+def _check_secrets(path: Path, data: dict[str, Any]) -> None:
+    secrets = find_secret_keys(data)
+    if secrets:
+        raise ConfigError(f"{path}: {secret_keys_message(secrets)}")
 
 
 def deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:

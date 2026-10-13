@@ -7,6 +7,14 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+
+- **Dashboard: Settings editor** ([#9](https://github.com/Gane2506/baton/issues/9)). Typed
+  controls for the common `jev.toml` settings with a section list, validation exactly as `jev`
+  loads the config, a diff before saving, reset to default, and atomic writes that keep
+  comments. Keys that decide where API keys go and what agents may run, `[trust]` and the user
+  config stay read-only. Adds `tomlkit` to the `dashboard` extra.
+
 ### Changed
 
 - **Screenshots come from the running app** ([#83](https://github.com/Gane2506/baton/issues/83)).
@@ -18,6 +26,9 @@ All notable changes to this project are documented here. The format is based on
 
 ### Fixed
 
+- A chat open in a terminal (`jev chat`) and a dashboard reply to the same chat could overwrite
+  each other's `meta.json` (spend, turns, brief, runs). One process has a chat at a time now
+  (`chat.lock`). The dashboard's new-chat form also rejects `inf` and `nan` budgets.
 - `examples/demo/seed_demo.py` failed on a fresh repo since repo-level tools and skills need
   `[trust]`; it now trusts the demo in a user config inside the demo repo, and only there.
 
