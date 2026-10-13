@@ -149,7 +149,8 @@ The functions a front end (such as a chat command) needs:
 
 - `jev_agent.core.learning.resolve_learning(store, learning, config, flag_profile, no_learning)`:
   the profile a new run uses, or None.
-- `jev_agent.cli.run_cmds.start_run(ctx, idea, plan_only=..., learning=..., no_learning=...)`: the
+- `jev_agent.cli.run_cmds.start_run(ctx, idea, plan_only=..., learning=..., no_learning=...,
+  quality=..., profile=...)`: the
   body of `jev run` (resolve, then start), with `ctx` from `jev_agent.cli.wiring.cli_context(repo)`.
 - `jev_agent.core.learning.Learning`: profiles and lessons (`profiles`, `create`, `lessons`,
   `flush`, `forget`, ...); `learning_status`, `set_repo_learning`, `set_active_profile` for the

@@ -329,6 +329,8 @@ Notes:
   `XDG_DATA_HOME` and `XDG_CACHE_HOME` at a temporary directory, unsets `OPENROUTER_API_KEY`,
   `TYPESAFE_API_KEY` and `JEV_FAKE_WORKERS`, and makes git ignore your global config and
   commit as a test identity. A test that needs a variable sets it with `monkeypatch.setenv`.
+  Tests under `tests/live/` are the exception: they keep your real user config and API keys,
+  because they call the real services.
 - The suite pins `COLUMNS=200`, because rich tables cut cells in a narrow terminal. Narrow
   output is checked on purpose in `tests/unit/test_narrow_terminal.py`: if you add a run
   outcome, next-step hint or error message to the CLI, add it there too.
