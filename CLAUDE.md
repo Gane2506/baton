@@ -46,6 +46,10 @@ Names (after two renames — don't rename again without being asked):
   issue (or comment on the existing one) with the plan, label it `in progress`, post progress
   comments as pieces land, and close it from the commit (`Closes #N`). Labels in use:
   `enhancement`, `bug`, `in progress`, `priority: low`, `priority: next`, `needs decision`.
+- **Decisions:** for non-trivial choices (design options, keep/refactor/rewrite, ranking
+  findings) use the `jev-decide` skill (`.claude/skills/jev-decide/`): Jev's direct pick plus
+  Jev scoring must-have gates and a weighted matrix, in one TypeSafe call. Act on AGREE; on
+  ESCALATE decide yourself and say why, or ask if it is outward-facing.
 - **Ask first** before outward-facing or hard-to-reverse steps not yet approved: publishing
   to PyPI, making any repo public/private, tagging releases (ask; the last two tags were
   approved per-release), enabling `access = "full"`, anything that costs real money (live
