@@ -34,9 +34,10 @@ from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
 from jev_agent import __version__
+from jev_agent.app import chat
+from jev_agent.app.errors import JevError
 from jev_agent.cli.board_cmds import format_age
 from jev_agent.cli.status_cmds import format_time
-from jev_agent.cli.wiring import CliError
 from jev_agent.config import ConfigError
 from jev_agent.config.schema import ShipMode
 from jev_agent.core.benchmarks import DEFAULT_LAST, format_value
@@ -59,7 +60,7 @@ from jev_agent.core.pipeline import PipelineError, cancel_run
 from jev_agent.core.queue import Move, QueueError, add_idea, move_item, remove_item
 from jev_agent.core.ship import Gh, ShipError, ShipPlan, prepare_ship
 from jev_agent.core.store import QUEUE_PRIORITIES, NotFoundError
-from jev_agent.dashboard import chat_ops, views
+from jev_agent.dashboard import views
 from jev_agent.dashboard.render import render_bar_chart, render_markdown, render_trend_chart
 from jev_agent.dashboard.runner import (
     ChatRunner,
@@ -177,7 +178,7 @@ class Dashboard:
                 context = build(repo)
         except ConfigError as exc:
             return self.render(request, "error.html", 500, title="Config error", message=str(exc))
-        except CliError as exc:
+        except JevError as exc:
             return self.render(request, "error.html", 500, title="State error", message=str(exc))
         except (NotFoundError, ChatError) as exc:
             return self.render(request, "error.html", 404, title="Not found", message=str(exc))
@@ -203,7 +204,7 @@ class Dashboard:
         try:
             message = await run_in_threadpool(work)
         except (
-            CliError,
+            JevError,
             ConfigError,
             NotFoundError,
             PipelineError,
@@ -262,7 +263,7 @@ class Dashboard:
         try:
             with views.open_repo(self.settings.root) as repo:
                 path = views.safe_run_file(repo, run_id, relative)
-        except CliError as exc:
+        except JevError as exc:
             raise HTTPException(500, str(exc)) from exc
         if path is None:
             raise HTTPException(404, "no such file")
@@ -305,7 +306,7 @@ class Dashboard:
             lambda repo: {
                 "chats": views.chats(repo),
                 "profiles": repo.learning.profiles(),
-                "backends": chat_ops.backend_readiness(repo.config),
+                "backends": chat.backend_readiness(repo.config),
             },
         )
 
@@ -406,7 +407,7 @@ class Dashboard:
 
         try:
             problem = await run_in_threadpool(check)
-        except (CliError, NotFoundError, ConfigError) as exc:
+        except (JevError, NotFoundError, ConfigError) as exc:
             problem = str(exc)
         if problem is not None:
             self.flash(request, "error", problem)
@@ -429,7 +430,7 @@ class Dashboard:
             has_workers = await run_in_threadpool(
                 request_changes, self.settings.root, run_id, notes
             )
-        except (CliError, ConfigError, NotFoundError, PipelineError, RunInUseError) as exc:
+        except (JevError, ConfigError, NotFoundError, PipelineError, RunInUseError) as exc:
             self.flash(request, "error", str(exc))
             return self.back(to)
         if not has_workers:
@@ -453,7 +454,7 @@ class Dashboard:
 
         try:
             ready = await run_in_threadpool(plan)
-        except (CliError, ShipError, NotFoundError, ConfigError) as exc:
+        except (JevError, ShipError, NotFoundError, ConfigError) as exc:
             self.flash(request, "error", str(exc))
             return self.back(to)
         if form.get("confirm") != "yes":
@@ -485,7 +486,7 @@ class Dashboard:
                     raise ValueError("the budget must be a number of USD") from None
                 if budget <= 0:
                     raise ValueError("the budget must be greater than zero")
-                return chat_ops.create_chat(
+                return chat.create_chat(
                     repo.root,
                     repo,
                     worker,
@@ -513,7 +514,7 @@ class Dashboard:
             return self.back(to)
 
         def work() -> str:
-            return chat_ops.turn(self.settings.root, chat_id, text)
+            return chat.turn(self.settings.root, chat_id, text)
 
         if not self.chat_runner.start(chat_id, work):
             self.flash(request, "error", f"chat {chat_id} is already waiting for a reply")
@@ -527,7 +528,7 @@ class Dashboard:
         to = f"/chats/{chat_id}"
 
         def work() -> str:
-            return chat_ops.brief(self.settings.root, chat_id)
+            return chat.brief(self.settings.root, chat_id)
 
         if not self.chat_runner.start(chat_id, work):
             self.flash(request, "error", f"chat {chat_id} is already waiting for a reply")
@@ -543,7 +544,7 @@ class Dashboard:
         plan_only = (_text(form, "action") or "run") == "plan"
 
         def start() -> str:
-            run_id = chat_ops.start_run_from_chat(self.settings.root, chat_id, plan_only=plan_only)
+            run_id = chat.start_run_from_chat(self.settings.root, chat_id, plan_only=plan_only)
             if not self.launcher.start(run_id, "start"):
                 raise PipelineError(f"run {run_id} is already being worked on here")
             return run_id
@@ -552,7 +553,7 @@ class Dashboard:
             run_id = await run_in_threadpool(start)
         except (
             ChatError,
-            CliError,
+            JevError,
             ConfigError,
             LearningError,
             NotFoundError,
@@ -573,7 +574,7 @@ class Dashboard:
         priority = _text(form, "priority") or "normal"
 
         def queue() -> int:
-            return chat_ops.queue_from_chat(self.settings.root, chat_id, priority)
+            return chat.queue_from_chat(self.settings.root, chat_id, priority)
 
         try:
             item_id = await run_in_threadpool(queue)
@@ -623,7 +624,7 @@ class Dashboard:
         try:
             run_id = await run_in_threadpool(start)
         except (
-            CliError,
+            JevError,
             ConfigError,
             LearningError,
             PipelineError,
@@ -718,7 +719,7 @@ class Dashboard:
 
             try:
                 lessons = await run_in_threadpool(count)
-            except (CliError, LearningError) as exc:
+            except (JevError, LearningError) as exc:
                 self.flash(request, "error", str(exc))
                 return self.back("/learning")
             return self.render(request, "confirm_flush.html", profile=name, lessons=lessons)
@@ -729,7 +730,7 @@ class Dashboard:
 
         try:
             deleted = await run_in_threadpool(flush)
-        except (CliError, LearningError) as exc:
+        except (JevError, LearningError) as exc:
             self.flash(request, "error", str(exc))
         else:
             self.flash(request, "ok", f"deleted {deleted} lesson(s) from {name}")

@@ -5,8 +5,9 @@ from pathlib import Path
 
 import pytest
 
-from jev_agent.cli import doctor_cmd, wiring
-from jev_agent.cli.wiring import FAKE_WORKERS_ENV, build_registry, worker_readiness
+from jev_agent.app import context
+from jev_agent.app.context import FAKE_WORKERS_ENV, build_registry, worker_readiness
+from jev_agent.cli import doctor_cmd
 from jev_agent.config import JevConfig, load_config
 from jev_agent.dispatch.requests import role_options
 from jev_agent.workers.fake import FakeWorker
@@ -17,7 +18,7 @@ KEY = "OPENROUTER_API_KEY"
 
 @pytest.fixture(autouse=True)
 def _isolate(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    monkeypatch.setattr(wiring, "which", lambda cmd: f"/fake/bin/{cmd}")
+    monkeypatch.setattr(context, "which", lambda cmd: f"/fake/bin/{cmd}")
 
 
 def _config(data: dict[str, object] | None = None) -> JevConfig:
@@ -41,7 +42,7 @@ def test_api_without_any_model_is_dropped(monkeypatch: pytest.MonkeyPatch) -> No
 
 
 def test_missing_cli_binary_is_dropped(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(wiring, "which", lambda cmd: None if cmd == "codex" else f"/bin/{cmd}")
+    monkeypatch.setattr(context, "which", lambda cmd: None if cmd == "codex" else f"/bin/{cmd}")
     registry, warnings = build_registry(_config({"workers": {"api": {"enabled": False}}}))
     assert registry.names() == ["claude_code"]
     assert warnings == [
@@ -94,7 +95,7 @@ def test_free_models_count_as_a_model(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_fake_workers_skip_readiness(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv(FAKE_WORKERS_ENV, "1")
-    monkeypatch.setattr(wiring, "which", lambda cmd: None)
+    monkeypatch.setattr(context, "which", lambda cmd: None)
     registry, warnings = build_registry(_config())
     assert sorted(registry.names("reviewer")) == ["api", "claude_code", "codex"]
     assert all(isinstance(registry.get(n), FakeWorker) for n in registry.names())
@@ -126,7 +127,7 @@ def test_doctor_and_wiring_agree(
     def which(cmd: str) -> str | None:
         return f"/bin/{cmd}" if cmd in found else None
 
-    monkeypatch.setattr(wiring, "which", which)
+    monkeypatch.setattr(context, "which", which)
     monkeypatch.setattr(doctor_cmd, "which", which)
     config = load_config(repo)
     registry, _ = build_registry(config)

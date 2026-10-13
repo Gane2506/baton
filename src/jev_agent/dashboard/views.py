@@ -19,13 +19,14 @@ from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+from jev_agent.app.context import FAKE_WORKERS_ENV, STATE_DB_FILENAME
+from jev_agent.app.errors import JevError
 from jev_agent.cli.board_cmds import COLUMN_FOR_STATE, COLUMNS, Card, load_board
 from jev_agent.cli.doctor_cmd import Check, run_checks
 from jev_agent.cli.quality_cmds import review_text
 from jev_agent.cli.queue_cmds import item_flags
 from jev_agent.cli.status_cmds import format_answers, learning_line, quality_line
 from jev_agent.cli.text import short
-from jev_agent.cli.wiring import FAKE_WORKERS_ENV, STATE_DB_FILENAME, CliError
 from jev_agent.config import STATE_DIRNAME, JevConfig, load_config
 from jev_agent.core.benchmarks import DEFAULT_LAST, Summary, Trend, summarize, trends
 from jev_agent.core.chat import ChatMeta, list_chats, read_transcript
@@ -75,7 +76,7 @@ def open_repo(root: Path) -> Iterator[Repo]:
     """Config, store and learning profiles for one request (the same files as the CLI).
 
     A state database this jev cannot read (written by a newer jev, or corrupt) becomes a
-    `CliError` with its message, like the CLI's own commands (issue #25), so the dashboard
+    `JevError` with its message, like the CLI's own commands (issue #25), so the dashboard
     renders a readable error page instead of a bare 500.
     """
     config = load_config(root)
@@ -87,9 +88,9 @@ def open_repo(root: Path) -> Iterator[Repo]:
             finally:
                 learning.close()
     except SchemaVersionError as exc:
-        raise CliError(str(exc)) from exc
+        raise JevError(str(exc)) from exc
     except sqlite3.DatabaseError as exc:
-        raise CliError(f"cannot read the state database: {exc}") from exc
+        raise JevError(f"cannot read the state database: {exc}") from exc
 
 
 def valid_run_id(run_id: str) -> bool:

@@ -10,27 +10,22 @@ import typer
 from rich.console import Console
 from rich.markup import escape
 
+from jev_agent.app.context import NO_WORKERS_MESSAGE, AppContext
+from jev_agent.app.runs import approve_run, resume_run
+from jev_agent.app.runs import start_run as start_run
 from jev_agent.cli.repo import RepoOption
 from jev_agent.cli.server_cmds import pick_profile_for_run
-from jev_agent.cli.wiring import NO_WORKERS_MESSAGE, CliContext, cli_context, fail
+from jev_agent.cli.wiring import cli_context, fail
 from jev_agent.config import STATE_DIRNAME
 from jev_agent.config.schema import JevConfig, ShipMode
-from jev_agent.config.servers_schema import NO_PROFILE
-from jev_agent.core.learning import Learning, LearningError, check_profile_name, resolve_learning
+from jev_agent.core.learning import LearningError
 from jev_agent.core.lease import RunInUseError
-from jev_agent.core.models import Idea, RunState
+from jev_agent.core.models import RunState
 from jev_agent.core.pipeline import PipelineError
 from jev_agent.core.ship import ShipPreview, ship_preview
 from jev_agent.core.store import NotFoundError, RunRecord, Store
 from jev_agent.quality.levels import LEVELS, QualityLevel, parse_level
-from jev_agent.servers.profiles import (
-    ProfileError,
-    effective_name,
-    get_profile,
-    read_run_profile,
-    snapshot,
-    write_run_profile,
-)
+from jev_agent.servers.profiles import ProfileError, read_run_profile
 
 console = Console()
 
@@ -132,7 +127,7 @@ def exit_for(run: RunRecord) -> None:
         raise typer.Exit(code)
 
 
-def print_warnings(ctx: CliContext) -> None:
+def print_warnings(ctx: AppContext) -> None:
     for warning in ctx.warnings:
         console.print(f"[yellow]warning:[/yellow] {escape(warning)}")
 
@@ -174,140 +169,6 @@ def print_outcome(run: RunRecord, store: Store | None = None) -> None:
     if workspace is not None:
         console.print(f"  workspace profile: {escape(workspace.name)}")
     console.print(f"  spent ${run.spend_usd:.2f}; timeline: `jev log {run.id}`")
-
-
-def _learning(ctx: CliContext) -> Learning:
-    assert ctx.learning is not None
-    return ctx.learning
-
-
-def create_run(
-    ctx: CliContext,
-    idea: str,
-    *,
-    plan_only: bool = False,
-    learning: str | None = None,
-    no_learning: bool = False,
-    quality: str | None = None,
-    profile: str | None = None,
-    ship_mode: ShipMode | None = None,
-) -> RunRecord:
-    """Create the run and record its flags, without advancing it (the front half of `jev run`;
-    `Pipeline.advance` continues it from its first state). Same errors as `start_run`.
-
-    Front ends that must show the run id at once (the dashboard, the chat) create a run this
-    way and advance it in the background.
-    """
-    workspace = effective_name(ctx.config, profile, ctx.root / STATE_DIRNAME)
-    if workspace is not None:
-        settings = get_profile(ctx.config, workspace)
-        if learning is None and not no_learning and settings.learning is not None:
-            if settings.learning is False:
-                no_learning = True
-            else:
-                learning = settings.learning
-        if quality is None and settings.quality is not None:
-            quality = settings.quality
-    level = ctx.config.quality.level if quality is None else parse_level(quality)
-    learning_profile = resolve_learning(
-        ctx.store, _learning(ctx), ctx.config, learning, no_learning
-    )
-    copy = None if workspace is None else snapshot(ctx.config, workspace)
-    run = ctx.store.create_run(
-        Idea(text=idea, repo_path=ctx.root),
-        learning_profile,
-        level,
-        plan_only=plan_only,
-        ship_mode=ship_mode,
-    )
-    write_run_profile(ctx.root / STATE_DIRNAME, run.id, copy)
-    return run
-
-
-async def start_run(
-    ctx: CliContext,
-    idea: str,
-    *,
-    plan_only: bool = False,
-    learning: str | None = None,
-    no_learning: bool = False,
-    quality: str | None = None,
-    profile: str | None = None,
-    ship_mode: ShipMode | None = None,
-) -> RunRecord:
-    """Start a run for `idea` and advance it as far as it goes (the body of `jev run`).
-
-    `learning` / `no_learning` are the run flags; `resolve_learning` applies the precedence
-    (flag > `jev learning` setting > jev.toml > default). Raises `LearningError` for an
-    unknown profile or both flags at once. `quality` is the quality gate level (None: the
-    config's `[quality] level`); ValueError for an unknown level. Reusable by other front
-    ends (the chat, the scheduler).
-
-    `profile` is the workspace profile (`none`: none); without it the repo default applies
-    (`jev profile use`). The profile's `learning` and `quality` apply when no flag says
-    otherwise. ProfileError (a ValueError) for an unknown profile. `ship_mode` is what the
-    run does after both votes approve at D6 (None: `[ship] after_approval`).
-    """
-    run = create_run(
-        ctx,
-        idea,
-        plan_only=plan_only,
-        learning=learning,
-        no_learning=no_learning,
-        quality=quality,
-        profile=profile,
-        ship_mode=ship_mode,
-    )
-    return await ctx.pipeline.advance(run.id)
-
-
-def set_run_profile(ctx: CliContext, run_id: str, profile: str | None) -> None:
-    """`jev resume --profile NAME|none`: replace the run's workspace profile."""
-    if profile is None:
-        return
-    ctx.store.get_run(run_id)  # NotFoundError for an unknown run
-    copy = None if profile == NO_PROFILE else snapshot(ctx.config, profile)
-    write_run_profile(ctx.root / STATE_DIRNAME, run_id, copy)
-
-
-def set_run_learning(ctx: CliContext, run_id: str, learning: str | None, no_learning: bool) -> None:
-    """Apply `--learning` / `--no-learning` to an existing run (from `jev resume`). Without
-    either flag the run keeps the profile it started with."""
-    if learning is not None and no_learning:
-        raise LearningError("--learning and --no-learning cannot be used together")
-    ctx.store.get_run(run_id)  # NotFoundError for an unknown run
-    if no_learning:
-        ctx.store.set_run_learning(run_id, None)
-    elif learning is not None:
-        if _learning(ctx).get(check_profile_name(learning)) is None:
-            raise LearningError(
-                f"no learning profile named {learning!r}; "
-                f"create it with `jev learning create {learning}`"
-            )
-        ctx.store.set_run_learning(run_id, learning)
-
-
-async def approve_run(ctx: CliContext, run_id: str) -> RunRecord:
-    """Approve the run's plan and execute it when workers are available (the body of
-    `jev approve`; the dashboard runs it in a background thread)."""
-    return await ctx.pipeline.approve(run_id, execute=ctx.has_workers)
-
-
-async def resume_run(
-    ctx: CliContext,
-    run_id: str,
-    *,
-    learning: str | None = None,
-    no_learning: bool = False,
-    quality: QualityLevel | None = None,
-    profile: str | None = None,
-) -> RunRecord:
-    """Apply the resume flags, then continue the run (the body of `jev resume`)."""
-    set_run_learning(ctx, run_id, learning, no_learning)
-    set_run_profile(ctx, run_id, profile)
-    if quality is not None:
-        ctx.store.set_run_quality(run_id, quality)
-    return await ctx.pipeline.resume(run_id)
 
 
 def run(

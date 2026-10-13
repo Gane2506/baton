@@ -11,6 +11,7 @@ import httpx
 import pytest
 from typer.testing import CliRunner
 
+from jev_agent.app import context
 from jev_agent.cli import doctor_cmd, wiring
 from jev_agent.cli.app import app
 from jev_agent.config import JevConfig
@@ -366,7 +367,7 @@ def mocked_models(monkeypatch: pytest.MonkeyPatch) -> list[httpx.Request]:
         calls.append(request)
         return httpx.Response(200, json=_models_body())
 
-    monkeypatch.setattr(wiring, "catalog_transport", httpx.MockTransport(handler))
+    monkeypatch.setattr(context, "catalog_transport", httpx.MockTransport(handler))
     return calls
 
 
@@ -394,7 +395,7 @@ def test_cli_models_refresh_and_failure(
     fixture_repo: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(
-        wiring, "catalog_transport", httpx.MockTransport(lambda r: httpx.Response(503))
+        context, "catalog_transport", httpx.MockTransport(lambda r: httpx.Response(503))
     )
     result = runner.invoke(app, ["models", "list", "--refresh", "--repo", str(fixture_repo)])
     assert result.exit_code == 1

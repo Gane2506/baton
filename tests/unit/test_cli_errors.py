@@ -11,7 +11,7 @@ import httpx
 import pytest
 from typer.testing import CliRunner
 
-from jev_agent.cli import wiring
+from jev_agent.app import context
 from jev_agent.cli.app import app
 from jev_agent.cli.wiring import FAKE_WORKERS_ENV, NO_WORKERS_MESSAGE
 
@@ -41,7 +41,7 @@ def test_no_workers_message_keeps_its_table_names(
     assert planned.exit_code == 0, planned.output
     run_id = next(w for w in planned.output.split() if w[:8].isdigit() and "-" in w).rstrip(":")
     monkeypatch.delenv(FAKE_WORKERS_ENV)
-    monkeypatch.setattr(wiring, "which", lambda cmd: None)  # no claude, no codex
+    monkeypatch.setattr(context, "which", lambda cmd: None)  # no claude, no codex
     result = runner.invoke(app, ["approve", run_id, "--repo", str(fixture_repo)])
     out = " ".join(result.output.split())
     assert "`[workers.claude_code]`" in out and "`[workers.api]`" in out
@@ -92,7 +92,7 @@ def test_read_only_commands_make_no_http_call_and_create_no_state_dir(
         calls.append(request)
         return httpx.Response(503)
 
-    monkeypatch.setattr(wiring, "catalog_transport", httpx.MockTransport(handler))
+    monkeypatch.setattr(context, "catalog_transport", httpx.MockTransport(handler))
     result = runner.invoke(app, [*args, "--repo", str(fixture_repo)])
     assert result.exit_code in (0, 1), result.output
     assert result.exception is None or isinstance(result.exception, SystemExit)

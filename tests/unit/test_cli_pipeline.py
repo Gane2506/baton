@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
-from jev_agent.cli import wiring
+from jev_agent.app import context
 from jev_agent.cli.app import app
 from jev_agent.cli.run_cmds import STOPPED_EXIT_CODE, run_exit_code
 from jev_agent.cli.status_cmds import format_answers, format_time
@@ -125,7 +125,7 @@ def test_not_a_git_repo(tmp_path: Path) -> None:
 def _scripted_fakes(monkeypatch: pytest.MonkeyPatch, script: Mapping[str, ScriptValue]) -> None:
     """`JEV_FAKE_WORKERS=1` with every fake worker following `script`."""
     monkeypatch.setenv(FAKE_WORKERS_ENV, "1")
-    monkeypatch.setattr(wiring, "FakeWorker", lambda name: FakeWorker(name, script))
+    monkeypatch.setattr(context, "FakeWorker", lambda name: FakeWorker(name, script))
 
 
 def test_exit_code_per_state() -> None:
@@ -202,7 +202,7 @@ class _CancelledFromAnotherShell(FakeWorker):
 def test_cancelled_run_exits_nonzero(fixture_repo: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     db = fixture_repo / ".jev" / "state.db"
     monkeypatch.setenv(FAKE_WORKERS_ENV, "1")
-    monkeypatch.setattr(wiring, "FakeWorker", lambda name: _CancelledFromAnotherShell(name, db))
+    monkeypatch.setattr(context, "FakeWorker", lambda name: _CancelledFromAnotherShell(name, db))
     code, output = _jev(fixture_repo, "run", "add search")
     assert "CANCELLED" in output
     assert code == STOPPED_EXIT_CODE
@@ -232,7 +232,7 @@ def test_build_dispatcher_from_config(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_build_registry_registers_api_worker_from_config(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(wiring, "which", lambda cmd: f"/fake/bin/{cmd}")
+    monkeypatch.setattr(context, "which", lambda cmd: f"/fake/bin/{cmd}")
     monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-v1-fake")
     config = JevConfig.model_validate(
         {"workers": {"api": {"base_url": "https://example.test/v1/", "default_model": "m/x"}}}

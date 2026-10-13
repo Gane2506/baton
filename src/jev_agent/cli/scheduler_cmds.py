@@ -10,8 +10,9 @@ import typer
 from rich.console import Console
 from rich.markup import escape
 
+from jev_agent.app.runs import start_run
 from jev_agent.cli.repo import RepoOption
-from jev_agent.cli.run_cmds import print_warnings, start_run
+from jev_agent.cli.run_cmds import print_warnings
 from jev_agent.cli.wiring import (
     NO_WORKERS_MESSAGE,
     CliContext,

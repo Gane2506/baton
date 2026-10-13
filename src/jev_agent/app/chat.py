@@ -1,7 +1,8 @@
-"""Chat work for the dashboard: create, continue and act on `jev chat` sessions (docs/chat.md).
+"""Chat work for the web UI and the CLI front ends: create, continue and act on `jev chat`
+sessions (docs/chat.md).
 
 Every function is the same code path the CLI uses (`core.chat` sessions and backends,
-`cli.run_cmds` for runs, `core.queue` for the queue), so a chat started in the browser is a
+`app.runs` for runs, `core.queue` for the queue), so a chat started in the browser is a
 normal `jev chat` session: same files, same budget, same learning profiles. Nothing here
 touches a network directly: the backends do, and `JEV_FAKE_WORKERS=1` swaps in the echo one.
 """
@@ -11,9 +12,11 @@ from __future__ import annotations
 import os
 import shutil
 from pathlib import Path
+from typing import Protocol
 
-from jev_agent.cli.run_cmds import create_run
-from jev_agent.cli.wiring import NO_WORKERS_MESSAGE, fake_workers_enabled, open_cli_context
+from jev_agent.app.context import NO_WORKERS_MESSAGE, fake_workers_enabled, open_context, open_repo
+from jev_agent.app.jobs import run_job_coroutine
+from jev_agent.app.runs import create_run
 from jev_agent.config.schema import JevConfig
 from jev_agent.core.chat import (
     ApiChatBackend,
@@ -29,10 +32,19 @@ from jev_agent.core.chat import (
     effective_profile,
     render_system_prompt,
 )
+from jev_agent.core.learning import Learning
 from jev_agent.core.pipeline import PipelineError
 from jev_agent.core.queue import add_idea
-from jev_agent.dashboard.runner import run_job_coroutine
-from jev_agent.dashboard.views import Repo, open_repo
+from jev_agent.core.store import Store
+
+
+class RepoLike(Protocol):
+    """What the chat needs from an open repo (`app.context.RepoContext`, `views.Repo`)."""
+
+    root: Path
+    config: JevConfig
+    store: Store
+    learning: Learning
 
 
 def backend_readiness(config: JevConfig) -> dict[str, tuple[bool, str]]:
@@ -85,7 +97,7 @@ def build_backend(
     )
 
 
-def session_for(root: Path, repo: Repo, chat_id: str) -> ChatSession:
+def session_for(root: Path, repo: RepoLike, chat_id: str) -> ChatSession:
     """The saved chat's session with its backend and prompt, as `jev chat --resume` builds it."""
     meta = ChatSession.load_meta(root, chat_id)
     backend = build_backend(repo.config, root, meta.backend, meta.model)
@@ -96,7 +108,7 @@ def session_for(root: Path, repo: Repo, chat_id: str) -> ChatSession:
 
 def create_chat(
     root: Path,
-    repo: Repo,
+    repo: RepoLike,
     worker: BackendName,
     model: str | None,
     choice: ChatLearning,
@@ -136,7 +148,7 @@ def brief(root: Path, chat_id: str) -> str:
 def start_run_from_chat(root: Path, chat_id: str, *, plan_only: bool) -> str:
     """`/plan` and `/run`: create a run from the chat's brief (the caller advances it with a
     `start` job) and record it on the chat. Returns the run id."""
-    with open_cli_context(root) as ctx:
+    with open_context(root) as ctx:
         if not ctx.has_workers:
             raise PipelineError(NO_WORKERS_MESSAGE)
         meta = ChatSession.load_meta(root, chat_id)

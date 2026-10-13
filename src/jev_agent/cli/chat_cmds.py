@@ -20,8 +20,9 @@ from rich.markup import escape
 from rich.prompt import Prompt
 from rich.table import Table
 
+from jev_agent.app.runs import start_run
 from jev_agent.cli.repo import RepoOption
-from jev_agent.cli.run_cmds import print_outcome, print_warnings, start_run
+from jev_agent.cli.run_cmds import print_outcome, print_warnings
 from jev_agent.cli.text import short
 from jev_agent.cli.wiring import (
     FAKE_WORKERS_ENV,

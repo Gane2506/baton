@@ -16,8 +16,9 @@ from rich.console import Console
 from rich.markup import escape
 from rich.table import Table
 
-from jev_agent.cli import wiring
+from jev_agent.app import context
 from jev_agent.cli.repo import RepoOption, find_git_root
+from jev_agent.cli.wiring import fail
 from jev_agent.config import ConfigError, load_config
 from jev_agent.workers.openrouter_models import (
     PARAM_ALIASES,
@@ -53,7 +54,7 @@ def _catalog(repo: Path, refresh: bool) -> ModelCatalog:
     try:
         config = load_config(root)
     except ConfigError as exc:
-        raise wiring.fail(str(exc)) from exc
+        raise fail(str(exc)) from exc
     api = config.workers.api
     catalog, warning = load_catalog(
         cache_path(root),
@@ -61,12 +62,12 @@ def _catalog(repo: Path, refresh: bool) -> ModelCatalog:
         ttl_s=config.models.cache_ttl_hours * 3600,
         refresh=refresh,
         api_key=os.environ.get(api.api_key_env, "").strip() or None,
-        transport=wiring.catalog_transport,
+        transport=context.catalog_transport,
     )
     if warning:
         console.print(f"[yellow]warning:[/yellow] {escape(warning)}")
     if catalog is None:
-        raise wiring.fail("no model list available")
+        raise fail("no model list available")
     return catalog
 
 
