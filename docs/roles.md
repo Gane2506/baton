@@ -220,6 +220,16 @@ it never edits the repository. It runs when D7 says `learn` (see
 
 An invalid reply only skips the learning step; the run's outcome does not change.
 
+## Skills in every prompt
+
+Every built-in prompt (planner, validator, coder, reviewer, code reviewer, learner and the
+`jev chat` lead) carries the same short `## Skills` block, placed before the lessons and the
+output format so the JSON reply instructions are untouched. It tells the agent to look for
+relevant skills first (the find-skills skill if it has one, otherwise its own list of skills),
+to use the skills that are already installed, and never to install a new one unless the
+maintainer has approved it. A custom `prompt_file` replaces the built-in text, so it only has
+this block if you copy it.
+
 ## Lessons in every prompt
 
 Every template, built-in or your own, gets `lessons`: a list (empty when the run does not

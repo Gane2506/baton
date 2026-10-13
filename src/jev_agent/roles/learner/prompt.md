@@ -17,6 +17,12 @@ the last problem a task hit.
 {% for lesson in lessons %}- `{{ lesson.id }}` (roles: {{ lesson.roles | join(", ") }}; tags: {{ lesson.tags | join(", ") or "none" }}; score {{ "%.1f" | format(lesson.score) }}): {{ lesson.text }}
 {% else %}None yet.
 {% endfor %}
+## Skills
+
+Before you start, look for skills that fit this work: use the find-skills skill if you have it,
+otherwise your own list of skills. Use the skills that are already installed. Never install a new
+skill unless the maintainer has approved it.
+
 ## Rules
 
 - A lesson is one concrete instruction for a future agent, at most 300 characters, for example

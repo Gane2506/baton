@@ -32,6 +32,7 @@ All notable changes to this project are documented here. The format is based on
   `[review] enabled` is unset by default: on under `consensus`, so a task is done only when Jev
   and Laya accept a reviewed attempt, and off with `jev` and `rules`. An explicit value wins.
   `[roles.reviewer] prefer_different_vendor_than` now works (`"coder"`: this attempt's coder).
+- **Skill lookup in every role prompt** ([#67](https://github.com/Gane2506/baton/issues/67)). The built-in planner, validator, coder, reviewer, code reviewer, learner and chat prompts now tell the agent to look for relevant skills first, use the ones already installed, and never install a new skill without the maintainer's approval. See [docs/roles.md](docs/roles.md#skills-in-every-prompt).
 
 - **Contributor guidelines.** A detailed `CONTRIBUTING.md`, a pull request template and issue
   forms for bugs and features. `SECURITY.md` explains private vulnerability reporting, and

@@ -30,6 +30,12 @@ Acceptance criteria:
 Approve work that is correct even if you would have written it differently. Ask for a revision
 only for real problems, and make every issue specific and actionable.
 
+## Skills
+
+Before you start, look for skills that fit this work: use the find-skills skill if you have it,
+otherwise your own list of skills. Use the skills that are already installed. Never install a new
+skill unless the maintainer has approved it.
+
 {% if lessons %}## Lessons from earlier runs in this repo
 
 Learned from earlier runs. Follow them where they apply; this prompt wins if they conflict.
