@@ -129,8 +129,9 @@ class ConsensusDispatcher:
     """`Dispatcher` that needs both Jev and Laya to agree confidently on every answer.
 
     `Decision.details` holds `direct`, Jev's final `answers` (as `JevDispatcher` stores them),
-    Laya's final vote per question (`laya`), the reasons of every unsettled round (`rounds`)
-    and the summed `usage`.
+    Laya's final vote per question (`laya`, with the final 1-5 `scores` per answer and
+    criterion, which `jev laya tune` learns from), the `weights` used, the reasons of every
+    unsettled round (`rounds`) and the summed `usage`.
     """
 
     name = "consensus"
@@ -138,6 +139,11 @@ class ConsensusDispatcher:
     def __init__(self, jev: JevDispatcher, laya: LayaSettings | None = None) -> None:
         self.jev = jev
         self.laya = laya or LayaSettings()
+
+    def with_weights(self, weights: dict[str, float]) -> ConsensusDispatcher:
+        """The same dispatcher with other matrix weights (a learning profile's tuned ones)."""
+        laya = LayaSettings.model_validate({**self.laya.model_dump(), "weights": weights})
+        return type(self)(self.jev, laya)
 
     async def decide(self, req: DecisionRequest) -> Decision:
         started = time.monotonic()
@@ -217,7 +223,11 @@ class ConsensusDispatcher:
             raise NoConsensus(_no_consensus_message(verdicts, round_no))
 
         details["answers"] = jev_votes
-        details["laya"] = {q: v.summary()["laya"] for q, v in verdicts.items()}
+        details["laya"] = {
+            q: {**v.summary()["laya"], "scores": _score_table(scores[q])}
+            for q, v in verdicts.items()
+        }
+        details["weights"] = dict(self.laya.weights)
         details["usage"] = usage.as_dict()
         return Decision(
             point=req.point,
@@ -283,6 +293,14 @@ def _parse_scores(
             value = min(max(float(score), 0.0), HIGHEST - LOWEST) + LOWEST
             parsed.setdefault(q, {})[cell] = Score(value, float(confidence))
     return parsed
+
+
+def _score_table(scores: dict[Cell, Score]) -> dict[str, dict[str, float]]:
+    """{answer: {criterion: 1-5 score}}, the final values of every scored cell."""
+    table: dict[str, dict[str, float]] = {}
+    for (option, criterion), score in scores.items():
+        table.setdefault(option, {})[criterion] = round(score.value, 3)
+    return table
 
 
 def _is_number(value: object) -> bool:

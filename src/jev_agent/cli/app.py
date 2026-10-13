@@ -9,6 +9,7 @@ from jev_agent.cli.chat_cmds import chat
 from jev_agent.cli.dashboard_cmd import dashboard
 from jev_agent.cli.doctor_cmd import doctor
 from jev_agent.cli.init_cmd import init
+from jev_agent.cli.laya_cmds import laya_app
 from jev_agent.cli.learning_cmds import learning_app
 from jev_agent.cli.models_cmds import models_app
 from jev_agent.cli.quality_cmds import quality_app
@@ -57,6 +58,7 @@ app.command("status")(status)
 app.command("log")(log)
 app.command("cancel")(cancel)
 app.add_typer(learning_app, name="learning")
+app.add_typer(laya_app, name="laya")
 app.add_typer(models_app, name="models")
 app.add_typer(queue_app, name="queue")
 app.add_typer(quality_app, name="quality")

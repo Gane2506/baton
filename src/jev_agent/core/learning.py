@@ -28,7 +28,9 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal
 
-from jev_agent.config.schema import PROFILE_NAME_PATTERN, JevConfig
+from pydantic import ValidationError
+
+from jev_agent.config.schema import PROFILE_NAME_PATTERN, JevConfig, LayaSettings
 from jev_agent.core.migrations import SHARED_MIGRATIONS, apply_migrations, configure_connection
 from jev_agent.core.models import LESSON_ROLES
 from jev_agent.core.store import Store
@@ -122,6 +124,25 @@ def _now() -> str:
     return datetime.now(UTC).isoformat(timespec="microseconds")
 
 
+def _checked_weights(profile: str, weights: object) -> dict[str, float]:
+    """`weights` if they are valid `[dispatcher.laya] weights`, else a LearningError."""
+    try:
+        return LayaSettings.model_validate({"weights": weights}).weights
+    except ValidationError as exc:
+        problems = "; ".join(str(e["msg"]) for e in exc.errors())
+        raise LearningError(f"profile {profile!r}: invalid Laya weights: {problems}") from exc
+
+
+def _stored_weights(profile: str, text: str | None) -> dict[str, float] | None:
+    if text is None:
+        return None
+    try:
+        value = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise LearningError(f"profile {profile!r}: stored Laya weights are not JSON") from exc
+    return _checked_weights(profile, value)
+
+
 def check_profile_name(name: str) -> str:
     if not re.match(PROFILE_NAME_PATTERN, name):
         raise LearningError(
@@ -201,6 +222,22 @@ class LessonDB:
         with self._tx() as db:
             db.execute(
                 "UPDATE learning_profiles SET enabled = ? WHERE name = ?", (int(enabled), name)
+            )
+
+    def get_laya_weights(self, name: str) -> dict[str, float] | None:
+        """Tuned Laya weights saved on the profile by `jev laya tune --apply`, or None for the
+        configured ones. Raises LearningError when the stored weights no longer validate."""
+        row = self.conn.execute(
+            "SELECT laya_weights_json FROM learning_profiles WHERE name = ?", (name,)
+        ).fetchone()
+        return None if row is None else _stored_weights(name, row["laya_weights_json"])
+
+    def set_laya_weights(self, name: str, weights: dict[str, float] | None) -> None:
+        """Save tuned Laya weights on the profile (validated first); None clears them."""
+        stored = None if weights is None else json.dumps(_checked_weights(name, weights))
+        with self._tx() as db:
+            db.execute(
+                "UPDATE learning_profiles SET laya_weights_json = ? WHERE name = ?", (stored, name)
             )
 
     def flush(self, name: str) -> int:
@@ -404,6 +441,12 @@ class Learning:
 
     def flush(self, name: str) -> int:
         return self.db_for(name).flush(name)
+
+    def laya_weights(self, name: str) -> dict[str, float] | None:
+        return self.db_for(name).get_laya_weights(name)
+
+    def set_laya_weights(self, name: str, weights: dict[str, float] | None) -> None:
+        self.db_for(name).set_laya_weights(name, weights)
 
     def delete(self, name: str) -> None:
         self.db_for(name).delete_profile(name)
