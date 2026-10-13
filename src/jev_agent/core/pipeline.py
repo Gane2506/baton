@@ -11,6 +11,10 @@ approval) finishes with the learning step (`core/learner.py`: scoring, D7, the l
 
 Each step reads the run from the store, does one unit of work and persists the next state, so
 `resume` simply runs the step for whatever state was last persisted.
+
+Every command that drives a run holds the run's lease (`core/lease.py`, issue #61) while it
+works, so two processes (a terminal and the dashboard, say) never drive the same run at once:
+the second one gets `RunInUseError`. `cancel` only writes the store and needs no lease.
 """
 
 from __future__ import annotations
@@ -34,6 +38,7 @@ from jev_agent.core.integration import (
 )
 from jev_agent.core.learner import LEARN_STATES, learn
 from jev_agent.core.learning import Learning
+from jev_agent.core.lease import hold_run_lease
 from jev_agent.core.models import (
     Idea,
     Plan,
@@ -121,20 +126,27 @@ class Pipeline:
         copy = None if profile is None else snapshot(self.h.config, profile)
         run = self.store.create_run(idea, learning_profile, level, plan_only=plan_only)
         write_run_profile(self.h.state_dir, run.id, copy)
-        return await self.advance(run.id)
+        async with hold_run_lease(self.store, run.id):
+            return await self._advance(run.id)
 
     async def approve(self, run_id: str, execute: bool = True) -> RunRecord:
         """Pass the human approval gate; then execute the plan unless `execute` is False."""
-        self._require_state(run_id, {RunState.AWAITING_APPROVAL}, "approve")
-        if not self.store.set_run_state(run_id, RunState.EXECUTING, unless=STOPPED):
-            raise PipelineError(f"cannot approve run {run_id}: it was stopped meanwhile")
-        if not execute:
-            return self.store.get_run(run_id)
-        return await self.advance(run_id)
+        async with hold_run_lease(self.store, run_id):
+            self._require_state(run_id, {RunState.AWAITING_APPROVAL}, "approve")
+            if not self.store.set_run_state(run_id, RunState.EXECUTING, unless=STOPPED):
+                raise PipelineError(f"cannot approve run {run_id}: it was stopped meanwhile")
+            if not execute:
+                return self.store.get_run(run_id)
+            return await self._advance(run_id)
 
     async def resume(self, run_id: str) -> RunRecord:
         """Continue a run that stopped mid-way (for example because the process died), or a
         NEEDS_HUMAN run whose cause the human has fixed (`resume_state` is set)."""
+        # Under the lease: the open attempts closed below are then surely from a dead process.
+        async with hold_run_lease(self.store, run_id):
+            return await self._resume(run_id)
+
+    async def _resume(self, run_id: str) -> RunRecord:
         run = self.store.get_run(run_id)
         if run.state is RunState.AWAITING_APPROVAL:
             raise PipelineError(f"run {run_id} is awaiting approval; use `jev approve {run_id}`")
@@ -145,13 +157,17 @@ class Pipeline:
         elif run.state in STOPPED:
             raise PipelineError(f"run {run_id} is {run.state}; it cannot be resumed")
         self._close_interrupted_attempts(run_id)
-        return await self.advance(run_id)
+        return await self._advance(run_id)
 
     def cancel(self, run_id: str) -> RunRecord:
         return cancel_run(self.store, run_id)
 
     async def advance(self, run_id: str) -> RunRecord:
         """Run steps until the run stops, waits for approval or finishes."""
+        async with hold_run_lease(self.store, run_id):
+            return await self._advance(run_id)
+
+    async def _advance(self, run_id: str) -> RunRecord:
         steps: Mapping[RunState, Callable[[RunRecord], Awaitable[None]]] = {
             RunState.INTAKE: self._intake,
             RunState.PLANNING: self._plan,

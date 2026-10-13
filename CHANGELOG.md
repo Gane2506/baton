@@ -61,6 +61,12 @@ All notable changes to this project are documented here. The format is based on
 
 ### Fixed
 
+- **Two processes can no longer drive the same run** ([#61](https://github.com/Gane2506/baton/issues/61)).
+  `jev run`, `approve`, `resume`, the scheduler and the dashboard hold a run lease in the state
+  DB while they drive a run; a second one fails with "run ... is in use by another jev process,
+  pid P on HOST". A lease whose process died (same host) or whose heartbeat is over 60 s old
+  (another host) is taken over. The dashboard shows Force resume while another process holds
+  the lease. State DB schema version 11.
 - **CLI errors** (#25). They go to stderr with their text verbatim. A state DB from a newer jev
   gives a one-line error, not a traceback.
 - **Read-only commands no longer build the pipeline** (#26). These commands build no workers,

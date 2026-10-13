@@ -16,6 +16,7 @@ from jev_agent.cli.wiring import NO_WORKERS_MESSAGE, CliContext, cli_context, fa
 from jev_agent.config import STATE_DIRNAME
 from jev_agent.config.servers_schema import NO_PROFILE
 from jev_agent.core.learning import Learning, LearningError, check_profile_name, resolve_learning
+from jev_agent.core.lease import RunInUseError
 from jev_agent.core.models import Idea, RunState
 from jev_agent.core.pipeline import PipelineError
 from jev_agent.core.store import NotFoundError, RunRecord
@@ -257,7 +258,7 @@ def run(
                     profile=profile,
                 )
             )
-        except (LearningError, ProfileError) as exc:
+        except (LearningError, ProfileError, RunInUseError) as exc:
             raise fail(str(exc)) from exc
         print_outcome(record)
     exit_for(record)
@@ -272,7 +273,7 @@ def approve(run_id: RunId, repo: RepoOption = Path(".")) -> None:
             print_warnings(ctx)
         try:
             record = asyncio.run(approve_run(ctx, run_id))
-        except (NotFoundError, PipelineError) as exc:
+        except (NotFoundError, PipelineError, RunInUseError) as exc:
             raise fail(str(exc)) from exc
         if not ctx.has_workers:
             console.print(f"Approved. {escape(NO_WORKERS_MESSAGE)} Then run `jev resume {run_id}`.")
@@ -310,7 +311,7 @@ def resume(
                     profile=profile,
                 )
             )
-        except (NotFoundError, PipelineError, LearningError, ProfileError) as exc:
+        except (NotFoundError, PipelineError, LearningError, ProfileError, RunInUseError) as exc:
             raise fail(str(exc)) from exc
         print_outcome(record)
     exit_for(record)

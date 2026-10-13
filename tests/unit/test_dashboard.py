@@ -7,6 +7,7 @@ import asyncio
 import json
 import os
 import re
+import socket
 import sys
 import threading
 import time
@@ -379,8 +380,6 @@ def test_interrupted_run_still_offers_plain_resume(planned: tuple[Path, str]) ->
 
 
 def test_resume_needs_force_while_the_scheduler_runs_the_item(planned: tuple[Path, str]) -> None:
-    import socket
-
     repo, run_id = planned
     with _store(repo) as store:
         store.set_run_state(run_id, RunState.EXECUTING)
@@ -1079,3 +1078,21 @@ def test_job_message_includes_run_start_warnings(
     assert job.message.startswith("run ")
     assert "; warning: " in job.message
     assert "is not set, so the Jev dispatcher cannot be reached" in job.message
+
+
+def test_resume_needs_force_while_another_process_holds_the_lease(
+    planned: tuple[Path, str],
+) -> None:
+    """Issue #61: a live run lease means another jev process drives the run, even between
+    worker attempts (no open attempt)."""
+    repo, run_id = planned
+    with _store(repo) as store:
+        store.set_run_state(run_id, RunState.EXECUTING)
+        store.claim_run_lease(run_id, "t", os.getpid(), socket.gethostname(), lambda _: False)
+    calls = Calls()
+    for client in _client(repo, calls):
+        assert "Force resume" in client.get(f"/runs/{run_id}").text
+        _post(client, f"/runs/{run_id}/resume")
+        text = client.get(f"/runs/{run_id}").text
+        assert "may be running this run" in text and f"pid {os.getpid()} on " in text
+        assert calls.calls == []

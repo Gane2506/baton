@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 import secrets
 import sqlite3
-from collections.abc import Collection, Iterator, Sequence
+from collections.abc import Callable, Collection, Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
@@ -43,6 +43,7 @@ __all__ = [
     "QueueItem",
     "QueuePriority",
     "QueueStatus",
+    "RunLease",
     "RunRecord",
     "SchemaVersionError",
     "ShippedPrRecord",
@@ -100,6 +101,18 @@ class RunRecord:
     # `jev run --plan-only` (or a plan-only queue item): stop at the approval gate even when
     # `[approval] require_plan_approval` is off, also after `jev resume`.
     plan_only: bool = False
+
+
+@dataclass(frozen=True)
+class RunLease:
+    """Who drives a run right now (issue #61, `core/lease.py`)."""
+
+    run_id: str
+    token: str  # random per claim: tells two holders with the same pid apart
+    pid: int
+    host: str
+    acquired_at: datetime
+    heartbeat_at: datetime
 
 
 @dataclass(frozen=True)
@@ -804,6 +817,51 @@ class Store:
             return None
         return datetime.fromisoformat(row["computed_at"]), str(row["kpis_json"])
 
+    # ---- run lease (`core/lease.py`) -------------------------------------------------------
+
+    def get_run_lease(self, run_id: str) -> RunLease | None:
+        row = self._conn.execute("SELECT * FROM run_leases WHERE run_id = ?", (run_id,)).fetchone()
+        return None if row is None else _run_lease(row)
+
+    def claim_run_lease(
+        self, run_id: str, token: str, pid: int, host: str, stale: Callable[[RunLease], bool]
+    ) -> RunLease | None:
+        """Take the run's lease unless a holder that `stale` calls live has it.
+
+        The check and the write are one transaction, so two claimers never both win. Returns
+        None when the lease was taken (a stale holder's lease is replaced), else the holder.
+        """
+        with self._tx() as db:
+            self._require_run(run_id)
+            row = db.execute("SELECT * FROM run_leases WHERE run_id = ?", (run_id,)).fetchone()
+            if row is not None:
+                holder = _run_lease(row)
+                if not stale(holder):
+                    return holder
+            now = _now()
+            db.execute(
+                "INSERT INTO run_leases (run_id, token, pid, host, acquired_at, heartbeat_at)"
+                " VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT (run_id) DO UPDATE SET"
+                " token = excluded.token, pid = excluded.pid, host = excluded.host,"
+                " acquired_at = excluded.acquired_at, heartbeat_at = excluded.heartbeat_at",
+                (run_id, token, pid, host, now, now),
+            )
+        return None
+
+    def renew_run_lease(self, run_id: str, token: str) -> bool:
+        """Refresh the heartbeat; False when the lease is no longer held with `token`."""
+        with self._tx() as db:
+            cur = db.execute(
+                "UPDATE run_leases SET heartbeat_at = ? WHERE run_id = ? AND token = ?",
+                (_now(), run_id, token),
+            )
+        return cur.rowcount == 1
+
+    def release_run_lease(self, run_id: str, token: str) -> None:
+        """Drop the lease if it is still held with `token` (a new holder's lease stays)."""
+        with self._tx() as db:
+            db.execute("DELETE FROM run_leases WHERE run_id = ? AND token = ?", (run_id, token))
+
     # ---- settings (set by `jev learning`) --------------------------------------------------
 
     def get_setting(self, key: str) -> str | None:
@@ -1039,6 +1097,17 @@ def _shipped_pr(row: sqlite3.Row) -> ShippedPrRecord:
         reverted=None if reverted is None else bool(reverted),
         last_synced_at=_time(row["last_synced_at"]),
         raw=None if raw is None else json.loads(raw),
+    )
+
+
+def _run_lease(row: sqlite3.Row) -> RunLease:
+    return RunLease(
+        run_id=row["run_id"],
+        token=row["token"],
+        pid=int(row["pid"]),
+        host=row["host"],
+        acquired_at=datetime.fromisoformat(row["acquired_at"]),
+        heartbeat_at=datetime.fromisoformat(row["heartbeat_at"]),
     )
 
 

@@ -10,6 +10,7 @@ import pytest
 
 from jev_agent.config import JevConfig
 from jev_agent.core.commands import FakeCommandRunner
+from jev_agent.core.lease import RunInUseError, hold_run_lease
 from jev_agent.core.models import (
     Decision,
     DecisionRequest,
@@ -816,3 +817,32 @@ async def test_cancel_while_the_next_task_is_assigned(fixture_repo: Path) -> Non
         assert run.state is RunState.CANCELLED, run.reason
         assert [j.task_id for j in worker.jobs if j.role == "coder"] == ["T1"]
         assert store.get_task(run.id, "T2").attempts == 0
+
+
+async def test_another_process_driving_the_run_blocks_resume_and_approve(make_env: Any) -> None:
+    """Issue #61: a second process (a fresh store on the same DB) cannot resume or approve a
+    run while another one holds its lease, and it touches nothing; once that one is gone, it
+    can."""
+    crashing: Env = make_env(
+        {"planner": FakeStep(parsed=TWO_TASKS), "coder:T2:1": FakeStep(crash=True)}
+    )
+    with pytest.raises(FakeWorkerCrash):
+        await crashing.pipeline.start(_idea(crashing.repo))
+    run_id = crashing.store.list_runs()[0].id
+    assert crashing.store.get_run_lease(run_id) is None  # released on the way out
+
+    other: Env = make_env({"planner": FakeStep(parsed=TWO_TASKS)})
+    async with hold_run_lease(crashing.store, run_id):  # "the first process is still running"
+        with pytest.raises(RunInUseError, match="in use by another jev process"):
+            await other.pipeline.resume(run_id)
+        with pytest.raises(RunInUseError):
+            await other.pipeline.approve(run_id)
+        with pytest.raises(RunInUseError):
+            await other.pipeline.advance(run_id)
+        open_attempts = [a for a in other.store.list_attempts(run_id) if a.result is None]
+        assert len(open_attempts) == 1  # the live process's attempt was not closed
+        assert other.worker.jobs == []
+
+    run = await other.pipeline.resume(run_id)
+    assert run.state is RunState.DONE, run.reason
+    assert other.store.get_run_lease(run_id) is None

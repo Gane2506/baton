@@ -86,8 +86,8 @@ Names (after two renames — don't rename again without being asked):
   dispatcher/workers/pipeline from config (`cli_context`, `start_run(profile=, learning=,
   quality=)`).
 - `core/` — `models.py` (pydantic), `store.py` + `migrations.py` (SQLite `.jev/state.db`,
-  **schema version 10** (shared learning DB: 2): runs (incl. plan_only, learning_counts_json), tasks, attempts, decisions, learning, queue, quality_reports,
-  shipped_prs/run_kpis), `pipeline.py` (run state machine INTAKE→PLANNING→VALIDATING→
+  **schema version 11** (shared learning DB: 2): runs (incl. plan_only, learning_counts_json), tasks, attempts, decisions, learning, queue, quality_reports,
+  shipped_prs/run_kpis, run_leases), `lease.py` (run lease, #61), `pipeline.py` (run state machine INTAKE→PLANNING→VALIDATING→
   AWAITING_APPROVAL→EXECUTING→INTEGRATING→DONE), `tasks.py`, `harness.py` (dumb: stores,
   asks dispatcher, executes; enforces budgets/limits), `workspace.py` (git worktrees,
   dependent-task bases, `refs/jev/<run>/start`), `integration.py`, `learning.py`/`learner.py`,
@@ -171,7 +171,8 @@ they start); `[workers.claude_code] extra_args` ignored by chat; dashboard queue
 validate profile names; Ship button only for the first PR per run; inline PR review comments
 not counted; rich markup not escaped in `ChatError`/wiring messages (`[workers.api]` text
 can vanish); `mkdir/cp/mv/rm` path checks on servers are lexical (file tools resolve
-symlinks); dashboard per-run lock doesn't cover a concurrent `jev resume` from a terminal.
+symlinks); the run lease (#61) assumes all drivers share one state DB on one host or a heartbeat
+within 60 s across hosts.
 
 ## 8. Useful commands
 

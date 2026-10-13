@@ -304,6 +304,18 @@ MIGRATIONS: list[str] = [
                             AS INTEGER))
         WHERE learning_outcome GLOB 'learned into *: [0-9]* added, [0-9]* updated, [0-9]* retired';
     """,
+    # 11: the run lease (issue #61): at most one process drives a run at a time. `token` is
+    # random per claim; `pid` and `host` say who holds it; the holder renews `heartbeat_at`.
+    """
+    CREATE TABLE run_leases (
+        run_id        TEXT PRIMARY KEY REFERENCES runs (id) ON DELETE CASCADE,
+        token         TEXT NOT NULL,
+        pid           INTEGER NOT NULL,
+        host          TEXT NOT NULL,
+        acquired_at   TEXT NOT NULL,
+        heartbeat_at  TEXT NOT NULL
+    );
+    """,
 ]
 
 SCHEMA_VERSION = len(MIGRATIONS)

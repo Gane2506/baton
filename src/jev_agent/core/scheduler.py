@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Any
 
 from jev_agent.config.defaults import STATE_DIRNAME
+from jev_agent.core.lease import pid_alive as _pid_alive
 from jev_agent.core.queue import status_for_run
 from jev_agent.core.store import NotFoundError, QueueItem, QueueStatus, RunRecord, Store
 
@@ -55,18 +56,6 @@ class LockInfo:
     host: str
     started_at: str
     current_item: int | None = None
-
-
-def _pid_alive(pid: int) -> bool:
-    if pid <= 0:
-        return False
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:  # exists, owned by someone else
-        return True
-    return True
 
 
 class SchedulerLock:

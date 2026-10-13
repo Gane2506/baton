@@ -29,6 +29,7 @@ from jev_agent.core.chat import ChatMeta, list_chats, read_transcript
 from jev_agent.core.harness import DEFAULT_TIMEOUT_S
 from jev_agent.core.kpi import PrKpis, load_pr_kpis
 from jev_agent.core.learning import Learning, LearningStatus, Lesson, Profile, learning_status
+from jev_agent.core.lease import describe_holder, live_holder
 from jev_agent.core.models import RunState
 from jev_agent.core.pipeline import STOPPED
 from jev_agent.core.queue import effective_status, queue_counts, run_states
@@ -219,13 +220,17 @@ def resume_risk(repo: Repo, run: RunRecord, now: datetime | None = None) -> str:
     executing `run` right now, or "" when nothing suggests it. Resuming such a run starts a
     second pipeline on the same worktrees, so the dashboard asks for an explicit force.
 
-    Signals (no run lease exists yet): an attempt without a result that started less than its
-    worker's timeout plus `RESUME_GRACE_S` ago (an older one is from a process that died), and
-    a live scheduler lock whose current queue item is this run's.
+    Signals: a live run lease (`core/lease.py`; resuming is then refused anyway, also when
+    forced), an attempt without a result that started less than its worker's timeout plus
+    `RESUME_GRACE_S` ago (an older one is from a process that died), and a live scheduler lock
+    whose current queue item is this run's.
     """
     if run.state in STOPPED or run.state is RunState.AWAITING_APPROVAL:
         return ""
     now = now or datetime.now(UTC)
+    lease = live_holder(repo.store, run.id, now)
+    if lease is not None:
+        return f"another jev process, {describe_holder(lease)}, is driving this run"
     for attempt in repo.store.list_attempts(run.id):
         if attempt.result is not None:
             continue
