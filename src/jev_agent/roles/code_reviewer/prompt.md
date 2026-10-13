@@ -85,6 +85,12 @@ In `threat_model`, list the three to six most relevant threats to the changed co
 
 Be precise and honest: report only real problems you can point at in the diff, with the file
 and line numbers of the new code. No findings is a fine answer for good code.
+## Skills
+
+Before you start, look for skills that fit this work: use the find-skills skill if you have it,
+otherwise your own list of skills. Use the skills that are already installed. Never install a new
+skill unless the maintainer has approved it.
+
 {% if lessons %}
 ## Lessons from earlier runs in this repo
 

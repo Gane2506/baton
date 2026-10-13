@@ -115,7 +115,7 @@ How to reach Jev (TypeSafe's System One API). The defaults call it through OpenR
 | `api_key_env` | `"OPENROUTER_API_KEY"` | Name of the environment variable holding the key. Must be a valid variable name. |
 | `timeout_s` | `30` | Timeout in seconds (> 0) for the whole Jev call, the retry and its backoff included. One retry is made on 429/5xx or a connect error. |
 | `min_confidence` | `0.55` | Between 0 and 1. If Jev's confidence on any answer is below this, the whole decision falls back to rules. |
-| `instructions` | `{}` | Optional table replacing the instruction sent for a question. Keys are `"<point>.<question>"` (e.g. `"D4.effort"`) for one decision point or `"<question>"` (e.g. `model`) for all of them. Unknown keys are an error. Questions: D1 `clear`, `worker`, `model`, `effort`; D2 `worker`, `model`, `effort`; D3 `verdict`; D4 `complexity`, `worker`, `model`, `effort`; D5 and D6 `action`; D7 `learn`, `worker`, `model`, `effort`. |
+| `instructions` | `{}` | Optional table replacing the instruction sent for a question. Keys are `"<point>.<question>"` (e.g. `"D4.effort"`) for one decision point or `"<question>"` (e.g. `model`) for all of them. Unknown keys are an error. Questions: D1 `clear`, `worker`, `model`, `effort`; D2 `worker`, `model`, `effort`; D3 `verdict`; D4 `complexity`, `worker`, `model`, `effort`; D5 and D6 `action`; D7 `learn`, `worker`, `model`, `effort`; D8 `worker`, `model`, `effort`. |
 
 To call TypeSafe directly instead of through OpenRouter:
 
@@ -224,7 +224,18 @@ validated plan. `--plan-only` always stops at the plan, whatever the setting.
 
 | Key | Default | Meaning |
 | --- | --- | --- |
-| `enabled` | `false` | After a task's tests pass, have the reviewer check its diff. A `revise` verdict counts as a failed attempt (retry, escalate, ...). The reviewer uses the role's first worker and model and its middle effort level. |
+| `enabled` | unset | After a task's tests pass (and the quality gate, if on), have the reviewer check its diff. A `revise` verdict counts as a failed attempt (retry, escalate, ...). Unset follows the dispatcher: on with `primary = "consensus"`, off with `"jev"` and `"rules"`. `true` or `false` always wins. |
+
+Before each review, decision point D8 picks the reviewer's worker, model and effort from
+`[roles.reviewer]`, seeing the task card, the attempt number, the test and quality results, the
+diff's size and the coder's assignment. The rules dispatcher answers as before D8 existed: the
+first worker and model and the middle effort. Set `[roles.reviewer]
+prefer_different_vendor_than = "coder"` to have D8 prefer a different vendor than the attempt's
+coder, as D2 does for the validator.
+
+Under `consensus` the review's verdict is part of the D5 state, so a task is done only when Jev
+and Laya both accept an attempt the reviewer has checked. Each review adds one decision (two
+Jev calls) and one reviewer call per attempt; set `enabled = false` to skip both.
 
 ## `[quality]`
 

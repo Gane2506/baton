@@ -68,7 +68,8 @@ A plan with a dependency cycle stops the run in `FAILED`. No valid plan at all s
 
 ## Validator
 
-**Purpose.** Decide whether the plan is good enough to hand to coders.
+**Purpose.** Decide whether the plan is good enough to hand to coders, and question every
+significant choice in it: why this instead of the obvious alternative, and what is the reason?
 
 **Template variables.**
 
@@ -85,9 +86,19 @@ A plan with a dependency cycle stops the run in `FAILED`. No valid plan at all s
 | --- | --- | --- |
 | `verdict` | string | `"approve"` or `"revise"`. |
 | `issues` | list of strings | Problems to fix; empty on approve. |
+| `challenges` | list of objects | One per plan choice questioned (optional; see below). |
 
-The dispatcher (D3) reads the verdict and decides to approve, revise or escalate to a human.
-`revise` sends the plan and the issues back to the planner, up to `[budget] max_plan_rounds`.
+Each challenge has `choice` (what the plan does, required), `alternative` (the option not
+taken), `reason` (the planner's reason, or `(not stated)`), `holds` (bool, required) and `note`
+(why it holds or not). A challenge holds when the stated reason is sound or, when none is
+stated, a sound reason clearly exists. One that does not hold is a mistake: it is added to
+`issues` and the verdict becomes `revise`, whatever the reply said, so the planner gets it back.
+Results stored before challenges existed load with an empty list.
+
+The dispatcher (D3) reads the verdict, the issues and the failed challenges (choice,
+alternative, reason and note, at most five) and decides to approve, revise or escalate to a
+human. `revise` sends the plan and the issues back to the planner, up to
+`[budget] max_plan_rounds`.
 
 ## Coder
 
@@ -129,9 +140,12 @@ failed attempt and the dispatcher (D5) decides what happens next.
 
 ## Reviewer
 
-**Purpose.** Check one task's diff against its acceptance criteria. Off by default; turn it on
-with `[review] enabled = true`. It runs after the task's tests pass, with the role's first
-worker and model and its middle effort level.
+**Purpose.** Check one task's diff against its acceptance criteria. On by default with the
+consensus dispatcher, off with `jev` and `rules` (`[review] enabled` sets it either way). It
+runs after the task's tests pass and the quality gate, if on, lets the attempt through, with
+the worker, model and effort the dispatcher picks at D8 (see
+[config.md](config.md#review)). The rules dispatcher picks the role's first worker and model
+and its middle effort level.
 
 **Template variables.**
 
@@ -205,6 +219,16 @@ it never edits the repository. It runs when D7 says `learn` (see
 | `retire` | list of strings | Ids of shown lessons to retire. |
 
 An invalid reply only skips the learning step; the run's outcome does not change.
+
+## Skills in every prompt
+
+Every built-in prompt (planner, validator, coder, reviewer, code reviewer, learner and the
+`jev chat` lead) carries the same short `## Skills` block, placed before the lessons and the
+output format so the JSON reply instructions are untouched. It tells the agent to look for
+relevant skills first (the find-skills skill if it has one, otherwise its own list of skills),
+to use the skills that are already installed, and never to install a new one unless the
+maintainer has approved it. A custom `prompt_file` replaces the built-in text, so it only has
+this block if you copy it.
 
 ## Lessons in every prompt
 

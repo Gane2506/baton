@@ -1,4 +1,5 @@
 from datetime import UTC, datetime
+from importlib.resources import files
 from pathlib import Path
 from typing import Any
 
@@ -215,3 +216,32 @@ def test_extract_coder_summary() -> None:
     assert extract_coder_summary(text) == CoderSummary(summary="last", files_changed=["a.py"])
     assert extract_coder_summary("no block") is None
     assert extract_coder_summary("```jev-summary\nnot json\n```") is None
+
+
+def test_validator_prompt_asks_why_x_not_y() -> None:
+    text = render_prompt("validator", **VARS["validator"])
+    assert "## Challenge every choice" in text
+    assert "why this instead of the" in text and "`(not stated)`" in text
+    assert '"challenges": [' in text
+
+
+SKILLS_SENTENCES = (
+    "## Skills",
+    "look for skills that fit this work: use the find-skills skill if you have it",
+    "Use the skills that are already installed.",
+    "Never install a new skill unless the maintainer has approved it.",
+)
+
+
+@pytest.mark.parametrize("role", [*ROLES, "chat"])
+def test_every_builtin_prompt_has_the_skills_block(role: str) -> None:
+    source = files("jev_agent.roles").joinpath(role, "prompt.md").read_text(encoding="utf-8")
+    text = " ".join(source.split())
+    assert all(part in text for part in SKILLS_SENTENCES)
+
+
+@pytest.mark.parametrize("role", [r for r in ROLES if r != "coder"])
+def test_skills_block_comes_before_the_output_format(role: str) -> None:
+    text = render_prompt(role, **VARS[role])  # type: ignore[arg-type]
+    assert text.count("## Skills") == 1
+    assert text.index("## Skills") < text.index("## Output")

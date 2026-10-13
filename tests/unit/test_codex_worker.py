@@ -207,7 +207,9 @@ async def test_structured_from_last_message_file(repo: Path) -> None:
     assert isinstance(out.parsed, ValidationResult) and out.parsed.issues == ["missing tests"]
     schema = runner.calls[0].schema
     assert schema["additionalProperties"] is False
-    assert set(schema["required"]) == {"verdict", "issues"}
+    assert set(schema["required"]) == {"verdict", "issues", "challenges"}
+    challenge = schema["$defs"]["ChoiceChallenge"]
+    assert set(challenge["required"]) == {"choice", "alternative", "reason", "holds", "note"}
 
 
 async def test_structured_from_events_when_no_file(repo: Path) -> None:

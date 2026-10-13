@@ -2,6 +2,53 @@
 
 Deviations from [PLAN.md](../PLAN.md) and choices it left open. Newest first.
 
+## 2026-10-13: The validator challenges every plan choice (#67)
+
+The validator now records, for each significant choice in the plan, the alternative it did not
+take, the planner's reason and whether that reason holds (`ChoiceChallenge` in
+`core/models.py`). Jev made both calls below with the jev-decide skill.
+
+- **The rule lives in the model** (ARBITRATED, confidence 0.48, over deriving it in
+  `Pipeline._validate` and over rejecting inconsistent replies). A validator on
+  `ValidationResult` turns each challenge that does not hold into an issue and sets the
+  verdict to `revise`. Every parse, from a worker reply or from the store, gives a consistent
+  result; a reply that flags a choice but approves is corrected rather than stopping the run.
+  The planner gets the mistake through the `issues` it already reads, so its prompt and
+  `_plan` are unchanged. Reloading is idempotent: an issue already present is not added again.
+- **An unstated reason is not a failure by itself** (ARBITRATED, confidence 0.78, over failing
+  every unstated reason). The planner prompt does not ask for reasons, so failing those would
+  send most plans back until `max_plan_rounds` ran out. The validator writes `(not stated)` and
+  fails the challenge only when the stated reason is wrong or no sound reason exists.
+- **D3 sees the failed challenges** (choice, alternative, reason and note, clipped, at most
+  five) plus the counts, so Jev and Laya vote on them. Sound challenges are only counted.
+- **Compatibility.** `challenges` defaults to empty; runs stored before this load unchanged,
+  and the rules dispatcher still reads only the (now enforced) verdict.
+
+## 2026-10-13: The dispatcher picks the task reviewer (#67)
+
+The task reviewer ran with the role's first worker and model and its middle effort, and was off
+by default. The maintainer's flow asks for every finished task to be rated and for Jev and Laya
+to choose who does each piece of work.
+
+- **A new decision point, D8.** Asked before each review with the same worker, model and effort
+  questions as D2, over adding reviewer questions to D4 (jev-decide with the Laya CDA matrix:
+  Jev and the matrix agree, Jev 0.72). D4 failed the "old runs keep working" gate: D4 records
+  stored before the change have no reviewer answers, and prefixed question names would bypass
+  the generic worker, model and effort handling (free models, worker/model pairing). D8 also
+  sees what D4 cannot: the diff's size and the test and quality results.
+- **State.** Task card, attempt, the coder's assignment, tests, quality (when the gate ran),
+  diff size (`files`, `lines_changed`), and `prefer_different_vendor_than` when
+  `[roles.reviewer]` sets it. That key did nothing for the reviewer before; `"coder"` means
+  this attempt's coder.
+- **Rules.** D8 is answered like D2: first worker and model, middle effort, a different vendor
+  when asked. With `primary = "rules"` or the rules fallback, the review runs as before.
+- **Default.** `[review] enabled` is tri-state like `require_plan_approval`: unset means on
+  under `consensus` and off with `jev` and `rules`; an explicit value wins. D5 already carries
+  the review verdict and needs both votes under `consensus`, so a task is done only when Jev
+  and Laya accept a reviewed attempt. This changes the default for repos that use `consensus`
+  and do not set the key: each attempt that passes its tests costs one more decision (two Jev
+  calls) and one reviewer call.
+
 ## 2026-10-13: Consensus dispatcher, Jev then Laya (#66)
 
 `[dispatcher] primary = "consensus"` is the new default. Every decision needs two votes that

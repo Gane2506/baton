@@ -1,7 +1,7 @@
 from pathlib import Path
 
 from jev_agent.config import JevConfig
-from jev_agent.core.models import Idea, Plan, TaskCard, ValidationResult
+from jev_agent.core.models import ChoiceChallenge, Idea, Plan, TaskCard, ValidationResult
 from jev_agent.dispatch import requests as r
 
 
@@ -83,3 +83,83 @@ def test_requests_have_stable_questions_and_compact_state(tmp_path: Path) -> Non
     d6 = r.d6_integration(1, True, [], "passed", fix_rounds=1, max_fix_rounds=2)
     assert d6.questions == {"action": ["ship", "fix_task", "human"]}
     assert (d6.state["fix_rounds"], d6.state["max_fix_rounds"]) == (1, 2)
+
+
+def test_d3_carries_the_failed_challenges_compactly() -> None:
+    challenges = [ChoiceChallenge(choice="kept", holds=True)] + [
+        ChoiceChallenge(choice=f"c{i}", alternative="y", reason="r" * 500, holds=False)
+        for i in range(7)
+    ]
+    card = r.d3_after_validation(ValidationResult(verdict="revise", challenges=challenges), 1, 3)
+    validation = card.state["validation"]
+    assert (validation["challenge_count"], validation["failed_challenge_count"]) == (8, 7)
+    failed = validation["failed_challenges"]
+    assert [c["choice"] for c in failed] == ["c0", "c1", "c2", "c3", "c4"]
+    assert len(failed[0]["reason"]) == 160 and "kept" not in str(failed)
+
+
+def test_d3_without_challenges() -> None:
+    validation = r.d3_after_validation(ValidationResult(verdict="approve"), 1, 3).state[
+        "validation"
+    ]
+    assert (validation["challenge_count"], validation["failed_challenges"]) == (0, [])
+
+
+DIFF = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,2 +1,2 @@
+-old = 1
++new = 1
+ same = 2
+diff --git a/y.py b/y.py
+new file mode 100644
+--- /dev/null
++++ b/y.py
+@@ -0,0 +1 @@
++added = 3
+"""
+
+
+def test_diff_card_counts_files_and_changed_lines() -> None:
+    assert r.diff_card(DIFF) == {"files": 2, "lines_changed": 3}
+    assert r.diff_card("") == {"files": 0, "lines_changed": 0}
+
+
+def test_d8_reviewer_state() -> None:
+    card = TaskCard(id="T1", title="t", description="d", files_hint=["x.py"])
+    opts = r.role_options(_config(), "reviewer", ALL)
+    coder = {"worker": "claude_code", "model": None, "effort": "medium"}
+    req = r.d8_reviewer(
+        card,
+        attempt=2,
+        coder=coder,
+        tests="passed",
+        quality="skipped",
+        diff=r.diff_card(DIFF),
+        reviewer=opts,
+        avoid_role="coder",
+        avoid_worker="claude_code",
+    )
+    assert req.point == "D8"
+    assert req.questions == {
+        "worker": ["api", "codex"],
+        "model": ["default"],
+        "effort": opts.efforts,
+    }
+    assert req.state["task"]["id"] == "T1" and req.state["attempt"] == 2
+    assert req.state["coder"] == coder and req.state["tests"] == "passed"
+    assert req.state["diff"] == {"files": 2, "lines_changed": 3}
+    assert req.state["prefer_different_vendor_than"]["vendor"] == "anthropic"
+    assert "quality" not in req.state  # only sent when the gate ran
+    gated = r.d8_reviewer(
+        card,
+        attempt=1,
+        coder=coder,
+        tests="skipped",
+        quality="passed",
+        diff=r.diff_card(""),
+        reviewer=opts,
+    )
+    assert gated.state["quality"] == "passed"
+    assert gated.state["prefer_different_vendor_than"] is None

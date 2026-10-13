@@ -1,5 +1,5 @@
-"""Build the compact `DecisionRequest`s for decision points D1-D7 (PLAN.md section 3; D7 is
-the learning step, docs/learning.md).
+"""Build the compact `DecisionRequest`s for decision points D1-D8 (PLAN.md section 3; D7 is
+the learning step, docs/learning.md; D8 picks the task reviewer, docs/roles.md).
 
 Requests carry small cards (counts, titles, short excerpts), never transcripts or full plans.
 Allowed answers come from config: the role's enabled workers, its model pool and effort levels.
@@ -15,6 +15,7 @@ Question names are stable; dispatchers rely on them:
 | D5 | action in {done, retry, escalate, reassign, human} (state: tests, review, quality gate) |
 | D6 | action in {ship, fix_task, human} (state: merge, tests, quality gate) |
 | D7 | learn in {learn, skip}; worker; model; effort (for the learner) |
+| D8 | worker; model; effort (for the reviewer of a task attempt) |
 """
 
 from __future__ import annotations
@@ -219,31 +220,43 @@ def d2_validator(
     avoid_model: str | None = None,
 ) -> DecisionRequest:
     """`avoid_*` describe the role named by `prefer_different_vendor_than`, if any."""
-    avoid = None
-    if avoid_role is not None and avoid_worker is not None:
-        avoid = {
-            "role": avoid_role,
-            "worker": avoid_worker,
-            "model": avoid_model,
-            "vendor": vendor_of(avoid_worker, avoid_model),
-        }
     state = {
         "plan": plan_card(plan),
         "round": plan_round,
-        "prefer_different_vendor_than": avoid,
+        "prefer_different_vendor_than": _avoid(avoid_role, avoid_worker, avoid_model),
         **validator.model_state(),
     }
     return DecisionRequest(point="D2", state=state, questions=validator.questions())
 
 
+def _avoid(role: str | None, worker: str | None, model: str | None) -> dict[str, Any] | None:
+    """`state.prefer_different_vendor_than`: the role to differ from and who ran it, if known."""
+    if role is None or worker is None:
+        return None
+    return {"role": role, "worker": worker, "model": model, "vendor": vendor_of(worker, model)}
+
+
 def d3_after_validation(
     validation: ValidationResult, plan_round: int, max_rounds: int
 ) -> DecisionRequest:
+    failed = [c for c in validation.challenges if not c.holds]
     state = {
         "validation": {
             "verdict": validation.verdict,
             "issue_count": len(validation.issues),
             "issues": [clip(issue, 200) for issue in validation.issues[:5]],
+            # The validator's "why X, not Y" per plan choice; the failed ones in full (#67).
+            "challenge_count": len(validation.challenges),
+            "failed_challenge_count": len(failed),
+            "failed_challenges": [
+                {
+                    "choice": clip(c.choice, 120),
+                    "alternative": clip(c.alternative, 120),
+                    "reason": clip(c.reason, 160),
+                    "note": clip(c.note, 200),
+                }
+                for c in failed[:5]
+            ],
         },
         "round": plan_round,
         "max_rounds": max_rounds,
@@ -366,3 +379,46 @@ def d7_learn(
     return DecisionRequest(
         point="D7", state=state, questions={"learn": D7_LEARN, **learner.questions()}
     )
+
+
+def diff_card(diff: str) -> dict[str, int]:
+    """Size of a unified diff: files touched and lines added or removed."""
+    lines = diff.splitlines()
+    changed = [
+        line for line in lines if line[:1] in ("+", "-") and not line.startswith(("+++ ", "--- "))
+    ]
+    return {
+        "files": sum(1 for line in lines if line.startswith("diff --git ")),
+        "lines_changed": len(changed),
+    }
+
+
+def d8_reviewer(
+    card: TaskCard,
+    *,
+    attempt: int,
+    coder: dict[str, str | None],
+    tests: str,  # "passed" | "skipped": a failed attempt is not reviewed
+    quality: str,  # "passed" | "skipped": a blocked attempt is not reviewed
+    diff: dict[str, int],
+    reviewer: RoleOptions,
+    avoid_role: str | None = None,
+    avoid_worker: str | None = None,
+    avoid_model: str | None = None,
+) -> DecisionRequest:
+    """Before a task attempt is reviewed: the reviewer's worker, model and effort.
+
+    `coder` is the attempt's assignment and `diff` its size (`diff_card`); `avoid_*` describe
+    the role named by `[roles.reviewer] prefer_different_vendor_than`, if any."""
+    state: dict[str, Any] = {
+        "task": task_card(card),
+        "attempt": attempt,
+        "coder": coder,
+        "tests": tests,
+        "diff": diff,
+        "prefer_different_vendor_than": _avoid(avoid_role, avoid_worker, avoid_model),
+        **reviewer.model_state(),
+    }
+    if quality != "skipped":
+        state["quality"] = quality
+    return DecisionRequest(point="D8", state=state, questions=reviewer.questions())
