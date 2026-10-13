@@ -1,8 +1,15 @@
 """Fill a repo's `.jev/` with illustrative demo state for the dashboard screenshots.
 
 Everything written here is made up: the runs, plans, decisions, attempts, costs, quality
-reviews and lessons only look like what a few days of real use produce. No agent, model or
-network is called. It exists so `docs/images/dashboard-*.png` can be regenerated.
+reviews, lessons and the saved chat only look like what a few days of real use produce. No
+agent, model or network is called. It exists so the screenshots in `docs/images/` can be
+regenerated (`dashboard-*.png` with Chrome, `cli-*.svg` with `examples/demo/capture.py`).
+
+It also edits the demo's `jev.toml` (rules dispatcher, free models for the planner, example
+MCP servers and a skill given to roles; variable names only, no secrets), adds an example
+skill folder, and caches an OpenRouter model list built from the test fixture
+`tests/fixtures/openrouter/models.json`, so `jev models list --free` and `jev doctor` work
+offline.
 
 Usage (from a clone of this repo; see docs/dashboard.md "Screenshots"):
 
@@ -12,6 +19,7 @@ Usage (from a clone of this repo; see docs/dashboard.md "Screenshots"):
     git -C "$DEMO" -c user.name=demo -c user.email=demo@example.com commit -qm "sample"
     (cd "$DEMO" && uv run --project "$OLDPWD" --all-extras jev init)
     uv run --all-extras python examples/demo/seed_demo.py "$DEMO"
+    uv run --all-extras python examples/demo/capture.py "$DEMO"   # optional: cli-*.svg
 
 Run it on a freshly initialised repo only: it adds runs, queue items and a learning profile
 next to whatever is already there. Timestamps are placed in the past relative to now, so the
@@ -20,7 +28,11 @@ board ages and the spend chart look like a couple of weeks of use.
 
 from __future__ import annotations
 
+import asyncio
+import json
+import re
 import sys
+import time
 from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -28,9 +40,20 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+import jev_agent.core.chat as chat_mod
 import jev_agent.core.learning as learning_mod
 import jev_agent.core.store as store_mod
 from jev_agent.config import STATE_DIRNAME, load_config
+from jev_agent.core.chat import (
+    BRIEF_CLOSE,
+    BRIEF_OPEN,
+    BRIEF_REQUEST,
+    BackendName,
+    ChatLearning,
+    ChatSession,
+    Reply,
+    Turn,
+)
 from jev_agent.core.learning import Learning, enable_learning, use_profile
 from jev_agent.core.models import (
     Decision,
@@ -52,9 +75,14 @@ from jev_agent.quality.models import CheckResult, GateResult
 from jev_agent.quality.report import render_gate, render_run_review
 from jev_agent.roles.schemas import ChecklistItem, FileNote, QualityReview, ReviewFinding
 from jev_agent.runlog.writer import log_path
+from jev_agent.workers.openrouter_models import ModelCatalog, cache_path, parse_models
 
 JEV_MODEL = "~typesafe/jev-latest"
 PROFILE = "textstats"
+CHAT_MODEL = "openai/gpt-5-mini"
+FIXTURE_MODELS = (
+    Path(__file__).resolve().parents[2] / "tests" / "fixtures" / "openrouter" / "models.json"
+)
 
 
 # ---- a controllable clock --------------------------------------------------------------------
@@ -83,13 +111,14 @@ class Clock:
 
 @contextmanager
 def patched_clock(clock: Clock) -> Iterator[None]:
-    saved: tuple[Callable[[], str], Callable[[], str]] = (store_mod._now, learning_mod._now)
+    saved: tuple[Callable[[], str], ...] = (store_mod._now, learning_mod._now, chat_mod._now)
     store_mod._now = clock
     learning_mod._now = clock
+    chat_mod._now = clock
     try:
         yield
     finally:
-        store_mod._now, learning_mod._now = saved
+        store_mod._now, learning_mod._now, chat_mod._now = saved
 
 
 @contextmanager
@@ -553,7 +582,7 @@ def seed_word_frequencies(store: Store, clock: Clock, root: Path, start: datetim
             "sonnet",
             "medium",
             0.09,
-            "Review: no blocking problems; 1 minor and 1 info finding.",
+            "Review: no blocking problems; 1 major, 1 minor and 1 info finding.",
             minutes=1.4,
         ),
     )
@@ -572,6 +601,14 @@ def seed_word_frequencies(store: Store, clock: Clock, root: Path, start: datetim
             FileNote(file="README.md", change="Usage example."),
         ],
         findings=[
+            ReviewFinding(
+                severity="major",
+                category="tests",
+                title="No test covers non-ASCII words (café, naïve)",
+                file="tests/test_core.py",
+                suggestion="Add a case with accented words; the tokenizer uses \\w, which "
+                "matches them, but nothing pins that.",
+            ),
             ReviewFinding(
                 severity="minor",
                 category="performance",
@@ -592,6 +629,12 @@ def seed_word_frequencies(store: Store, clock: Clock, root: Path, start: datetim
         ],
         security_checklist=[
             ChecklistItem(item="Untrusted input handling", status="ok", note="Pure function."),
+            ChecklistItem(
+                item="Resource use on large input",
+                status="concern",
+                note="Builds a dict of every word; fine for files, not for unbounded streams.",
+            ),
+            ChecklistItem(item="Secrets in the diff", status="ok", note="None found."),
         ],
     )
     gate = GateResult(
@@ -872,6 +915,160 @@ def seed_queue(store: Store, clock: Clock, now: datetime) -> None:
         learning.close()
 
 
+# ---- config, tools and the model list ----------------------------------------------------------
+
+DEMO_TOOLS = """
+# Demo tools (examples/demo/seed_demo.py): variable NAMES only, never values.
+[tools.mcp.github]
+command = "npx"
+args = ["-y", "@modelcontextprotocol/server-github"]
+env_from = ["GITHUB_PERSONAL_ACCESS_TOKEN"]
+
+[tools.mcp.docs]
+url = "https://docs.example.com/mcp"
+bearer_token_env = "DOCS_MCP_TOKEN"
+
+[tools.skills]
+house-style = ".claude/house-style"
+"""
+
+HOUSE_STYLE = """---
+name: house-style
+description: textstats house style for new code and tests (demo skill).
+---
+
+- Type-annotate public functions; keep them pure where possible.
+- One behaviour per test; name tests after the behaviour.
+"""
+
+
+def _set_in_table(text: str, table: str, key: str, value: str) -> str:
+    """Set `key = value` in `[table]` of a jev.toml written by `jev init` (adds the key if the
+    table does not have it)."""
+    head = f"[{table}]"
+    start = text.index(head)
+    end = text.find("\n[", start + len(head))
+    end = len(text) if end == -1 else end + 1
+    body = text[start:end]
+    line = re.compile(rf"^{re.escape(key)} = .*$", re.MULTILINE)
+    if line.search(body):
+        body = line.sub(f"{key} = {value}", body, count=1)
+    else:
+        body = body.replace(head + "\n", f"{head}\n{key} = {value}\n", 1)
+    return text[:start] + body + text[end:]
+
+
+def configure_demo(root: Path) -> None:
+    """Demo settings in jev.toml, an example skill folder and an offline model list."""
+    path = root / "jev.toml"
+    text = path.read_text(encoding="utf-8")
+    if not re.search(r"^\[tools\.mcp\.github\]", text, re.MULTILINE):
+        edits = [
+            ("dispatcher", "primary", '"rules"                  # demo: no key needed'),
+            ("roles.planner", "workers", '["api", "claude_code"]'),
+            ("roles.planner", "models", '["free", "openai/gpt-5-mini"]'),
+            ("roles.planner", "mcp", '["github", "docs"]'),
+            ("roles.coder", "skills", '["house-style"]'),
+            ("roles.code_reviewer", "mcp", '["github"]'),
+        ]
+        for table, key, value in edits:
+            text = _set_in_table(text, table, key, value)
+        path.write_text(text.rstrip("\n") + "\n" + DEMO_TOOLS, encoding="utf-8")
+    skill = root / ".claude" / "house-style"
+    skill.mkdir(parents=True, exist_ok=True)
+    (skill / "SKILL.md").write_text(HOUSE_STYLE, encoding="utf-8")
+    body = json.loads(FIXTURE_MODELS.read_text(encoding="utf-8"))
+    catalog = ModelCatalog(parse_models(body), time.time(), "https://openrouter.ai/api/v1/models")
+    catalog.save(cache_path(root))
+
+
+# ---- a saved chat ------------------------------------------------------------------------------
+
+CHAT_SCRIPT: list[tuple[str, str]] = [
+    (
+        "Let callers ask word_frequencies() for just the most common words",
+        "Two questions before I write the brief:\n\n"
+        "1. Should it be a `top_n` argument on `word_frequencies()`, or a new function?\n"
+        "2. Ties at the cut-off: keep today's alphabetical order, or return every tied word?\n\n"
+        "I read `textstats/core.py`: results are already sorted by count, then word.",
+    ),
+    (
+        "An optional top_n argument; keep alphabetical ties; top_n <= 0 raises ValueError",
+        "Clear. `word_frequencies(text, top_n=None)` returns everything as today; with "
+        "`top_n` it returns the first `top_n` items of the sorted result. Non-positive "
+        "values raise `ValueError`. Tests: a cut-off inside a tie, `top_n` larger than the "
+        "vocabulary, and the error. Type `/brief` when you are happy with that.",
+    ),
+]
+
+CHAT_BRIEF = """# Add top_n to word_frequencies()
+
+## Goal
+Let callers ask `word_frequencies()` for only the most common words.
+
+## Scope
+- New optional argument `top_n: int | None = None` on `word_frequencies()`.
+- `None` keeps today's behaviour; a positive `top_n` returns the first `top_n` items.
+- `top_n <= 0` raises `ValueError`.
+
+## Acceptance
+- Ties at the cut-off follow the existing alphabetical order.
+- Tests cover a cut-off inside a tie, `top_n` above the vocabulary size, and the error.
+- README example updated.
+
+## Assumptions
+- No change to tokenization."""
+
+
+class DemoChatBackend:
+    """A canned chat model for the demo: replays `CHAT_SCRIPT` and `CHAT_BRIEF`. Never calls
+    a model, a CLI or the network. `examples/demo/capture.py` uses it for `cli-chat.svg`."""
+
+    keeps_session = False
+
+    def __init__(self, name: BackendName = "api", model: str | None = CHAT_MODEL) -> None:
+        self.name: BackendName = name
+        self.model = model
+        self.replies = {user: reply for user, reply in CHAT_SCRIPT}
+
+    async def send(
+        self,
+        system: str,
+        history: Sequence[Turn],
+        message: str,
+        *,
+        session_id: str | None,
+        budget_left_usd: float,
+        log_path: Path,
+    ) -> Reply:
+        if message.endswith(BRIEF_REQUEST):
+            return Reply(True, f"{BRIEF_OPEN}\n{CHAT_BRIEF}\n{BRIEF_CLOSE}", 0.0021)
+        reply = self.replies.get(message, "Noted. Anything else, or shall I write the brief?")
+        return Reply(True, reply, 0.0012)
+
+
+def seed_chat(root: Path, clock: Clock, start: datetime) -> str:
+    """One saved chat that ends with a brief."""
+    clock.set(start, step_s=50)
+    saved_id = chat_mod.new_chat_id
+    chat_mod.new_chat_id = lambda: f"c-{start:%Y%m%d-%H%M%S}-5e1d"
+    try:
+        session = ChatSession.create(
+            root,
+            DemoChatBackend(),
+            "(demo system prompt)",
+            ChatLearning(profile=PROFILE),
+            None,
+            1.00,
+        )
+    finally:
+        chat_mod.new_chat_id = saved_id
+    for user, _ in CHAT_SCRIPT:
+        asyncio.run(session.say(user))
+    asyncio.run(session.make_brief())
+    return session.meta.chat_id
+
+
 # ---- main --------------------------------------------------------------------------------------
 
 
@@ -879,6 +1076,7 @@ def seed(root: Path) -> None:
     root = root.resolve()
     if not (root / "jev.toml").is_file() or not (root / STATE_DIRNAME).is_dir():
         raise SystemExit(f"{root} is not initialised: run `jev init` there first")
+    configure_demo(root)
     now = datetime.now(UTC).replace(microsecond=0)
     clock = Clock()
     with patched_clock(clock), Store.open(root / STATE_DIRNAME / "state.db") as store:
@@ -1050,6 +1248,7 @@ def seed(root: Path) -> None:
             ),
         )
         seed_queue(store, clock, now)
+        seed_chat(root, clock, now - timedelta(hours=4, minutes=10))
     print(f"Seeded demo state in {root / STATE_DIRNAME}; richest run: {rich}")
 
 

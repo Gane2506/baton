@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import re
 import threading
+import xml.etree.ElementTree as ET
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -23,7 +24,13 @@ from jev_agent.core.models import RunState
 from jev_agent.core.pipeline import PipelineError
 from jev_agent.core.store import Store
 from jev_agent.dashboard.app import create_app
-from jev_agent.dashboard.render import bar_chart, render_markdown
+from jev_agent.dashboard.render import (
+    LABEL_CHAR_PX,
+    bar_chart,
+    fit_label,
+    render_bar_chart,
+    render_markdown,
+)
 from jev_agent.dashboard.runner import RunAction, RunLauncher
 from jev_agent.dashboard.security import (
     DashboardConfigError,
@@ -452,6 +459,67 @@ def test_spend_helpers() -> None:
     assert chart.bars[0].width == chart.bar_area and chart.bars[1].width == chart.bar_area / 2
     assert bar_chart([("a", 0.0, None)]).bars[0].width == 0
     assert spend_by_day([], days=3)[-1][1] == 0.0 and len(spend_by_day([], days=3)) == 3
+
+
+LONG_LABEL = "20261011-005528-f3a0 Stream large files through the parser in chunks <fast>"
+
+
+def _svg_rows(chart_svg: str) -> list[ET.Element]:
+    root = ET.fromstring(chart_svg)
+    ns = "{http://www.w3.org/2000/svg}"
+    assert root.tag in ("svg", f"{ns}svg")
+    return [el for el in root if el.tag.endswith("g")]
+
+
+def test_fit_label_truncates_with_ellipsis() -> None:
+    assert fit_label("short", 100) == "short"
+    cut = fit_label(LONG_LABEL, 200)
+    assert cut.endswith("\u2026") and len(cut) * LABEL_CHAR_PX <= 200
+    assert LONG_LABEL.startswith(cut[:-1])
+    assert fit_label("a  b\n c", 100) == "a b c"
+
+
+def test_bar_chart_labels_never_overlap_bars_or_values() -> None:
+    rows = [(LONG_LABEL, 1.12, "/runs/x"), ("b", 0.5, None), (LONG_LABEL + " zero", 0.0, None)]
+    chart = bar_chart(rows, label_width=190)
+    for bar in chart.bars:
+        assert bar.text_end <= chart.label_width  # label ends before the bar starts
+        assert bar.value_x >= bar.x + bar.width  # value after the bar's end
+        assert bar.value_x > bar.text_end  # and after the label, also for $0.00
+        assert bar.value_x + len(bar.value_text) * 7.3 <= chart.width  # value fits
+    zero = chart.bars[2]
+    assert zero.width == 0 and zero.value_x == chart.label_width + 6
+    assert zero.text.endswith("\u2026") and zero.label == LONG_LABEL + " zero"
+
+
+def test_render_bar_chart_svg_has_full_label_tooltips() -> None:
+    rows = [(LONG_LABEL, 1.12, "/runs/x"), ("2026-10-01", 0.0, None)]
+    chart = bar_chart(rows, label_width=190)
+    svg = str(render_bar_chart(chart))
+    assert "<fast>" not in svg and "&lt;fast&gt;" in svg  # escaped
+    groups = _svg_rows(svg)
+    assert len(groups) == 2
+    for group, bar in zip(groups, chart.bars, strict=True):
+        title = next(el for el in group if el.tag.endswith("title"))
+        assert title.text == f"{bar.label}: {bar.value_text}"
+        value = [el for el in group if el.tag.endswith("text") and el.get("class") == "value"]
+        rect = next(el for el in group if el.tag.endswith("rect"))
+        bar_end = float(rect.get("x", "0")) + float(rect.get("width", "0"))
+        assert float(value[0].get("x", "0")) >= bar_end
+        assert float(value[0].get("x", "0")) > bar.text_end
+    link = next(el for el in groups[0] if el.tag.endswith("a"))
+    assert link.get("href") == "/runs/x"
+    assert "".join(link.itertext()) == chart.bars[0].text
+    assert str(render_bar_chart(bar_chart([]), "Nothing.")) == '<p class="muted">Nothing.</p>'
+
+
+def test_spend_page_truncates_long_run_labels(
+    client: TestClient, planned: tuple[Path, str]
+) -> None:
+    _, run_id = planned
+    page = client.get("/spend")
+    assert page.status_code == 200
+    assert f"<title>{run_id} " in page.text
 
 
 def test_settings_never_renders_secret_values(

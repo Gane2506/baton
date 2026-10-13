@@ -71,7 +71,7 @@
 </table></div>
 {% else %}<p class="muted">No attempts yet.</p>{% endif %}
 
-<h2>Quality review</h2>
+<h2 id="quality-review">Quality review</h2>
 {% if v.review_html %}
 <section class="card markdown">{{ v.review_html }}</section>
 {% else %}<p class="muted">No quality gate has run for this run (level {{ run.quality_level }}).</p>{% endif %}

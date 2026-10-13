@@ -378,11 +378,15 @@ class SpendView:
 def spend_view(repo: Repo, days: int = 30, top_runs: int = 25) -> SpendView:
     runs = repo.store.list_runs()
     costly = sorted(runs, key=lambda r: r.spend_usd, reverse=True)[:top_runs]
+    # Long labels are cut with an ellipsis by bar_chart; the full one is the row's tooltip.
     by_run = bar_chart(
-        [(f"{r.id} {short(r.idea.text, 14)}", r.spend_usd, f"/runs/{r.id}") for r in costly]
+        [(f"{r.id} {r.idea.text}", r.spend_usd, f"/runs/{r.id}") for r in costly],
+        label_width=330,
     )
     by_day = bar_chart(
-        [(day.isoformat(), usd, None) for day, usd in spend_by_day(runs, days)], row=18
+        [(day.isoformat(), usd, None) for day, usd in spend_by_day(runs, days)],
+        label_width=100,
+        row=18,
     )
     return SpendView(runs, sum(r.spend_usd for r in runs), by_run, by_day, days)
 

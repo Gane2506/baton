@@ -96,6 +96,7 @@ def test_doctor_passes_after_init(git_repo: Path, all_tools: None) -> None:
     assert "fail" not in result.output
     assert "OPENROUTER_API_KEY is set" in result.output
     assert "sk-super-secret-value" not in result.output
+    assert "[budget] caps" in " ".join(result.output.split())  # not eaten as Rich markup
 
 
 def test_doctor_fails_on_broken_config(git_repo: Path, all_tools: None) -> None:

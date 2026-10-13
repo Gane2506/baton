@@ -20,6 +20,19 @@ All notable changes to this project are documented here. The format is based on
   a social preview image, the mark as the dashboard favicon and header logo, and dashboard
   screenshots in the README and docs/dashboard.md, generated from illustrative demo data by
   `examples/demo/seed_demo.py`.
+- **Feature screenshots in README.** The Features section is now a gallery: one dashboard
+  and/or terminal image per feature. `examples/demo/capture.py` regenerates every terminal
+  image (`docs/images/cli-*.svg`) from the seeded demo repo in one command, offline; the seed
+  script now also adds a saved chat, a review with findings of several severities, a cached
+  model list and example tool config. See [docs/dashboard.md](docs/dashboard.md#screenshots).
+
+### Fixed
+
+- **Fix: Spend page labels** ([#6](https://github.com/Gane2506/baton/issues/6)). Long run
+  labels in "Costliest runs" are cut with an ellipsis to fit, with the full label as a tooltip,
+  and every value is drawn after its bar, so a $0.00 bar no longer puts its value over the label.
+- Text in square brackets such as `[budget]`, `[quality]` and `[models]` was swallowed as Rich
+  markup in `jev doctor`, `jev quality checks` and `jev models list --free`.
 
 ### Changed
 

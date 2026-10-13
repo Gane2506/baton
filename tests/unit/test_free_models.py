@@ -373,6 +373,7 @@ def test_cli_models_list_free(fixture_repo: Path, mocked_models: list[httpx.Requ
     assert "nemotron" in out and "lfm-2.5" in out
     assert "gpt-5-mini" not in out and "claude-sonnet" not in out
     assert "freemodels(6;" in out
+    assert "`[models]prefer_free=true`" in out  # not eaten as Rich markup
     assert len(mocked_models) == 1
     assert cache_path(fixture_repo).is_file()
     # A second call uses the cache.

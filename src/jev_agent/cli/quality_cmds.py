@@ -54,7 +54,7 @@ def show(run_id: RunId, repo: RepoOption = Path(".")) -> None:
         if not reports:
             console.print(
                 f"No quality gate has run for run {run_id} (level {run.quality_level}). "
-                "Set a level with `jev run --quality LEVEL` or `[quality] level`."
+                "Set a level with `jev run --quality LEVEL` or `\\[quality] level`."
             )
             return
         path = review_path(ctx.root, run_id)
@@ -147,5 +147,5 @@ def checks(repo: RepoOption = Path(".")) -> None:
     for level in LEVELS:
         console.print(f"  {level}: {LEVEL_SUMMARY[level]}", highlight=False)
     console.print(
-        "Missing tools are skipped (never fail a run) unless listed in [quality] required_tools."
+        "Missing tools are skipped (never fail a run) unless listed in \\[quality] required_tools."
     )

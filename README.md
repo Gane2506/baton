@@ -57,31 +57,50 @@ pushed.
 
 ## Features
 
+Every image below is real `jev` output on illustrative demo data
+([examples/demo](examples/demo): `seed_demo.py` writes the data, `capture.py` regenerates the
+terminal images; see [docs/dashboard.md](docs/dashboard.md#screenshots)).
+
 <table>
+  <tr><td colspan="2"><b>Plan → validate → code → test → integrate</b><br>A planner splits the idea into tasks, a validator from another vendor checks the plan, coders work in their own worktrees, tests run after each task and on the merged result branch. <a href="#how-it-works">How it works</a> · <a href="docs/roles.md">Roles</a></td></tr>
   <tr>
-    <td width="50%"><b>Jev dispatching, rules fallback</b><br>Jev picks agent, model and effort at each step; a deterministic rules dispatcher steps in when it can't. <a href="#how-it-works">How it works</a></td>
-    <td width="50%"><b>End-to-end pipeline</b><br>Plan → validate → approve → code → test → integrate, with retries and fix tasks. <a href="docs/roles.md">Roles</a></td>
+    <td width="50%"><img alt="Dashboard run page: plan, tasks, decisions and attempts" src="docs/images/dashboard-run.png"></td>
+    <td width="50%"><img alt="jev status RUN: plan summary, validation verdict, tasks with worker, model and spend" src="docs/images/cli-status-run.svg"></td>
+  </tr>
+  <tr><td colspan="2"><b>Jev dispatching, rules fallback</b><br>Jev picks agent, model and effort at every decision point, with a confidence per answer; when it is unreachable or unsure, the deterministic rules dispatcher answers instead, and <code>jev log</code> says why. <a href="#how-it-works">The dispatcher</a></td></tr>
+  <tr><td colspan="2"><img alt="jev log RUN: decision timeline with Jev confidences and one rules fallback after a timeout" src="docs/images/cli-log.svg"></td></tr>
+  <tr><td colspan="2"><b>Chat before you run</b><br><code>jev chat</code> asks which lessons to use, talks the idea through, writes a brief, then plans, runs or queues it. <a href="docs/chat.md">Chat</a></td></tr>
+  <tr><td colspan="2"><img alt="jev chat session: learning choice, two exchanges, /brief and /plan" src="docs/images/cli-chat.svg" width="760"></td></tr>
+  <tr><td colspan="2"><b>Idea queue and scheduler</b><br>Queue ideas with a priority; the scheduler works through them one run at a time within a daily budget. <a href="docs/queue.md">Queue</a></td></tr>
+  <tr>
+    <td><img alt="Dashboard queue page with scheduler status and queued ideas" src="docs/images/dashboard-queue.png"></td>
+    <td><img alt="jev queue list and jev scheduler status" src="docs/images/cli-queue.svg"></td>
+  </tr>
+  <tr><td colspan="2"><b>Kanban board</b><br><code>jev board</code> (or <code>--watch</code>, or the dashboard above) shows queued ideas and runs from Backlog to Done and Blocked. <a href="docs/queue.md">Board</a></td></tr>
+  <tr><td colspan="2"><img alt="jev board: Backlog, Planning, Awaiting approval, Running, Done and Blocked columns" src="docs/images/cli-board.svg"></td></tr>
+  <tr>
+    <td><b>Free OpenRouter models</b><br>Plan and review on free models, with fallback to the next free or paid model on rate limits. <a href="docs/config.md#free-models">Free models</a></td>
+    <td><b>Per-role MCP tools, skills and plugins</b><br>Define tools once, give them to roles by name; <code>jev doctor</code> checks them. Variable names only, never secrets. <a href="docs/config.md#agent-tools-tools">Tools</a></td>
   </tr>
   <tr>
-    <td><b>Isolated and local</b><br>Each task in its own git worktree and branch; jev never pushes. <a href="#safety-defaults">Safety</a></td>
-    <td><b>Budgets and audit</b><br>Hard per-run and per-task caps; every decision and attempt logged. <a href="#cost">Cost</a></td>
+    <td><img alt="jev models list --free: free models with context size and json_schema/reasoning support" src="docs/images/cli-models-free.svg"></td>
+    <td><img alt="jev doctor with tool rows for MCP servers and a skill per role" src="docs/images/cli-doctor-tools.svg"></td>
+  </tr>
+  <tr><td colspan="2"><b>Recursive learning</b><br>A run that needed extra work ends with a learner call that turns mistakes into short lessons; later runs get the relevant ones in their prompts. <a href="docs/learning.md">Learning</a></td></tr>
+  <tr>
+    <td><img alt="Dashboard learning page with profiles and lessons" src="docs/images/dashboard-learning.png"></td>
+    <td><img alt="jev learning show: lessons with roles, tags, score and uses" src="docs/images/cli-learning.svg"></td>
+  </tr>
+  <tr><td colspan="2"><b>Quality and security gate</b><br>Levels from <code>basic</code> to <code>scalable</code>: lint, the full test suite, scanners and an AI code review with findings by severity; failing work is blocked and retried. <a href="docs/quality.md">Quality</a></td></tr>
+  <tr>
+    <td><img alt="Dashboard quality review: summary, walkthrough, major, minor and info findings, checks" src="docs/images/dashboard-quality.png"></td>
+    <td><img alt="jev quality checks: which checks apply and which tools are installed" src="docs/images/cli-quality-checks.svg"><br><img alt="jev quality show RUN: the review as Markdown" src="docs/images/cli-quality.svg"></td>
   </tr>
   <tr>
-    <td><b>Chat first</b><br><code>jev chat</code> turns a rough idea into a brief, then plans, runs or queues it. <a href="docs/chat.md">Chat</a></td>
-    <td><b>Queue, scheduler, board</b><br>Queue ideas, let the scheduler work through them, watch <code>jev board</code>. <a href="docs/queue.md">Queue</a></td>
+    <td><b>Budgets and audit</b><br>Hard per-run and per-task caps; every decision and attempt is logged with its cost. <a href="#cost">Cost</a></td>
+    <td><b>Isolated, local, dashboard</b><br>Each task in its own worktree and branch; jev never pushes. <code>jev dashboard</code> binds 127.0.0.1. <a href="#safety-defaults">Safety</a> · <a href="#dashboard">Dashboard</a></td>
   </tr>
-  <tr>
-    <td><b>Free models</b><br>Plan and review on free OpenRouter models, with fallback on rate limits. <a href="docs/config.md#free-models">Free models</a></td>
-    <td><b>Per-role tools</b><br>MCP servers, skills and Claude Code plugins, given to roles by name. <a href="docs/config.md#agent-tools-tools">Tools</a></td>
-  </tr>
-  <tr>
-    <td><b>Learns from past runs</b><br>Recursive learning profiles turn mistakes into lessons for later runs. <a href="docs/learning.md">Learning</a></td>
-    <td><b>Quality and security gate</b><br>Levels from <code>basic</code> to <code>scalable</code>: lint, tests, scanners, AI review. <a href="docs/quality.md">Quality</a></td>
-  </tr>
-  <tr>
-    <td><b>Web dashboard</b><br><code>jev dashboard</code>: live board, run details, approve/resume, queue, learning, spend. <a href="#dashboard">Dashboard</a></td>
-    <td><b>Local first</b><br>The dashboard binds 127.0.0.1; off loopback it needs a token. Use an SSH tunnel on a VPS. <a href="docs/dashboard.md">Security</a></td>
-  </tr>
+  <tr><td colspan="2"><img alt="Dashboard spend page: spend per day and the costliest runs" src="docs/images/dashboard-spend.png" width="760"></td></tr>
 </table>
 
 ## How it works
@@ -457,18 +476,8 @@ jev dashboard              # http://127.0.0.1:8765/, opens a browser (--no-open 
   **Chats** (read-only transcripts), **Spend** (per run and per day) and **Settings**
   (effective config, env var names, `jev doctor`).
 
-<table>
-  <tr>
-    <td width="50%"><img alt="Run detail page with tasks, Jev decisions and confidences" src="docs/images/dashboard-run.png"><br><sub><b>Run</b>: tasks, the decision timeline with Jev's confidences and a rules fallback, attempts.</sub></td>
-    <td width="50%"><img alt="Queue page with scheduler status and queued ideas" src="docs/images/dashboard-queue.png"><br><sub><b>Queue</b>: scheduler status, add an idea, reorder and remove items.</sub></td>
-  </tr>
-  <tr>
-    <td><img alt="Learning page with profiles and lessons" src="docs/images/dashboard-learning.png"><br><sub><b>Learning</b>: profiles and the lessons distilled from past runs.</sub></td>
-    <td><img alt="Spend page with per-day and per-run bar charts" src="docs/images/dashboard-spend.png"><br><sub><b>Spend</b>: per day and the costliest runs.</sub></td>
-  </tr>
-</table>
-
-<sub>Screenshots use illustrative demo data (<a href="examples/demo/seed_demo.py">examples/demo/seed_demo.py</a>); see <a href="docs/dashboard.md#screenshots">docs/dashboard.md</a>.</sub>
+Screenshots of every page are in [Features](#features) above and in
+[docs/dashboard.md](docs/dashboard.md#screenshots).
 
 It listens on 127.0.0.1 only. On a VPS keep it that way and use an SSH tunnel
 (`ssh -L 8765:127.0.0.1:8765 host`). Any other `--host` requires a token, which jev generates

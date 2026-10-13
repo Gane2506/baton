@@ -141,24 +141,48 @@ connect, and preferably a TLS reverse proxy.
 
 ## Screenshots
 
-The images above use made-up demo data, written straight into a scratch repo's `.jev/` by
-[`examples/demo/seed_demo.py`](../examples/demo/seed_demo.py); no agent or model runs. To
-regenerate them from a clone of this repo (macOS paths; any Chrome or Chromium works):
+The screenshots here and in the README use made-up demo data, written straight into a scratch
+repo's `.jev/` by [`examples/demo/seed_demo.py`](../examples/demo/seed_demo.py); no agent or
+model runs. The seed script also sets the demo's `jev.toml` up for the pictures (rules
+dispatcher, free models for the planner, example MCP servers and a skill, variable names only),
+caches a model list from the test fixtures and saves one chat.
+
+Set up the demo repo from a clone of this repo:
 
 ```bash
 DEMO=$(mktemp -d /tmp/baton-demo.XXXX)
 cp -R examples/sample-repo/. "$DEMO"/
 git -C "$DEMO" init -q && git -C "$DEMO" add -A
 git -C "$DEMO" -c user.name=demo -c user.email=demo@example.com commit -qm "sample"
+export XDG_DATA_HOME="$DEMO/.xdg/data" XDG_CONFIG_HOME="$DEMO/.xdg/config"  # keep your own config out
 (cd "$DEMO" && uv run --project "$OLDPWD" --all-extras jev init)
-sed -i '' 's/^primary = "jev"  /primary = "rules"/' "$DEMO/jev.toml"
-export XDG_DATA_HOME="$DEMO/.xdg"   # keep your own shared learning profiles out of the shots
-uv run --all-extras python examples/demo/seed_demo.py "$DEMO"
+uv run --all-extras python examples/demo/seed_demo.py "$DEMO"   # prints the richest run id
+```
+
+**Terminal images** (`docs/images/cli-*.svg`): one command regenerates all of them.
+
+```bash
+uv run --all-extras python examples/demo/capture.py "$DEMO"      # --only cli-log.svg ... for some
+```
+
+[`capture.py`](../examples/demo/capture.py) runs the real `jev` commands in the demo repo with a
+scrubbed environment (scratch HOME and XDG directories, `JEV_FAKE_WORKERS=1`, proxy variables
+pointing nowhere, stub `claude`/`codex`/`npx` on `PATH` that are never run) and exports the
+output with Rich's `export_svg`. `jev doctor` gets placeholder values for the variables the demo
+config names; they are never printed, and the script refuses to write an image that contains a
+home path or a placeholder. `jev chat` is driven from a script with a canned model
+(`seed_demo.DemoChatBackend`); its `/plan` starts a real plan-only run with fake workers, so the
+chat is captured last.
+
+**Dashboard images** (`docs/images/dashboard-*.png`), with any Chrome or Chromium (macOS path):
+
+```bash
 (cd "$DEMO" && uv run --project "$OLDPWD" --all-extras jev dashboard --no-open --port 8799) &
 
 CHROME="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
 shot() {  # shot WIDTH HEIGHT OUT.png PATH [light=1|dark=0]
   profile=$(mktemp -d)   # a throwaway profile: never your own
+  [ -d "$profile" ] || return 1
   "$CHROME" --headless=new --disable-gpu --hide-scrollbars --user-data-dir="$profile" \
     --blink-settings=preferredColorScheme="${5:-1}" --window-size="$1,$2" \
     --screenshot="$3" "http://127.0.0.1:8799$4"
@@ -169,7 +193,9 @@ shot 1440 900 docs/images/dashboard-board-dark.png / 0
 shot 1440 1400 docs/images/dashboard-run.png /runs/RUN_ID   # the id the seed script prints
 shot 1440 900 docs/images/dashboard-queue.png /queue
 shot 1440 900 docs/images/dashboard-learning.png /learning
-shot 1440 1300 docs/images/dashboard-spend.png /spend
+shot 1440 1580 docs/images/dashboard-spend.png /spend
+# dashboard-quality.png: a tall shot of /runs/RUN_ID (1440x3400), cropped to the
+# "Quality review" section, e.g. `sips -c 1320 1440 --cropOffset Y 0 full.png --out ...`
 
 kill %1 && rm -rf "$DEMO"
 ```

@@ -48,6 +48,7 @@ from jev_agent.core.pipeline import PipelineError, cancel_run
 from jev_agent.core.queue import Move, QueueError, add_idea, move_item, remove_item
 from jev_agent.core.store import QUEUE_PRIORITIES, NotFoundError
 from jev_agent.dashboard import views
+from jev_agent.dashboard.render import render_bar_chart
 from jev_agent.dashboard.runner import Executor, RunAction, RunLauncher, execute_run
 from jev_agent.dashboard.security import (
     CSRF_FIELD,
@@ -101,6 +102,7 @@ def _environment() -> Environment:
     env.globals["nav"] = NAV
     env.globals["version"] = __version__
     env.globals["csrf_field"] = CSRF_FIELD
+    env.globals["bar_chart_svg"] = render_bar_chart
     return env
 
 

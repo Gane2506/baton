@@ -121,7 +121,7 @@ def _list(repo: Path, free: bool, supports: list[str] | None, refresh: bool) -> 
         console.print(
             "Free models are rate-limited and run on the api worker only; providers may log or "
             "train on prompts (see https://openrouter.ai/settings/privacy). Use them with "
-            '`[models] prefer_free = true` or `models = ["free"]` in a role.'
+            '`\\[models] prefer_free = true` or `models = ["free"]` in a role.'
         )
 
 

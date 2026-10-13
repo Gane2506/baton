@@ -13,6 +13,7 @@ from typing import Literal
 
 import typer
 from rich.console import Console
+from rich.markup import escape
 from rich.table import Table
 
 from jev_agent.cli.quality_cmds import missing_tools
@@ -53,7 +54,9 @@ def doctor(
     table.add_column("detail", overflow="fold")
     for check in checks:
         style = _STYLE[check.status]
-        table.add_row(check.name, f"[{style}]{check.status}[/{style}]", check.detail)
+        table.add_row(
+            escape(check.name), f"[{style}]{check.status}[/{style}]", escape(check.detail)
+        )
     console.print(table)
     if any(check.status == "fail" for check in checks):
         raise typer.Exit(1)

@@ -121,6 +121,7 @@ def test_quality_checks_lists_checks_and_tools(repo: Path) -> None:
     for name in ("ruff", "tests", "secrets", "bandit", "mypy", "trivy", "ai-review"):
         assert name in out
     assert "no (built-in scan)" in out and "scalable:" in out
+    assert "[quality] required_tools" in out  # not eaten as Rich markup
 
 
 def test_doctor_quality_row(repo: Path, monkeypatch: pytest.MonkeyPatch) -> None:
