@@ -170,56 +170,37 @@ model runs. The seed script also sets the demo's `jev.toml` up for the pictures 
 dispatcher, free models for the planner, example MCP servers and a skill, variable names only),
 caches a model list from the test fixtures and saves one chat.
 
-Set up the demo repo from a clone of this repo:
+Every image in `docs/images/` except the logos comes from the running app on your checkout.
+One command regenerates all of them:
 
 ```bash
-DEMO=$(mktemp -d /tmp/baton-demo.XXXX)
-cp -R examples/sample-repo/. "$DEMO"/
-git -C "$DEMO" init -q && git -C "$DEMO" add -A
-git -C "$DEMO" -c user.name=demo -c user.email=demo@example.com commit -qm "sample"
-export XDG_DATA_HOME="$DEMO/.xdg/data" XDG_CONFIG_HOME="$DEMO/.xdg/config"  # keep your own config out
-(cd "$DEMO" && uv run --project "$OLDPWD" --all-extras jev init)
-uv run --all-extras python examples/demo/seed_demo.py "$DEMO"   # prints the richest run id
+uv sync --all-extras
+uv run python examples/demo/screenshots.py              # writes docs/images/
+uv run python examples/demo/screenshots.py --out preview/ --no-cli   # dashboard only, elsewhere
 ```
 
-**Terminal images** (`docs/images/cli-*.svg`): one command regenerates all of them.
+[`screenshots.py`](../examples/demo/screenshots.py) builds a scratch repo under `/tmp` from
+`examples/sample-repo`, runs `jev init` and the seed script, starts the real `jev dashboard`
+on a free loopback port and captures each `dashboard-*.png` with headless Chrome through
+Playwright (a fresh browser profile, no proxy). It then runs `capture.py` for the terminal
+images and deletes the scratch repo (`--keep` keeps it). Chrome is Playwright's own Chromium
+when it is installed (`uv run playwright install chromium`), otherwise your Chrome; `--chrome
+PATH` picks a binary.
 
-```bash
-uv run --all-extras python examples/demo/capture.py "$DEMO"      # --only cli-log.svg ... for some
-```
+Everything runs with a scrubbed environment (scratch HOME and XDG directories inside the demo
+repo, `JEV_FAKE_WORKERS=1`, proxy variables pointing nowhere), so your own config, keys and
+browser profile are never read. The seed script trusts the demo repo (`[trust] repos`) in that
+scratch user config only and refuses to write any other.
 
-[`capture.py`](../examples/demo/capture.py) runs the real `jev` commands in the demo repo with a
-scrubbed environment (scratch HOME and XDG directories, `JEV_FAKE_WORKERS=1`, proxy variables
-pointing nowhere, stub `claude`/`codex`/`npx` on `PATH` that are never run) and exports the
-output with Rich's `export_svg`. `jev doctor` gets placeholder values for the variables the demo
-config names; they are never printed, and the script refuses to write an image that contains a
-home path or a placeholder. `jev chat` is driven from a script with a canned model
-(`seed_demo.DemoChatBackend`); its `/plan` starts a real plan-only run with fake workers, so the
-chat is captured last.
+**Terminal images** (`docs/images/cli-*.svg`): [`capture.py`](../examples/demo/capture.py)
+runs the real `jev` commands in the demo repo with stub `claude`/`codex`/`npx` on `PATH` that
+are never run, and exports the output with Rich's `export_svg`. `jev doctor` gets placeholder
+values for the variables the demo config names; they are never printed, and the script refuses
+to write an image that contains a home path or a placeholder. `jev chat` is driven from a
+script with a canned model (`seed_demo.DemoChatBackend`); its `/plan` starts a real plan-only
+run with fake workers, so the chat is captured last.
 
-**Dashboard images** (`docs/images/dashboard-*.png`), with any Chrome or Chromium (macOS path):
-
-```bash
-(cd "$DEMO" && uv run --project "$OLDPWD" --all-extras jev dashboard --no-open --port 8799) &
-
-CHROME="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
-shot() {  # shot WIDTH HEIGHT OUT.png PATH [light=1|dark=0]
-  profile=$(mktemp -d)   # a throwaway profile: never your own
-  [ -d "$profile" ] || return 1
-  "$CHROME" --headless=new --disable-gpu --hide-scrollbars --user-data-dir="$profile" \
-    --blink-settings=preferredColorScheme="${5:-1}" --window-size="$1,$2" \
-    --screenshot="$3" "http://127.0.0.1:8799$4"
-  rm -rf "$profile"
-}
-shot 1440 900 docs/images/dashboard-board.png /
-shot 1440 900 docs/images/dashboard-board-dark.png / 0
-shot 1440 1400 docs/images/dashboard-run.png /runs/RUN_ID   # the id the seed script prints
-shot 1440 900 docs/images/dashboard-queue.png /queue
-shot 1440 900 docs/images/dashboard-learning.png /learning
-shot 1440 1580 docs/images/dashboard-spend.png /spend
-shot 1440 1700 docs/images/dashboard-kpis.png /kpis
-# dashboard-quality.png: a tall shot of /runs/RUN_ID (1440x3400), cropped to the
-# "Quality review" section, e.g. `sips -c 1320 1440 --cropOffset Y 0 full.png --out ...`
-
-kill %1 && rm -rf "$DEMO"
-```
+**In CI**, the `screenshots` job runs the same command on every pull request and uploads the
+images as the `screenshots` artifact: a preview of the pull request's dashboard and CLI, and a
+failure if the seed script or a page no longer renders. A pull request that changes what the
+dashboard or the CLI shows commits the regenerated images (CONTRIBUTING.md).

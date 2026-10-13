@@ -2,6 +2,17 @@
 
 Deviations from [PLAN.md](../PLAN.md) and choices it left open. Newest first.
 
+## 2026-10-13: Screenshots from the running app, with Playwright (#83)
+
+- **Playwright as a dev dependency**, not more Chrome command-line flags: the quality image is
+  one section of the run page, and Playwright clips it by the section's own box instead of a
+  hand-measured crop, waits for the network and fonts, and switches light/dark per page. It
+  drives an installed Chrome, so CI needs no browser download.
+- **CI uploads the captures, it does not diff them**: run ids, the repo path in the header and
+  relative ages change on every capture, so a pixel comparison would fail on every run. The job
+  still fails when the seed script or a page breaks, which is how the old capture path rotted
+  unnoticed (#83).
+
 ## 2026-10-13: Tune Laya's weights from run outcomes (#69)
 
 - **Outcomes are derived, not recorded** (jev-decide, Jev then Laya: both picked this over an

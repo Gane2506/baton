@@ -9,7 +9,13 @@ Closes #
 ## How it was tested
 
 <!-- Tests added or changed; confirm a new test failed before the fix. Any manual check,
-     e.g. a run on the sample repo with JEV_FAKE_WORKERS=1. Screenshots for dashboard changes. -->
+     e.g. a run on the sample repo with JEV_FAKE_WORKERS=1. -->
+
+## Screenshots
+
+<!-- UI or CLI output changed? Run `uv run python examples/demo/screenshots.py`, commit the
+     changed images in docs/images/ and show them here. CI's `screenshots` artifact has the
+     same captures. "None" is fine. -->
 
 ## Coding agents
 
@@ -31,6 +37,7 @@ Closes #
 - [ ] No network or real CLIs in tests; no secrets, home-directory paths or email addresses
 - [ ] Docs updated: `docs/config.md` for config fields, `examples/jev.toml` if the init
       template changed, the feature's doc in `docs/`, `docs/security.md` if agent permissions changed
+- [ ] Dashboard or CLI output changed: images regenerated with `examples/demo/screenshots.py`
 - [ ] `CHANGELOG.md` "Unreleased" entry for user-visible changes
 - [ ] `docs/decisions.md` entry for a design choice or a deviation from PLAN.md
 - [ ] `uv.lock` updated if dependencies changed
