@@ -41,6 +41,30 @@
     {% endif %}
     {% if busy %}<span class="muted small">working in the background...</span>{% endif %}
   </div>
+  {% if v.ship_preview %}{% set p = v.ship_preview %}
+  <h3>Ready to ship: your call</h3>
+  <dl class="small">
+    <dt>PR title</dt><dd>{{ p.title }}</dd>
+    <dt>branch</dt><dd><code>{{ p.branch }}</code></dd>
+    {% if p.diff %}<dt>diff</dt><dd>{{ p.diff.files }} files, +{{ p.diff.additions }} / -{{ p.diff.deletions }}</dd>{% endif %}
+    {% if v.ship_vote %}<dt>D6 vote</dt><dd class="mono">{{ v.ship_vote }}</dd>{% endif %}
+  </dl>
+  <div class="actions">
+    <form class="inline" method="post" action="/runs/{{ run.id }}/approve" data-confirm="Push this branch, open the PR, wait for its checks and merge it?">
+      {{ csrf_input() }}<button class="primary" type="submit"{% if busy %} disabled{% endif %}>Approve: ship and merge</button>
+    </form>
+    <form class="inline" method="post" action="/runs/{{ run.id }}/stop" data-confirm="End this run without shipping it? Its result branch is kept.">
+      {{ csrf_input() }}<button class="danger" type="submit"{% if busy %} disabled{% endif %}>Stop: do not ship</button>
+    </form>
+  </div>
+  <form method="post" action="/runs/{{ run.id }}/modify">
+    {{ csrf_input() }}
+    <label>Ask for changes (a new task for the coder; the votes run again)
+      <textarea name="notes" rows="3" maxlength="4000" required></textarea>
+    </label>
+    <button type="submit"{% if busy %} disabled{% endif %}>Modify</button>
+  </form>
+  {% endif %}
   {% if v.can_resume and v.resume_risk %}
   <p class="small">Possibly still running: {{ v.resume_risk }}. Another jev process may be running this run; resuming starts a second one. Resume only if that process is gone.</p>
   {% endif %}

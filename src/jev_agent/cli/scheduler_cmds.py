@@ -50,6 +50,7 @@ async def start_item(ctx: CliContext, item: QueueItem) -> RunRecord:
         no_learning=item.no_learning,
         quality=item.quality,
         profile=item.profile,
+        ship_mode=item.ship_mode,
     )
 
 

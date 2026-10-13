@@ -36,6 +36,7 @@ from starlette.staticfiles import StaticFiles
 from jev_agent import __version__
 from jev_agent.cli.board_cmds import format_age
 from jev_agent.cli.status_cmds import format_time
+from jev_agent.cli.wiring import CliError
 from jev_agent.config import ConfigError
 from jev_agent.core.benchmarks import DEFAULT_LAST, format_value
 from jev_agent.core.chat import ChatError
@@ -45,6 +46,7 @@ from jev_agent.core.learning import (
     enable_learning,
     use_profile,
 )
+from jev_agent.core.lease import RunInUseError
 from jev_agent.core.models import RunState
 from jev_agent.core.pipeline import PipelineError, cancel_run
 from jev_agent.core.queue import Move, QueueError, add_idea, move_item, remove_item
@@ -52,7 +54,13 @@ from jev_agent.core.ship import Gh, ShipError, ShipPlan, prepare_ship
 from jev_agent.core.store import QUEUE_PRIORITIES, NotFoundError
 from jev_agent.dashboard import views
 from jev_agent.dashboard.render import render_bar_chart, render_markdown, render_trend_chart
-from jev_agent.dashboard.runner import Executor, RunAction, RunLauncher, execute_run
+from jev_agent.dashboard.runner import (
+    Executor,
+    RunAction,
+    RunLauncher,
+    execute_run,
+    request_changes,
+)
 from jev_agent.dashboard.security import (
     CSRF_FIELD,
     DashboardSettings,
@@ -306,10 +314,13 @@ class Dashboard:
         run_id: str = request.path_params["run_id"]
         action: str = request.path_params["action"]
         to = f"/runs/{run_id}"
-        if not views.valid_run_id(run_id) or action not in ("approve", "resume", "cancel", "ship"):
+        actions = ("approve", "resume", "cancel", "ship", "modify", "stop")
+        if not views.valid_run_id(run_id) or action not in actions:
             raise HTTPException(404, "no such action")
         if action == "ship":
             return await self.ship(request, run_id)
+        if action == "modify":
+            return await self.modify(request, run_id)
         if action == "cancel":
 
             def cancel(repo: views.Repo, form: FormData) -> str:
@@ -319,16 +330,20 @@ class Dashboard:
             return await self.act(request, to, cancel)
 
         form = await checked_form(request)
-        kind: RunAction = "approve" if action == "approve" else "resume"
+        kinds: dict[str, RunAction] = {"approve": "approve", "stop": "stop"}
+        kind = kinds.get(action, "resume")
         force = form.get("force") == "1"
 
         def check() -> str | None:
             with views.open_repo(self.settings.root) as repo:
                 run = repo.store.get_run(run_id)
-                if kind == "approve" and run.state is not RunState.AWAITING_APPROVAL:
+                gates = (RunState.AWAITING_APPROVAL, RunState.AWAITING_SHIP)
+                if kind == "approve" and run.state not in gates:
                     return (
                         f"run {run_id} is {run.state}; only a run awaiting approval can be approved"
                     )
+                if kind == "stop" and run.state is not RunState.AWAITING_SHIP:
+                    return f"run {run_id} is {run.state}; only a run waiting to ship can be stopped"
                 if kind == "resume" and not views.can_resume(run):
                     return f"run {run_id} is {run.state}; it cannot be resumed"
                 risk = "" if kind != "resume" or force else views.resume_risk(repo, run)
@@ -347,6 +362,30 @@ class Dashboard:
             self.flash(request, "error", problem)
         elif self.launcher.start(run_id, kind):
             self.flash(request, "ok", f"{kind} started in the background; this page updates")
+        else:
+            self.flash(request, "error", f"run {run_id} is already being worked on here")
+        return self.back(to)
+
+    async def modify(self, request: Request, run_id: str) -> Response:
+        """A run waiting to ship: add a task with the person's notes (`jev ship modify`), then
+        execute it in the background like Resume."""
+        form = await checked_form(request)
+        to = f"/runs/{run_id}"
+        notes = _text(form, "notes") or ""
+        if self.launcher.busy(run_id):
+            self.flash(request, "error", f"run {run_id} is already being worked on here")
+            return self.back(to)
+        try:
+            has_workers = await run_in_threadpool(
+                request_changes, self.settings.root, run_id, notes
+            )
+        except (CliError, ConfigError, NotFoundError, PipelineError, RunInUseError) as exc:
+            self.flash(request, "error", str(exc))
+            return self.back(to)
+        if not has_workers:
+            self.flash(request, "ok", "changes recorded; set up a worker, then resume the run")
+        elif self.launcher.start(run_id, "resume"):
+            self.flash(request, "ok", "changes recorded; the run executes them in the background")
         else:
             self.flash(request, "error", f"run {run_id} is already being worked on here")
         return self.back(to)
@@ -397,6 +436,7 @@ class Dashboard:
                 no_learning=learning_choice == "none",
                 profile=_text(form, "profile") or None,
                 quality=_text(form, "quality") or None,
+                ship_mode=_ship_mode(repo, _text(form, "ship_mode")),
             )
             return f"queued item {item.id} ({item.priority})"
 
@@ -482,6 +522,15 @@ class Dashboard:
 def _text(form: FormData, name: str) -> str | None:
     value = form.get(name)
     return value.strip() if isinstance(value, str) else None
+
+
+def _ship_mode(repo: views.Repo, value: str | None) -> str | None:
+    """The queue form's "after both votes approve" choice; it needs shipping on."""
+    if not value:
+        return None
+    if not repo.config.ship.enabled:
+        raise QueueError("that choice needs shipping on: set `[ship] enabled = true`")
+    return value
 
 
 def _int(value: str) -> int:

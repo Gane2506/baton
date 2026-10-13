@@ -1,7 +1,9 @@
-"""`jev ship` (open a GitHub PR for a DONE run, `jev ship sync`) and `jev kpi` (docs/ship.md)."""
+"""`jev ship` (open a GitHub PR for a DONE run, `jev ship sync`, and the person's choice for a
+run waiting to ship: `jev ship approve | modify | stop`) and `jev kpi` (docs/ship.md)."""
 
 from __future__ import annotations
 
+import asyncio
 import json
 from contextlib import AbstractContextManager
 from pathlib import Path
@@ -13,7 +15,15 @@ from rich.markup import escape
 from rich.table import Table
 
 from jev_agent.cli.repo import RepoOption
-from jev_agent.cli.wiring import RepoContext, fail, print_error, repo_context
+from jev_agent.cli.run_cmds import exit_for, print_outcome, print_warnings
+from jev_agent.cli.wiring import (
+    NO_WORKERS_MESSAGE,
+    RepoContext,
+    cli_context,
+    fail,
+    print_error,
+    repo_context,
+)
 from jev_agent.core.benchmarks import (
     DEFAULT_LAST,
     KPI_BY_KEY,
@@ -22,6 +32,8 @@ from jev_agent.core.benchmarks import (
     trends,
 )
 from jev_agent.core.kpi import PrKpis, load_pr_kpis
+from jev_agent.core.lease import RunInUseError
+from jev_agent.core.pipeline import PipelineError
 from jev_agent.core.ship import (
     Gh,
     ShipError,
@@ -35,6 +47,9 @@ from jev_agent.core.ship import (
 from jev_agent.core.store import NotFoundError, ShippedPrRecord
 
 console = Console()
+
+# `jev ship <choice> RUN`: what a person decides for a run waiting to ship (AWAITING_SHIP).
+CHOICES = ("approve", "modify", "stop")
 
 
 def ship_repo(repo: Path, *, create: bool = True) -> AbstractContextManager[RepoContext]:
@@ -54,9 +69,20 @@ def print_plan(plan: ShipPlan) -> None:
 
 
 def ship(
-    target: Annotated[str, typer.Argument(metavar="RUN_ID | sync", help="Run to ship, or `sync`.")],
+    target: Annotated[
+        str,
+        typer.Argument(
+            metavar="RUN_ID | sync | approve | modify | stop",
+            help="Run to ship, or what to do (then the run id).",
+        ),
+    ],
     run_id: Annotated[
-        str | None, typer.Argument(metavar="[RUN_ID]", help="With `sync`: the run to sync.")
+        str | None,
+        typer.Argument(metavar="[RUN_ID]", help="With sync, approve, modify or stop: the run."),
+    ] = None,
+    notes: Annotated[
+        str | None,
+        typer.Option("--notes", help="With `modify`: what to change, for the coder."),
     ] = None,
     yes: Annotated[bool, typer.Option("--yes", "-y", help="Do not ask for confirmation.")] = False,
     dry_run: Annotated[
@@ -71,14 +97,23 @@ def ship(
     all_: Annotated[bool, typer.Option("--all", help="With `sync`: every shipped PR.")] = False,
     repo: RepoOption = Path("."),
 ) -> None:
-    """Open a GitHub pull request for a DONE run (`jev ship RUN`), or read shipped PRs back
-    from GitHub for the KPIs (`jev ship sync RUN` / `jev ship sync --all`).
+    """Open a GitHub pull request for a DONE run (`jev ship RUN`), read shipped PRs back
+    from GitHub for the KPIs (`jev ship sync RUN` / `jev ship sync --all`), or decide for a
+    run waiting to ship: `approve` (ship and merge it), `modify --notes "..."` (a task with
+    your notes, then the votes again) or `stop` (end it DONE, not shipped).
 
-    Needs ship enabled in jev.toml (docs/ship.md). Never force-pushes, never merges.
+    Needs ship enabled in jev.toml (docs/ship.md). Never force-pushes.
     """
     if target == "sync":
         sync(run_id, all_, repo)
         return
+    if target in CHOICES:
+        if run_id is None:
+            raise fail(f"usage: `jev ship {target} RUN_ID`")
+        decide(target, run_id, notes, repo)
+        return
+    if notes is not None:
+        raise fail("--notes goes with `jev ship modify RUN_ID`")
     if run_id is not None or all_:
         raise fail("usage: `jev ship RUN_ID` or `jev ship sync [RUN_ID | --all]`")
     with ship_repo(repo) as r:
@@ -108,6 +143,33 @@ def ship(
         verb = "opened" if plan.existing_pr is None else "recorded existing"
         console.print(f"[green]{verb}[/green] {escape(describe_pr(record))}")
         console.print(f"  read it back later with `jev ship sync {plan.run_id}`")
+
+
+def decide(choice: str, run_id: str, notes: str | None, repo: Path) -> None:
+    """`jev ship approve | modify | stop RUN`, through the run's pipeline (and its lease)."""
+    if choice == "modify" and not (notes or "").strip():
+        raise fail('say what to change: `jev ship modify RUN_ID --notes "..."`')
+    if choice != "modify" and notes is not None:
+        raise fail("--notes goes with `jev ship modify RUN_ID`")
+    with cli_context(repo) as ctx:
+        if ctx.has_workers:
+            print_warnings(ctx)
+        execute = ctx.has_workers
+        try:
+            if choice == "approve":
+                record = asyncio.run(ctx.pipeline.approve(run_id, execute=execute))
+            elif choice == "modify":
+                record = asyncio.run(
+                    ctx.pipeline.request_changes(run_id, notes or "", execute=execute)
+                )
+            else:
+                record = asyncio.run(ctx.pipeline.stop_ship(run_id))
+        except (NotFoundError, PipelineError, RunInUseError) as exc:
+            raise fail(str(exc)) from exc
+        if not execute and choice != "stop":
+            console.print(f"Done. {escape(NO_WORKERS_MESSAGE)} Then run `jev resume {run_id}`.")
+        print_outcome(record, ctx.store)
+    exit_for(record)
 
 
 def _quoted(command: list[str]) -> str:

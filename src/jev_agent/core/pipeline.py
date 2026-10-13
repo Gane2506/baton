@@ -2,7 +2,10 @@
 
 INTAKE -(D1)-> PLANNING -> VALIDATING -(D2, D3)-> PLANNING again (revise) or
 AWAITING_APPROVAL -> EXECUTING -> INTEGRATING -(D6)-> DONE, or back to EXECUTING with a fix
-task (at most `max_fix_rounds` times). Any step may stop the run in NEEDS_HUMAN, FAILED,
+task (at most `max_fix_rounds` times). With shipping on (`[ship] enabled`, issue #68), a D6
+"ship" goes to SHIPPING (push, PR, checks, merge; then DONE) or, when the run asks first, to
+AWAITING_SHIP, where a person approves (SHIPPING), modifies (a task with their notes, then
+EXECUTING) or stops (DONE, not shipped). Any step may stop the run in NEEDS_HUMAN, FAILED,
 BUDGET_EXCEEDED or CANCELLED (see `Halt`). A DONE run's worktrees are removed (its branches
 stay); a stopped run keeps them for inspection.
 
@@ -25,7 +28,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from jev_agent.config.defaults import STATE_DIRNAME
-from jev_agent.config.schema import JevConfig
+from jev_agent.config.schema import JevConfig, ShipMode
 from jev_agent.core.assign import Assignment
 from jev_agent.core.commands import CommandRunner, ShellCommandRunner
 from jev_agent.core.harness import DEFAULT_TIMEOUT_S, Halt, Harness
@@ -49,10 +52,16 @@ from jev_agent.core.models import (
     ValidationResult,
     WorkerResult,
 )
+from jev_agent.core.ship import (
+    ShipError,
+    after_approval,
+    changes_task_card,
+    ship_and_merge,
+)
 from jev_agent.core.store import RunRecord, Store
 from jev_agent.core.taskgraph import CycleError, topological_order
 from jev_agent.core.tasks import TaskRunner
-from jev_agent.core.workspace import GitWorkspace, Workspace, WorkspaceError
+from jev_agent.core.workspace import GitWorkspace, Workspace, WorkspaceError, result_branch
 from jev_agent.dispatch.base import Dispatcher
 from jev_agent.dispatch.consensus import ConsensusDispatcher
 from jev_agent.dispatch.guard import GuardedDispatcher
@@ -114,31 +123,70 @@ class Pipeline:
         learning_profile: str | None = None,
         quality: QualityLevel | None = None,
         profile: str | None = None,
+        ship_mode: ShipMode | None = None,
     ) -> RunRecord:
         """Create a run for `idea` and advance it as far as it goes.
 
         `learning_profile` (see `core.learning.resolve_learning`) is recorded on the run, so a
         resumed run keeps using it; None means no learning. `quality` is the run's quality gate
-        level (None: `[quality] level`), also recorded on the run, like `plan_only`.
+        level (None: `[quality] level`), also recorded on the run, like `plan_only` and
+        `ship_mode` (`--auto-ship` / `--ask-before-ship`; None: `[ship] after_approval`).
         """
         level = self.h.config.quality.level if quality is None else quality
         # Workspace profile (docs/servers.md): copied to .jev/runs/<id>/profile.json, so a
         # resumed run reaches the same servers. ProfileError (a ValueError) if unknown.
         copy = None if profile is None else snapshot(self.h.config, profile)
-        run = self.store.create_run(idea, learning_profile, level, plan_only=plan_only)
+        run = self.store.create_run(
+            idea, learning_profile, level, plan_only=plan_only, ship_mode=ship_mode
+        )
         write_run_profile(self.h.state_dir, run.id, copy)
         async with hold_run_lease(self.store, run.id):
             return await self._advance(run.id)
 
     async def approve(self, run_id: str, execute: bool = True) -> RunRecord:
-        """Pass the human approval gate; then execute the plan unless `execute` is False."""
+        """Pass the human gate the run waits at: the plan (then execute it) or shipping (then
+        ship and merge it). With `execute` False only the gate is passed."""
         async with hold_run_lease(self.store, run_id):
-            self._require_state(run_id, {RunState.AWAITING_APPROVAL}, "approve")
-            if not self.store.set_run_state(run_id, RunState.EXECUTING, unless=STOPPED):
+            gates = {RunState.AWAITING_APPROVAL: RunState.EXECUTING}
+            gates[RunState.AWAITING_SHIP] = RunState.SHIPPING
+            self._require_state(run_id, set(gates), "approve")
+            nxt = gates[self.store.get_run(run_id).state]
+            if not self.store.set_run_state(run_id, nxt, unless=STOPPED):
                 raise PipelineError(f"cannot approve run {run_id}: it was stopped meanwhile")
             if not execute:
                 return self.store.get_run(run_id)
             return await self._advance(run_id)
+
+    async def request_changes(self, run_id: str, notes: str, execute: bool = True) -> RunRecord:
+        """`jev ship modify`: a run waiting to ship gets a task with the person's notes and
+        goes back to EXECUTING; D6 votes on the new result again."""
+        if not notes.strip():
+            raise PipelineError("say what to change: the notes are empty")
+        async with hold_run_lease(self.store, run_id):
+            self._require_state(run_id, {RunState.AWAITING_SHIP}, "modify")
+            run = self.store.get_run(run_id)
+            assert run.plan is not None
+            cards = [task.card for task in self.store.list_tasks(run_id)]
+            tasks = [*cards, changes_task_card(cards, notes)]
+            plan = Plan(summary=run.plan.summary, tasks=tasks, risks=run.plan.risks)
+            self.store.set_run_plan(run_id, plan, run.plan_round)
+            self.store.upsert_tasks(run_id, plan)
+            if not self.store.set_run_state(run_id, RunState.EXECUTING, unless=STOPPED):
+                raise PipelineError(f"cannot modify run {run_id}: it was stopped meanwhile")
+            if not execute:
+                return self.store.get_run(run_id)
+            return await self._advance(run_id)
+
+    async def stop_ship(self, run_id: str) -> RunRecord:
+        """`jev ship stop`: end a run waiting to ship as DONE without shipping it. Its result
+        branch stays; `jev ship RUN` can still open a PR for it later."""
+        async with hold_run_lease(self.store, run_id):
+            self._require_state(run_id, {RunState.AWAITING_SHIP}, "stop")
+            reason = f"not shipped (stopped by a person); result on branch {result_branch(run_id)}"
+            if not self.store.set_run_state(run_id, RunState.DONE, reason, unless=STOPPED):
+                raise PipelineError(f"cannot stop run {run_id}: it was stopped meanwhile")
+            await self._cleanup(run_id)
+            return await self._finish(run_id)
 
     async def resume(self, run_id: str) -> RunRecord:
         """Continue a run that stopped mid-way (for example because the process died), or a
@@ -151,6 +199,11 @@ class Pipeline:
         run = self.store.get_run(run_id)
         if run.state is RunState.AWAITING_APPROVAL:
             raise PipelineError(f"run {run_id} is awaiting approval; use `jev approve {run_id}`")
+        if run.state is RunState.AWAITING_SHIP:
+            raise PipelineError(
+                f"run {run_id} waits for a person before it ships; use `jev ship approve`, "
+                f"`jev ship modify` or `jev ship stop` with {run_id}"
+            )
         if run.state is RunState.NEEDS_HUMAN and run.resume_state is not None:
             if not self.store.set_run_state(run_id, run.resume_state, unless=KEEP_CANCELLED):
                 raise PipelineError(f"run {run_id} was cancelled; it cannot be resumed")
@@ -175,6 +228,7 @@ class Pipeline:
             RunState.VALIDATING: self._validate,
             RunState.EXECUTING: self._execute,
             RunState.INTEGRATING: self._integrate,
+            RunState.SHIPPING: self._ship,
         }
         while True:
             run = self.store.get_run(run_id)
@@ -346,13 +400,44 @@ class Pipeline:
         if action == "ship" and outcome.quality_state == "failed":
             action = "fix_task"  # the gate is a hard limit: never ship while it blocks
         if action == "ship":
-            self._move(run.id, RunState.DONE, f"result on branch {result.branch}")
-            await self._cleanup(run.id)
+            await self._after_ship_vote(run, result.branch)
         elif action == "fix_task" and outcome.fixable and rounds < max_rounds:
             self._add_fix_task(run, outcome)
             self._move(run.id, RunState.EXECUTING)
         else:
             raise Halt(RunState.NEEDS_HUMAN, _integration_stop_reason(outcome, rounds, max_rounds))
+
+    async def _after_ship_vote(self, run: RunRecord, branch: str) -> None:
+        """D6 voted "ship": ship and merge, wait for a person, or (shipping off) end DONE."""
+        mode = after_approval(self.h.config, run.ship_mode)
+        if mode == "merge":
+            self._move(run.id, RunState.SHIPPING, f"result on branch {branch}")
+        elif mode == "ask":
+            reason = (
+                f"result on branch {branch}; ship it with `jev ship approve {run.id}`, ask for "
+                f"changes with `jev ship modify {run.id} --notes ...`, or `jev ship stop {run.id}`"
+            )
+            self._move(run.id, RunState.AWAITING_SHIP, reason)
+        else:
+            self._move(run.id, RunState.DONE, f"result on branch {branch}")
+            await self._cleanup(run.id)
+
+    async def _ship(self, run: RunRecord) -> None:
+        """Push the result, open the PR, wait for its checks and merge it (`core/ship.py`).
+        Anything that needs a person stops the run; `jev resume` tries the step again."""
+        try:
+            pr = await ship_and_merge(
+                self.h.repo,
+                self.h.config,
+                self.store,
+                run.id,
+                on_wait=lambda: self.h.check_running(run.id),
+            )
+        except ShipError as exc:
+            raise Halt(RunState.NEEDS_HUMAN, f"ship: {exc}", resumable=True) from exc
+        where = pr.url or f"{pr.repo} ({pr.branch})"
+        self._move(run.id, RunState.DONE, f"merged PR #{pr.number}: {where}")
+        await self._cleanup(run.id)
 
     # ---- helpers ---------------------------------------------------------------------------
 

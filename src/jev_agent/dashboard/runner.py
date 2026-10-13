@@ -1,4 +1,4 @@
-"""Approve, resume and ship runs from the dashboard without blocking the web server.
+"""Approve, resume, ship and stop runs from the dashboard without blocking the web server.
 
 `RunLauncher.start` runs the work in a background thread, through the same code path as
 `jev approve` / `jev resume` (`open_cli_context` + `approve_run` / `resume_run`), so it builds
@@ -32,7 +32,7 @@ from jev_agent.core.pipeline import PipelineError
 from jev_agent.core.ship import Gh, prepare_ship
 from jev_agent.core.ship import execute_ship as ship_now
 
-RunAction = Literal["approve", "resume", "ship"]
+RunAction = Literal["approve", "resume", "ship", "stop"]
 JobState = Literal["running", "finished", "failed"]
 
 # (repo root, run id, action) -> a one-line outcome; raises on failure. Blocking.
@@ -96,13 +96,24 @@ def execute_ship(root: Path, run_id: str) -> str:
     return f"{verb} {describe_pr(record)}"
 
 
+def request_changes(root: Path, run_id: str, notes: str) -> bool:
+    """`jev ship modify RUN --notes ...` without executing: add the task with the notes and
+    move the run back to EXECUTING. Returns whether workers are there to resume it."""
+    with open_cli_context(root) as ctx:
+        asyncio.run(ctx.pipeline.request_changes(run_id, notes, execute=False))
+        return ctx.has_workers
+
+
 def execute_run(root: Path, run_id: str, action: RunAction) -> str:
-    """Approve, resume or ship `run_id` exactly as the CLI does, and describe the outcome."""
+    """Approve, resume, ship or stop (`jev ship stop`) `run_id` exactly as the CLI does, and
+    describe the outcome."""
     if action == "ship":
         return execute_ship(root, run_id)
     with open_cli_context(root) as ctx:
         if action == "approve":
             record = run_job_coroutine(approve_run(ctx, run_id))
+        elif action == "stop":
+            record = run_job_coroutine(ctx.pipeline.stop_ship(run_id))
         else:
             if not ctx.has_workers:
                 raise PipelineError(NO_WORKERS_MESSAGE)

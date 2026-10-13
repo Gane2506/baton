@@ -14,12 +14,14 @@ from jev_agent.cli.repo import RepoOption
 from jev_agent.cli.server_cmds import pick_profile_for_run
 from jev_agent.cli.wiring import NO_WORKERS_MESSAGE, CliContext, cli_context, fail
 from jev_agent.config import STATE_DIRNAME
+from jev_agent.config.schema import JevConfig, ShipMode
 from jev_agent.config.servers_schema import NO_PROFILE
 from jev_agent.core.learning import Learning, LearningError, check_profile_name, resolve_learning
 from jev_agent.core.lease import RunInUseError
 from jev_agent.core.models import Idea, RunState
 from jev_agent.core.pipeline import PipelineError
-from jev_agent.core.store import NotFoundError, RunRecord
+from jev_agent.core.ship import ShipPreview, ship_preview
+from jev_agent.core.store import NotFoundError, RunRecord, Store
 from jev_agent.quality.levels import LEVELS, QualityLevel, parse_level
 from jev_agent.servers.profiles import (
     ProfileError,
@@ -52,6 +54,22 @@ QualityOption = Annotated[
         help=f"Quality gate level for the run ({' | '.join(LEVELS)}); overrides [quality] level.",
     ),
 ]
+AutoShipOption = Annotated[
+    bool,
+    typer.Option(
+        "--auto-ship",
+        help="Once both votes approve at D6, ship and merge without asking "
+        "(overrides [ship] after_approval).",
+    ),
+]
+AskBeforeShipOption = Annotated[
+    bool,
+    typer.Option(
+        "--ask-before-ship",
+        help="Once both votes approve at D6, wait for `jev ship approve|modify|stop` "
+        "(overrides [ship] after_approval).",
+    ),
+]
 ProfileOption = Annotated[
     str | None,
     typer.Option(
@@ -72,9 +90,23 @@ def quality_level(value: str | None) -> QualityLevel | None:
         raise fail(str(exc)) from exc
 
 
+def ship_mode_flag(config: JevConfig, auto_ship: bool, ask_before_ship: bool) -> ShipMode | None:
+    """`--auto-ship` / `--ask-before-ship` as a ship mode (None: neither); exits with an error
+    for both at once, or when shipping is off in the repo."""
+    if auto_ship and ask_before_ship:
+        raise fail("--auto-ship and --ask-before-ship cannot be used together")
+    if not (auto_ship or ask_before_ship):
+        return None
+    if not config.ship.enabled:
+        flag = "--auto-ship" if auto_ship else "--ask-before-ship"
+        raise fail(f"{flag} needs shipping on: set `[ship] enabled = true` (see docs/ship.md)")
+    return "merge" if auto_ship else "ask"
+
+
 _STYLE = {
     RunState.DONE: "green",
     RunState.AWAITING_APPROVAL: "yellow",
+    RunState.AWAITING_SHIP: "yellow",
     RunState.NEEDS_HUMAN: "yellow",
 }
 
@@ -105,13 +137,32 @@ def print_warnings(ctx: CliContext) -> None:
         console.print(f"[yellow]warning:[/yellow] {escape(warning)}")
 
 
-def print_outcome(run: RunRecord) -> None:
+def print_ship_preview(preview: ShipPreview) -> None:
+    """What a person reviews before `jev ship approve | modify | stop`."""
+    from jev_agent.cli.status_cmds import format_answers  # status_cmds imports this module
+
+    console.print(f"  PR title: {escape(preview.title)}")
+    console.print(f"  branch: {preview.branch}")
+    if preview.diff is not None:
+        d = preview.diff
+        console.print(f"  diff: {d.files} files, +{d.additions} / -{d.deletions}")
+    if preview.vote is not None:
+        vote = preview.vote.decision
+        line = format_answers(vote.answers, vote.details)
+        console.print(f"  D6 vote ({vote.dispatcher}): {escape(line)}")
+
+
+def print_outcome(run: RunRecord, store: Store | None = None) -> None:
+    """The run's state and what to do next. With `store`, a run waiting to ship also shows
+    the PR it would open, Jev's and Laya's D6 votes and the diff summary."""
     style = _STYLE.get(run.state, "red")
     console.print(f"run [bold]{run.id}[/bold]: [{style}]{run.state}[/{style}]")
     if run.reason:
         console.print(f"  {escape(run.reason)}")
     if run.state is RunState.AWAITING_APPROVAL:
         console.print(f"  Review the plan with `jev status {run.id}`, then `jev approve {run.id}`.")
+    if run.state is RunState.AWAITING_SHIP and store is not None:
+        print_ship_preview(ship_preview(run.idea.repo_path, store, run.id))
     if run.learning_outcome:
         console.print(f"  learning: {escape(run.learning_outcome)}")
     if run.quality_level != "none":
@@ -139,6 +190,7 @@ async def start_run(
     no_learning: bool = False,
     quality: str | None = None,
     profile: str | None = None,
+    ship_mode: ShipMode | None = None,
 ) -> RunRecord:
     """Start a run for `idea` and advance it as far as it goes (the body of `jev run`).
 
@@ -150,7 +202,8 @@ async def start_run(
 
     `profile` is the workspace profile (`none`: none); without it the repo default applies
     (`jev profile use`). The profile's `learning` and `quality` apply when no flag says
-    otherwise. ProfileError (a ValueError) for an unknown profile.
+    otherwise. ProfileError (a ValueError) for an unknown profile. `ship_mode` is what the
+    run does after both votes approve at D6 (None: `[ship] after_approval`).
     """
     workspace = effective_name(ctx.config, profile, ctx.root / STATE_DIRNAME)
     if workspace is not None:
@@ -172,6 +225,7 @@ async def start_run(
         learning_profile=learning_profile,
         quality=level,
         profile=workspace,
+        ship_mode=ship_mode,
     )
 
 
@@ -233,6 +287,8 @@ def run(
     no_learning: NoLearningOption = False,
     quality: QualityOption = None,
     profile: ProfileOption = None,
+    auto_ship: AutoShipOption = False,
+    ask_before_ship: AskBeforeShipOption = False,
     repo: RepoOption = Path("."),
 ) -> None:
     """Take an idea through planning, validation, approval, execution and integration.
@@ -242,6 +298,7 @@ def run(
     with cli_context(repo) as ctx:
         if learning is not None and no_learning:
             raise fail("--learning and --no-learning cannot be used together")
+        mode = ship_mode_flag(ctx.config, auto_ship, ask_before_ship)
         if not ctx.has_workers:
             raise fail(NO_WORKERS_MESSAGE)
         print_warnings(ctx)
@@ -256,16 +313,18 @@ def run(
                     no_learning=no_learning,
                     quality=level,
                     profile=profile,
+                    ship_mode=mode,
                 )
             )
         except (LearningError, ProfileError, RunInUseError) as exc:
             raise fail(str(exc)) from exc
-        print_outcome(record)
+        print_outcome(record, ctx.store)
     exit_for(record)
 
 
 def approve(run_id: RunId, repo: RepoOption = Path(".")) -> None:
-    """Approve a validated plan and execute it.
+    """Approve a validated plan and execute it, or a run waiting to ship (as
+    `jev ship approve`): ship and merge it.
 
     Exit codes: 0 done or awaiting approval, 3 stopped short of DONE, 1 error."""
     with cli_context(repo) as ctx:
@@ -277,7 +336,7 @@ def approve(run_id: RunId, repo: RepoOption = Path(".")) -> None:
             raise fail(str(exc)) from exc
         if not ctx.has_workers:
             console.print(f"Approved. {escape(NO_WORKERS_MESSAGE)} Then run `jev resume {run_id}`.")
-        print_outcome(record)
+        print_outcome(record, ctx.store)
     exit_for(record)
 
 
@@ -313,7 +372,7 @@ def resume(
             )
         except (NotFoundError, PipelineError, LearningError, ProfileError, RunInUseError) as exc:
             raise fail(str(exc)) from exc
-        print_outcome(record)
+        print_outcome(record, ctx.store)
     exit_for(record)
 
 
@@ -324,4 +383,4 @@ def cancel(run_id: RunId, repo: RepoOption = Path(".")) -> None:
             record = ctx.pipeline.cancel(run_id)
         except (NotFoundError, PipelineError) as exc:
             raise fail(str(exc)) from exc
-        print_outcome(record)
+        print_outcome(record, ctx.store)

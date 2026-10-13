@@ -33,6 +33,12 @@ All notable changes to this project are documented here. The format is based on
   and Laya accept a reviewed attempt, and off with `jev` and `rules`. An explicit value wins.
   `[roles.reviewer] prefer_different_vendor_than` now works (`"coder"`: this attempt's coder).
 - **Skill lookup in every role prompt** ([#67](https://github.com/Gane2506/baton/issues/67)). The built-in planner, validator, coder, reviewer, code reviewer, learner and chat prompts now tell the agent to look for relevant skills first, use the ones already installed, and never install a new skill without the maintainer's approval. See [docs/roles.md](docs/roles.md#skills-in-every-prompt).
+- **Ship and merge once both votes approve, or ask first** ([#68](https://github.com/Gane2506/baton/issues/68)).
+  With `[ship] enabled = true`, a D6 "ship" pushes the result, opens the PR ready, waits for
+  its checks and merges it (`gh pr merge --match-head-commit`, `merge_method` configurable),
+  or with `[ship] after_approval = "ask"` waits for `jev ship approve | modify --notes | stop`
+  (also on the dashboard run page). `jev run` / `jev queue add` take `--auto-ship` and
+  `--ask-before-ship`. Any failure stops for a person; this reverses "jev never merges".
 
 - **Contributor guidelines.** A detailed `CONTRIBUTING.md`, a pull request template and issue
   forms for bugs and features. `SECURITY.md` explains private vulnerability reporting, and
