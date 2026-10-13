@@ -401,6 +401,8 @@ def _first_is(value: Any) -> Callable[[dict[str, Any]], dict[str, Any]]:
         (_set_first(score=True), "laya: no score for effort=low on correctness"),
         (_set_first(score="3"), "laya: no score for effort=low on correctness"),
         (_set_first(confidence=None), "laya: no score for effort=low on correctness"),
+        (_set_first(confidence=1.5), "laya: invalid confidence for effort=low on correctness"),
+        (_set_first(confidence=-0.1), "laya: invalid confidence for effort=low on correctness"),
     ],
 )
 async def test_bad_laya_answers_raise(

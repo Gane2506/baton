@@ -102,6 +102,8 @@ All notable changes to this project are documented here. The format is based on
 
 ### Fixed
 
+- **Laya score confidence outside 0 to 1 is rejected** ([#79](https://github.com/Gane2506/baton/issues/79)). A malformed Laya response now stops the run for a person instead of letting a thin margin pass as robust.
+
 - **Two processes can no longer drive the same run** ([#61](https://github.com/Gane2506/baton/issues/61)).
   `jev run`, `approve`, `resume`, the scheduler and the dashboard hold a run lease in the state
   DB while they drive a run; a second one fails with "run ... is in use by another jev process,
