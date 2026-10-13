@@ -1,0 +1,12 @@
+{
+  "id": "gen-dec-1760270002-a7b8c9",
+  "model": "typesafe/jev-1.13-20260917",
+  "provider": "TypeSafe",
+  "answers": {
+    "complexity": {"type": "choice", "choice": "standard", "probabilities": {"trivial": 0.1, "standard": 0.8, "hard": 0.1}, "confidence": 0.8},
+    "worker": {"type": "choice", "choice": "codex", "probabilities": {"claude_code": 0.4, "codex": 0.5, "api": 0.1}, "confidence": 0.5},
+    "model": {"type": "choice", "choice": "anthropic/claude-sonnet-4.6", "probabilities": {"anthropic/claude-sonnet-4.6": 0.9, "openai/gpt-5.1-codex": 0.1}, "confidence": 0.9},
+    "effort": {"type": "choice", "choice": "high", "probabilities": {"low": 0.3, "medium": 0.29, "high": 0.41}, "confidence": 0.41}
+  },
+  "usage": {"input_tokens": 600, "output_tokens": 40, "cost": 0.0000252}
+}

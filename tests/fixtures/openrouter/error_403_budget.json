@@ -1,0 +1,9 @@
+{
+  "error": {
+    "code": 403,
+    "message": "Workspace budget exceeded",
+    "metadata": {
+      "limit_source": "openrouter_workspace_budget"
+    }
+  }
+}

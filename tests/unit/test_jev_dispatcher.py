@@ -1,0 +1,330 @@
+import json
+from pathlib import Path
+from typing import Any
+
+import httpx
+import pytest
+
+from jev_agent.config.schema import JevConfig
+from jev_agent.core.models import DecisionRequest
+from jev_agent.dispatch.base import Dispatcher, DispatchError
+from jev_agent.dispatch.jev import (
+    GENERIC_INSTRUCTION,
+    PRICE_PER_INPUT_TOKEN_USD,
+    JevDispatcher,
+    JevSettings,
+)
+
+FIXTURES = Path(__file__).parent.parent / "fixtures" / "jev"
+KEY = "sk-or-test-SECRET-1234567890"
+MODELS = ["anthropic/claude-sonnet-4.6", "openai/gpt-5.1-codex"]
+
+
+def _fixture(name: str) -> Any:
+    return json.loads((FIXTURES / name).read_text())
+
+
+def _d4() -> DecisionRequest:
+    return DecisionRequest(
+        point="D4",
+        state={
+            "task": {"id": "T3", "title": "Add rate limiting to /api/search", "criteria_count": 3},
+            "quota": {"claude_code": "ok", "codex": "ok"},
+            "prior_attempts": 0,
+        },
+        questions={
+            "complexity": ["trivial", "standard", "hard"],
+            "worker": ["claude_code", "codex", "api"],
+            "model": MODELS,
+            "effort": ["low", "medium", "high"],
+        },
+    )
+
+
+class Recorder:
+    """A MockTransport handler that replays responses and records requests."""
+
+    def __init__(self, *responses: httpx.Response | Exception) -> None:
+        self.responses = list(responses)
+        self.requests: list[httpx.Request] = []
+
+    def __call__(self, request: httpx.Request) -> httpx.Response:
+        self.requests.append(request)
+        item = self.responses.pop(0)
+        if isinstance(item, Exception):
+            raise item
+        return item
+
+    def payload(self, index: int = 0) -> Any:
+        return json.loads(self.requests[index].content)
+
+
+def _ok(name: str) -> httpx.Response:
+    return httpx.Response(200, json=_fixture(name))
+
+
+def _dispatcher(
+    recorder: Recorder, settings: JevSettings | None = None
+) -> tuple[JevDispatcher, list[float]]:
+    sleeps: list[float] = []
+
+    async def fake_sleep(seconds: float) -> None:
+        sleeps.append(seconds)
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(recorder))
+    return JevDispatcher(settings, client=client, sleep=fake_sleep), sleeps
+
+
+@pytest.fixture(autouse=True)
+def _key(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("OPENROUTER_API_KEY", KEY)
+    monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
+
+
+def test_implements_dispatcher_protocol() -> None:
+    assert isinstance(JevDispatcher(), Dispatcher)
+    assert JevDispatcher.name == "jev"
+
+
+async def test_payload_shape() -> None:
+    rec = Recorder(_ok("d4_openrouter_success.json"))
+    jev, _ = _dispatcher(rec)
+    await jev.decide(_d4())
+
+    request = rec.requests[0]
+    assert str(request.url) == "https://openrouter.ai/api/v1/systemone"
+    assert request.headers["authorization"] == f"Bearer {KEY}"
+    body = rec.payload()
+    assert body["model"] == "~typesafe/jev-latest"
+    assert body["state"]["decision_point"]["id"] == "D4"
+    assert body["state"]["decision_point"]["description"]
+    assert body["state"]["task"]["id"] == "T3"
+    assert set(body["questions"]) == {"complexity", "worker", "model", "effort"}
+    for question in body["questions"].values():
+        assert question["type"] == "choice"
+        assert question["instructions"]
+    effort = body["questions"]["effort"]["criteria"]
+    assert list(effort) == ["low", "medium", "high"]
+    assert all(isinstance(v, str) for v in effort.values())
+    assert body["questions"]["model"]["criteria"] == dict.fromkeys(MODELS)
+
+
+async def test_instruction_overrides_and_generic_fallback() -> None:
+    settings = JevSettings(instructions={"D4.effort": "custom effort", "worker": "custom worker"})
+    rec = Recorder(_ok("d4_openrouter_success.json"))
+    jev, _ = _dispatcher(rec, settings)
+    await jev.decide(_d4())
+    questions = rec.payload()["questions"]
+    assert questions["effort"]["instructions"] == "custom effort"
+    assert questions["worker"]["instructions"] == "custom worker"
+    assert jev.instruction_for("D2", "mystery") == GENERIC_INSTRUCTION.format(name="mystery")
+
+
+async def test_parses_answers_model_and_cost_from_usage() -> None:
+    rec = Recorder(_ok("d4_openrouter_success.json"))
+    jev, _ = _dispatcher(rec)
+    decision = await jev.decide(_d4())
+    assert decision.dispatcher == "jev"
+    assert decision.point == "D4"
+    assert decision.answers == {
+        "complexity": "standard",
+        "worker": "claude_code",
+        "model": "anthropic/claude-sonnet-4.6",
+        "effort": "medium",
+    }
+    assert decision.model == "typesafe/jev-1.13-20260917"
+    assert decision.cost_usd == pytest.approx(0.0000257)
+    assert decision.latency_ms >= 0
+    assert decision.invalid_answers(_d4()) == []
+    answers = decision.details["answers"]
+    assert answers["worker"]["confidence"] == pytest.approx(0.72)
+    assert answers["effort"]["probabilities"]["medium"] == pytest.approx(0.7)
+    assert decision.details["usage"]["cost"] == pytest.approx(0.0000257)
+    assert not hasattr(jev, "last_details")
+
+
+async def test_native_settings_and_cost_estimated_from_tokens(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("TYPESAFE_API_KEY", KEY)
+    rec = Recorder(_ok("d3_native_success.json"))
+    jev, _ = _dispatcher(rec, JevSettings.for_native())
+    req = DecisionRequest(
+        point="D3",
+        state={"validation": {"verdict": "revise", "issues": 2}},
+        questions={"verdict": ["approve", "revise", "human"]},
+    )
+    decision = await jev.decide(req)
+    assert str(rec.requests[0].url) == "https://api.typesafe.ai/v1/systemone"
+    assert rec.payload()["model"] == "jev-latest"
+    assert decision.answers == {"verdict": "revise"}
+    assert decision.model == "jev-1.13.0"
+    assert decision.cost_usd == pytest.approx(1000 * PRICE_PER_INPUT_TOKEN_USD)
+
+
+async def test_single_option_questions_skip_http() -> None:
+    rec = Recorder()
+    jev, _ = _dispatcher(rec)
+    req = DecisionRequest(point="D2", state={}, questions={"worker": ["codex"], "effort": ["low"]})
+    decision = await jev.decide(req)
+    assert rec.requests == []
+    assert decision.answers == {"worker": "codex", "effort": "low"}
+    assert decision.cost_usd == 0.0
+    assert decision.details == {"direct": ["effort", "worker"], "answers": {}, "usage": None}
+
+
+async def test_single_option_questions_are_not_sent() -> None:
+    rec = Recorder(_ok("d4_openrouter_success.json"))
+    jev, _ = _dispatcher(rec)
+    req = _d4()
+    req.questions["worker"] = ["claude_code"]
+    decision = await jev.decide(req)
+    assert "worker" not in rec.payload()["questions"]
+    assert decision.answers["worker"] == "claude_code"
+    assert decision.details["direct"] == ["worker"]
+    assert "worker" not in decision.details["answers"]
+
+
+async def test_single_option_shortcut_needs_no_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("OPENROUTER_API_KEY")
+    jev, _ = _dispatcher(Recorder())
+    req = DecisionRequest(point="D1", state={}, questions={"clear": ["yes"]})
+    assert (await jev.decide(req)).answers == {"clear": "yes"}
+
+
+async def test_invalid_choice_raises() -> None:
+    jev, _ = _dispatcher(Recorder(_ok("d4_invalid_choice.json")))
+    with pytest.raises(DispatchError, match="worker"):
+        await jev.decide(_d4())
+
+
+async def test_missing_answer_raises() -> None:
+    body = _fixture("d4_openrouter_success.json")
+    del body["answers"]["effort"]
+    jev, _ = _dispatcher(Recorder(httpx.Response(200, json=body)))
+    with pytest.raises(DispatchError, match="no answer for effort"):
+        await jev.decide(_d4())
+
+
+async def test_low_confidence_raises_with_the_confidences() -> None:
+    jev, _ = _dispatcher(Recorder(_ok("d4_low_confidence.json")))
+    with pytest.raises(DispatchError, match=r"low confidence on worker \(0.50\), effort \(0.41\)"):
+        await jev.decide(_d4())
+
+
+async def test_min_confidence_is_configurable() -> None:
+    jev, _ = _dispatcher(Recorder(_ok("d4_low_confidence.json")), JevSettings(min_confidence=0.4))
+    assert (await jev.decide(_d4())).answers["effort"] == "high"
+
+
+@pytest.mark.parametrize("status", [401, 403])
+async def test_auth_errors(status: int) -> None:
+    rec = Recorder(httpx.Response(status, json={"error": {"message": f"bad key {KEY}"}}))
+    jev, sleeps = _dispatcher(rec)
+    with pytest.raises(DispatchError, match="auth") as info:
+        await jev.decide(_d4())
+    assert KEY not in str(info.value)
+    assert len(rec.requests) == 1
+    assert sleeps == []
+
+
+async def test_422_reports_server_message() -> None:
+    jev, _ = _dispatcher(Recorder(httpx.Response(422, json=_fixture("error_422.json"))))
+    with pytest.raises(DispatchError, match=r"422.*must contain at least 2 options"):
+        await jev.decide(_d4())
+
+
+async def test_error_detail_is_truncated_and_redacted() -> None:
+    long = f"{KEY} " + "x" * 2000
+    jev, _ = _dispatcher(Recorder(httpx.Response(400, text=long)))
+    with pytest.raises(DispatchError) as info:
+        await jev.decide(_d4())
+    message = str(info.value)
+    assert KEY not in message
+    assert len(message) < 400
+
+
+async def test_429_retries_once_then_succeeds() -> None:
+    rec = Recorder(
+        httpx.Response(429, json=_fixture("error_429.json"), headers={"retry-after": "2"}),
+        _ok("d4_openrouter_success.json"),
+    )
+    jev, sleeps = _dispatcher(rec)
+    decision = await jev.decide(_d4())
+    assert decision.answers["worker"] == "claude_code"
+    assert len(rec.requests) == 2
+    assert sleeps == [2.0]
+
+
+@pytest.mark.parametrize("status", [529, 503])
+async def test_overload_fails_after_one_retry(status: int) -> None:
+    rec = Recorder(httpx.Response(status, text="busy"), httpx.Response(status, text="busy"))
+    jev, sleeps = _dispatcher(rec)
+    with pytest.raises(DispatchError, match=f"HTTP {status}"):
+        await jev.decide(_d4())
+    assert len(rec.requests) == 2
+    assert sleeps == [1.0]
+
+
+async def test_timeout_raises() -> None:
+    jev, _ = _dispatcher(Recorder(httpx.ReadTimeout("slow")))
+    with pytest.raises(DispatchError, match="timed out"):
+        await jev.decide(_d4())
+
+
+async def test_network_error_raises() -> None:
+    jev, _ = _dispatcher(Recorder(httpx.ConnectError("refused")))
+    with pytest.raises(DispatchError, match="network error"):
+        await jev.decide(_d4())
+
+
+async def test_non_json_response_raises() -> None:
+    jev, _ = _dispatcher(Recorder(httpx.Response(200, text="<html>")))
+    with pytest.raises(DispatchError, match="not JSON"):
+        await jev.decide(_d4())
+
+
+async def test_missing_key_names_env_var(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("OPENROUTER_API_KEY")
+    rec = Recorder()
+    jev, _ = _dispatcher(rec)
+    with pytest.raises(DispatchError, match="OPENROUTER_API_KEY"):
+        await jev.decide(_d4())
+    assert rec.requests == []
+
+
+async def test_oversize_state_is_not_sent() -> None:
+    rec = Recorder()
+    jev, _ = _dispatcher(rec)
+    req = _d4()
+    req.state["notes"] = "x" * 100_000
+    with pytest.raises(DispatchError, match="state too large"):
+        await jev.decide(req)
+    assert rec.requests == []
+
+
+async def test_key_never_in_any_error_message() -> None:
+    cases: list[list[httpx.Response | Exception]] = [
+        [httpx.Response(401, text=KEY)],
+        [httpx.Response(422, json={"error": {"message": f"echo {KEY}"}})],
+        [httpx.Response(500, text=KEY), httpx.Response(500, text=KEY)],
+        [httpx.ReadTimeout(KEY)],
+        [httpx.ConnectError(KEY)],
+    ]
+    for responses in cases:
+        rec = Recorder(*responses)
+        jev, _ = _dispatcher(rec)
+        with pytest.raises(DispatchError) as info:
+            await jev.decide(_d4())
+        assert KEY not in str(info.value)
+
+
+def test_settings_come_from_dispatcher_config() -> None:
+    config = JevConfig.model_validate(
+        {"dispatcher": {"jev": {"model": "typesafe/jev-1.13", "min_confidence": 0.7}}}
+    )
+    settings = config.dispatcher.jev
+    assert isinstance(settings, JevSettings)
+    assert JevDispatcher(settings).settings.model == "typesafe/jev-1.13"
+    assert settings.min_confidence == 0.7
+    assert settings.base_url == "https://openrouter.ai/api/v1"

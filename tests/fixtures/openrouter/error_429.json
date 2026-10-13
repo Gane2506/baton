@@ -1,0 +1,11 @@
+{
+  "error": {
+    "code": 429,
+    "message": "Rate limit exceeded: too many requests. Please retry shortly.",
+    "metadata": {
+      "headers": {
+        "X-RateLimit-Remaining": "0"
+      }
+    }
+  }
+}

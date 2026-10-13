@@ -1,0 +1,9 @@
+{
+  "error": {
+    "code": 429,
+    "message": "Key limit exceeded: this key's spend limit has been reached. Manage it at https://openrouter.ai/settings/keys",
+    "metadata": {
+      "limit_source": "openrouter_key_limit"
+    }
+  }
+}

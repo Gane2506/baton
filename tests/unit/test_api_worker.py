@@ -1,0 +1,416 @@
+import json
+from collections.abc import Callable
+from pathlib import Path
+from typing import Any
+
+import httpx
+import pytest
+
+from jev_agent.core.models import Plan, Role, ValidationResult
+from jev_agent.workers.api import (
+    PROJECT_TITLE,
+    PROJECT_URL,
+    ApiWorker,
+    classify_api_error,
+    parse_json_content,
+    strict_json_schema,
+)
+from jev_agent.workers.base import Worker, WorkerJob
+
+FIXTURES = Path(__file__).parent.parent / "fixtures" / "openrouter"
+KEY_ENV = "JEV_TEST_OPENROUTER_KEY"
+FAKE_KEY = "sk-or-v1-0123456789abcdef-fake-test-key"
+BASE_URL = "https://openrouter.test/api/v1"
+
+Handler = Callable[[httpx.Request], httpx.Response]
+
+
+def _fixture(name: str) -> str:
+    return (FIXTURES / name).read_text()
+
+
+def _response(status: int, fixture: str, headers: dict[str, str] | None = None) -> httpx.Response:
+    return httpx.Response(status, content=_fixture(fixture), headers=headers)
+
+
+class Recorder:
+    """A MockTransport handler that replays responses in order and records requests."""
+
+    def __init__(self, *responses: httpx.Response | Exception) -> None:
+        self.responses = list(responses)
+        self.requests: list[httpx.Request] = []
+
+    def __call__(self, request: httpx.Request) -> httpx.Response:
+        self.requests.append(request)
+        item = self.responses.pop(0)
+        if isinstance(item, Exception):
+            raise item
+        return item
+
+    def body(self, index: int = 0) -> dict[str, Any]:
+        data: dict[str, Any] = json.loads(self.requests[index].content)
+        return data
+
+
+class Sleeps:
+    def __init__(self) -> None:
+        self.calls: list[float] = []
+
+    async def __call__(self, seconds: float) -> None:
+        self.calls.append(seconds)
+
+
+@pytest.fixture(autouse=True)
+def _key(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv(KEY_ENV, FAKE_KEY)
+
+
+def _worker(handler: Handler, sleeps: Sleeps | None = None) -> ApiWorker:
+    return ApiWorker(
+        BASE_URL,
+        KEY_ENV,
+        default_model="openai/gpt-5-mini",
+        transport=httpx.MockTransport(handler),
+        sleep=sleeps or Sleeps(),
+    )
+
+
+def _job(tmp_path: Path, role: Role = "planner", **kwargs: Any) -> WorkerJob:
+    return WorkerJob(
+        role=role,
+        prompt="Plan the idea: add search.",
+        workdir=tmp_path,
+        log_path=tmp_path / "logs" / "api.log",
+        **kwargs,
+    )
+
+
+def test_is_a_worker() -> None:
+    assert isinstance(ApiWorker(BASE_URL, KEY_ENV), Worker)
+    assert ApiWorker(BASE_URL, KEY_ENV).name == "api"
+
+
+# --- request body ---------------------------------------------------------------------------
+
+
+async def test_request_body_with_schema_and_effort(tmp_path: Path) -> None:
+    rec = Recorder(_response(200, "success_plan.json"))
+    job = _job(tmp_path, model="anthropic/claude-sonnet-4.5", effort="high", output_schema=Plan)
+    await _worker(rec).run(job)
+
+    request = rec.requests[0]
+    assert str(request.url) == f"{BASE_URL}/chat/completions"
+    assert request.headers["Authorization"] == f"Bearer {FAKE_KEY}"
+    assert request.headers["HTTP-Referer"] == PROJECT_URL
+    assert request.headers["X-OpenRouter-Title"] == PROJECT_TITLE
+    body = rec.body()
+    assert body["model"] == "anthropic/claude-sonnet-4.5"
+    assert body["messages"] == [{"role": "user", "content": "Plan the idea: add search."}]
+    assert body["reasoning"] == {"effort": "high"}
+    assert body["provider"] == {"require_parameters": True}
+    fmt = body["response_format"]
+    assert fmt["type"] == "json_schema"
+    assert fmt["json_schema"]["name"] == "Plan"
+    assert fmt["json_schema"]["strict"] is True
+    assert fmt["json_schema"]["schema"] == strict_json_schema(Plan)
+
+
+async def test_request_body_plain_uses_default_model(tmp_path: Path) -> None:
+    rec = Recorder(_response(200, "success_plan.json"))
+    await _worker(rec).run(_job(tmp_path, role="reviewer"))
+    body = rec.body()
+    assert body["model"] == "openai/gpt-5-mini"
+    assert "response_format" not in body
+    assert "provider" not in body
+    assert "reasoning" not in body
+
+
+async def test_unknown_effort_is_not_sent(tmp_path: Path) -> None:
+    rec = Recorder(_response(200, "success_plan.json"))
+    await _worker(rec).run(_job(tmp_path, effort="turbo"))
+    assert "reasoning" not in rec.body()
+
+
+def test_strict_schema_closes_every_object() -> None:
+    schema = strict_json_schema(Plan)
+    assert schema["additionalProperties"] is False
+    assert set(schema["required"]) == {"summary", "tasks", "risks"}
+    task = schema["$defs"]["TaskCard"]
+    assert task["additionalProperties"] is False
+    assert set(task["required"]) == set(task["properties"])
+    assert "default" not in json.dumps(schema).replace('"default_', "")
+
+
+def test_parse_json_content_tolerates_fences() -> None:
+    assert parse_json_content('{"a": 1}') == {"a": 1}
+    assert parse_json_content('text\n```json\n{"a": 1}\n```\nmore') == {"a": 1}
+    with pytest.raises(json.JSONDecodeError):
+        parse_json_content("no json here")
+
+
+# --- success --------------------------------------------------------------------------------
+
+
+async def test_success_parses_plan_and_captures_cost(tmp_path: Path) -> None:
+    rec = Recorder(_response(200, "success_plan.json"))
+    out = await _worker(rec).run(_job(tmp_path, output_schema=Plan))
+
+    assert out.result.status == "success"
+    assert isinstance(out.parsed, Plan)
+    assert [t.id for t in out.parsed.tasks] == ["T1", "T2", "T3", "T4"]
+    assert out.result.summary == "plan with 4 tasks"
+    assert out.result.cost_usd == pytest.approx(0.00123)
+    assert out.result.tokens == {"prompt": 812, "completion": 240, "total": 1052}
+    assert out.result.raw_log_path == tmp_path / "logs" / "api.log"
+
+
+async def test_success_fenced_json(tmp_path: Path) -> None:
+    rec = Recorder(_response(200, "success_fenced_validation.json"))
+    out = await _worker(rec).run(_job(tmp_path, role="validator", output_schema=ValidationResult))
+    assert out.result.status == "success"
+    assert isinstance(out.parsed, ValidationResult)
+    assert out.parsed.verdict == "revise"
+    assert out.result.summary == "verdict: revise (3 issues)"
+
+
+async def test_success_free_text_summary_is_truncated(tmp_path: Path) -> None:
+    data = json.loads(_fixture("success_plan.json"))
+    data["choices"][0]["message"]["content"] = "x" * 2000
+    rec = Recorder(httpx.Response(200, json=data))
+    out = await _worker(rec).run(_job(tmp_path, role="reviewer"))
+    assert out.result.status == "success"
+    assert out.parsed is None
+    assert out.result.summary == "x" * 500
+
+
+async def test_schema_invalid_is_error_with_raw_content_logged(tmp_path: Path) -> None:
+    rec = Recorder(_response(200, "schema_invalid.json"))
+    job = _job(tmp_path, role="validator", output_schema=ValidationResult)
+    out = await _worker(rec).run(job)
+    assert out.result.status == "error"
+    assert out.parsed is None
+    assert "ValidationResult" in out.result.summary
+    assert out.result.cost_usd == pytest.approx(0.0002)
+    assert '"verdict": "maybe"' in job.log_path.read_text()
+
+
+async def test_non_json_content_is_error(tmp_path: Path) -> None:
+    data = json.loads(_fixture("success_plan.json"))
+    data["choices"][0]["message"]["content"] = "I think the plan is fine."
+    rec = Recorder(httpx.Response(200, json=data))
+    out = await _worker(rec).run(_job(tmp_path, output_schema=Plan))
+    assert out.result.status == "error"
+    assert "not valid JSON" in out.result.summary
+
+
+async def test_missing_content_is_error(tmp_path: Path) -> None:
+    rec = Recorder(httpx.Response(200, json={"choices": []}))
+    out = await _worker(rec).run(_job(tmp_path))
+    assert out.result.status == "error"
+
+
+# --- error classification -------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("status", "fixture", "expected"),
+    [
+        (402, "error_402.json", "quota_exhausted"),
+        (429, "error_429.json", "failure"),
+        (429, "error_429_quota.json", "quota_exhausted"),
+        (401, "error_401.json", "error"),
+        (403, "error_401.json", "error"),
+        (403, "error_403_budget.json", "quota_exhausted"),
+        (500, "error_500.json", "failure"),
+        (503, "error_503.json", "failure"),
+    ],
+)
+def test_classify_api_error(status: int, fixture: str, expected: str) -> None:
+    assert classify_api_error(status, _fixture(fixture)) == expected
+
+
+def test_classify_daily_free_limit_as_quota() -> None:
+    body = '{"error": {"code": 429, "message": "Rate limit exceeded: free-models-per-day."}}'
+    assert classify_api_error(429, body) == "quota_exhausted"
+
+
+def test_classify_other_codes() -> None:
+    assert classify_api_error(400, "bad request") == "error"
+    assert classify_api_error(408, "") == "timeout"
+    assert classify_api_error(502, "not json") == "failure"
+
+
+@pytest.mark.parametrize(
+    ("status", "fixture", "expected"),
+    [
+        (402, "error_402.json", "quota_exhausted"),
+        (401, "error_401.json", "error"),
+        (500, "error_500.json", "failure"),
+        (403, "error_403_budget.json", "quota_exhausted"),
+    ],
+)
+async def test_run_maps_http_errors(
+    tmp_path: Path, status: int, fixture: str, expected: str
+) -> None:
+    rec = Recorder(_response(status, fixture))
+    out = await _worker(rec).run(_job(tmp_path))
+    assert out.result.status == expected
+    assert out.result.summary.startswith(f"HTTP {status}: ")
+    assert len(rec.requests) == 1  # no retry
+
+
+# --- retry ----------------------------------------------------------------------------------
+
+
+async def test_retry_on_429_honours_retry_after(tmp_path: Path) -> None:
+    rec = Recorder(
+        _response(429, "error_429.json", {"Retry-After": "3"}),
+        _response(200, "success_plan.json"),
+    )
+    sleeps = Sleeps()
+    out = await _worker(rec, sleeps).run(_job(tmp_path, output_schema=Plan))
+    assert out.result.status == "success"
+    assert sleeps.calls == [3.0]
+    assert len(rec.requests) == 2
+
+
+async def test_retry_only_once(tmp_path: Path) -> None:
+    rec = Recorder(_response(503, "error_503.json"), _response(503, "error_503.json"))
+    sleeps = Sleeps()
+    out = await _worker(rec, sleeps).run(_job(tmp_path))
+    assert out.result.status == "failure"
+    assert sleeps.calls == [2.0]
+    assert len(rec.requests) == 2
+
+
+async def test_no_retry_when_retry_after_too_long(tmp_path: Path) -> None:
+    rec = Recorder(_response(429, "error_429.json", {"Retry-After": "60"}))
+    sleeps = Sleeps()
+    out = await _worker(rec, sleeps).run(_job(tmp_path))
+    assert out.result.status == "failure"
+    assert sleeps.calls == []
+
+
+async def test_no_retry_on_quota_429(tmp_path: Path) -> None:
+    rec = Recorder(_response(429, "error_429_quota.json", {"Retry-After": "1"}))
+    sleeps = Sleeps()
+    out = await _worker(rec, sleeps).run(_job(tmp_path))
+    assert out.result.status == "quota_exhausted"
+    assert sleeps.calls == []
+
+
+# --- timeouts, network, key, role -----------------------------------------------------------
+
+
+async def test_timeout(tmp_path: Path) -> None:
+    rec = Recorder(httpx.ReadTimeout("timed out"))
+    out = await _worker(rec).run(_job(tmp_path, timeout_s=5))
+    assert out.result.status == "timeout"
+    assert "5s" in out.result.summary
+
+
+async def test_network_error(tmp_path: Path) -> None:
+    rec = Recorder(httpx.ConnectError("connection refused"))
+    out = await _worker(rec).run(_job(tmp_path))
+    assert out.result.status == "error"
+    assert "network error" in out.result.summary
+
+
+async def test_missing_key(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv(KEY_ENV)
+    rec = Recorder()
+    job = _job(tmp_path)
+    out = await _worker(rec).run(job)
+    assert out.result.status == "error"
+    assert KEY_ENV in out.result.summary
+    assert rec.requests == []
+    assert job.log_path.exists()
+
+
+async def test_missing_model(tmp_path: Path) -> None:
+    worker = ApiWorker(BASE_URL, KEY_ENV, transport=httpx.MockTransport(Recorder()))
+    out = await worker.run(_job(tmp_path))
+    assert out.result.status == "error"
+    assert "model" in out.result.summary
+
+
+async def test_coder_is_rejected(tmp_path: Path) -> None:
+    rec = Recorder()
+    out = await _worker(rec).run(_job(tmp_path, role="coder"))
+    assert out.result.status == "error"
+    assert "coder" in out.result.summary
+    assert rec.requests == []
+
+
+async def test_injected_client_is_used(tmp_path: Path) -> None:
+    rec = Recorder(_response(200, "success_plan.json"))
+    async with httpx.AsyncClient(transport=httpx.MockTransport(rec)) as client:
+        worker = ApiWorker(BASE_URL, KEY_ENV, "m", client=client)
+        out = await worker.run(_job(tmp_path))
+        assert not client.is_closed
+    assert out.result.status == "success"
+    assert len(rec.requests) == 1
+
+
+# --- logging --------------------------------------------------------------------------------
+
+
+async def test_log_has_metadata_and_never_the_key(tmp_path: Path) -> None:
+    data = json.loads(_fixture("success_plan.json"))
+    # Even if the model echoes the key back, it must not reach the log or the summary.
+    data["choices"][0]["message"]["content"] = f"key is {FAKE_KEY} and Bearer {FAKE_KEY}"
+    rec = Recorder(_response(503, "error_503.json"), httpx.Response(200, json=data))
+    job = WorkerJob(
+        role="reviewer",
+        prompt=f"review this; token {FAKE_KEY}",
+        workdir=tmp_path,
+        log_path=tmp_path / "nested" / "dir" / "api.log",
+        effort="low",
+    )
+    out = await _worker(rec).run(job)
+    log = job.log_path.read_text()
+    assert FAKE_KEY not in log
+    assert FAKE_KEY not in out.result.summary
+    assert "Authorization" not in log
+    assert "role: reviewer" in log
+    assert "model: openai/gpt-5-mini" in log
+    assert "effort: low" in log
+    assert "HTTP 503" in log
+    assert "HTTP 200" in log
+    assert '"cost": 0.00123' in log
+    assert "[REDACTED]" in log
+
+
+async def test_log_redacts_unknown_key_shapes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    odd_key = "plainkeyvalue-ABCDEFGH"
+    monkeypatch.setenv(KEY_ENV, odd_key)
+    data = json.loads(_fixture("success_plan.json"))
+    data["choices"][0]["message"]["content"] = f"echo {odd_key}"
+    rec = Recorder(httpx.Response(200, json=data))
+    job = _job(tmp_path, role="reviewer")
+    out = await _worker(rec).run(job)
+    assert odd_key not in job.log_path.read_text()
+    assert odd_key not in out.result.summary
+
+
+async def test_log_redacts_other_secret_env_values(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    other = "another-secret-value-123"
+    monkeypatch.setenv("SOME_SERVICE_TOKEN", other)
+    data = json.loads(_fixture("success_plan.json"))
+    data["choices"][0]["message"]["content"] = f"leaked {other}"
+    rec = Recorder(httpx.Response(200, json=data))
+    job = _job(tmp_path, role="reviewer")
+    out = await _worker(rec).run(job)
+    assert other not in job.log_path.read_text()
+    assert other not in out.result.summary
+
+
+async def test_error_summary_scrubs_the_key(tmp_path: Path) -> None:
+    rec = Recorder(httpx.Response(400, json={"error": {"message": f"bad key {FAKE_KEY}"}}))
+    out = await _worker(rec).run(_job(tmp_path))
+    assert out.result.status == "error"
+    assert FAKE_KEY not in out.result.summary

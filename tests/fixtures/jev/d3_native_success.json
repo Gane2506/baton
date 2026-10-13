@@ -1,0 +1,12 @@
+{
+  "model": "jev-1.13.0",
+  "answers": {
+    "verdict": {
+      "type": "choice",
+      "choice": "revise",
+      "probabilities": {"approve": 0.12, "revise": 0.83, "human": 0.05},
+      "confidence": 0.83
+    }
+  },
+  "usage": {"input_tokens": 1000, "output_tokens": 10}
+}

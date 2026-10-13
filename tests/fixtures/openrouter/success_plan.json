@@ -1,0 +1,37 @@
+{
+  "id": "gen-1760000000-AbCdEfGhIjKlMnOp",
+  "provider": "OpenAI",
+  "model": "openai/gpt-5-mini",
+  "object": "chat.completion",
+  "created": 1760000000,
+  "choices": [
+    {
+      "index": 0,
+      "logprobs": null,
+      "finish_reason": "stop",
+      "native_finish_reason": "completed",
+      "message": {
+        "role": "assistant",
+        "content": "{\"summary\": \"Add search\", \"tasks\": [{\"id\": \"T1\", \"title\": \"Index\", \"description\": \"Build index\", \"files_hint\": [\"src/index.py\"], \"depends_on\": [], \"acceptance_criteria\": [\"index builds\"], \"test_command\": \"pytest tests/test_index.py\"}, {\"id\": \"T2\", \"title\": \"Query\", \"description\": \"Query API\", \"files_hint\": [], \"depends_on\": [\"T1\"], \"acceptance_criteria\": [], \"test_command\": null}, {\"id\": \"T3\", \"title\": \"CLI\", \"description\": \"CLI flag\", \"files_hint\": [], \"depends_on\": [\"T2\"], \"acceptance_criteria\": [], \"test_command\": null}, {\"id\": \"T4\", \"title\": \"Docs\", \"description\": \"Docs\", \"files_hint\": [], \"depends_on\": [], \"acceptance_criteria\": [], \"test_command\": null}], \"risks\": []}",
+        "refusal": null,
+        "reasoning": null
+      }
+    }
+  ],
+  "usage": {
+    "prompt_tokens": 812,
+    "completion_tokens": 240,
+    "total_tokens": 1052,
+    "cost": 0.00123,
+    "is_byok": false,
+    "prompt_tokens_details": {
+      "cached_tokens": 0
+    },
+    "cost_details": {
+      "upstream_inference_cost": null
+    },
+    "completion_tokens_details": {
+      "reasoning_tokens": 64
+    }
+  }
+}

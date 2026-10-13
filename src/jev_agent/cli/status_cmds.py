@@ -1,0 +1,220 @@
+"""`jev status` and `jev log`: read-only views of runs in the state database."""
+
+from __future__ import annotations
+
+from datetime import UTC, datetime
+from pathlib import Path
+from typing import Annotated, Any
+
+import typer
+from rich.console import Console
+from rich.markup import escape
+from rich.table import Table
+
+from jev_agent.cli.repo import RepoOption
+from jev_agent.cli.run_cmds import RunId
+from jev_agent.cli.wiring import cli_context, fail
+from jev_agent.core.store import (
+    AttemptRecord,
+    DecisionRecord,
+    NotFoundError,
+    QualityReportRecord,
+    RunRecord,
+    Store,
+)
+
+console = Console()
+
+
+def format_time(value: datetime) -> str:
+    """UTC with an explicit `Z`, like run ids (which are UTC too): `2026-10-12 15:30:12Z`."""
+    if value.tzinfo is None:  # stored times are UTC; never let the local zone creep in
+        value = value.replace(tzinfo=UTC)
+    return value.astimezone(UTC).strftime("%Y-%m-%d %H:%M:%SZ")
+
+
+def _usd(value: float | None) -> str:
+    return "-" if value is None else f"${value:.2f}"
+
+
+def status(
+    run_id: Annotated[str | None, typer.Argument(help="Show one run in detail.")] = None,
+    repo: RepoOption = Path("."),
+) -> None:
+    """List runs, or show one run with its plan and tasks."""
+    with cli_context(repo) as ctx:
+        if run_id is None:
+            _print_runs(ctx.store.list_runs())
+            return
+        try:
+            _print_run(ctx.store, ctx.store.get_run(run_id))
+        except NotFoundError as exc:
+            raise fail(str(exc)) from exc
+
+
+def _print_runs(runs: list[RunRecord]) -> None:
+    if not runs:
+        console.print('No runs yet. Start one with `jev run "idea"`.')
+        return
+    table = Table(title="runs")
+    table.add_column("run", no_wrap=True)
+    for column in ("state", "spent", "updated", "idea"):
+        table.add_column(column, overflow="fold")
+    for r in runs:
+        idea = r.idea.text if len(r.idea.text) <= 60 else r.idea.text[:57] + "..."
+        table.add_row(
+            r.id, str(r.state), _usd(r.spend_usd), format_time(r.updated_at), escape(idea)
+        )
+    console.print(table)
+
+
+def _print_run(store: Store, run: RunRecord) -> None:
+    console.print(f"[bold]run {run.id}[/bold]  {run.state}  spent {_usd(run.spend_usd)}")
+    if run.reason:
+        console.print(f"reason: {escape(run.reason)}")
+    console.print(f"learning: {escape(learning_line(run))}")
+    console.print(f"quality: {escape(quality_line(run, store.list_quality_reports(run.id)))}")
+    console.print(f"idea: {escape(run.idea.text)}")
+    if run.plan is not None:
+        console.print(f"plan (round {run.plan_round}): {escape(run.plan.summary)}")
+    if run.validation is not None:
+        console.print(f"validation: {run.validation.verdict}")
+        for issue in run.validation.issues:
+            console.print(f"  - {escape(issue)}")
+    tasks = store.list_tasks(run.id)
+    if not tasks:
+        return
+    table = Table(title="tasks")
+    for column in ("task", "title", "state", "tries", "worker", "model", "effort", "spent", "note"):
+        table.add_column(column, overflow="fold")
+    for t in tasks:
+        note = (t.note or "").splitlines()[0] if t.note else ""
+        table.add_row(
+            t.id,
+            escape(t.card.title),
+            str(t.state),
+            str(t.attempts),
+            t.worker or "-",
+            t.model or "-",
+            t.effort or "-",
+            _usd(t.spend_usd),
+            escape(note),
+        )
+    console.print(table)
+
+
+def learning_line(run: RunRecord) -> str:
+    """`profile default (learned into default: 1 added, ...)`, or `off`."""
+    if run.learning_profile is None:
+        return "off"
+    outcome = f" ({run.learning_outcome})" if run.learning_outcome else ""
+    return f"profile {run.learning_profile}{outcome}"
+
+
+def quality_line(run: RunRecord, reports: list[QualityReportRecord]) -> str:
+    """`production; T1 #2 passed, integration #1 blocked (...); `jev quality show RUN``,
+    `production (no gate has run yet)`, or `none`."""
+    if run.quality_level == "none" and not reports:
+        return "none"
+    latest: dict[str, QualityReportRecord] = {}
+    for record in reports:
+        key = record.result.task_id or "integration"
+        latest.pop(key, None)
+        latest[key] = record
+    if not latest:
+        return f"{run.quality_level} (no gate has run yet)"
+    parts = []
+    for key, record in latest.items():
+        r = record.result
+        verdict = "blocked" if r.blocked else "passed"
+        counts = r.counts()
+        serious = ", ".join(f"{counts[s]} {s}" for s in ("critical", "major") if counts[s])
+        parts.append(f"{key} #{r.number} {verdict}" + (f" ({serious})" if serious else ""))
+    return f"{run.quality_level}; {', '.join(parts)}; report: `jev quality show {run.id}`"
+
+
+def log(run_id: RunId, repo: RepoOption = Path(".")) -> None:
+    """Show the run's timeline: every decision and every worker attempt."""
+    with cli_context(repo) as ctx:
+        try:
+            run = ctx.store.get_run(run_id)
+            decisions = ctx.store.list_decisions(run_id)
+            attempts = ctx.store.list_attempts(run_id)
+            reports = ctx.store.list_quality_reports(run_id)
+        except NotFoundError as exc:
+            raise fail(str(exc)) from exc
+        console.print(f"[bold]run {run.id}[/bold]  {run.state}  spent {_usd(run.spend_usd)}")
+        for when, line in timeline(decisions, attempts, reports):
+            console.print(f"{format_time(when)}  {line}", markup=False, highlight=False)
+        if run.reason:
+            console.print(f"reason: {run.reason}", markup=False)
+        console.print(f"learning: {learning_line(run)}", markup=False, highlight=False)
+        console.print(f"quality: {quality_line(run, reports)}", markup=False, highlight=False)
+
+
+def timeline(
+    decisions: list[DecisionRecord],
+    attempts: list[AttemptRecord],
+    reports: list[QualityReportRecord] | None = None,
+) -> list[tuple[datetime, str]]:
+    """Decisions, attempts and quality gates as (time, line) pairs, oldest first."""
+    events = [(d.created_at, _decision_line(d)) for d in decisions]
+    events += [(a.started_at, _attempt_line(a)) for a in attempts]
+    events += [(r.created_at, quality_gate_line(r)) for r in reports or []]
+    return sorted(events, key=lambda event: event[0])
+
+
+def quality_gate_line(record: QualityReportRecord) -> str:
+    """`quality [T1] #2 production: blocked (...); ruff=fail tests=pass bandit=skipped`."""
+    r = record.result
+    checks = " ".join(f"{c.name}={c.status}" for c in r.checks)
+    line = f"quality [{r.task_id or 'integration'}] #{r.number} {r.level}: {r.summary_line()}"
+    if checks:
+        line += f"; {checks}"
+    if r.blocked:
+        line += f"; blocked by: {'; '.join(r.reasons)}"
+    return line
+
+
+def _decision_line(record: DecisionRecord) -> str:
+    d = record.decision
+    scope = record.task_id or "run"
+    answers = format_answers(d.answers, d.details)
+    line = (
+        f"decision {d.point} [{scope}] by {d.dispatcher}"
+        f"{f' ({d.model})' if d.model else ''}: {answers}"
+        f"  cost {_usd(d.cost_usd)}  {d.latency_ms}ms"
+    )
+    if record.fallback_reason:
+        line += f"  FALLBACK: {record.fallback_reason}"
+    return line
+
+
+def format_answers(answers: dict[str, str], details: dict[str, Any]) -> str:
+    """`worker=codex effort=high (0.91)`: each answer, with Jev's confidence when recorded."""
+    per_question = details.get("answers")
+    if not isinstance(per_question, dict):
+        per_question = {}
+    parts = []
+    for name, value in answers.items():
+        part = f"{name}={value}"
+        info = per_question.get(name)
+        confidence = info.get("confidence") if isinstance(info, dict) else None
+        if isinstance(confidence, int | float) and not isinstance(confidence, bool):
+            part += f" ({confidence:.2f})"
+        parts.append(part)
+    return " ".join(parts)
+
+
+def _attempt_line(a: AttemptRecord) -> str:
+    scope = a.task_id or "run"
+    status = a.result.status if a.result else "running"
+    cost = a.result.cost_usd if a.result else None
+    line = (
+        f"attempt {a.role} [{scope}] #{a.attempt_no} {a.worker}"
+        f" model={a.model or 'default'} effort={a.effort or 'default'}"
+        f" -> {status}  cost {_usd(cost)}"
+    )
+    if a.lesson_ids:
+        line += f"  lessons {','.join(a.lesson_ids)}"
+    return line

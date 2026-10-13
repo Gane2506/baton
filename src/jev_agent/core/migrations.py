@@ -1,0 +1,224 @@
+"""SQLite schema migrations for the state store (PLAN.md section 9).
+
+Each entry in `MIGRATIONS` is one SQL script. Script N (1-based) moves the database from
+`PRAGMA user_version` N-1 to N. Never edit a released script: append a new one instead.
+"""
+
+from __future__ import annotations
+
+import sqlite3
+
+# Profiles and lessons for recursive learning (docs/learning.md). The same tables live in the
+# repo's state.db (migration 4) and in the shared learning database (`SHARED_MIGRATIONS`).
+# Like every released script, never edit this text: add a new migration instead.
+LEARNING_TABLES_V1 = """
+    CREATE TABLE learning_profiles (
+        name        TEXT PRIMARY KEY,
+        enabled     INTEGER NOT NULL DEFAULT 1,
+        created_at  TEXT NOT NULL
+    );
+
+    -- source_run/source_task have no foreign key: shared databases hold no runs.
+    CREATE TABLE lessons (
+        id           INTEGER PRIMARY KEY,
+        profile      TEXT NOT NULL REFERENCES learning_profiles (name) ON DELETE CASCADE,
+        text         TEXT NOT NULL,
+        roles_json   TEXT NOT NULL,
+        tags_json    TEXT NOT NULL,
+        source_run   TEXT,
+        source_task  TEXT,
+        created_at   TEXT NOT NULL,
+        updated_at   TEXT NOT NULL,
+        uses         INTEGER NOT NULL DEFAULT 0,
+        score        REAL NOT NULL DEFAULT 0,
+        retired      INTEGER NOT NULL DEFAULT 0
+    );
+
+    CREATE INDEX lessons_profile ON lessons (profile);
+"""
+
+MIGRATIONS: list[str] = [
+    # 1: initial schema
+    """
+    CREATE TABLE runs (
+        id          TEXT PRIMARY KEY,
+        idea_json   TEXT NOT NULL,
+        state       TEXT NOT NULL,
+        plan_json   TEXT,
+        plan_round  INTEGER NOT NULL DEFAULT 0,
+        spend_usd   REAL NOT NULL DEFAULT 0,
+        created_at  TEXT NOT NULL,
+        updated_at  TEXT NOT NULL
+    );
+
+    CREATE TABLE tasks (
+        run_id     TEXT NOT NULL REFERENCES runs (id),
+        id         TEXT NOT NULL,
+        position   INTEGER NOT NULL,  -- index of the card in the plan
+        card_json  TEXT NOT NULL,
+        state      TEXT NOT NULL,
+        attempts   INTEGER NOT NULL DEFAULT 0,
+        spend_usd  REAL NOT NULL DEFAULT 0,
+        PRIMARY KEY (run_id, id)
+    );
+
+    -- task_id is NULL for run-level work such as planning and validation.
+    CREATE TABLE attempts (
+        id           INTEGER PRIMARY KEY,
+        run_id       TEXT NOT NULL REFERENCES runs (id),
+        task_id      TEXT,
+        attempt_no   INTEGER NOT NULL,
+        role         TEXT NOT NULL,
+        worker       TEXT NOT NULL,
+        model        TEXT,
+        effort       TEXT,
+        status       TEXT,
+        result_json  TEXT,
+        cost_usd     REAL,
+        log_path     TEXT,
+        started_at   TEXT NOT NULL,
+        finished_at  TEXT,
+        FOREIGN KEY (run_id, task_id) REFERENCES tasks (run_id, id)
+    );
+
+    -- point/dispatcher/model/cost_usd/latency_ms duplicate decision_json for easy querying.
+    CREATE TABLE decisions (
+        id               INTEGER PRIMARY KEY,
+        run_id           TEXT NOT NULL REFERENCES runs (id),
+        task_id          TEXT,
+        point            TEXT NOT NULL,
+        request_json     TEXT NOT NULL,
+        decision_json    TEXT NOT NULL,
+        dispatcher       TEXT NOT NULL,
+        model            TEXT,
+        cost_usd         REAL,
+        latency_ms       INTEGER NOT NULL,
+        fallback_reason  TEXT,
+        created_at       TEXT NOT NULL,
+        FOREIGN KEY (run_id, task_id) REFERENCES tasks (run_id, id)
+    );
+
+    CREATE INDEX tasks_run_id ON tasks (run_id);
+    CREATE INDEX attempts_run_id ON attempts (run_id);
+    CREATE INDEX decisions_run_id ON decisions (run_id);
+    """,
+    # 2: pipeline bookkeeping (M2): why a run stopped, the last validation verdict, and each
+    # task's current worker assignment plus a note (feedback for the next attempt, or why it
+    # failed).
+    """
+    ALTER TABLE runs ADD COLUMN reason TEXT;
+    ALTER TABLE runs ADD COLUMN validation_json TEXT;
+    ALTER TABLE tasks ADD COLUMN worker TEXT;
+    ALTER TABLE tasks ADD COLUMN model TEXT;
+    ALTER TABLE tasks ADD COLUMN effort TEXT;
+    ALTER TABLE tasks ADD COLUMN note TEXT;
+    """,
+    # 3: the state a NEEDS_HUMAN run returns to on `resume` once the human has fixed the
+    # problem (for example a broken prompt template). NULL means the stop is final.
+    """
+    ALTER TABLE runs ADD COLUMN resume_state TEXT;
+    """,
+    # 4: recursive learning. Repo settings set by `jev learning` (active profile, on/off), the
+    # profile each run uses (NULL: learning off) and its learning outcome, lesson ids injected
+    # into each attempt (JSON list), whether a task's lessons were scored, and the repo-scope
+    # profile and lesson tables.
+    """
+    CREATE TABLE settings (
+        key    TEXT PRIMARY KEY,
+        value  TEXT NOT NULL
+    );
+    ALTER TABLE runs ADD COLUMN learning_profile TEXT;
+    ALTER TABLE runs ADD COLUMN learning_outcome TEXT;
+    ALTER TABLE tasks ADD COLUMN lessons_scored INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE attempts ADD COLUMN lesson_ids TEXT;
+    """
+    + LEARNING_TABLES_V1,
+    # 5: the idea queue worked through by `jev scheduler` (docs/queue.md). Ordered by priority,
+    # then position. `run_id` links an item to the run started for it; `profile` is a workspace
+    # profile name, stored and passed through to the run.
+    """
+    CREATE TABLE queue (
+        id                INTEGER PRIMARY KEY,
+        idea              TEXT NOT NULL,
+        priority          TEXT NOT NULL DEFAULT 'normal'
+                          CHECK (priority IN ('high', 'normal', 'low')),
+        position          INTEGER NOT NULL,
+        status            TEXT NOT NULL DEFAULT 'queued'
+                          CHECK (status IN ('queued', 'running', 'waiting', 'done', 'failed',
+                                            'cancelled')),
+        run_id            TEXT REFERENCES runs (id),
+        plan_only         INTEGER NOT NULL DEFAULT 0,
+        learning_profile  TEXT,
+        no_learning       INTEGER NOT NULL DEFAULT 0,
+        profile           TEXT,
+        note              TEXT,
+        created_at        TEXT NOT NULL,
+        updated_at        TEXT NOT NULL
+    );
+
+    CREATE INDEX queue_status ON queue (status);
+    """,
+    # 6: the quality gate (docs/quality.md). The level each run uses (NULL: "none", as for runs
+    # made before this migration), the level a queue item asks for (NULL: the config's), and
+    # one row per gate (a task attempt or an integration round) with its result as JSON.
+    """
+    ALTER TABLE runs ADD COLUMN quality_level TEXT;
+    ALTER TABLE queue ADD COLUMN quality TEXT;
+    CREATE TABLE quality_reports (
+        id           INTEGER PRIMARY KEY,
+        run_id       TEXT NOT NULL REFERENCES runs (id),
+        task_id      TEXT,
+        scope        TEXT NOT NULL CHECK (scope IN ('task', 'integration')),
+        number       INTEGER NOT NULL,
+        level        TEXT NOT NULL,
+        blocked      INTEGER NOT NULL,
+        result_json  TEXT NOT NULL,
+        report_path  TEXT,
+        created_at   TEXT NOT NULL
+    );
+
+    CREATE INDEX quality_reports_run ON quality_reports (run_id);
+    """,
+]
+
+SCHEMA_VERSION = len(MIGRATIONS)
+
+# Migrations for the shared learning database (`$XDG_DATA_HOME/jev/learning.db`).
+SHARED_MIGRATIONS: list[str] = [LEARNING_TABLES_V1]
+
+
+class SchemaVersionError(RuntimeError):
+    """The database was written by a newer version of jev than this one."""
+
+
+def schema_version(conn: sqlite3.Connection) -> int:
+    version: int = conn.execute("PRAGMA user_version").fetchone()[0]
+    return version
+
+
+def apply_migrations(conn: sqlite3.Connection, migrations: list[str] | None = None) -> None:
+    """Bring the database up to the last of `migrations` (default: the state database's
+    `MIGRATIONS`, i.e. `SCHEMA_VERSION`). Safe to call on every open.
+
+    Each script runs in its own transaction together with its `user_version` bump, so a
+    failure leaves the database at the last fully applied version. `conn` must be in
+    autocommit mode (`isolation_level=None`).
+    """
+    scripts = MIGRATIONS if migrations is None else migrations
+    latest = len(scripts)
+    current = schema_version(conn)
+    if current > latest:
+        raise SchemaVersionError(
+            f"database has schema version {current}, but this jev only knows up to "
+            f"{latest}; upgrade jev to open it"
+        )
+    for version in range(current + 1, latest + 1):
+        script = scripts[version - 1]
+        try:
+            conn.executescript(
+                f"BEGIN IMMEDIATE;\n{script}\nPRAGMA user_version = {version};\nCOMMIT;"
+            )
+        except BaseException:
+            if conn.in_transaction:
+                conn.rollback()
+            raise

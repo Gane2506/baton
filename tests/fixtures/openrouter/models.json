@@ -1,0 +1,62 @@
+{
+  "data": [
+    {
+      "id": "openai/gpt-5-mini",
+      "name": "OpenAI: GPT-5 Mini",
+      "context_length": 400000,
+      "pricing": {"prompt": "0.00000025", "completion": "0.000002"},
+      "supported_parameters": ["max_tokens", "reasoning", "response_format", "structured_outputs", "tools"]
+    },
+    {
+      "id": "nvidia/nemotron-3-super-120b-a12b:free",
+      "name": "NVIDIA: Nemotron 3 Super (free)",
+      "context_length": 262144,
+      "pricing": {"prompt": "0", "completion": "0"},
+      "supported_parameters": ["max_tokens", "reasoning", "response_format", "structured_outputs", "tools"]
+    },
+    {
+      "id": "poolside/laguna-s-2.1:free",
+      "name": "Poolside: Laguna S 2.1 (free)",
+      "context_length": 262144,
+      "pricing": {"prompt": "0", "completion": "0"},
+      "supported_parameters": ["max_tokens", "reasoning", "tools"]
+    },
+    {
+      "id": "inclusionai/ling-3.1-flash",
+      "name": "inclusionAI: Ling 3.1 Flash",
+      "context_length": 262144,
+      "pricing": {"prompt": "0", "completion": "0"},
+      "supported_parameters": ["max_tokens", "reasoning", "structured_outputs"]
+    },
+    {
+      "id": "liquid/lfm-2.5-2.6b:free",
+      "name": "LiquidAI: LFM 2.5 (free)",
+      "context_length": 65536,
+      "pricing": {"prompt": "0", "completion": "0"}
+    },
+    {
+      "id": "apodex/apodex-1.1-mini:free",
+      "name": "Apodex 1.1 Mini (free)",
+      "context_length": 262144,
+      "pricing": {"prompt": "0", "completion": "0"},
+      "supported_parameters": ["reasoning", "response_format", "structured_outputs"]
+    },
+    {
+      "id": "openrouter/free",
+      "name": "Free Models Router",
+      "context_length": 200000,
+      "pricing": {"prompt": "0", "completion": "0"},
+      "supported_parameters": ["reasoning", "response_format", "structured_outputs", "tools"]
+    },
+    {
+      "id": "anthropic/claude-sonnet-5",
+      "name": "Anthropic: Claude Sonnet 5",
+      "context_length": 1000000,
+      "pricing": {"prompt": "0.000003", "completion": "0.000015"},
+      "supported_parameters": ["max_tokens", "reasoning", "structured_outputs", "tools"]
+    },
+    {"name": "entry without an id is skipped"}
+  ],
+  "total_count": 8,
+  "links": {"next": null}
+}
