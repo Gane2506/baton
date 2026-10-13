@@ -507,8 +507,13 @@ def _process_alive(pid: int) -> bool:
         os.kill(pid, 0)
     except ProcessLookupError:
         return False
-    status = Path(f"/proc/{pid}/status")
-    return not (status.exists() and "\nState:\tZ" in status.read_text())
+    if not Path("/proc").is_dir():  # macOS: kill(0) succeeded, so it runs
+        return True
+    try:  # a zombie still answers kill(0); it may also be reaped right now
+        state = Path(f"/proc/{pid}/status").read_text()
+    except FileNotFoundError:
+        return False
+    return "\nState:\tZ" not in state
 
 
 def test_learning_page_and_actions(client: TestClient, planned: tuple[Path, str]) -> None:

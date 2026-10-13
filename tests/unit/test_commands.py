@@ -22,8 +22,13 @@ def _alive(pid: int) -> bool:
         os.kill(pid, 0)
     except ProcessLookupError:
         return False
-    status = Path(f"/proc/{pid}/status")
-    return not (status.exists() and "\nState:\tZ" in status.read_text())
+    if not Path("/proc").is_dir():  # macOS: kill(0) succeeded, so it runs
+        return True
+    try:  # a zombie still answers kill(0); it may also be reaped right now
+        state = Path(f"/proc/{pid}/status").read_text()
+    except FileNotFoundError:
+        return False
+    return "\nState:\tZ" not in state
 
 
 async def test_output_keeps_stream_order_and_exit_code(tmp_path: Path) -> None:
