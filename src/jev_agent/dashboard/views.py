@@ -561,7 +561,7 @@ def config_summary(repo: Repo) -> list[tuple[str, str]]:
         ("budget.max_task_attempts", str(c.budget.max_task_attempts)),
         ("approval.require_plan_approval", str(c.plan_approval_required).lower()),
         ("integration.test_command", c.integration.test_command or "-"),
-        ("review.enabled", str(c.review.enabled).lower()),
+        ("review.enabled", str(c.review_enabled).lower()),
         ("quality.level", c.quality.level),
         ("learning", f"{'on' if status.enabled else 'off'} ({status.enabled_source})"),
         ("learning.profile", f"{status.profile} ({status.profile_source})"),

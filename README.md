@@ -142,7 +142,7 @@ Any state can also end in `NEEDS_HUMAN`, `FAILED`, `BUDGET_EXCEEDED` or `CANCELL
    With a quality level set, a quality gate (lint, scans, AI review) runs after each task and
    on the result branch ([Quality gate](#quality-gate)).
 
-**The dispatcher.** At each decision point (D1 to D7) the harness sends the dispatcher a small
+**The dispatcher.** At each decision point (D1 to D8) the harness sends the dispatcher a small
 card (state plus allowed answers) and acts on the answer:
 
 | Point | When | Decides |
@@ -154,10 +154,13 @@ card (state plus allowed answers) and acts on the answer:
 | D5 | After a task's tests (and review, quality gate) | Done, retry, escalate, reassign, or ask a human |
 | D6 | After integration (and quality gate) | Ship, add a fix task, or ask a human |
 | D7 | At the end of a run, if learning is on | Learn or skip; learner worker, model, effort |
+| D8 | Before each task review | Reviewer worker, model, effort |
 
-Jev answers by default. If Jev is unreachable, gives an answer outside the allowed values, or
-is not confident enough, a deterministic rules dispatcher answers that one decision instead.
-`jev log` shows which dispatcher made each decision and why a fallback happened. The harness
+By default every decision needs two votes: Jev first, then Laya (Jev scoring each allowed
+answer on the Laya CDA decision matrix). Both must agree confidently; otherwise the question is
+asked again, and then the run stops for a human (`jev resume` continues it). With
+`[dispatcher] primary = "jev"`, Jev answers alone and a deterministic rules dispatcher answers
+any decision Jev cannot. `jev log` shows who made each decision and why a fallback happened. The harness
 itself makes no routing choices; it only enforces hard limits (plan rounds, task attempts,
 budgets).
 
