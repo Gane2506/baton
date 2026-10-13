@@ -7,7 +7,9 @@
 - scalable: production, plus major performance findings.
 
 At every level, a check whose tool is in `[quality] required_tools` blocks when it fails
-(a missing required tool is a failure). Everything else is reported, never blocking.
+(a missing required tool is a failure). A required check whose tool is installed but could
+not give an answer (status `error`: crashed, timed out, unparseable output) blocks too.
+Everything else is reported, never blocking.
 """
 
 from __future__ import annotations
@@ -25,6 +27,8 @@ def blocking_reasons(
     for check in checks:
         if check.status == "fail" and check.required:
             reasons.append(f"{check.name} failed: {_short(check.detail)}")
+        elif check.status == "error" and check.required:
+            reasons.append(f"{check.name} could not run: {_short(check.detail)}")
     critical = [f for f in findings if f.severity == "critical"]
     if critical:
         reasons.append(f"{len(critical)} critical finding(s)")

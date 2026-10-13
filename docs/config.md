@@ -22,6 +22,9 @@ Unknown keys are errors (to catch typos). Errors name the file and the field, fo
 /path/to/repo/jev.toml: budget.per_task_usd: must be greater than 0
 ```
 
+A repo file may not change the keys that decide where API keys go and what agents can run or
+reach unless your user config trusts that repository: see [`[trust]`](#trust-user-config-only).
+
 Run `jev doctor` to check that config loads, which worker CLIs are on `PATH`, which API key
 environment variables are set, and that every `prompt_file` exists and parses.
 
@@ -31,6 +34,34 @@ Config files never hold secrets. Any key whose name ends in `key` or contains `t
 or `password` is rejected, in any table (names you choose for MCP servers, skills, plugins and
 HTTP headers are exempt). Put the secret in an environment variable and name the variable with
 `api_key_env` (or, for MCP servers, `env_from`, `bearer_token_env` and `headers_from_env`).
+
+## `[trust]` (user config only)
+
+A `jev.toml` committed to a repository you cloned could otherwise point the API worker at
+someone else's host with your `GITHUB_TOKEN` as the key, or give an agent your servers. So a
+repo file may change these **guarded keys** only when your user config trusts the repository:
+
+- `[dispatcher.jev]` and `[workers.api]` `base_url` and `api_key_env`;
+- `[workers.claude_code]` `command`, `extra_args`, `permission_mode`,
+  `read_only_permission_mode`, `allowed_tools`, `skip_permissions`, `bare`;
+  `[workers.codex]` `command`, `extra_args`, `sandbox`;
+- `[tools]`, `[servers]`, `[browser]`, `[profiles]`, and `servers`, `mcp`, `skills`, `plugins`
+  under `[roles.<role>]`.
+
+A repo value equal to what the defaults and your user config already give is always accepted.
+Otherwise loading fails with an error that names each key and the `[trust]` lines to add.
+
+| Key | Default | Meaning |
+|---|---|---|
+| `repos` | `[]` | Repositories whose `jev.toml` may change guarded keys: absolute paths (`~` allowed), or `"*"` for every repository. |
+
+```toml
+# ~/.config/jev/config.toml
+[trust]
+repos = ["~/code/my-app"]
+```
+
+A repository's `jev.toml` cannot contain `[trust]`.
 
 ## `[dispatcher]`
 

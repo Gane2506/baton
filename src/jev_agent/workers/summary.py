@@ -42,7 +42,7 @@ def make_output(
     parsed: BaseModel | None = None,
 ) -> WorkerOutput:
     """Build the output and append a short result section to the job's log."""
-    summary = redact(summary[:SUMMARY_CHARS], env)
+    summary = redact(summary, env)[:SUMMARY_CHARS]  # redact first: a cut can split a secret
     append_log_sections(
         job.log_path,
         [("result", f"status: {status}\nsummary: {summary}\nfiles_changed: {files_changed}")],

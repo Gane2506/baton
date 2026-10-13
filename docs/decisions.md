@@ -2,6 +2,54 @@
 
 Deviations from [PLAN.md](../PLAN.md) and choices it left open. Newest first.
 
+## 2026-10-13: Fixes from the full code review (batches A and B)
+
+Tracking issue #59. Each design choice below was decided with the `jev-decide` skill
+(`.claude/skills/jev-decide/`): Jev's direct pick plus a gated weighted matrix; disagreements go
+back to Jev, which arbitrates. Decision logs are kept with the review notes, not in the repo.
+
+- **Process lifecycle (#11, #12, #13, #49).** `workers.subprocess_runner.run_command` is the one
+  owner of child processes: it kills the process group on timeout *and* on cancellation.
+  `ShellCommandRunner` delegates to it with `sh -c "exec 2>&1\n<command>"` (Jev: ARBITRATED 0.88
+  over a `merge_stderr` flag on `run_command`), so test commands keep their stream order and
+  their timeout holds when they start children. The dashboard's `RunLauncher` owns its jobs: a
+  Starlette lifespan calls `shutdown()`, which cancels each job's coroutine through
+  `run_job_coroutine` (Jev: AGREE, sync executors with a cancel hook, over async executors and
+  over jobs as subprocesses). Server commands run under the server's `timeout -k 2 N sh -c`,
+  without a limit where `timeout` is missing (Jev: ARBITRATED 0.70 over requiring it).
+- **Trusted repository config (#16).** A repo `jev.toml` may change `config.loader.GUARDED_KEYS`
+  (endpoints, credential variables, worker commands and permissions, tools, servers, browser,
+  profiles, role grants) only when the user config's `[trust] repos` lists the repo; a value
+  equal to the user/default value is always accepted, and a repo cannot contain `[trust]`.
+  Jev: AGREE over a host allowlist for endpoints only, and over warnings (which failed the
+  gate). `prompt_file` is not guarded: custom prompts are an ordinary repo feature.
+- **One credential-pattern list (#27).** `runlog.redact.CREDENTIAL_PATTERNS` (kind, pattern,
+  replacement) is used for redaction, by the quality gate's secret scan (plus its
+  code-only "hard-coded credential" heuristic) and by the config check for literal secrets.
+  Text is redacted before it is truncated.
+- **Server policy hardening (#44, #45, #46, #48).** Recursive `grep` only inside
+  workdir/allowed_paths, with `--exclude`/`--exclude-dir` for credential names and `-R`
+  refused (Jev: ARBITRATED 0.35). `docker inspect` and `systemctl show` are dropped rather than
+  filtered, since `--format` filters are easy to get around (Jev: ARBITRATED 0.82); `ps e`,
+  `git show REV:path` and `git diff --no-index` are closed too. Recursive `cp` only from inside
+  allowed_paths (Jev: ARBITRATED 0.20); a credential file that lives there can still be copied
+  (documented). Writes go through a fresh `mktemp` file. `.git` paths are never writable, and
+  every git command runs with `core.hooksPath=/dev/null` and `core.fsmonitor=false`.
+  `pip install -r` stays allowed and is documented instead: medium access already means code
+  execution as the server account (Jev: ARBITRATED 0.76). The audit log gets a `phase` field:
+  a `started` line before ssh runs (nothing runs if it cannot be written) and a `finished`
+  line after (Jev: ARBITRATED 0.78). Not covered: implicit bare repositories inside
+  allowed_paths, and tokens in remote URLs readable at basic (docs/servers.md, known limits).
+- **Quality tool errors are a status (#18, #17).** `CheckStatus` gains `error`: the tool is
+  installed but crashed, timed out, printed unparseable output, or (bandit, Semgrep) reported
+  scan errors; a check that raises is `error` too. One helper (`quality.base.tool_error`)
+  builds it; it blocks only when the check is required, otherwise it is reported. Jev:
+  ARBITRATED 0.22 for `error` over "fail without findings" and over "skipped plus a flag" (the
+  direct pick was `error` in every round). Stored `quality_reports` JSON still parses. A
+  failing or timed-out test suite stays `fail`: the code under test is the usual cause.
+  gitleaks exiting 1 with nothing parsed fails with a critical finding (Jev: ARBITRATED 0.92
+  over `error` and over switching to its JSON report).
+
 ## 2026-10-13: Servers over SSH, virtual browser, workspace profiles
 
 Code: `src/jev_agent/servers/` (policy, ssh, audit, service, mcp, access, profiles, browser),
@@ -46,7 +94,8 @@ Verification: [verification.md](verification.md) section 9.
   `BatchMode=yes`, `StrictHostKeyChecking=yes` (never `no`/`accept-new`: the user accepts a
   host key once by hand), `ConnectTimeout=10`, `ControlMaster=auto` with `%C` sockets under
   `.jev/ssh/` (0700, `ControlPersist=60`; off when the socket path would be too long). Files go
-  through `head -c` and `cat > tmp && mv`, so no scp/sftp. `SSH_AUTH_SOCK` is forwarded to the
+  through `head -c` and `cat > "$(mktemp DIR/.jev-tmp.XXXXXXXXXX)" && mv` (a fresh temp file since
+  the review fixes, #45), so no scp/sftp. `SSH_AUTH_SOCK` is forwarded to the
   MCP process because MCP clients start stdio servers with a reduced environment.
 - **No migrations.** Issue #8 owns the store this cycle, so state lives in files: the repo's
   default profile in `.jev/profile`, the run's copy of its profile in

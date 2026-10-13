@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import contextlib
 import os
+import posixpath
 import shlex
 import signal
 import subprocess
@@ -200,8 +201,17 @@ class SshTransport:
         return self.run(f"realpath -m -- {shlex.quote(path)}", timeout_s=timeout_s)
 
     def write(self, path: str, data: bytes, timeout_s: float = DEFAULT_TIMEOUT_S) -> SshResult:
-        """Write `data` to `path` through a temporary file in the same folder, then rename."""
+        """Write `data` to `path` (absolute, symlinks resolved) through a temporary file in the
+        same folder, then rename. `mktemp` creates the temporary file itself (O_EXCL, a fresh
+        random name), so a symlink planted in the folder can never redirect the write (issue
+        #45); it is given the usual `0666 & ~umask` mode (mktemp makes it 0600) and removed if
+        anything fails."""
         target = shlex.quote(path)
-        tmp = shlex.quote(f"{path}.jev-tmp")
-        command = f"cat > {tmp} && mv -f -- {tmp} {target}"
+        template = shlex.quote(f"{posixpath.dirname(path)}/.jev-tmp.XXXXXXXXXX")
+        command = (
+            f"tmp=$(mktemp {template}) || exit 1 ; "
+            'chmod "$(printf %o "$(( 0666 & ~$(umask) ))")" "$tmp" '
+            f'&& cat > "$tmp" && mv -f -- "$tmp" {target} '
+            '|| { rm -f -- "$tmp" ; exit 1 ; }'
+        )
         return self.run(command, stdin=data, timeout_s=timeout_s)

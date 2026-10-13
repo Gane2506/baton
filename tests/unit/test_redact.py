@@ -54,3 +54,67 @@ def test_log_writes_are_redacted(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     text = path.read_text()
     assert "supersecret" not in text and "abcdefghijklmnop" not in text
     assert log_path(tmp_path, "r1", "T2", "3.test").name == "3.test.log"
+
+
+# ---- credential shapes beyond `sk-` keys (issue #27) ---------------------------------------
+
+GITHUB_PAT = "github_pat_11ABCDEFG0123456789_abcdefghijklmnopqrstuvwxyz"
+JWT = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U"
+
+
+@pytest.mark.parametrize(
+    ("text", "secret"),
+    [
+        (
+            "token ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 used",
+            "ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ0123",
+        ),
+        ("gh auth: ghs_abcdefghijklmnopqrstuvwxyz012345", "ghs_abcdefghijklmnop"),
+        (f"pat {GITHUB_PAT}", GITHUB_PAT),
+        ("slack xoxb-1234567890-abcdefghijkl", "xoxb-1234567890"),
+        ("aws AKIAIOSFODNN7EXAMPLE key", "AKIAIOSFODNN7EXAMPLE"),
+        (
+            "google AIzaSyA-abcdefghijklmnopqrstuvwxyz01234",
+            "AIzaSyA-abcdefghijklmnopqrstuvwxyz01234",
+        ),
+        (f"jwt {JWT}", JWT),
+        ("remote https://x-access-token:ghs_secretvalue@github.com/o/r.git", "ghs_secretvalue"),
+        ("remote https://deploy:hunter2hunter2@git.example.com/r.git", "hunter2hunter2"),
+        ("Authorization: token ghp_short123", "ghp_short123"),
+        ("authorization: Basic dXNlcjpwYXNzd29yZA==", "dXNlcjpwYXNzd29yZA=="),
+    ],
+)
+def test_common_credential_formats_are_redacted(text: str, secret: str) -> None:
+    out = redact(text, env={})
+    assert secret not in out and REDACTED in out
+
+
+def test_url_credentials_keep_the_host() -> None:
+    out = redact("https://user:longpassword@example.com/repo.git", env={})
+    assert out == f"https://{REDACTED}@example.com/repo.git"
+
+
+def test_private_key_block_is_redacted_whole_even_when_cut_off() -> None:
+    body = "MIIEowIBAAKCAQEAabcdefghijklmnopqrstuvwxyz0123456789"
+    block = f"-----BEGIN OPENSSH PRIVATE KEY-----\n{body}\n-----END OPENSSH PRIVATE KEY-----"
+    out = redact(f"before\n{block}\nafter", env={})
+    assert body not in out and out == f"before\n{REDACTED}\nafter"
+    cut = redact(f"-----BEGIN RSA PRIVATE KEY-----\n{body}", env={})
+    assert body not in cut
+
+
+def test_ordinary_prose_is_left_alone() -> None:
+    text = "the token generation step and Basic authentication are documented"
+    assert redact(text, env={}) == text
+
+
+def test_summary_is_redacted_before_it_is_cut(tmp_path: Path) -> None:
+    """A secret straddling the 500-character cut must not leave its prefix (issue #27)."""
+    from jev_agent.workers.base import WorkerJob
+    from jev_agent.workers.summary import SUMMARY_CHARS, make_output
+
+    token = "ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+    text = "x" * (SUMMARY_CHARS - 10) + " " + token
+    job = WorkerJob(role="coder", prompt="p", workdir=tmp_path, log_path=tmp_path / "w.log")
+    summary = make_output(job, "success", text, env={}).result.summary
+    assert "ghp_" not in summary and len(summary) <= SUMMARY_CHARS

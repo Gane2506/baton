@@ -117,9 +117,9 @@ async def _run_check(
             result = await check.run(runner.workdir, runner)
         except Halt:
             raise
-        except Exception as exc:  # a buggy check must not stop the run; report it instead
+        except Exception as exc:  # a buggy check must not stop the run; it blocks if required
             result = CheckResult(
-                status="skipped", detail=redact(f"check error: {type(exc).__name__}: {exc}")
+                status="error", detail=redact(f"check error: {type(exc).__name__}: {exc}")
             )
         if check.whole_repo:
             result = _only_changed(result, runner)

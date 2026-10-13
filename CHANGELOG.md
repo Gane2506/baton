@@ -54,6 +54,31 @@ All notable changes to this project are documented here. The format is based on
 
 ### Fixed
 
+- **A repository's `jev.toml` can no longer redirect credentials or widen permissions**
+  (#16, security). Keys that choose where API keys go, which credential variables are read,
+  worker commands and permissions, tools, servers, browser and profiles may be changed by a
+  repo file only when your user config trusts it: `[trust] repos = ["~/code/app"]` (or `"*"`).
+  Otherwise jev stops with an error naming the keys. Before, a cloned repo's `jev.toml` could
+  make even `jev status` send e.g. `GITHUB_TOKEN` to another host. Error messages now print
+  config tables such as `[trust]` verbatim.
+- **Redaction covers common credential formats** (#27, security): GitHub, Slack, AWS and Google
+  tokens, private-key blocks, JWTs, `Authorization: token|Basic` values and `user:password@`
+  in URLs, from one shared list that the quality gate's secret scan and the config check use
+  too. Summaries are redacted before they are shortened, so no token prefix is left.
+- **Quality gate: tool errors block when the tool is required** (#18, #17, security). A check
+  whose tool crashes, times out, prints unparseable output or lists scan errors (bandit,
+  Semgrep), and a check that raises, now reports a new `error` status instead of `skipped` or a
+  fake minor finding; a required check with that status blocks. gitleaks exiting 1 with output
+  that cannot be parsed now fails with a critical finding instead of passing.
+- **Server tools: credential reads, writes, `.git` and audit hardened** (#44, #45, #46, #48,
+  security). Recursive `grep` only inside workdir/allowed_paths and never into credential
+  files (`-R` refused); `docker inspect`, `systemctl show` and `ps e` are no longer allowed;
+  recursive `cp` only from inside allowed_paths; `git show REV:path` is checked and
+  `git diff --no-index` refused. File writes use a fresh `mktemp` file in the target's folder,
+  so a planted symlink can no longer redirect them. Medium access never writes under `.git`,
+  and every `git` runs with hooks and fsmonitor off; the docs now say plainly that medium
+  access means code execution as the server account. The audit log writes a `started` line
+  before ssh runs and a `finished` line after; audit write failures become tool errors.
 - **Processes are cleaned up on cancellation, timeout and shutdown** (#11, #12, #13, #49).
   Ctrl-C (or any cancellation) now kills the Claude Code / Codex process group instead of
   leaving it running. Test commands (task, integration and quality tools) run through the

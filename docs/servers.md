@@ -58,32 +58,45 @@ file literally named `*.log`; use `find . -name '*.log'`). Commands run in `work
 
 | Allowed | Refused options |
 | --- | --- |
-| `ls`, `cat`, `head`, `grep`, `wc`, `stat`, `df`, `du`, `free`, `uptime`, `ps`, `uname`, `whoami`, `id`, `pwd`, `hostname` | |
+| `ls`, `cat`, `head`, `wc`, `stat`, `df`, `du`, `free`, `uptime`, `uname`, `whoami`, `id`, `pwd`, `hostname` | |
+| `grep` (also `egrep`, `fgrep`) | recursive (`-r`, `-d recurse`) only inside `workdir`/`allowed_paths`, with credential excludes added; `-R` |
+| `ps` | the BSD-style `e` option (`ps auxe`: process environments) |
 | `tail` | `-f`, `-F`, `--follow` |
 | `find` | `-exec`, `-execdir`, `-ok`, `-delete`, `-fprint*`, `-fls` |
 | `sort` | `-o`, `--output`, `--compress-program` |
 | `file` | `-C` |
 | `top -b -n1` | anything else |
-| `systemctl status / is-active / is-enabled / is-failed / list-units / list-unit-files / list-timers / show / cat` | other verbs |
+| `systemctl status / is-active / is-enabled / is-failed / list-units / list-unit-files / list-timers / cat` | other verbs (also `show`: it prints `Environment=`) |
 | `journalctl` | `-f`, `--vacuum-*`, `--rotate`, `--flush`, `--sync`, `--setup-keys`, ... |
-| `docker ps / logs / inspect / images`, `docker compose ps / logs` | `-f` |
-| `git status / log / diff / show / branch / remote / rev-parse` | `--output`, `--ext-diff`, options before the subcommand except `-C DIR`, `--no-pager` |
+| `docker ps / logs / images`, `docker compose ps / logs` | `-f`; no `inspect` (it prints the container's environment) |
+| `git status / log / diff / show / branch / remote / rev-parse` | `--output`, `--ext-diff`, `diff --no-index`, options before the subcommand except `-C DIR`, `--no-pager` |
+
+Every `git` command runs as `git -c core.hooksPath=/dev/null -c core.fsmonitor=false ...`, so
+no hook or fsmonitor command in the repository's config runs (at any level).
 
 Reads of credential files are refused at every level: anything under `.ssh`, `.gnupg`, `.aws`,
 `.kube`, `.docker`; `/etc/shadow`, `/etc/gshadow`, sudoers; private keys (`id_rsa`, `*.pem`,
 `*.key`, ...); `.env*`, `.netrc`, `.pgpass`, `.git-credentials`, `.npmrc`, `.pypirc`,
-`/proc/*/environ`.
+`/proc/*/environ`. Paths are checked as written (also `git show REV:path`); a recursive
+`grep` gets `--exclude`/`--exclude-dir` arguments for the same names (it also never follows
+symlinks: `-R` is refused). `ls -R`, `du` and `find` list names and sizes only. Commands that
+print environments (`docker inspect`, `systemctl show`, `ps e`) are not allowed.
 No `sudo`, `env` or `printenv`.
+
+What this does not cover: a credential under another name (`config/prod.yml`), a token inside
+a readable file (an application log, a unit file's `Environment=` line read with `cat` or
+`systemctl cat`, a remote URL in `.git/config`), or one that `git log -p` shows because it was
+committed. Keep such files unreadable for the server account.
 
 **medium** = basic, plus:
 
 | Allowed | Limits |
 | --- | --- |
-| `write_file`, `upload` tools | inside `allowed_paths` (after resolving symlinks on the server), ≤ 1 MiB / 10 MiB; uploads only from the local repo or the agent's task worktree (relative paths: the worktree), never `.git/`, other `.jev/` files or credential files |
-| `mkdir`, `touch`, `cp`, `mv`, `rm` | targets inside `allowed_paths` (`rm`/`mv`: strictly inside, never the root itself) |
-| `git add / commit / pull / fetch / checkout / switch` | the working copy (`workdir` or `-C DIR`) inside `allowed_paths`; no `push` |
+| `write_file`, `upload` tools | inside `allowed_paths` (after resolving symlinks on the server), ≤ 1 MiB / 10 MiB; written to a fresh `mktemp` file in the same folder, then renamed; uploads only from the local repo or the agent's task worktree (relative paths: the worktree), never `.git/`, other `.jev/` files or credential files |
+| `mkdir`, `touch`, `cp`, `mv`, `rm` | targets inside `allowed_paths` (`rm`/`mv`: strictly inside, never the root itself); recursive `cp` (`-r`, `-R`, `-a`) only from sources strictly inside `allowed_paths` |
+| `git add / commit / pull / fetch / checkout / switch` | the working copy (`workdir` or `-C DIR`) inside `allowed_paths`; no `push`; hooks and fsmonitor off |
 | `apt-get install -y PKG...`, `apt-get update` | package names only (no paths/URLs) |
-| `pip install PKG...` / `-r FILE` / `-e PATH` | no `--index-url`, `--extra-index-url`, `--trusted-host`, URLs or paths as packages |
+| `pip install PKG...` / `-r FILE` / `-e PATH` | no `--index-url`, `--extra-index-url`, `--trusted-host`, URLs or paths as packages on the command line; the options inside a `-r` file (index URLs, VCS links) are **not** checked |
 | `npm install [PKG...]`, `npm ci` | in `workdir`; no `-g`, URLs, git or paths |
 | `systemctl restart / reload / start / stop / try-restart UNIT` | never `ssh`/`sshd` (lock-out) |
 | `docker compose up -d / down / restart / pull` | `down` without `-v`/`--rmi`; no `exec`/`run` |
@@ -97,25 +110,42 @@ password and sudoers changes, firewall changes (`iptables`, `ufw`, `nft`, ...), 
 `crontab -r`, `kill -9 1`, anything mentioning `authorized_keys`, `git push --force` (and
 `+refspec`, `--mirror`), and piping into a shell or interpreter (`curl ... | sh`).
 
+Nothing is ever written, copied, moved or removed under a `.git` directory (or a `.git` file),
+by commands or by the file tools, in any letter case: a hook or a config entry there would run
+code at the next `git` command.
+
 **Who gets which level.** A server's `access` is the most any agent gets. The coder gets it;
 every other role (planner, validator, reviewer, code_reviewer, learner, chat) is capped at
 `basic`; a workspace profile's `access_overrides` can lower it further, never raise it.
 
+**Medium access means code execution as the server account.** Package installs run the
+packages' own build and install code (`pip install`, `npm install`, `apt-get` maintainer
+scripts), a `pip install -r` file can point pip at any index, `docker compose up` runs whatever
+the compose file says, and an agent can write files that the server's own services later run.
+jev's medium rules limit mistakes; they do not contain a hostile agent. Give medium access only
+to servers, and with a server account, where that is acceptable.
+
 Known limits: `mkdir`/`cp`/`mv`/`rm` commands are checked on the paths as written (the file
-tools also resolve symlinks on the server); package installs run the package's own install
-scripts; `docker compose up` runs whatever the compose file says. Give medium access only to
-servers where that is acceptable.
+tools also resolve symlinks on the server); a recursive `cp` from inside `allowed_paths` can
+still copy a credential file that lives there.
 
 ## Audit log
 
-`.jev/audit/servers.log` (mode 0600) gets one JSON line per command or file operation, allowed
-or refused, from agents, `jev browser install --server` and `jev doctor --connect`:
+`.jev/audit/servers.log` (mode 0600) records every command or file operation, allowed or
+refused, from agents, `jev browser install --server` and `jev doctor --connect`. An allowed
+operation gets two lines: `"phase": "started"` before ssh runs and `"phase": "finished"` with
+the exit code after it returns, so a command whose MCP process was killed meanwhile (an agent
+timeout during `apt-get`) is still on record. Refused operations and `jev doctor --connect`
+write one line with an empty `phase`:
 
 ```json
-{"run_id": "r-1a2b", "role": "coder", "server": "web", "access": "medium", "action": "run_command", "command": "systemctl restart app", "allowed": true, "reason": "", "exit_code": 0, "duration_s": 1.204, "time": "2026-10-13T09:12:44+00:00"}
+{"run_id": "r-1a2b", "role": "coder", "server": "web", "access": "medium", "action": "run_command", "command": "systemctl restart app", "allowed": true, "reason": "", "exit_code": null, "duration_s": null, "phase": "started", "time": "2026-10-13T09:12:43+00:00"}
+{"run_id": "r-1a2b", "role": "coder", "server": "web", "access": "medium", "action": "run_command", "command": "systemctl restart app", "allowed": true, "reason": "", "exit_code": 0, "duration_s": 1.204, "phase": "finished", "time": "2026-10-13T09:12:44+00:00"}
 ```
 
-Lines are redacted like run logs; file contents are never logged, only their size.
+If the "started" line cannot be written, nothing runs and the agent gets an error; if the
+"finished" line cannot be written, the agent gets the output marked as an error with the
+reason. Lines are redacted like run logs; file contents are never logged, only their size.
 
 ## How agents reach servers
 

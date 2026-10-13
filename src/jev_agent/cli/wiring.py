@@ -21,6 +21,7 @@ from pathlib import Path
 import httpx
 import typer
 from rich.console import Console
+from rich.markup import escape
 
 from jev_agent.cli.repo import find_git_root
 from jev_agent.config import STATE_DIRNAME, ConfigError, JevConfig, load_config
@@ -173,7 +174,8 @@ def build_registry(config: JevConfig, catalog: ModelCatalog | None = None) -> Wo
 
 
 def fail(message: str) -> typer.Exit:
-    console.print(f"[red]error:[/red] {message}")
+    # Messages quote config tables (`[trust]`, `[workers.api]`): print them verbatim.
+    console.print(f"[red]error:[/red] {escape(message)}")
     return typer.Exit(1)
 
 
