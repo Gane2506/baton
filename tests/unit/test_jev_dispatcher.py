@@ -15,8 +15,18 @@ from jev_agent.dispatch.jev import (
     PRICE_PER_INPUT_TOKEN_USD,
     JevDispatcher,
     JevSettings,
+    parse_answers,
 )
-from jev_agent.dispatch.requests import RoleOptions, model_fits
+from jev_agent.dispatch.requests import (
+    D1_CLEAR,
+    D3_VERDICT,
+    D4_COMPLEXITY,
+    D5_ACTION,
+    D6_ACTION,
+    D7_LEARN,
+    RoleOptions,
+    model_fits,
+)
 
 FIXTURES = Path(__file__).parent.parent / "fixtures" / "jev"
 KEY = "sk-or-test-SECRET-1234567890"
@@ -110,6 +120,34 @@ async def test_payload_shape() -> None:
     assert list(effort) == ["low", "medium", "high"]
     assert all(isinstance(v, str) for v in effort.values())
     assert body["questions"]["model"]["criteria"] == dict.fromkeys(MODELS)
+
+
+@pytest.mark.parametrize(
+    ("point", "question", "allowed"),
+    [
+        ("D1", "clear", D1_CLEAR),
+        ("D3", "verdict", D3_VERDICT),
+        ("D4", "complexity", D4_COMPLEXITY),
+        ("D5", "action", D5_ACTION),
+        ("D6", "action", D6_ACTION),
+        ("D7", "learn", D7_LEARN),
+    ],
+)
+def test_every_decision_answer_has_a_description(
+    point: str, question: str, allowed: list[str]
+) -> None:
+    body = JevDispatcher().build_payload(point, {}, {question: allowed})
+    criteria = body["questions"][question]["criteria"]
+    assert list(criteria) == allowed
+    assert all(isinstance(description, str) and description for description in criteria.values())
+
+
+@pytest.mark.parametrize("confidence", [float("nan"), -0.01, 1.01])
+def test_confidence_must_be_finite_and_in_range(confidence: float) -> None:
+    body = _fixture("d4_openrouter_success.json")
+    body["answers"]["worker"]["confidence"] = confidence
+    with pytest.raises(DispatchError, match="invalid confidence"):
+        parse_answers(body, _d4().questions)
 
 
 async def test_instruction_overrides_and_generic_fallback() -> None:
