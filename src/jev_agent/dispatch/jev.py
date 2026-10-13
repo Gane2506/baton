@@ -339,7 +339,10 @@ class JevDispatcher:
             """Return the description for one allowed answer, if known."""
             if name == "model" and option in free:
                 return FREE_UNKNOWN_OPTION if option in unknown else FREE_OPTION
-            return POINT_OPTION_DESCRIPTIONS.get((point, name), COMMON_OPTION_DESCRIPTIONS.get(name, {})).get(option)
+            descriptions = POINT_OPTION_DESCRIPTIONS.get(
+                (point, name), COMMON_OPTION_DESCRIPTIONS.get(name, {})
+            )
+            return descriptions.get(option)
 
         def instruction(name: str) -> str:
             """Build the prompt instructions for one decision question."""
