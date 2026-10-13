@@ -42,6 +42,7 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
+from jev_agent.config.schema import WORKER_EFFORTS
 from jev_agent.core.models import WorkerStatus
 from jev_agent.workers.base import WorkerJob, WorkerOutput
 from jev_agent.workers.subprocess_runner import (
@@ -55,7 +56,7 @@ from jev_agent.workers.subprocess_runner import (
 from jev_agent.workers.summary import finish_reply, make_output
 from jev_agent.workers.tools import AgentTools, with_redact_names
 
-EFFORTS = frozenset({"low", "medium", "high", "xhigh", "max"})
+EFFORTS = WORKER_EFFORTS["claude_code"]  # other levels are ignored (with a note)
 CODER_PERMISSION_MODE = "acceptEdits"
 READ_ONLY_PERMISSION_MODE = "dontAsk"
 DEFAULT_CODER_TOOLS: tuple[str, ...] = (

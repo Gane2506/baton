@@ -96,12 +96,10 @@ TRUST_ALL = '[trust]\nrepos = ["*"]\n'
 
 @pytest.fixture(autouse=True)
 def _isolate(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
     user_config = tmp_path / "xdg" / "jev" / "config.toml"
     user_config.parent.mkdir(parents=True, exist_ok=True)
     user_config.write_text(TRUST_ALL)  # these tests model the user's own repo (issue #16)
     monkeypatch.setenv(FAKE_WORKERS_ENV, "1")
-    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
 
 
 @pytest.fixture

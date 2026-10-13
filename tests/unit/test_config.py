@@ -39,7 +39,6 @@ def user_cfg(tmp_path: Path) -> Path:
 def test_empty_config_is_valid_with_plan_defaults() -> None:
     cfg = JevConfig()
     assert cfg.dispatcher.primary == "jev"
-    assert cfg.dispatcher.fallback == "rules"
     assert cfg.budget.per_run_usd == 5.0
     assert cfg.budget.per_task_usd == 1.5
     assert cfg.approval.require_plan_approval is True

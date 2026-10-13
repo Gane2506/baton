@@ -327,12 +327,20 @@ class JevDispatcher:
         return GENERIC_INSTRUCTION.format(name=question)
 
     async def _post(self, payload: dict[str, Any], key: str) -> dict[str, Any]:
+        """POST once, retrying once; `timeout_s` bounds the whole call, retry and backoff
+        included (httpx's own timeout applies per phase: connect, write, read)."""
         url = self.settings.base_url.rstrip("/") + "/systemone"
         headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
-        if self._client is not None:
-            return await self._post_with_retry(self._client, url, payload, headers, key)
-        async with httpx.AsyncClient(timeout=self.settings.timeout_s) as client:
-            return await self._post_with_retry(client, url, payload, headers, key)
+        try:
+            async with asyncio.timeout(self.settings.timeout_s):
+                if self._client is not None:
+                    return await self._post_with_retry(self._client, url, payload, headers, key)
+                async with httpx.AsyncClient(timeout=self.settings.timeout_s) as client:
+                    return await self._post_with_retry(client, url, payload, headers, key)
+        except TimeoutError as exc:
+            raise DispatchError(
+                f"jev: request timed out after {self.settings.timeout_s:g}s"
+            ) from exc
 
     async def _post_with_retry(
         self,
@@ -342,6 +350,8 @@ class JevDispatcher:
         headers: dict[str, str],
         key: str,
     ) -> dict[str, Any]:
+        """One retry in all: on 429/5xx (after `Retry-After`), or on a connect error (the
+        request was never sent; after `DEFAULT_BACKOFF_S`)."""
         for attempt in (1, 2):
             try:
                 resp = await client.post(
@@ -351,6 +361,11 @@ class JevDispatcher:
                 raise DispatchError(
                     f"jev: request timed out after {self.settings.timeout_s:g}s"
                 ) from exc
+            except httpx.ConnectError as exc:
+                if attempt == 1:
+                    await self._sleep(DEFAULT_BACKOFF_S)
+                    continue
+                raise DispatchError(f"jev: network error ({type(exc).__name__})") from exc
             except httpx.HTTPError as exc:
                 raise DispatchError(f"jev: network error ({type(exc).__name__})") from exc
 

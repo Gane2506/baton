@@ -28,13 +28,13 @@ import typer
 from rich.console import Console
 from rich.markup import escape
 
-from jev_agent.cli.repo import find_git_root
+from jev_agent.cli.repo import LEGACY_MESSAGE, find_git_root, legacy_layout
 from jev_agent.config import STATE_DIRNAME, ConfigError, JevConfig, load_config
 from jev_agent.config.schema import role_can_use_free, role_uses_free
 from jev_agent.core.learning import Learning
 from jev_agent.core.models import Role
 from jev_agent.core.pipeline import Pipeline, PipelineSettings, build_pipeline
-from jev_agent.core.store import Store
+from jev_agent.core.store import SchemaVersionError, Store
 from jev_agent.dispatch.base import Dispatcher
 from jev_agent.dispatch.jev import JevDispatcher
 from jev_agent.dispatch.requests import API_WORKER, DEFAULT_MODEL, model_fits, role_options
@@ -57,6 +57,7 @@ NO_WORKERS_MESSAGE = (
 )
 
 console = Console()
+err_console = Console(stderr=True)
 
 # Test hook: the HTTP transport used to fetch the OpenRouter model list (None: the network).
 catalog_transport: httpx.BaseTransport | None = None
@@ -286,27 +287,111 @@ def build_registry(
     return registry, readiness.warnings()
 
 
+class CliError(Exception):
+    """A command cannot go ahead; the message is for the user. The CLI prints it and exits 1
+    (`fail`); other front ends (the dashboard) show `str(exc)` (issue #51)."""
+
+
+def print_error(message: str) -> None:
+    """`error: <message>` on stderr. Messages quote config tables (`[trust]`, `[workers.api]`)
+    and git output (`! [rejected]`): printed verbatim, never as Rich markup."""
+    err_console.print(f"[red]error:[/red] {escape(message)}", highlight=False)
+
+
 def fail(message: str) -> typer.Exit:
-    # Messages quote config tables (`[trust]`, `[workers.api]`): print them verbatim.
-    console.print(f"[red]error:[/red] {escape(message)}")
+    print_error(message)
     return typer.Exit(1)
 
 
 @contextmanager
-def cli_context(repo: Path) -> Iterator[CliContext]:
-    """Open config, store and pipeline for the repo containing `repo`; exit 1 on errors."""
-    root = find_git_root(repo)
-    if root is None:
-        raise fail(f"{repo.resolve()} is not inside a git repository")
+def cli_errors() -> Iterator[None]:
+    """Turn a `CliError` raised inside the block into the CLI's `error:` line and exit 1."""
     try:
-        config = load_config(root)
-    except ConfigError as exc:
+        yield
+    except CliError as exc:
         raise fail(str(exc)) from exc
+
+
+def repo_root(repo: Path) -> Path:
+    """The git repo containing `repo`; CliError when there is none or it still has the jao
+    (v0.1) layout."""
+    root = find_git_root(repo, allow_legacy=True)
+    if root is None:
+        raise CliError(f"{repo.resolve()} is not inside a git repository")
+    if legacy_layout(root):
+        raise CliError(LEGACY_MESSAGE)
+    return root
+
+
+def repo_config(root: Path) -> JevConfig:
+    try:
+        return load_config(root)
+    except ConfigError as exc:
+        raise CliError(str(exc)) from exc
+
+
+def state_db_path(root: Path) -> Path:
+    return root / STATE_DIRNAME / STATE_DB_FILENAME
+
+
+@contextmanager
+def open_store(root: Path, *, create: bool = True) -> Iterator[Store]:
+    """The repo's state database. With `create=False` (read-only commands) a missing database
+    is not created: the store is an empty in-memory one with the current schema, so the
+    command shows its usual "nothing yet" output and leaves no `.jev/` behind (issue #26).
+    A database written by a newer jev is a CliError, not a traceback (issue #25)."""
+    path = state_db_path(root)
+    try:
+        store = Store.open(path if create or path.exists() else Path(":memory:"))
+    except SchemaVersionError as exc:
+        raise CliError(str(exc)) from exc
+    with store:
+        yield store
+
+
+@dataclass
+class RepoContext:
+    """Config, state database and lesson profiles: what commands need that run no workers."""
+
+    root: Path
+    config: JevConfig
+    store: Store
+    learning: Learning
+
+
+@contextmanager
+def open_repo(repo: Path, *, create: bool = True) -> Iterator[RepoContext]:
+    """A `RepoContext` for the repo containing `repo`; raises CliError. No workers, dispatcher
+    or model list are built, and nothing is fetched."""
+    root = repo_root(repo)
+    config = repo_config(root)
+    with open_store(root, create=create) as store:
+        learning = Learning.for_store(store)
+        try:
+            yield RepoContext(root, config, store, learning)
+        finally:
+            learning.close()
+
+
+@contextmanager
+def repo_context(repo: Path, *, create: bool = True) -> Iterator[RepoContext]:
+    """`open_repo` for CLI commands: errors exit 1 with one line on stderr. Read-only commands
+    pass `create=False`."""
+    with cli_errors(), open_repo(repo, create=create) as ctx:
+        yield ctx
+
+
+@contextmanager
+def open_cli_context(repo: Path) -> Iterator[CliContext]:
+    """Config, store and pipeline (workers, dispatcher, model list) for the repo containing
+    `repo`; raises CliError. The dashboard uses it directly; commands use `cli_context`."""
+    root = repo_root(repo)
+    config = repo_config(root)
     catalog, free_warnings = load_free_catalog(config, root, allow_fetch=not fake_workers_enabled())
     registry, worker_warnings = build_registry(config, catalog)
     dispatcher, warnings = build_dispatcher(config)
     warnings += worker_warnings + free_warnings
-    with Store.open(root / STATE_DIRNAME / STATE_DB_FILENAME) as store:
+    with open_store(root) as store:
         learning = Learning.for_store(store)
         try:
             pipeline = build_pipeline(
@@ -322,3 +407,10 @@ def cli_context(repo: Path) -> Iterator[CliContext]:
             yield CliContext(root, config, store, pipeline, bool(registry), warnings, learning)
         finally:
             learning.close()
+
+
+@contextmanager
+def cli_context(repo: Path) -> Iterator[CliContext]:
+    """`open_cli_context` for commands that run the pipeline; errors exit 1 (stderr)."""
+    with cli_errors(), open_cli_context(repo) as ctx:
+        yield ctx

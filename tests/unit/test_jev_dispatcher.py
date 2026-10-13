@@ -277,9 +277,13 @@ async def test_timeout_raises() -> None:
 
 
 async def test_network_error_raises() -> None:
-    jev, _ = _dispatcher(Recorder(httpx.ConnectError("refused")))
+    # A connect error is retried once (the request was never sent); the second one raises.
+    rec = Recorder(httpx.ConnectError("refused"), httpx.ConnectError("refused"))
+    jev, sleeps = _dispatcher(rec)
     with pytest.raises(DispatchError, match="network error"):
         await jev.decide(_d4())
+    assert len(rec.requests) == 2
+    assert sleeps == [1.0]
 
 
 async def test_non_json_response_raises() -> None:
@@ -313,7 +317,7 @@ async def test_key_never_in_any_error_message() -> None:
         [httpx.Response(422, json={"error": {"message": f"echo {KEY}"}})],
         [httpx.Response(500, text=KEY), httpx.Response(500, text=KEY)],
         [httpx.ReadTimeout(KEY)],
-        [httpx.ConnectError(KEY)],
+        [httpx.ConnectError(KEY), httpx.ConnectError(KEY)],
     ]
     for responses in cases:
         rec = Recorder(*responses)

@@ -14,7 +14,7 @@ from rich.table import Table
 from jev_agent.cli.repo import RepoOption
 from jev_agent.cli.run_cmds import QualityOption, quality_level
 from jev_agent.cli.text import short
-from jev_agent.cli.wiring import cli_context, fail
+from jev_agent.cli.wiring import fail, repo_context
 from jev_agent.config.servers_schema import NO_PROFILE
 from jev_agent.core.queue import (
     ACTIVE_STATUSES,
@@ -85,8 +85,7 @@ def add(
 ) -> None:
     """Add an idea to the queue."""
     level = quality_level(quality)
-    with cli_context(repo) as ctx:
-        assert ctx.learning is not None
+    with repo_context(repo) as ctx:
         if profile is not None and profile.strip() and profile != NO_PROFILE:
             try:
                 get_profile(ctx.config, profile)
@@ -119,7 +118,7 @@ def list_items(
     repo: RepoOption = Path("."),
 ) -> None:
     """List the queue in the order the scheduler takes it."""
-    with cli_context(repo) as ctx:
+    with repo_context(repo, create=False) as ctx:
         items = ctx.store.list_queue()
         states = run_states(ctx.store, items)
         rows = [(item, effective_status(item, states.get(item.run_id or ""))) for item in items]
@@ -159,7 +158,7 @@ def move(
     """Move a queued item. Crossing into another priority band takes that band's priority."""
     if sum((up, down, top)) != 1:
         raise fail("give exactly one of --up, --down or --top")
-    with cli_context(repo) as ctx:
+    with repo_context(repo) as ctx:
         try:
             before = ctx.store.get_queue_item(item_id)
             after = move_item(ctx.store, item_id, "up" if up else "down" if down else "top")
@@ -175,7 +174,7 @@ def move(
 @queue_app.command("remove")
 def remove(item_id: ItemId, repo: RepoOption = Path(".")) -> None:
     """Remove an item from the queue. Its run, if it has one, is kept."""
-    with cli_context(repo) as ctx:
+    with repo_context(repo) as ctx:
         try:
             remove_item(ctx.store, item_id)
         except QueueError as exc:
@@ -191,5 +190,5 @@ def clear(
     """Remove every queued item (items with a run are kept)."""
     if not yes:
         raise fail("this removes every queued idea; add --yes to confirm")
-    with cli_context(repo) as ctx:
+    with repo_context(repo) as ctx:
         console.print(f"removed {ctx.store.clear_queued()} queued item(s)")

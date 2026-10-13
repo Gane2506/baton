@@ -9,6 +9,13 @@ All notable changes to this project are documented here. The format is based on
 
 ### Added
 
+- **Contributor guidelines.** A detailed `CONTRIBUTING.md`, a pull request template and issue
+  forms for bugs and features. `SECURITY.md` explains private vulnerability reporting, and
+  `CODE_OF_CONDUCT.md` is the Contributor Covenant 2.1.
+  - `CONTRIBUTING.md` covers finding work, the CI check command, a pre-PR checklist, branch and
+    commit style, the docs that change with code, and review and merge.
+  - Its module map now lists every module (#55).
+
 - **Servers over SSH, virtual browser, workspace profiles**
   ([#3](https://github.com/Gane2506/baton/issues/3), first version: `basic` and `medium`).
   `[servers.<name>]` (host or `~/.ssh/config` alias, `access = "basic" | "medium"`, `workdir`,
@@ -53,6 +60,30 @@ All notable changes to this project are documented here. The format is based on
   model list and example tool config. See [docs/dashboard.md](docs/dashboard.md#screenshots).
 
 ### Fixed
+
+- **CLI errors** (#25). They go to stderr with their text verbatim. A state DB from a newer jev
+  gives a one-line error, not a traceback.
+- **Read-only commands no longer build the pipeline** (#26). These commands build no workers,
+  fetch no model list and create no `.jev/`: `status`, `log`, `board`, `queue list`,
+  `learning list/show`, `quality show`, `scheduler status`, `chat --list`, `kpi` and
+  `ship sync`.
+- **Dashboard jobs show the real error** (#51), and they include run-start warnings.
+- **Concurrent state DB upgrades** (#23). Two processes that open an old state DB or shared
+  learning DB at the same time no longer crash. Migrations re-check the version under the write
+  lock, and the switch to WAL mode waits for the lock.
+- **`jev ship` recovers a lost PR response** (#41). If GitHub opened the PR but `gh pr create`
+  failed or timed out, the PR is recorded instead of being refused or opened twice. A timeout is
+  reported as an unknown outcome.
+- **KPIs no longer parse text** (#42). Lessons added are read from counts stored on the run
+  (migration 10), and the PR state is typed.
+- **Config typos are errors** (#30). These used to be ignored silently:
+  - unknown `[dispatcher.jev.instructions]` keys;
+  - effort levels that none of a role's workers accept;
+  - `[dispatcher] fallback` values other than `"rules"`. The key is deprecated.
+- **Test isolation** (#53). The test suite no longer picks up the developer's jev or git config,
+  or their API keys. Narrow-terminal output has its own tests.
+- **Jev call timeout** (#36). `[dispatcher.jev] timeout_s` now bounds the whole call, retry and
+  backoff included. A connect error is retried once, sharing the single retry with 429/5xx.
 
 - **Git calls cannot hang a run** (#24). Worktree and `jev ship` git calls have timeouts (1
   minute; 10 minutes for commits, merges, checkouts and pushes) and run off the event loop; a

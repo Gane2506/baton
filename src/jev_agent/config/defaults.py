@@ -16,7 +16,6 @@ DEFAULT_CONFIG_TOML = """\
 
 [dispatcher]
 # primary = "jev"                  # "jev" | "rules"
-# fallback = "rules"               # used when the primary dispatcher fails
 
 # Jev via OpenRouter. For native TypeSafe use base_url = "https://api.typesafe.ai/v1",
 # model = "jev-latest" and api_key_env = "TYPESAFE_API_KEY".

@@ -32,9 +32,10 @@ from jev_agent.core.kpi import (
     diff_stat,
     github_kpis,
     is_revert_of,
+    pr_state,
 )
 from jev_agent.core.models import RunState
-from jev_agent.core.store import NotFoundError, ShippedPrRecord, Store
+from jev_agent.core.store import NotFoundError, PrState, ShippedPrRecord, Store
 from jev_agent.core.workspace import (
     GIT_QUICK_TIMEOUT_S,
     GIT_SLOW_TIMEOUT_S,
@@ -58,6 +59,10 @@ _GITHUB_URL = re.compile(
 
 class ShipError(Exception):
     """`jev ship` cannot (or did not) go ahead. The message is user-facing."""
+
+
+class GhTimeoutError(ShipError):
+    """`gh` did not finish in time: what it was doing may or may not have happened."""
 
 
 # ---- running git and gh ------------------------------------------------------------------
@@ -98,7 +103,11 @@ class Gh:
                 timeout=self.timeout_s,
                 check=False,
             )
-        except (OSError, subprocess.TimeoutExpired) as exc:
+        except subprocess.TimeoutExpired as exc:
+            raise GhTimeoutError(
+                f"gh {' '.join(args[:2])} timed out after {self.timeout_s:g} s"
+            ) from exc
+        except OSError as exc:
             raise ShipError(f"gh {' '.join(args[:2])} could not run: {exc}") from exc
 
     def out(self, *args: str) -> str:
@@ -133,6 +142,61 @@ def pr_title(idea: str) -> str:
     line = next((ln.strip() for ln in idea.splitlines() if ln.strip()), "jev run")
     line = " ".join(line.split())
     return line if len(line) <= TITLE_MAX else line[: TITLE_MAX - 3].rstrip() + "..."
+
+
+# ---- finding a PR already opened for the branch (issue #41) -------------------------------
+
+
+@dataclass(frozen=True)
+class ExistingPr:
+    number: int
+    url: str | None
+    state: PrState
+
+
+def parse_pr_list(text: str, branch: str) -> ExistingPr | None:
+    """The newest PR in `gh pr list --json number,url,state,headRefName` output whose head is
+    `branch`, or None. gh's output shape is not verified live (docs/verification.md section 8):
+    anything unexpected (no JSON, no list, no integer number) reads as "none found"."""
+    try:
+        data = json.loads(text) if text.strip() else []
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(data, list):
+        return None
+    for item in data:
+        if not isinstance(item, dict):
+            continue
+        number = item.get("number")
+        head = item.get("headRefName")
+        if not isinstance(number, int) or isinstance(number, bool):
+            continue
+        if isinstance(head, str) and head != branch:
+            continue
+        url = item.get("url")
+        return ExistingPr(
+            number, url if isinstance(url, str) else None, pr_state(item.get("state"))
+        )
+    return None
+
+
+def find_branch_pr(gh: Gh, repo: str, branch: str) -> ExistingPr | None:
+    """A PR (any state) whose head is `branch`. Raises `ShipError` when gh cannot tell."""
+    text = gh.out(
+        "pr",
+        "list",
+        "--repo",
+        repo,
+        "--head",
+        branch,
+        "--state",
+        "all",
+        "--json",
+        "number,url,state,headRefName",
+        "--limit",
+        "10",
+    )
+    return parse_pr_list(text, branch)
 
 
 # ---- the PR body ---------------------------------------------------------------------------
@@ -264,6 +328,8 @@ class ShipPlan:
     pushed_commits: int | None
     kpis: RunKpis
     skip_push: bool = False  # the branch is already on the remote at this commit
+    # A PR already open (or closed) for the branch: recorded instead of opening another.
+    existing_pr: ExistingPr | None = None
     warnings: list[str] = field(default_factory=list)
 
     @property
@@ -307,6 +373,11 @@ class ShipPlan:
                 + (" (already pushed, push skipped)" if self.skip_push else ""),
             ),
             ("base", self.base),
+            *(
+                [("existing PR", f"#{e.number} ({e.state}): recorded, no new PR is opened")]
+                if (e := self.existing_pr) is not None
+                else []
+            ),
             ("title", self.title),
             ("draft", "yes" if self.draft else "no"),
             ("labels", ", ".join(self.labels) or "-"),
@@ -466,6 +537,20 @@ def prepare_ship(
         number += 1
         branch = f"{name}-{number}"
 
+    existing: ExistingPr | None = None
+    if skip_push and usable_gh is not None:
+        # An earlier `jev ship` pushed this branch; its PR may exist although gh's answer was
+        # lost (a timeout or an error after GitHub opened it).
+        try:
+            existing = find_branch_pr(usable_gh, repo, branch)
+        except ShipError as exc:
+            if not dry_run:
+                raise ShipError(
+                    f"cannot tell whether a PR is already open for branch {branch}: {exc}. "
+                    f"Run `jev ship {run_id}` again"
+                ) from exc
+            warnings.append(f"cannot tell whether a PR is already open for {branch}")
+
     count = _git(root, "rev-list", "--count", f"{start_ref(run_id)}..{head_oid}")
     pushed = int(count.stdout.strip()) if count.returncode == 0 else None
     kpis = compute_run_kpis(store, run_id, diff_stat(root, start_ref(run_id), head_oid))
@@ -484,13 +569,20 @@ def prepare_ship(
         pushed_commits=pushed,
         kpis=kpis,
         skip_push=skip_push,
+        existing_pr=existing,
         warnings=warnings,
     )
 
 
 def execute_ship(plan: ShipPlan, store: Store, root: Path, gh: Gh | None = None) -> ShippedPrRecord:
-    """Push the branch, open the PR and record it (with the run's KPI snapshot)."""
+    """Push the branch, open the PR and record it (with the run's KPI snapshot).
+
+    A PR that already exists for the branch (`plan.existing_pr`, or found after `gh pr create`
+    failed or timed out) is recorded instead of opening another (issue #41).
+    """
     gh = gh or Gh(root)
+    if plan.existing_pr is not None:
+        return _record(plan, store, plan.existing_pr)
     if not plan.skip_push:
         try:
             proc = _git(root, *plan.push_command()[1:], slow=True)
@@ -501,16 +593,31 @@ def execute_ship(plan: ShipPlan, store: Store, root: Path, gh: Gh | None = None)
             ) from exc
         if proc.returncode != 0:
             raise ShipError(f"git push failed (nothing was opened): {redact(proc.stderr.strip())}")
+    retry = (
+        f"run `jev ship {plan.run_id}` again to retry: it looks for a PR on branch "
+        f"{plan.branch} first and records it instead of opening another (the push is skipped)"
+    )
     with tempfile.TemporaryDirectory(prefix="jev-ship-") as tmp:
         body_file = Path(tmp) / "body.md"
         body_file.write_text(plan.body, encoding="utf-8")
         body_file.chmod(0o600)
-        proc = gh.run(*plan.create_command(str(body_file))[1:])
+        try:
+            proc = gh.run(*plan.create_command(str(body_file))[1:])
+        except GhTimeoutError as exc:
+            found = _lookup_after_failure(gh, plan)
+            if found is not None:
+                return _record(plan, store, found)
+            raise ShipError(
+                f"{exc}: the outcome is unknown, GitHub may have opened the PR. "
+                f"The branch {plan.branch} is on {plan.remote}; {retry}"
+            ) from exc
     if proc.returncode != 0:
         detail = redact((proc.stderr or proc.stdout).strip())
+        found = _lookup_after_failure(gh, plan)
+        if found is not None:
+            return _record(plan, store, found)
         raise ShipError(
-            f"gh pr create failed: {detail}. The branch {plan.branch} is on {plan.remote}; "
-            f"run `jev ship {plan.run_id}` again to retry (the push is skipped)"
+            f"gh pr create failed: {detail}. The branch {plan.branch} is on {plan.remote}; {retry}"
         )
     number: int | None = None
     url: str | None = None
@@ -525,18 +632,39 @@ def execute_ship(plan: ShipPlan, store: Store, root: Path, gh: Gh | None = None)
         if isinstance(data, dict):
             number = data.get("number") if isinstance(data.get("number"), int) else None
             url = data.get("url") if isinstance(data.get("url"), str) else None
+    return _record(plan, store, number=number, url=url)
+
+
+def _lookup_after_failure(gh: Gh, plan: ShipPlan) -> ExistingPr | None:
+    """After `gh pr create` failed or timed out: the PR GitHub opened anyway, if gh can say."""
+    try:
+        return find_branch_pr(gh, plan.repo, plan.branch)
+    except ShipError:
+        return None
+
+
+def _record(
+    plan: ShipPlan,
+    store: Store,
+    pr: ExistingPr | None = None,
+    *,
+    number: int | None = None,
+    url: str | None = None,
+) -> ShippedPrRecord:
+    """Record the PR: one found on the branch (`pr`), or the one just opened."""
     record = store.add_shipped_pr(
         plan.run_id,
         remote=plan.remote,
         repo=plan.repo,
         branch=plan.branch,
         base=plan.base,
-        number=number,
-        url=url,
+        number=number if pr is None else pr.number,
+        url=url if pr is None else pr.url,
         title=plan.title,
         draft=plan.draft,
         head_oid=plan.head_oid,
         pushed_commits=plan.pushed_commits,
+        state="open" if pr is None else pr.state,
     )
     store.set_run_kpis(plan.run_id, plan.kpis.model_dump_json())
     return record
@@ -607,7 +735,7 @@ def sync_pr(store: Store, gh: Gh, pr: ShippedPrRecord) -> ShippedPrRecord:
     reverted = find_revert(gh, pr) if k.state == "merged" else None
     return store.update_shipped_pr(
         pr.id,
-        state=k.state,  # type: ignore[arg-type]
+        state=k.state,
         draft=k.draft,
         merged_at=k.merged_at,
         closed_at=k.closed_at,

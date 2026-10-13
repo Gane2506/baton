@@ -59,9 +59,7 @@ SECRET = "sk-or-v1-dashboard-test-secret-0123456789"
 
 @pytest.fixture(autouse=True)
 def _isolate(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
     monkeypatch.setenv(FAKE_WORKERS_ENV, "1")
-    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
 
 
 def _jev(repo: Path, *args: str) -> str:
@@ -1033,3 +1031,51 @@ def test_ship_button_confirmation_and_background_job(
         live = client.get(f"/runs/{run_id}/live").text
         assert "https://github.com/acme/widgets/pull/42" in live
         assert "Ship as PR</button>" not in live and "already shipped" not in live
+
+
+# ---- job errors and warnings (#51) ---------------------------------------------------------
+
+
+def _default_job(root: Path, run_id: str, action: RunAction) -> str:
+    launcher = RunLauncher(root)  # the real executor: execute_run
+    assert launcher.start(run_id, action)
+    job = launcher.wait(run_id)
+    assert job is not None and job.state == "failed"
+    return job.message
+
+
+def test_job_shows_not_a_repo_error(tmp_path: Path) -> None:
+    (tmp_path / "plain").mkdir()
+    message = _default_job(tmp_path / "plain", "20261013-000000-abcd", "resume")
+    assert "is not inside a git repository" in message
+
+
+def test_job_shows_config_error(planned: tuple[Path, str]) -> None:
+    repo, run_id = planned
+    (repo / "jev.toml").write_text("[workers.api]\nbogus = 1\n")
+    message = _default_job(repo, run_id, "approve")
+    assert "workers.api.bogus: unknown key" in message
+
+
+def test_job_shows_newer_state_db_error(planned: tuple[Path, str]) -> None:
+    repo, run_id = planned
+    with _store(repo) as store:
+        store.connection.execute("PRAGMA user_version = 999")
+    actions: list[RunAction] = ["approve", "ship"]
+    for action in actions:
+        message = _default_job(repo, run_id, action)
+        assert "database has schema version 999" in message
+
+
+def test_job_message_includes_run_start_warnings(
+    planned: tuple[Path, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo, run_id = planned
+    (repo / "jev.toml").write_text('[dispatcher]\nprimary = "jev"\n')  # its key is unset
+    launcher = RunLauncher(repo)
+    assert launcher.start(run_id, "approve")
+    job = launcher.wait(run_id, timeout=60)
+    assert job is not None and job.state == "finished", job and job.message
+    assert job.message.startswith("run ")
+    assert "; warning: " in job.message
+    assert "is not set, so the Jev dispatcher cannot be reached" in job.message

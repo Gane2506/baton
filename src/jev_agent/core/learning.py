@@ -29,7 +29,7 @@ from pathlib import Path
 from typing import Literal
 
 from jev_agent.config.schema import PROFILE_NAME_PATTERN, JevConfig
-from jev_agent.core.migrations import SHARED_MIGRATIONS, apply_migrations
+from jev_agent.core.migrations import SHARED_MIGRATIONS, apply_migrations, configure_connection
 from jev_agent.core.models import LESSON_ROLES
 from jev_agent.core.store import Store
 
@@ -150,9 +150,7 @@ class LessonDB:
         conn = sqlite3.connect(path, isolation_level=None)
         try:
             conn.row_factory = sqlite3.Row
-            conn.execute("PRAGMA foreign_keys = ON")
-            conn.execute("PRAGMA journal_mode = WAL")
-            conn.execute("PRAGMA busy_timeout = 5000")
+            configure_connection(conn)
             apply_migrations(conn, SHARED_MIGRATIONS)
         except BaseException:
             conn.close()

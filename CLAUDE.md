@@ -57,7 +57,7 @@ Names (after two renames — don't rename again without being asked):
   approved per-release), enabling `access = "full"`, anything that costs real money (live
   tests with real models/APIs — a ~$1–2 cap was fine last time).
 - After each change: `uv run ruff format . && uv run ruff check . && uv run mypy && uv run
-  pytest -q` (also `COLUMNS=40 uv run pytest -q`), push, then watch CI:
+  pytest -q` (narrow output is covered by `tests/unit/test_narrow_terminal.py`), push, then watch CI:
   `RID=$(gh run list -R Gane2506/baton --workflow CI --limit 1 --json databaseId -q '.[0].databaseId'); gh run watch $RID -R Gane2506/baton --exit-status`.
 - Before pushing anything public, scan for personal data:
   grep for home-directory paths (`/Users/`, `/home/`) and email addresses in changed files.
@@ -86,7 +86,7 @@ Names (after two renames — don't rename again without being asked):
   dispatcher/workers/pipeline from config (`cli_context`, `start_run(profile=, learning=,
   quality=)`).
 - `core/` — `models.py` (pydantic), `store.py` + `migrations.py` (SQLite `.jev/state.db`,
-  **schema version 9** (shared learning DB: 2): runs (incl. plan_only), tasks, attempts, decisions, learning, queue, quality_reports,
+  **schema version 10** (shared learning DB: 2): runs (incl. plan_only, learning_counts_json), tasks, attempts, decisions, learning, queue, quality_reports,
   shipped_prs/run_kpis), `pipeline.py` (run state machine INTAKE→PLANNING→VALIDATING→
   AWAITING_APPROVAL→EXECUTING→INTEGRATING→DONE), `tasks.py`, `harness.py` (dumb: stores,
   asks dispatcher, executes; enforces budgets/limits), `workspace.py` (git worktrees,

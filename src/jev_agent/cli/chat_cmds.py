@@ -23,7 +23,14 @@ from rich.table import Table
 from jev_agent.cli.repo import RepoOption
 from jev_agent.cli.run_cmds import print_outcome, print_warnings, start_run
 from jev_agent.cli.text import short
-from jev_agent.cli.wiring import FAKE_WORKERS_ENV, NO_WORKERS_MESSAGE, CliContext, cli_context, fail
+from jev_agent.cli.wiring import (
+    FAKE_WORKERS_ENV,
+    NO_WORKERS_MESSAGE,
+    CliContext,
+    cli_context,
+    fail,
+    repo_context,
+)
 from jev_agent.config.schema import JevConfig
 from jev_agent.config.servers_schema import NO_PROFILE
 from jev_agent.core.chat import (
@@ -449,8 +456,8 @@ class ChatLoop:
 # ---- the command -------------------------------------------------------------------------
 
 
-def print_chat_list(ctx: CliContext) -> None:
-    chats = list_chats(ctx.root)
+def print_chat_list(root: Path) -> None:
+    chats = list_chats(root)
     if not chats:
         console.print("No saved chats. Start one with `jev chat`.")
         return
@@ -564,10 +571,11 @@ def chat(
     repo: RepoOption = Path("."),
 ) -> None:
     """Talk an idea through with a model, then /plan, /run or /queue the brief."""
+    if list_:  # read-only: no workers, no model list, no new .jev/ (#26)
+        with repo_context(repo, create=False) as listing:
+            print_chat_list(listing.root)
+        return
     with cli_context(repo) as ctx:
-        if list_:
-            print_chat_list(ctx)
-            return
         if learning is not None and no_learning:
             raise fail("--learning and --no-learning cannot be used together")
         if profile is not None and not profile.strip():

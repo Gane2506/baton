@@ -1,10 +1,12 @@
 """Approve, resume and ship runs from the dashboard without blocking the web server.
 
 `RunLauncher.start` runs the work in a background thread, through the same code path as
-`jev approve` / `jev resume` (`cli_context` + `approve_run` / `resume_run`), so it builds its
-own store connection, workers and pipeline. One job per run id at a time: a per-run lock is
-held for the whole job and a second start while it is held is refused. Tests inject an
-`executor` instead of running workers.
+`jev approve` / `jev resume` (`open_cli_context` + `approve_run` / `resume_run`), so it builds
+its own store connection, workers and pipeline. Errors are exceptions (`CliError` for the repo,
+its config or state DB), never the CLI's printed `error:` line and exit, so the job keeps the
+real message; run-start warnings are part of the job's message. One job per run id at a
+time: a per-run lock is held for the whole job and a second start while it is held is refused.
+Tests inject an `executor` instead of running workers.
 
 The launcher owns its jobs' lifetime: `shutdown` (called by the app's lifespan when the server
 stops) cancels the async work of every running job and joins the threads. An executor runs
@@ -23,11 +25,9 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal, TypeVar
 
-import typer
-
 from jev_agent.cli.run_cmds import approve_run, resume_run
-from jev_agent.cli.ship_cmds import describe_pr, ship_repo
-from jev_agent.cli.wiring import NO_WORKERS_MESSAGE, cli_context
+from jev_agent.cli.ship_cmds import describe_pr
+from jev_agent.cli.wiring import NO_WORKERS_MESSAGE, open_cli_context, open_repo
 from jev_agent.core.pipeline import PipelineError
 from jev_agent.core.ship import Gh, prepare_ship
 from jev_agent.core.ship import execute_ship as ship_now
@@ -88,26 +88,28 @@ def run_job_coroutine(coro: Coroutine[Any, Any, T]) -> T:
 
 def execute_ship(root: Path, run_id: str) -> str:
     """`jev ship RUN --yes`: check everything again, push and open the PR."""
-    with ship_repo(root) as r:
+    with open_repo(root) as r:
         gh = Gh(r.root)
         plan = prepare_ship(r.root, r.config, r.store, run_id, gh=gh)
         record = ship_now(plan, r.store, r.root, gh)
-    return f"opened {describe_pr(record)}"
+    verb = "opened" if plan.existing_pr is None else "recorded existing"
+    return f"{verb} {describe_pr(record)}"
 
 
 def execute_run(root: Path, run_id: str, action: RunAction) -> str:
     """Approve, resume or ship `run_id` exactly as the CLI does, and describe the outcome."""
     if action == "ship":
         return execute_ship(root, run_id)
-    with cli_context(root) as ctx:
+    with open_cli_context(root) as ctx:
         if action == "approve":
             record = run_job_coroutine(approve_run(ctx, run_id))
         else:
             if not ctx.has_workers:
                 raise PipelineError(NO_WORKERS_MESSAGE)
             record = run_job_coroutine(resume_run(ctx, run_id))
-    outcome = f"run {record.state}"
-    return outcome + (f": {record.reason}" if record.reason else "")
+        warnings = ctx.warnings if ctx.has_workers else []  # as `jev approve` / `resume` show
+    outcome = f"run {record.state}" + (f": {record.reason}" if record.reason else "")
+    return "; ".join([outcome, *(f"warning: {w}" for w in warnings)])
 
 
 @dataclass
@@ -171,9 +173,6 @@ class RunLauncher:
             job.state = "finished"
         except asyncio.CancelledError:  # `shutdown` cancelled it
             job.message = STOPPED_MESSAGE
-            job.state = "failed"
-        except typer.Exit:  # cli_context printed why (bad config, not a repo) to the terminal
-            job.message = "could not open the repo or its config; see the dashboard's terminal"
             job.state = "failed"
         except Exception as exc:  # shown on the run page; the run keeps its saved state
             job.message = str(exc) or type(exc).__name__

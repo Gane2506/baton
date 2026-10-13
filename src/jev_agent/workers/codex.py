@@ -36,6 +36,7 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
+from jev_agent.config.schema import WORKER_EFFORTS
 from jev_agent.core.models import WorkerStatus
 from jev_agent.workers.api import strict_json_schema
 from jev_agent.workers.base import WorkerJob, WorkerOutput
@@ -50,7 +51,7 @@ from jev_agent.workers.subprocess_runner import (
 from jev_agent.workers.summary import finish_reply, make_output
 from jev_agent.workers.tools import AgentTools, with_redact_names
 
-EFFORTS = frozenset({"low", "medium", "high", "xhigh", "max", "ultra"})
+EFFORTS = WORKER_EFFORTS["codex"]  # other levels are ignored (with a note)
 READ_ONLY_SANDBOX = "read-only"
 SANDBOXES = frozenset({"read-only", "workspace-write", "danger-full-access"})
 SCHEMA_FILE = "schema.json"

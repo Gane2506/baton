@@ -505,3 +505,39 @@ def test_guarded_state_write_keeps_a_cancellation(tmp_path: Path) -> None:
         assert store.get_run(run.id).reason == "by user"
         with pytest.raises(NotFoundError):
             store.set_run_state("nope", RunState.FAILED, unless=keep)
+
+
+def test_migration_10_backfills_learning_counts_from_old_outcomes(tmp_path: Path) -> None:
+    """Issue #42: runs learned before migration 10 get their counts parsed once, here."""
+    from jev_agent.core.migrations import MIGRATIONS
+    from jev_agent.core.models import Idea
+    from jev_agent.core.store import LearningCounts
+
+    db_path = tmp_path / "state.db"
+    stamp = "2026-10-01T00:00:00+00:00"
+    idea = Idea(text="x", repo_path=tmp_path).model_dump_json()
+    outcomes = {
+        "learned": "learned into my-profile_2: 3 added, 1 updated, 12 retired",
+        "zero": "learned into default: 0 added, 0 updated, 0 retired",
+        "skipped": "skipped: D7 found nothing worth learning",
+        "none": None,
+    }
+    with sqlite3.connect(db_path) as conn:
+        conn.executescript("".join(MIGRATIONS[:9]) + "\nPRAGMA user_version = 9;")
+        for run_id, outcome in outcomes.items():
+            conn.execute(
+                "INSERT INTO runs (id, idea_json, state, created_at, updated_at,"
+                " learning_outcome) VALUES (?, ?, 'DONE', ?, ?, ?)",
+                (run_id, idea, stamp, stamp, outcome),
+            )
+    with Store.open(db_path) as store:
+        assert _user_version(db_path) == SCHEMA_VERSION
+        counts = {run_id: store.get_run(run_id).learning_counts for run_id in outcomes}
+        assert counts == {
+            "learned": LearningCounts(added=3, updated=1, retired=12),
+            "zero": LearningCounts(added=0, updated=0, retired=0),
+            "skipped": None,
+            "none": None,
+        }
+        # The outcome text itself is kept for `jev status` and `jev log`.
+        assert store.get_run("learned").learning_outcome == outcomes["learned"]

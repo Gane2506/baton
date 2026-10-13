@@ -2,6 +2,57 @@
 
 Deviations from [PLAN.md](../PLAN.md) and choices it left open. Newest first.
 
+## 2026-10-13: Medium-priority review fixes
+
+Tracking issue #59. Choices were decided with the `jev-decide` skill, as for batches A to E.
+#35 is fixed in the contributor pull request #62 instead.
+
+- **CLI errors and light contexts (#25, #26, #51).** `cli.wiring.CliError` carries user-facing
+  errors: repo, config and a newer state DB.
+  - The CLI turns a `CliError` into one `error:` line on stderr and exits 1.
+  - The dashboard shows the same error as the job message. Jev: ARBITRATED 0.84, over a
+    `typer.Exit` subclass.
+  - Commands that run no workers use `RepoContext`: config, store and learning.
+  - Read-only commands open a missing state DB as an empty in-memory one. They print their usual
+    empty output and leave no `.jev/` behind. Jev: ARBITRATED 0.98, over an optional store and
+    over failing.
+- **Migrations under the write lock (#23).** `apply_migrations` takes `BEGIN IMMEDIATE`, then
+  reads `user_version`, then runs each script statement by statement.
+  - Statement by statement is needed because `executescript` commits first, before
+    Python 3.12.
+  - `configure_connection` retries the WAL switch, because it fails at once while another
+    process holds the lock.
+- **Ship recovery (#41).** `jev ship` runs `gh pr list --head <branch> --state all` in two cases
+  and records a PR it finds:
+  - before creating a PR on a branch that is already pushed;
+  - after a `gh pr create` that failed or timed out.
+
+  The JSON shape of `gh pr list` is not verified live, so parsing is tolerant: anything
+  unexpected means "no PR found".
+- **Learning counts (#42).** Learning steps store their counts in `runs.learning_counts_json`.
+  - Migration 10 fills the column once from older runs' outcome text.
+  - Counts are summed over the run's learning steps, and KPIs never parse text.
+  - Jev: ARBITRATED 0.72, a JSON column over an integer column and over counting lessons by
+    `source_run`.
+  - The PR state is a `Literal`, and unknown gh values count as `open`.
+- **Total Jev timeout (#36).** `asyncio.timeout(timeout_s)` wraps the retry loop.
+  - An `httpx.ConnectError` gets the call's single retry after 1 s, shared with 429/5xx, so a
+    call makes at most two requests. Jev: ARBITRATED 0.31.
+  - Read errors are not retried, because the server may already have processed the request.
+- **Config keys that did nothing (#30, #53).** `[dispatcher] fallback` is removed. `"rules"` is
+  still accepted for old files. Jev: ARBITRATED 0.72, over `Literal["rules"]`.
+  - A role's `efforts` must be accepted by at least one of the role's workers. Jev: ARBITRATED
+    0.56, over requiring every worker and over accepting any known level.
+  - Instruction keys are checked against `config.schema.DECISION_QUESTIONS`.
+  - Tests run with COLUMNS pinned to 200, and narrow output has its own tests in
+    `test_narrow_terminal.py`. Jev: AGREE 0.77, over `setdefault` with a known-red narrow run.
+  - Follow-up: rich tables in `cli/` crop cells at 40 columns; fold them instead.
+- **Contributor docs.** The contributor docs require no DCO sign-off: inbound equals outbound
+  under Apache-2.0 section 5. Jev: ARBITRATED 0.73.
+  - Blank issues are disabled, and questions go to Discussions. Jev: ARBITRATED 0.38, a low
+    confidence, so revisit it if contributors find this awkward.
+  - There is no CODEOWNERS file. Jev: AGREE 0.96.
+
 ## 2026-10-13: Fixes from the full code review (batches A to E)
 
 Tracking issue #59. Each design choice below was decided with the `jev-decide` skill
