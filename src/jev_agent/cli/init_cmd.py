@@ -86,7 +86,8 @@ def _migrate(root: Path) -> None:
     except MigrateError as exc:
         console.print(f"[red]error:[/red] {escape(str(exc))}")
         raise typer.Exit(1) from exc
-    if not (report.moved or report.renamed_refs or report.skipped_refs or report.gitignore):
+    changed = (report.moved, report.renamed_refs, report.skipped_refs, report.gitignore)
+    if not (any(changed) or report.db_rows or report.problems):
         console.print("Nothing to migrate: no jao.toml, .jao/ or jao/* branches found.")
         return
     for item in report.moved:
@@ -101,4 +102,10 @@ def _migrate(root: Path) -> None:
         console.print(f"Renamed {len(report.renamed_refs)} local branch(es)/ref(s) jao/* → jev/*")
     for ref, reason in report.skipped_refs:
         console.print(f"[yellow]skipped[/yellow] {ref}: {escape(reason)}; rename it yourself")
+    for problem in report.problems:
+        console.print(
+            f"[yellow]not done[/yellow] {escape(problem)}; run `jev init --migrate` again"
+        )
+    if report.problems:
+        raise typer.Exit(1)
     console.print("[green]Done.[/green] Nothing was pushed. Run [bold]jev doctor[/bold] to check.")

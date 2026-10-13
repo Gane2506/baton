@@ -132,6 +132,17 @@ task, or asks a human.
 | `test_command` | unset | Full test suite to run on the result branch, e.g. `"uv run pytest -q"`. Run through the shell. |
 | `max_fix_rounds` | `2` | Fix tasks D6 may add for failing integration tests before a human is asked (>= 0). Merge conflicts always go to a human. |
 
+## `[workspace]`
+
+jev commits each task attempt and merges task branches in git worktrees under `.jev/worktrees/`.
+Every git call has a timeout (1 minute; 10 minutes for commits, merges, worktree checkouts and
+pushes), so a hook or lock that hangs stops the run with an error instead of hanging it. A
+failed commit stops the run in NEEDS_HUMAN: fix the cause, then `jev resume`.
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `run_hooks` | `true` | Run the repository's git hooks (pre-commit, commit-msg, ...) on jev's commits and merges. `false` passes `--no-verify`. |
+
 ## `[approval]`
 
 | Key | Default | Meaning |

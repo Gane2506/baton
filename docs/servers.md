@@ -162,6 +162,11 @@ which exposes:
 - `read_file`: a text file, up to 256 KiB;
 - `write_file` and `upload`: only when a medium server is granted.
 
+Bad input never stops the MCP server: a number that is not finite (`Infinity`, `NaN`) is
+refused, a tool that fails (for example an OSError while reading an upload source) returns an
+error result with a one-line message (the traceback goes to the server's stderr), and a request
+line that cannot be handled gets a JSON-RPC error; the next request is served as usual.
+
 The connection to each server is reused for 60 s (`ControlMaster`, sockets in `.jev/ssh/`).
 `SSH_AUTH_SOCK` is forwarded to the MCP process so ssh-agent keys work. You can run the server
 yourself for testing: `jev mcp servers --allow web` (stdio).

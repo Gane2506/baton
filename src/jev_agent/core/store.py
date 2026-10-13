@@ -868,6 +868,25 @@ class Store:
             )
         return cur.rowcount == 1
 
+    @contextmanager
+    def link_new_run(self, item_id: int) -> Iterator[None]:
+        """While active, link the first run created through this connection to queue item
+        `item_id` (the scheduler's running item), in the transaction that inserts the run.
+
+        A TEMP trigger: it lives only on this connection (no schema change) and is dropped on
+        exit. So a scheduler killed mid-run leaves its item linked to its run, or no run at all.
+        """
+        self._conn.execute("DROP TRIGGER IF EXISTS temp.jev_link_queue_run")
+        self._conn.execute(
+            "CREATE TEMP TRIGGER jev_link_queue_run AFTER INSERT ON main.runs BEGIN"
+            " UPDATE queue SET run_id = NEW.id"
+            f" WHERE id = {int(item_id)} AND status = 'running' AND run_id IS NULL; END"
+        )
+        try:
+            yield
+        finally:
+            self._conn.execute("DROP TRIGGER IF EXISTS temp.jev_link_queue_run")
+
     def set_queue_status(
         self,
         item_id: int,
@@ -900,11 +919,18 @@ class Store:
                 if cur.rowcount == 0:
                     raise NotFoundError(f"queue item {item_id} not found")
 
-    def delete_queue_item(self, item_id: int) -> None:
+    def delete_queue_item(self, item_id: int, *, keep_running: bool = False) -> bool:
+        """Delete the item; with `keep_running`, only if it is not `running` (one statement,
+        so a scheduler's claim cannot slip in between). False when it was kept."""
+        sql = "DELETE FROM queue WHERE id = ?" + (
+            " AND status != 'running'" if keep_running else ""
+        )
         with self._tx() as db:
-            cur = db.execute("DELETE FROM queue WHERE id = ?", (item_id,))
-            if cur.rowcount == 0:
+            if db.execute(sql, (item_id,)).rowcount == 1:
+                return True
+            if db.execute("SELECT 1 FROM queue WHERE id = ?", (item_id,)).fetchone() is None:
                 raise NotFoundError(f"queue item {item_id} not found")
+        return False
 
     def clear_queued(self) -> int:
         """Delete every item that is still `queued`; returns how many were deleted."""

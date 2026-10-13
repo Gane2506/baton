@@ -8,6 +8,7 @@ shows up as `done` without anyone touching the queue).
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Literal
 
 from jev_agent.core.learning import Learning, LearningError, check_profile_name
@@ -178,18 +179,33 @@ def add_idea(
 
 
 def remove_item(store: Store, item_id: int) -> None:
-    """Remove an item (`jev queue remove`, the dashboard); a running item stays. Its run, if it
-    has one, is kept."""
+    """Remove an item (`jev queue remove`, the dashboard). Its run, if it has one, is kept.
+
+    A `running` item stays while a live scheduler holds the repo's lock; without one it is an
+    orphan of a scheduler that died, and it can be removed. The status check and the delete
+    are one statement, so an item the scheduler claims meanwhile is never deleted.
+    """
     try:
-        item = store.get_queue_item(item_id)
+        deleted = store.delete_queue_item(item_id, keep_running=_scheduler_alive(store))
     except NotFoundError as exc:
         raise QueueError(str(exc)) from exc
-    if item.status == "running":
+    if not deleted:
         raise QueueError(
             f"queue item {item_id} is running; stop the scheduler (Ctrl-C) first, "
             "or cancel its run with `jev cancel`"
         )
-    store.delete_queue_item(item_id)
+
+
+def _scheduler_alive(store: Store) -> bool:
+    """Whether a live scheduler holds the lock next to the store's database
+    (`.jev/scheduler.lock`). True when the database has no file (nothing to look at)."""
+    from jev_agent.core.scheduler import LOCK_FILENAME, SchedulerLock  # imports this module
+
+    rows = store.connection.execute("PRAGMA database_list").fetchall()
+    path = next((str(row["file"]) for row in rows if row["name"] == "main"), "")
+    if not path:
+        return True
+    return SchedulerLock(Path(path).parent / LOCK_FILENAME).read() is not None
 
 
 def queue_counts(store: Store) -> dict[QueueStatus, int]:

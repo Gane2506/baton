@@ -2,7 +2,7 @@
 
 Deviations from [PLAN.md](../PLAN.md) and choices it left open. Newest first.
 
-## 2026-10-13: Fixes from the full code review (batches A to D)
+## 2026-10-13: Fixes from the full code review (batches A to E)
 
 Tracking issue #59. Each design choice below was decided with the `jev-decide` skill
 (`.claude/skills/jev-decide/`): Jev's direct pick plus a gated weighted matrix; disagreements go
@@ -55,6 +55,33 @@ back to Jev, which arbitrates. Decision logs are kept with the review notes, not
   without output is `error`, and D5 rules reassign on `error` at once (Jev: ARBITRATED 0.97);
   the api worker maps `httpx.NetworkError` and `RemoteProtocolError` to `failure`, other
   transport errors to `error` (Jev: ARBITRATED 0.33).
+- **Git timeouts and repo hooks (#24).** `workspace.run_git` runs git in its own process group
+  with no terminal and closed stdin; 60 s for quick calls, 600 s for commit, merge, worktree and
+  push (Jev: AGREE). `jev ship` sets `GIT_TERMINAL_PROMPT=0` and an empty `GIT_ASKPASS`
+  (ARBITRATED 0.30). Git runs off the event loop through `asyncio.to_thread` at the call sites;
+  the `Workspace` protocol stays synchronous (ARBITRATED 0.31). Repo hooks run by default;
+  `[workspace] run_hooks = false` adds `--no-verify` (ARBITRATED 0.09). A failed commit or diff
+  halts NEEDS_HUMAN resumably, keeping the worktree (ARBITRATED 0.83 over FAILED and over a
+  failed attempt).
+- **`init --migrate` (#29).** Only pre-checks raise; the DB is migrated right after the
+  directory rename; failed ref renames and steps are reported, and a rerun completes them.
+- **Exit codes (#28).** One code, 3, for every stop short of DONE, not one per state (Jev:
+  ARBITRATED 0.34; the matrix leaned to distinct codes). 1 stays a command error, 2 usage.
+- **Queue items and a dying scheduler (#38, #39).** The scheduler links an item to its run with
+  a per-connection TEMP trigger on `runs`, inside the run's insert (ARBITRATED 0.94 over editing
+  `create_run` and over a callback through the pipeline). On start it recovers `running` items;
+  `remove_item` refuses only while a live scheduler holds the lock (ARBITRATED 0.80). Deleting
+  is one conditional statement. The lock is an `fcntl.flock` held for the scheduler's lifetime
+  (ARBITRATED 0.82); unmarked lock files from older versions keep the pid/host rules.
+- **Lesson ids and scoring (#40).** `lessons` is rebuilt with AUTOINCREMENT in state.db
+  (migration 9, numbering after `L` ids attempts still name) and in the shared DB (shared
+  migration 2); writes to a lesson also match its profile. Scoring is recorded in a
+  `scored_tasks` ledger in the database that holds the scores, in the same transaction
+  (ARBITRATED 0.95). Ids deleted before the upgrade in the shared DB cannot be recovered.
+- **MCP server survives bad input (#47).** `servers/mcp.py` accepts only finite numbers;
+  out-of-range values are still clamped by `ServerService` (Jev: ARBITRATED 0.04, "finite only"
+  over also refusing out-of-range values). A tool exception becomes an `isError` result with the
+  traceback logged to stderr; any other failing line gets a -32603 reply and serving continues.
 - **Server policy hardening (#44, #45, #46, #48).** Recursive `grep` only inside
   workdir/allowed_paths, with `--exclude`/`--exclude-dir` for credential names and `-R`
   refused (Jev: ARBITRATED 0.35). `docker inspect` and `systemctl show` are dropped rather than
@@ -346,7 +373,8 @@ Code: `core/chat.py`, `cli/chat_cmds.py`, `roles/chat/prompt.md`; tests in
   "with learning" on the start screen or `/learning on` creates the active profile, as
   `jev learning enable` would. Lessons are selected for the planner role.
 - **Workspace profile**: same PROFILE HOOK as the scheduler. Passed to `start_run` only if its
-  signature has `profile`; otherwise `/plan` and `/run` refuse rather than drop it.
+  signature has `profile`; otherwise `/plan` and `/run` refuse rather than drop it. *(Superseded 2026-10-13: the chat
+  passes the profile directly and it is applied to the runs it starts, #31.)*
 - **Chat cost is separate**: checked against `--budget-usd` (default $1.00) before each model
   call, shown by `/cost`, never added to a run. A check-before-call budget can end slightly
   above the cap; Claude Code calls also get `--max-budget-usd` with what is left.
@@ -414,8 +442,8 @@ Code: `core/queue.py`, `core/scheduler.py`, queue methods in `core/store.py` (mi
   is interrupted where it is (as with `jev run`), its item becomes `waiting` with a
   `jev resume` note, and nothing restarts it automatically. The scheduler finds the run it
   started by idea text and start time when `start_run` did not return.
-- **Lock file, not a database row**: `.jev/scheduler.lock` with pid and host, taken with
-  `O_CREAT | O_EXCL`; a dead pid on this host (or an unreadable file) is stale and taken over;
+- **Lock file, not a database row** *(since #39 also held with `fcntl.flock`)*:
+  `.jev/scheduler.lock` with pid and host, taken with `O_CREAT | O_EXCL`; a dead pid on this host (or an unreadable file) is stale and taken over;
   another host's lock is respected because its pid cannot be checked.
 - **Daily budget** counts every run created today (UTC), not only queue runs, and is checked
   between runs, so it can be overshot by up to one run's cap.
@@ -423,7 +451,8 @@ Code: `core/queue.py`, `core/scheduler.py`, queue methods in `core/store.py` (mi
 - **Workspace profiles**: the item's `profile` is stored and passed to `start_run` as
   `profile=` when that function accepts it (`scheduler_cmds.apply_profile`, the hook for the
   profile feature). Until then an item naming a profile fails with a note instead of running
-  with access it did not ask for.
+  with access it did not ask for. *(Superseded 2026-10-13: `start_run` always takes `profile`
+  and `quality`; the scheduler passes them directly and profiles are applied, #31.)*
 - **Board**: `build_board` is a pure function (tested without rendering); columns side by side
   from 140 columns, stacked panels below. Done shows the last 10 runs unless `--all`.
 

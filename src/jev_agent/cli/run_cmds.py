@@ -78,6 +78,27 @@ _STYLE = {
 }
 
 
+# Exit codes of `jev run`, `jev approve` and `jev resume` (the table in README "Quickstart"):
+# 0 when the run is DONE, waits for approval or is left to continue; STOPPED_EXIT_CODE when it
+# stopped short of DONE (`jev status RUN` says why); 1 for a command error, 2 for bad usage.
+STOPPED_EXIT_CODE = 3
+STOPPED_STATES = frozenset(
+    {RunState.NEEDS_HUMAN, RunState.FAILED, RunState.BUDGET_EXCEEDED, RunState.CANCELLED}
+)
+
+
+def run_exit_code(state: RunState) -> int:
+    """The exit code of a command that left a run in `state`."""
+    return STOPPED_EXIT_CODE if state in STOPPED_STATES else 0
+
+
+def exit_for(run: RunRecord) -> None:
+    """End `jev run` / `approve` / `resume` with the run's exit code (see `run_exit_code`)."""
+    code = run_exit_code(run.state)
+    if code:
+        raise typer.Exit(code)
+
+
 def print_warnings(ctx: CliContext) -> None:
     for warning in ctx.warnings:
         console.print(f"[yellow]warning:[/yellow] {escape(warning)}")
@@ -213,7 +234,9 @@ def run(
     profile: ProfileOption = None,
     repo: RepoOption = Path("."),
 ) -> None:
-    """Take an idea through planning, validation, approval, execution and integration."""
+    """Take an idea through planning, validation, approval, execution and integration.
+
+    Exit codes: 0 done or awaiting approval, 3 stopped short of DONE, 1 error."""
     level = quality_level(quality)
     with cli_context(repo) as ctx:
         if learning is not None and no_learning:
@@ -237,10 +260,13 @@ def run(
         except (LearningError, ProfileError) as exc:
             raise fail(str(exc)) from exc
         print_outcome(record)
+    exit_for(record)
 
 
 def approve(run_id: RunId, repo: RepoOption = Path(".")) -> None:
-    """Approve a validated plan and execute it."""
+    """Approve a validated plan and execute it.
+
+    Exit codes: 0 done or awaiting approval, 3 stopped short of DONE, 1 error."""
     with cli_context(repo) as ctx:
         if ctx.has_workers:
             print_warnings(ctx)
@@ -251,6 +277,7 @@ def approve(run_id: RunId, repo: RepoOption = Path(".")) -> None:
         if not ctx.has_workers:
             console.print(f"Approved. {NO_WORKERS_MESSAGE} Then run `jev resume {run_id}`.")
         print_outcome(record)
+    exit_for(record)
 
 
 def resume(
@@ -262,7 +289,9 @@ def resume(
     repo: RepoOption = Path("."),
 ) -> None:
     """Continue a run from its last saved state (with the learning profile and quality level
-    it started with, unless --learning, --no-learning or --quality says otherwise)."""
+    it started with, unless --learning, --no-learning or --quality says otherwise).
+
+    Exit codes: 0 done or awaiting approval, 3 stopped short of DONE, 1 error."""
     level = quality_level(quality)
     with cli_context(repo) as ctx:
         if learning is not None and no_learning:
@@ -284,6 +313,7 @@ def resume(
         except (NotFoundError, PipelineError, LearningError, ProfileError) as exc:
             raise fail(str(exc)) from exc
         print_outcome(record)
+    exit_for(record)
 
 
 def cancel(run_id: RunId, repo: RepoOption = Path(".")) -> None:

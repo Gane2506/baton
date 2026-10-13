@@ -24,6 +24,7 @@ from pydantic import BaseModel, Field
 from jev_agent.core.integration import fix_rounds
 from jev_agent.core.models import TaskState
 from jev_agent.core.store import ShippedPrRecord, Store
+from jev_agent.core.workspace import GIT_QUICK_TIMEOUT_S, run_git
 from jev_agent.quality.report import latest_per_gate
 from jev_agent.roles.schemas import SEVERITIES
 from jev_agent.workers.openrouter_models import is_free_slug
@@ -77,13 +78,10 @@ class RunKpis(BaseModel):
 
 def diff_stat(repo: Path, base: str, head: str) -> DiffStat | None:
     """`git diff --shortstat base..head` as numbers; None when git cannot tell."""
-    proc = subprocess.run(
-        ["git", "diff", "--shortstat", f"{base}..{head}"],
-        cwd=repo,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    try:
+        proc = run_git(["diff", "--shortstat", f"{base}..{head}"], repo, GIT_QUICK_TIMEOUT_S)
+    except subprocess.TimeoutExpired:
+        return None
     if proc.returncode != 0:
         return None
     return parse_shortstat(proc.stdout)

@@ -54,6 +54,33 @@ All notable changes to this project are documented here. The format is based on
 
 ### Fixed
 
+- **Git calls cannot hang a run** (#24). Worktree and `jev ship` git calls have timeouts (1
+  minute; 10 minutes for commits, merges, checkouts and pushes) and run off the event loop; a
+  failed commit (for example a hook that hangs) stops the run resumably, so `jev resume`
+  continues once it is fixed. `jev ship` never waits on a credential prompt. A half-created or
+  stray worktree directory is rebuilt instead of reused. New `[workspace] run_hooks` (default
+  true) can skip the repo's git hooks on jev's commits and merges.
+- **`jev init --migrate` no longer stops half-way** (#29): `state.db` is updated right after
+  `.jao/` moves, refs it cannot rename are reported, and a rerun completes what is left.
+- **`jev run` / `approve` / `resume` exit 3 when the run stops short of DONE** (#28):
+  NEEDS_HUMAN, FAILED, BUDGET_EXCEEDED or CANCELLED (0 for DONE or awaiting approval, 1 for
+  errors), so `jev approve RUN && jev ship RUN` no longer ships a failed run.
+- **Workspace-profile docs are current** (#31): docs/queue.md and docs/chat.md no longer say
+  profiles are refused; they are applied to scheduled and chat-launched runs. Leftover shims
+  removed.
+- **A killed scheduler no longer leaves its item `running` forever** (#38, #39): the run is
+  linked to its queue item when it is created, the next `jev scheduler start` recovers orphaned
+  items, and `jev queue remove` works when no scheduler is alive. Remove can no longer delete an
+  item being claimed, a removed item no longer crashes the scheduler, and the scheduler lock
+  uses `flock`, so two starters cannot both take over a stale lock.
+- **Learned lesson ids are never reused** (#40) after `jev learning flush`/`delete` (state DB
+  schema 9, shared learning DB version 2); end-of-run scoring only touches the run's own
+  profile and counts each task once, even after a crash and `jev resume`.
+- **CI builds and smoke-tests the wheel; the PyPI publish action is pinned** (#56).
+- **The servers MCP process survives bad input** (#47): non-finite numbers are refused, a
+  failing tool returns an error result, a request that cannot be handled gets a JSON-RPC error,
+  and the next request is served as usual. Tests now cover run failure, cleanup and
+  cancellation paths, migration rollback and server failure paths (#54).
 - **Cancellations stick; `--plan-only` survives `jev resume`** (#14, #22). Run state changes
   are conditional in the store, so a `jev cancel` (or the dashboard's Cancel) made while a
   worker runs is no longer overwritten when the worker then fails, and a cancel cannot replace a

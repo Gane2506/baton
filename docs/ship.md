@@ -59,6 +59,14 @@ the remote's default branch (`refs/remotes/<remote>/HEAD`, else
 worked but `gh pr create` failed, run `jev ship RUN` again: the push is skipped when the remote
 branch already holds the same commit. jev never merges a PR and never enables auto-merge.
 
+Nothing waits for input: git runs without a terminal, with `GIT_TERMINAL_PROMPT=0` and an empty
+`GIT_ASKPASS` (no password prompt, no askpass popup; credential helpers such as
+`gh auth setup-git` or the OS keychain still work), and `gh` with `GH_PROMPT_DISABLED=1`. Every
+call has a timeout: 10 minutes for `git push`, 1 minute for the other git calls, 2 minutes for
+`gh`. A push that needs a password you have not stored fails with git's error instead of hanging
+(set up a credential helper or use an SSH remote with a loaded key); a push that timed out may
+still have landed, and running `jev ship RUN` again skips it if it did.
+
 The PR body (Markdown, redacted like every log) has the idea, the plan summary, a task table
 (worker, model, effort, attempts, cost), the quality summary (level, gates, blocking problems
 and non-blocking findings by severity; the full review stays local, `jev quality show RUN`), a

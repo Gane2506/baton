@@ -54,6 +54,7 @@ from jev_agent.servers.ssh import (
     REMOTE_TIMEOUT_EXIT,
     SshResult,
     SshTransport,
+    run_process,
     ssh_options,
     time_limited,
 )
@@ -1301,3 +1302,239 @@ def test_doctor_without_servers_runs_no_ssh(
     monkeypatch.setattr(doctor_cmd, "ssh_runner", boom)
     names = [c.name for c in doctor_cmd.run_checks(fixture_repo)]
     assert "ssh" not in names and "browser" not in names and "profiles" in names
+
+
+# ---- MCP server robustness (issue #47) ---------------------------------------------------
+
+
+def _call(msg_id: int, name: str, arguments: dict[str, Any]) -> str:
+    """A tools/call line; `allow_nan` so Infinity/NaN go out as JSON-RPC clients send them."""
+    message = {
+        "jsonrpc": "2.0",
+        "id": msg_id,
+        "method": "tools/call",
+        "params": {"name": name, "arguments": arguments},
+    }
+    return json.dumps(message, allow_nan=True) + "\n"
+
+
+def _serve_lines(server: Any, *lines: str) -> list[dict[str, Any]]:
+    stdin, stdout = io.StringIO("".join(lines)), io.StringIO()
+    server.serve(stdin, stdout)
+    return [json.loads(line) for line in stdout.getvalue().splitlines()]
+
+
+_PING = '{"jsonrpc": "2.0", "id": 99, "method": "ping"}\n'
+
+
+@pytest.mark.parametrize(
+    ("name", "arguments", "message"),
+    [
+        ("read_file", {"server": "db", "path": "/etc/hosts", "max_bytes": float("inf")},
+         "max_bytes must be a finite number"),
+        ("read_file", {"server": "db", "path": "/etc/hosts", "max_bytes": float("-inf")},
+         "max_bytes must be a finite number"),
+        ("read_file", {"server": "db", "path": "/etc/hosts", "max_bytes": float("nan")},
+         "max_bytes must be a finite number"),
+        ("read_file", {"server": "db", "path": "/etc/hosts", "max_bytes": 10**400},
+         "max_bytes must be a finite number"),
+        ("run_command", {"server": "db", "command": "uptime", "timeout_s": float("nan")},
+         "timeout_s must be a finite number"),
+        ("run_command", {"server": "db", "command": "uptime", "timeout_s": float("inf")},
+         "timeout_s must be a finite number"),
+        ("run_command", {"server": "db", "command": "uptime", "timeout_s": "10"},
+         "timeout_s must be a number"),
+    ],
+)  # fmt: skip
+def test_mcp_rejects_non_finite_numbers_and_keeps_serving(
+    tmp_path: Path, name: str, arguments: dict[str, Any], message: str
+) -> None:
+    fake = FakeSsh()
+    server = servers_mcp(_service(tmp_path, fake), "1")
+    bad, ping = _serve_lines(server, _call(1, name, arguments), _PING)
+    assert bad["id"] == 1 and bad["result"]["isError"] is True
+    assert bad["result"]["content"][0]["text"] == f"bad arguments: {message}"
+    assert ping == {"jsonrpc": "2.0", "id": 99, "result": {}}
+    assert fake.calls == []  # nothing reached ssh
+
+
+def test_mcp_huge_finite_numbers_are_clamped_by_the_service(tmp_path: Path) -> None:
+    timeouts: list[float] = []
+    fake = FakeSsh({"head -c": SshResult(0, b"hello\n", b"")})
+
+    def runner(argv: Sequence[str], *, stdin: bytes | None, timeout_s: float) -> SshResult:
+        timeouts.append(timeout_s)
+        return fake(argv, stdin=stdin, timeout_s=timeout_s)
+
+    service = ServerService(_config(), tmp_path / ".jev", tmp_path, {"db": "basic"}, runner=runner)
+    read, run = _serve_lines(
+        servers_mcp(service, "1"),
+        _call(1, "read_file", {"server": "db", "path": "/etc/hosts", "max_bytes": 1e300}),
+        _call(2, "run_command", {"server": "db", "command": "uptime", "timeout_s": 1e300}),
+    )
+    assert read["result"] == {"content": [{"type": "text", "text": "hello\n"}], "isError": False}
+    assert f"head -c {256 * 1024 + 1} -- /etc/hosts" in fake.remotes
+    assert run["result"]["isError"] is False and timeouts[-1] == 600
+
+
+def test_mcp_tool_exception_is_an_error_result(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """An OSError (ssh not executable, unreadable upload source) or any other exception in a
+    tool is an isError result without a traceback; it is logged, and the server keeps
+    serving."""
+
+    def broken(argv: Sequence[str], *, stdin: bytes | None, timeout_s: float) -> SshResult:
+        raise PermissionError(13, "Permission denied", "ssh")
+
+    service = ServerService(_config(), tmp_path / ".jev", tmp_path, {"db": "basic"}, runner=broken)
+    server = servers_mcp(service, "1")
+    with caplog.at_level("ERROR", logger="jev_agent.servers.mcp"):
+        failed, ping = _serve_lines(
+            server, _call(1, "run_command", {"server": "db", "command": "uptime"}), _PING
+        )
+    text = failed["result"]["content"][0]["text"]
+    assert failed["result"]["isError"] is True
+    assert text == "run_command failed: PermissionError: [Errno 13] Permission denied: 'ssh'"
+    assert "Traceback" not in text
+    assert ping["result"] == {}
+    (record,) = caplog.records
+    assert "run_command" in record.getMessage() and record.exc_info is not None
+    started = AuditLog(audit_path(tmp_path / ".jev")).read()
+    assert [e["phase"] for e in started] == ["started"]  # the attempt is on record
+
+
+def test_mcp_unreadable_upload_source_is_an_error_result(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (tmp_path / "dist").mkdir()
+    source = tmp_path / "dist" / "app.tar"
+    source.write_bytes(b"tarball")
+    real_read_bytes = Path.read_bytes
+
+    def unreadable(self: Path) -> bytes:
+        if self == source:
+            raise PermissionError(13, "Permission denied", str(self))
+        return real_read_bytes(self)
+
+    monkeypatch.setattr(Path, "read_bytes", unreadable)
+    monkeypatch.chdir(tmp_path)
+    fake = FakeSsh()
+    server = servers_mcp(_service(tmp_path, fake), "1")
+    arguments = {"server": "web", "local_path": "dist/app.tar", "remote_path": "/srv/app/a.tar"}
+    failed, ping = _serve_lines(server, _call(1, "upload", arguments), _PING)
+    assert failed["result"]["isError"] is True
+    assert failed["result"]["content"][0]["text"].startswith("upload failed: PermissionError")
+    assert ping["result"] == {} and fake.calls == []
+
+
+def test_mcp_malformed_lines_get_errors_and_serving_goes_on(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from jev_agent.servers.mcp import McpServer
+
+    server = McpServer("x", "1", [])
+    real_dispatch = server.dispatch
+
+    def dispatch(method: str, params: dict[str, Any]) -> dict[str, Any]:
+        if method == "explode":
+            raise RuntimeError("internal bug")
+        return real_dispatch(method, params)
+
+    monkeypatch.setattr(server, "dispatch", dispatch)
+    replies = _serve_lines(
+        server,
+        "{nope\n",
+        "[1, 2]\n",
+        '{"jsonrpc": "2.0", "id": 5, "method": "explode"}\n',
+        '{"jsonrpc": "2.0", "id": 6, "method": "tools/call", "params": {"name": "x"}}\n',
+        _PING,
+    )
+    assert [r.get("id") for r in replies] == [None, None, 5, 6, 99]
+    assert replies[0]["error"]["code"] == -32700
+    assert replies[1]["error"]["code"] == -32600
+    assert replies[2]["error"] == {"code": -32603, "message": "internal error"}
+    assert replies[3]["error"]["code"] == -32602
+    assert replies[4]["result"] == {}
+
+
+# ---- service failure paths (issue #54) ---------------------------------------------------
+
+
+_CONNECT_FAILED = SshResult(255, b"", b"ssh: connect to host db.internal port 22: refused\n")
+
+
+@pytest.mark.parametrize(
+    ("call", "answers", "text", "is_error", "audit"),
+    [
+        pytest.param(
+            lambda s: s.read_file("db", "/etc/hosts"),
+            {"realpath": _CONNECT_FAILED},
+            "cannot read /etc/hosts: ssh: connect to host db.internal port 22: refused",
+            True,
+            [("", False, None)],
+            id="realpath-ssh-255",
+        ),
+        pytest.param(
+            lambda s: s.run_command("db", "uptime"),
+            {"uptime": SshResult(None, b"partial\n", b"", True, 3.0)},
+            "timed out after 3s\n--- stdout ---\npartial\n",
+            True,
+            [("started", True, None), ("finished", True, None)],
+            id="timed-out",
+        ),
+        pytest.param(
+            lambda s: s.run_command("db", "uptime"),
+            {"uptime": _CONNECT_FAILED},
+            "exit code 255 (ssh could not connect or the remote command failed; see stderr)\n"
+            "--- stderr ---\nssh: connect to host db.internal port 22: refused\n",
+            True,
+            [("started", True, None), ("finished", True, 255)],
+            id="command-ssh-255",
+        ),
+        pytest.param(
+            lambda s: s.read_file("db", "/var/log/big.log"),
+            {"head -c": SshResult(0, b"a" * (256 * 1024 + 1), b"")},
+            "a" * 256 * 1024 + f"\n[truncated at {256 * 1024} bytes]",
+            False,
+            [("started", True, None), ("finished", True, 0)],
+            id="larger-than-read-limit",
+        ),
+        pytest.param(
+            lambda s: s.write_file("web", "/srv/app/a.txt", "x"),
+            {"tmp=": SshResult(1, b"", b"mktemp: failed to create file\n")},
+            "exit code 1\n--- stderr ---\nmktemp: failed to create file\n",
+            True,
+            [("started", True, None), ("finished", True, 1)],
+            id="write-fails",
+        ),
+    ],
+)
+def test_service_failure_paths(
+    tmp_path: Path,
+    call: Any,
+    answers: dict[str, SshResult],
+    text: str,
+    is_error: bool,
+    audit: list[tuple[str, bool, int | None]],
+) -> None:
+    result = call(_service(tmp_path, FakeSsh(answers)))
+    assert result.text == text and result.is_error is is_error
+    entries = AuditLog(audit_path(tmp_path / ".jev")).read()
+    assert [(e["phase"], e["allowed"], e["exit_code"]) for e in entries] == audit
+    if not audit[0][1]:
+        assert "refused" in str(entries[0]["reason"])
+
+
+def test_run_process_timeout_kills_the_child() -> None:
+    """The real runner: a child that sleeps past the timeout is killed (with its process
+    group) and reported as timed out, quickly."""
+    script = "import os, time; print(os.getpid(), flush=True); time.sleep(30)"
+    started = time.monotonic()
+    result = run_process([sys.executable, "-c", script], stdin=None, timeout_s=0.3)
+    elapsed = time.monotonic() - started
+    assert result.timed_out and result.exit_code is None and not result.ok
+    assert elapsed < 5 and 0.3 <= result.duration_s < 5
+    pid = int(result.stdout.split()[0])
+    with pytest.raises(ProcessLookupError):
+        os.kill(pid, 0)  # gone (and reaped)

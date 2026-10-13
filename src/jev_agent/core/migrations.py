@@ -37,6 +37,47 @@ LEARNING_TABLES_V1 = """
     CREATE INDEX lessons_profile ON lessons (profile);
 """
 
+# Issue #40: rebuild `lessons` with AUTOINCREMENT so an id is never handed out again after its
+# lesson was deleted (flush, delete), and add the ledger of scored (run, task) pairs, kept in the
+# database that holds the scores so scoring and its record commit together. Ids and data are
+# kept; a lesson whose profile is missing (only possible with foreign keys off) is dropped.
+# Used by migration 9 (state.db) and shared migration 2. Never edit this text.
+LESSONS_AUTOINCREMENT_V2 = """
+    CREATE TABLE lessons_v2 (
+        id           INTEGER PRIMARY KEY AUTOINCREMENT,
+        profile      TEXT NOT NULL REFERENCES learning_profiles (name) ON DELETE CASCADE,
+        text         TEXT NOT NULL,
+        roles_json   TEXT NOT NULL,
+        tags_json    TEXT NOT NULL,
+        source_run   TEXT,
+        source_task  TEXT,
+        created_at   TEXT NOT NULL,
+        updated_at   TEXT NOT NULL,
+        uses         INTEGER NOT NULL DEFAULT 0,
+        score        REAL NOT NULL DEFAULT 0,
+        retired      INTEGER NOT NULL DEFAULT 0
+    );
+
+    INSERT INTO lessons_v2 (id, profile, text, roles_json, tags_json, source_run, source_task,
+                            created_at, updated_at, uses, score, retired)
+        SELECT id, profile, text, roles_json, tags_json, source_run, source_task, created_at,
+               updated_at, uses, score, retired
+        FROM lessons WHERE profile IN (SELECT name FROM learning_profiles);
+
+    DROP TABLE lessons;
+    ALTER TABLE lessons_v2 RENAME TO lessons;
+    CREATE INDEX lessons_profile ON lessons (profile);
+
+    -- One row per task whose injected lessons were scored (docs/learning.md, scoring).
+    CREATE TABLE scored_tasks (
+        run_id     TEXT NOT NULL,
+        task_id    TEXT NOT NULL,
+        profile    TEXT NOT NULL,
+        scored_at  TEXT NOT NULL,
+        PRIMARY KEY (run_id, task_id)
+    );
+"""
+
 MIGRATIONS: list[str] = [
     # 1: initial schema
     """
@@ -227,12 +268,36 @@ MIGRATIONS: list[str] = [
     """
     ALTER TABLE runs ADD COLUMN plan_only INTEGER NOT NULL DEFAULT 0;
     """,
+    # 9: lesson ids are never reused, and scoring is recorded with the scores (issue #40). Ids
+    # deleted before this upgrade are unknown, except the repo-scope (`L`) ids that attempts
+    # still name: the sequence starts after the highest of those too.
+    LESSONS_AUTOINCREMENT_V2
+    + """
+    DELETE FROM sqlite_sequence WHERE name = 'lessons';
+    INSERT INTO sqlite_sequence (name, seq)
+        SELECT 'lessons', top FROM (
+            SELECT MAX(n) AS top FROM (
+                SELECT id AS n FROM lessons
+                UNION ALL
+                SELECT CAST(substr(j.value, 2) AS INTEGER)
+                FROM attempts AS a,
+                     json_each(CASE WHEN json_valid(a.lesson_ids) THEN a.lesson_ids
+                                    ELSE '[]' END) AS j
+                WHERE j.type = 'text' AND upper(substr(j.value, 1, 1)) = 'L'
+            )
+        )
+        WHERE top IS NOT NULL;
+    """,
 ]
 
 SCHEMA_VERSION = len(MIGRATIONS)
 
 # Migrations for the shared learning database (`$XDG_DATA_HOME/jev/learning.db`).
-SHARED_MIGRATIONS: list[str] = [LEARNING_TABLES_V1]
+SHARED_MIGRATIONS: list[str] = [
+    LEARNING_TABLES_V1,
+    # 2: lesson ids are never reused; the scored (run, task) ledger (issue #40).
+    LESSONS_AUTOINCREMENT_V2,
+]
 
 
 class SchemaVersionError(RuntimeError):

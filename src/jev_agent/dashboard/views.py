@@ -19,8 +19,9 @@ from typing import Any
 from jev_agent.cli.board_cmds import COLUMN_FOR_STATE, COLUMNS, Card, load_board
 from jev_agent.cli.doctor_cmd import Check, run_checks
 from jev_agent.cli.quality_cmds import review_text
-from jev_agent.cli.queue_cmds import item_flags, short
+from jev_agent.cli.queue_cmds import item_flags
 from jev_agent.cli.status_cmds import format_answers, learning_line, quality_line
+from jev_agent.cli.text import short
 from jev_agent.cli.wiring import FAKE_WORKERS_ENV, STATE_DB_FILENAME
 from jev_agent.config import STATE_DIRNAME, JevConfig, load_config
 from jev_agent.core.benchmarks import DEFAULT_LAST, Summary, Trend, summarize, trends

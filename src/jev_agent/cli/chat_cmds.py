@@ -11,7 +11,7 @@ import asyncio
 import os
 import sys
 from pathlib import Path
-from typing import Annotated, Any
+from typing import Annotated
 
 import typer
 from rich.console import Console
@@ -20,9 +20,9 @@ from rich.markup import escape
 from rich.prompt import Prompt
 from rich.table import Table
 
-from jev_agent.cli.queue_cmds import short
 from jev_agent.cli.repo import RepoOption
 from jev_agent.cli.run_cmds import print_outcome, print_warnings, start_run
+from jev_agent.cli.text import short
 from jev_agent.cli.wiring import FAKE_WORKERS_ENV, NO_WORKERS_MESSAGE, CliContext, cli_context, fail
 from jev_agent.config.schema import JevConfig
 from jev_agent.config.servers_schema import NO_PROFILE
@@ -146,15 +146,6 @@ def make_backend(ctx: CliContext, backend: BackendName, model: str | None) -> Ch
     )
 
 
-# ---- workspace profile -------------------------------------------------------------------
-
-
-def profile_kwargs(profile: str | None) -> dict[str, Any]:
-    """Extra `start_run` arguments for the chat's workspace profile (docs/servers.md); without
-    one, launched runs use the repo default like `jev run`."""
-    return {} if profile is None else {"profile": profile}
-
-
 # ---- learning ----------------------------------------------------------------------------
 
 
@@ -267,9 +258,6 @@ class ChatLoop:
             console.print(f"[red]error:[/red] {escape(NO_WORKERS_MESSAGE)}")
             return
         meta = self.session.meta
-        extra = profile_kwargs(meta.profile)
-        if meta.quality:  # only when set, so a start_run without `quality` keeps working
-            extra["quality"] = meta.quality
         brief = self._current_brief()
         if brief is None:
             return
@@ -283,7 +271,9 @@ class ChatLoop:
                     brief,
                     plan_only=kind == "plan",
                     **meta.learning.run_flags(),
-                    **extra,
+                    quality=meta.quality,
+                    # Without a profile, launched runs use the repo default like `jev run`.
+                    profile=meta.profile,
                 )
             )
         except (LearningError, PipelineError, ValueError) as exc:

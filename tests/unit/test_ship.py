@@ -310,6 +310,64 @@ def test_retry_after_pr_create_failed_skips_the_push(
     assert code == 0 and "already pushed" in output and "opened PR #7" in output, output
 
 
+def _git_wrapper(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, hang_on: str = "") -> Path:
+    """A `git` first on PATH that logs each call's prompt settings, then runs the real git
+    (or, for `hang_on`, hangs in a child process that keeps the pipes open)."""
+    real_git = shutil.which("git")
+    assert real_git is not None
+    bin_dir = tmp_path / "git-bin"
+    bin_dir.mkdir()
+    log = tmp_path / "git-env.log"
+    wrapper = bin_dir / "git"
+    wrapper.write_text(
+        "#!/bin/sh\n"
+        'echo "$1 prompt=${GIT_TERMINAL_PROMPT-unset} askpass=${GIT_ASKPASS-unset}"'
+        f' >> "{log}"\n'
+        f'if [ -n "{hang_on}" ] && [ "$1" = "{hang_on}" ]; then sleep 60; fi\n'
+        f'exec "{real_git}" "$@"\n'
+    )
+    wrapper.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
+    return log
+
+
+def test_ship_git_never_prompts(
+    done_run: tuple[Path, str], gh: FakeGh, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo, run_id = done_run
+    monkeypatch.setenv("GIT_TERMINAL_PROMPT", "1")
+    monkeypatch.setenv("GIT_ASKPASS", "/usr/bin/some-gui-askpass")
+    log = _git_wrapper(tmp_path, monkeypatch)
+    code, output = _jev(repo, "ship", run_id, "--yes")
+    assert code == 0, output
+    # Every git call of ship.py (kpi.diff_stat's local `git diff` is not one of them).
+    lines = [line for line in log.read_text().splitlines() if not line.startswith("diff ")]
+    assert {"push", "ls-remote"} <= {line.split()[0] for line in lines}, lines
+    assert all(line.endswith(" prompt=0 askpass=") for line in lines), lines
+
+
+def test_ship_git_hang_times_out(
+    done_run: tuple[Path, str],
+    origin: Path,
+    gh: FakeGh,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import time
+
+    import jev_agent.core.ship as ship
+
+    repo, run_id = done_run
+    monkeypatch.setattr(ship, "GIT_QUICK_TIMEOUT_S", 0.5)
+    _git_wrapper(tmp_path, monkeypatch, hang_on="ls-remote")
+    started = time.monotonic()
+    code, output = _jev(repo, "ship", run_id, "--yes")
+    assert code == 1
+    assert "git ls-remote" in output and "timed out after 0.5 s" in output, output
+    assert time.monotonic() - started < 20
+    assert f"jev/{run_id}" not in _remote_branches(origin)
+
+
 def test_base_branch_comes_from_the_remote_head(done_run: tuple[Path, str], gh: FakeGh) -> None:
     from jev_agent.core.ship import _default_base
 

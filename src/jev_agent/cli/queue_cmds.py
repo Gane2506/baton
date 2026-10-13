@@ -13,6 +13,7 @@ from rich.table import Table
 
 from jev_agent.cli.repo import RepoOption
 from jev_agent.cli.run_cmds import QualityOption, quality_level
+from jev_agent.cli.text import short
 from jev_agent.cli.wiring import cli_context, fail
 from jev_agent.config.servers_schema import NO_PROFILE
 from jev_agent.core.queue import (
@@ -42,12 +43,6 @@ class Priority(StrEnum):
     high = "high"
     normal = "normal"
     low = "low"
-
-
-def short(text: str, width: int) -> str:
-    """`text` on one line, cut to `width` characters with `...`."""
-    line = " ".join(text.split())
-    return line if len(line) <= width else line[: max(width - 3, 1)] + "..."
 
 
 def item_flags(item: QueueItem) -> str:

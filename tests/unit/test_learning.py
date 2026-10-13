@@ -85,7 +85,7 @@ def test_repo_profile_and_lesson_round_trip(learning: Learning) -> None:
     )
     assert (got.uses, got.score, got.retired) == (0, 0.0, False)
     assert learning.get("work") is not None and learning.get("work").lessons == 1  # type: ignore[union-attr]
-    db.update_text(1, "Run `pytest` from the root.")
+    db.update_text("work", 1, "Run `pytest` from the root.")
     assert learning.lessons("work")[0].text == "Run `pytest` from the root."
     assert not shared_db_path().exists()  # reading and repo writes never create the shared db
 
@@ -431,3 +431,93 @@ def test_store_records_learning_columns(store: Store) -> None:
     assert store.get_setting("k") == "w"
     store.set_setting("k", None)
     assert store.get_setting("k") is None
+
+
+# ---- lesson ids and scoring stay with their profile (#40) ----------------------------------------
+
+
+@pytest.mark.parametrize("shared", [False, True])
+def test_lesson_ids_are_never_reused_after_flush(learning: Learning, shared: bool) -> None:
+    learning.create("a", shared=shared)
+    learning.create("b", shared=shared)
+    db = learning.db_for("a")
+    first = db.add_lesson("a", "old lesson", ["coder"], [])
+    assert learning.flush("a") == 1
+    second = db.add_lesson("b", "new lesson", ["coder"], [])
+    assert second.number > first.number
+    with pytest.raises(LearningError, match="no lesson"):
+        learning.forget(first.id)  # the flushed id points at nothing, never at b's lesson
+
+
+def test_lesson_writes_only_touch_the_given_profile(learning: Learning) -> None:
+    learning.create("a")
+    learning.create("b")
+    db = learning.db_for("b")
+    lesson = db.add_lesson("b", "b's lesson", ["coder"], [])
+    db.record_use("a", lesson.number, -5.0)
+    db.update_text("a", lesson.number, "changed")
+    db.retire("a", lesson.number)
+    assert db.get_lesson(lesson.number) == lesson  # untouched: it belongs to b
+    db.record_use("b", lesson.number, -0.5)
+    got = db.get_lesson(lesson.number)
+    assert got is not None and (got.uses, got.score) == (1, -0.5)
+
+
+def test_shared_scoring_is_not_repeated_after_a_crash(
+    store: Store, learning: Learning, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    learning.create("team", shared=True)
+    db = learning.db_for("team")
+    lesson = db.add_lesson("team", "shared lesson", ["coder"], [])
+    run = store.create_run(Idea(text="x", repo_path=Path(".")), "team")
+    store.upsert_tasks(run.id, Plan(summary="s", tasks=[_card("T1")]))
+    _attempt(store, run.id, "T1", 1, [lesson.id])
+    store.set_task_state(run.id, "T1", TaskState.DONE)
+    store.increment_task_attempts(run.id, "T1")
+
+    def crash(run_id: str, task_id: str) -> None:
+        raise KeyboardInterrupt  # the process dies after scoring, before the mark
+
+    with monkeypatch.context() as m:
+        m.setattr(store, "mark_task_lessons_scored", crash)
+        with pytest.raises(KeyboardInterrupt):
+            score_lessons(store, store.get_run(run.id), db)
+    assert not store.get_task(run.id, "T1").lessons_scored
+    score_lessons(store, store.get_run(run.id), db)  # resume scores again
+    got = db.get_lesson(lesson.number)
+    assert got is not None and (got.uses, got.score) == (1, 1.0)
+    assert store.get_task(run.id, "T1").lessons_scored
+
+
+def test_shared_migration_rebuilds_lessons_without_reusing_ids(tmp_path: Path) -> None:
+    import sqlite3
+
+    from jev_agent.core.learning import LessonDB
+    from jev_agent.core.migrations import SHARED_MIGRATIONS
+
+    path = tmp_path / "learning.db"
+    with sqlite3.connect(path) as conn:
+        conn.executescript(SHARED_MIGRATIONS[0] + "\nPRAGMA user_version = 1;")
+        conn.execute("INSERT INTO learning_profiles VALUES ('a', 1, '2026-10-01T00:00:00+00:00')")
+        for number in (1, 2, 3):
+            conn.execute(
+                "INSERT INTO lessons (id, profile, text, roles_json, tags_json, created_at,"
+                " updated_at, uses, score) VALUES (?, 'a', ?, '[\"coder\"]', '[]', ?, ?, 2, 1.5)",
+                (number, f"lesson {number}", *["2026-10-01T00:00:00+00:00"] * 2),
+            )
+        conn.execute("DELETE FROM lessons WHERE id = 2")
+    db = LessonDB.open_shared(path)
+    try:
+        assert db.conn.execute("PRAGMA user_version").fetchone()[0] == len(SHARED_MIGRATIONS)
+        assert [(x.id, x.text, x.uses, x.score) for x in db.list_lessons("a")] == [
+            ("S1", "lesson 1", 2, 1.5),
+            ("S3", "lesson 3", 2, 1.5),
+        ]
+        db.flush("a")
+        assert db.add_lesson("a", "after", ["coder"], []).id == "S4"
+        assert db.conn.execute("PRAGMA foreign_key_check").fetchall() == []
+        with db.conn:
+            db.conn.execute("DELETE FROM learning_profiles WHERE name = 'a'")
+        assert db.list_lessons("a", include_retired=True) == []  # still cascades
+    finally:
+        db.conn.close()

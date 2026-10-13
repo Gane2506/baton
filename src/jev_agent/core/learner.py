@@ -4,8 +4,9 @@ learner role, store its changes.
 1. **Scoring** (deterministic, always, no model call). For each task that ended (DONE, FAILED,
    NEEDS_HUMAN) and was not scored yet, every lesson injected into the task's attempts (coder,
    reviewer) gets `uses += 1`, and `score += 1` if the task was DONE on its first attempt,
-   else `-0.5`. A lesson whose score reaches -2 is retired. Lessons given only to the planner
-   or validator are not scored (there is no per-task outcome to credit).
+   else `-0.5`, once per task (a ledger next to the scores records it). Only lessons of the
+   run's profile are touched. A lesson whose score reaches -2 is retired. Lessons given only
+   to the planner or validator are not scored (there is no per-task outcome to credit).
 2. **D7**: learn or skip, and the learner's worker, model and effort. Skipped without asking
    when the learner role has no worker or the run's budget is spent.
 3. **Learner**: a read-only role that sees a compact run card (never transcripts) and the
@@ -143,7 +144,13 @@ async def _distill(h: Harness, run: RunRecord, db: LessonDB, profile: str) -> st
 
 
 def score_lessons(store: Store, run: RunRecord, db: LessonDB) -> None:
-    """Update uses and scores of the lessons this run injected (see the module docstring)."""
+    """Update uses and scores of the lessons this run injected (see the module docstring).
+
+    Each task is scored once: `db` records the (run, task) pair in the same transaction as the
+    scores, so a crash before `tasks.lessons_scored` is set never counts a task twice.
+    """
+    profile = run.learning_profile
+    assert profile is not None
     attempts = store.list_attempts(run.id)
     for task in store.list_tasks(run.id):
         if task.lessons_scored or task.state not in _ENDED:
@@ -151,8 +158,7 @@ def score_lessons(store: Store, run: RunRecord, db: LessonDB) -> None:
         ids = {i for a in attempts if a.task_id == task.id for i in a.lesson_ids}
         first_try = task.state is TaskState.DONE and task.attempts <= 1
         delta = SCORE_FIRST_TRY if first_try else SCORE_STRUGGLED
-        for number in _numbers_in(db, ids):
-            db.record_use(number, delta)
+        db.score_task(profile, run.id, task.id, _numbers_in(db, ids), delta)
         store.mark_task_lessons_scored(run.id, task.id)
 
 
@@ -277,13 +283,13 @@ def apply_learner_output(
         text = clean_text(edit.text)
         if target is None or not text or target.id in updated:
             continue
-        db.update_text(target.number, text)
+        db.update_text(profile, target.number, text)
         updated.append(target.id)
     retired: list[str] = []
     for lesson_id in output.retire:
         target = by_id.get(lesson_id.strip().upper())
         if target is None or target.id in retired:
             continue
-        db.retire(target.number)
+        db.retire(profile, target.number)
         retired.append(target.id)
     return Applied(added, updated, retired)

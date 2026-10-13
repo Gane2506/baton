@@ -1,4 +1,5 @@
 import time
+from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
 
@@ -7,6 +8,7 @@ from typer.testing import CliRunner
 
 from jev_agent.cli import wiring
 from jev_agent.cli.app import app
+from jev_agent.cli.run_cmds import STOPPED_EXIT_CODE, run_exit_code
 from jev_agent.cli.status_cmds import format_answers, format_time
 from jev_agent.cli.wiring import (
     FAKE_WORKERS_ENV,
@@ -16,14 +18,16 @@ from jev_agent.cli.wiring import (
     pipeline_settings,
 )
 from jev_agent.config import JevConfig
-from jev_agent.core.models import RunState
+from jev_agent.core.models import RunState, ValidationResult
+from jev_agent.core.pipeline import cancel_run
 from jev_agent.core.store import Store
 from jev_agent.dispatch.jev import JevDispatcher
 from jev_agent.dispatch.rules import RulesDispatcher
 from jev_agent.workers.api import ApiWorker
+from jev_agent.workers.base import WorkerJob, WorkerOutput
 from jev_agent.workers.claude_code import ClaudeCodeWorker
 from jev_agent.workers.codex import CodexWorker
-from jev_agent.workers.fake import FakeWorker
+from jev_agent.workers.fake import FakeStep, FakeWorker, ScriptValue
 
 runner = CliRunner()
 
@@ -118,6 +122,95 @@ def test_cancel_and_unknown_run(fixture_repo: Path, monkeypatch: pytest.MonkeyPa
 def test_not_a_git_repo(tmp_path: Path) -> None:
     code, output = _jev(tmp_path, "status")
     assert code == 1 and "not inside a git repository" in output
+
+
+# ---- exit codes by final run state (#28) ----------------------------------------------------
+
+
+def _scripted_fakes(monkeypatch: pytest.MonkeyPatch, script: Mapping[str, ScriptValue]) -> None:
+    """`JEV_FAKE_WORKERS=1` with every fake worker following `script`."""
+    monkeypatch.setenv(FAKE_WORKERS_ENV, "1")
+    monkeypatch.setattr(wiring, "FakeWorker", lambda name: FakeWorker(name, script))
+
+
+def test_exit_code_per_state() -> None:
+    for state in RunState:
+        stopped = state in {
+            RunState.NEEDS_HUMAN,
+            RunState.FAILED,
+            RunState.BUDGET_EXCEEDED,
+            RunState.CANCELLED,
+        }
+        assert run_exit_code(state) == (STOPPED_EXIT_CODE if stopped else 0), state
+    assert STOPPED_EXIT_CODE not in (0, 1, 2)  # 1: command error, 2: usage error
+
+
+def test_run_needs_human_exits_nonzero(fixture_repo: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    (fixture_repo / "jev.toml").write_text("[budget]\nmax_plan_rounds = 1\n")
+    revise = FakeStep(parsed=ValidationResult(verdict="revise", issues=["no"]))
+    _scripted_fakes(monkeypatch, {"validator": revise})
+    code, output = _jev(fixture_repo, "run", "add search")
+    assert "NEEDS_HUMAN" in output
+    assert code == STOPPED_EXIT_CODE
+
+
+def test_approve_failed_run_exits_nonzero(
+    fixture_repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _scripted_fakes(monkeypatch, {"coder": FakeStep(status="failure")})
+    assert _jev(fixture_repo, "run", "add search")[0] == 0  # AWAITING_APPROVAL
+    code, output = _jev(fixture_repo, "approve", _run_id(fixture_repo))
+    assert "FAILED" in output
+    assert code == STOPPED_EXIT_CODE
+
+
+def test_budget_exceeded_exits_nonzero(fixture_repo: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _scripted_fakes(
+        monkeypatch,
+        {"planner": FakeStep(cost_usd=3.0), "validator": FakeStep(cost_usd=2.5)},
+    )
+    assert _jev(fixture_repo, "run", "add search")[0] == 0  # AWAITING_APPROVAL, over the cap
+    code, output = _jev(fixture_repo, "approve", _run_id(fixture_repo))
+    assert "BUDGET_EXCEEDED" in output
+    assert code == STOPPED_EXIT_CODE
+
+
+def test_resume_to_failed_exits_nonzero(
+    fixture_repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _scripted_fakes(monkeypatch, {"coder": FakeStep(status="failure")})
+    assert _jev(fixture_repo, "run", "add search")[0] == 0
+    run_id = _run_id(fixture_repo)
+    monkeypatch.delenv(FAKE_WORKERS_ENV)
+    (fixture_repo / "jev.toml").write_text(NO_WORKERS_TOML)
+    assert _jev(fixture_repo, "approve", run_id)[0] == 0  # approved, left EXECUTING
+    (fixture_repo / "jev.toml").unlink()
+    monkeypatch.setenv(FAKE_WORKERS_ENV, "1")
+    code, output = _jev(fixture_repo, "resume", run_id)
+    assert "FAILED" in output
+    assert code == STOPPED_EXIT_CODE
+
+
+class _CancelledFromAnotherShell(FakeWorker):
+    """A fake planner during which the user runs `jev cancel` from another shell."""
+
+    def __init__(self, name: str, db: Path) -> None:
+        super().__init__(name)
+        self.db = db
+
+    async def run(self, job: WorkerJob) -> WorkerOutput:
+        with Store.open(self.db) as store:
+            cancel_run(store, store.list_runs()[0].id)
+        return await super().run(job)
+
+
+def test_cancelled_run_exits_nonzero(fixture_repo: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    db = fixture_repo / ".jev" / "state.db"
+    monkeypatch.setenv(FAKE_WORKERS_ENV, "1")
+    monkeypatch.setattr(wiring, "FakeWorker", lambda name: _CancelledFromAnotherShell(name, db))
+    code, output = _jev(fixture_repo, "run", "add search")
+    assert "CANCELLED" in output
+    assert code == STOPPED_EXIT_CODE
 
 
 def test_build_dispatcher_from_config(monkeypatch: pytest.MonkeyPatch) -> None:

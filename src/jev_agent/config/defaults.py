@@ -42,6 +42,9 @@ DEFAULT_CONFIG_TOML = """\
 # test_command = "uv run pytest -q" # full suite on the merged result branch; default: none
 # max_fix_rounds = 2               # fix tasks added for failing integration tests before asking
 
+[workspace]
+# run_hooks = true                 # run the repo's git hooks on jev's task commits and merges
+
 [approval]
 # require_plan_approval = true     # human gate after plan validation
 

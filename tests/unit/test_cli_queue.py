@@ -17,9 +17,9 @@ from jev_agent.cli.board_cmds import (
     format_age,
     render_board,
 )
-from jev_agent.cli.scheduler_cmds import apply_profile
 from jev_agent.cli.wiring import FAKE_WORKERS_ENV
 from jev_agent.core.models import Idea, Plan, RunState, TaskCard, TaskState
+from jev_agent.core.scheduler import SchedulerLock
 from jev_agent.core.store import Store
 
 runner = CliRunner()
@@ -96,8 +96,12 @@ def test_queue_remove_refuses_running(fixture_repo: Path) -> None:
     _jev(fixture_repo, "queue", "add", "x")
     with _store(fixture_repo) as store:
         store.claim_queue_item(1)
+    lock = SchedulerLock(fixture_repo / ".jev" / "scheduler.lock")
+    lock.acquire()  # a live scheduler is working on it
     code, output = _jev(fixture_repo, "queue", "remove", "1")
     assert code == 1 and "running" in output
+    lock.release()  # its scheduler is gone: the orphaned item can be removed
+    assert _jev(fixture_repo, "queue", "remove", "1") == (0, "removed item 1")
 
 
 # ---- jev scheduler ---------------------------------------------------------------------------
@@ -162,12 +166,14 @@ def test_scheduler_daily_budget_flag(fixture_repo: Path) -> None:
     assert code == 0 and "daily budget reached" in output and "started 0 run(s)" in output
 
 
-def test_profile_hook(fixture_repo: Path) -> None:
+def test_scheduler_applies_item_quality(fixture_repo: Path) -> None:
+    _jev(fixture_repo, "queue", "add", "x", "--plan-only", "--quality", "basic")
+    _jev(fixture_repo, "queue", "add", "y", "--plan-only")
+    code, output = _jev(fixture_repo, "scheduler", "start", "--max-runs", "2")
+    assert code == 0, output
     with _store(fixture_repo) as store:
-        plain = store.add_queue_item("a")
-        boxed = store.add_queue_item("b", profile="box")
-    assert apply_profile(plain) == {}
-    assert apply_profile(boxed) == {"profile": "box"}
+        levels = {run.idea.text: run.quality_level for run in store.list_runs()}
+    assert levels == {"x": "basic", "y": "none"}
 
 
 def test_queue_add_checks_profile(fixture_repo: Path) -> None:

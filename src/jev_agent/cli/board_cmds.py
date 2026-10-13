@@ -22,8 +22,8 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
-from jev_agent.cli.queue_cmds import short
 from jev_agent.cli.repo import RepoOption
+from jev_agent.cli.text import short
 from jev_agent.cli.wiring import cli_context
 from jev_agent.core.models import RunState, TaskState
 from jev_agent.core.store import QueueItem, RunRecord, Store, TaskRecord

@@ -12,14 +12,21 @@ run builds the same branches even if the user has moved HEAD since.
 - `cleanup` removes a finished run's worktrees and base branches; task and result branches stay.
 
 Worktrees live under `<state_dir>/worktrees/<run_id>/`. Nothing here pushes, ever.
+
+Every git call has a timeout (`run_git`): a hung hook or a stale `index.lock` raises
+`WorkspaceError` instead of hanging the run. Calls that can run repo hooks, check out a tree or
+reach the network get `GIT_SLOW_TIMEOUT_S`; the rest get `GIT_QUICK_TIMEOUT_S`.
 """
 
 from __future__ import annotations
 
+import contextlib
+import os
 import re
 import shutil
+import signal
 import subprocess
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol
@@ -34,6 +41,61 @@ _GIT_IDENTITY = [
     "commit.gpgsign=false",
 ]
 _SAFE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+
+GIT_QUICK_TIMEOUT_S = 60.0  # plumbing: rev-parse, update-ref, for-each-ref, diff, ls-remote ...
+GIT_SLOW_TIMEOUT_S = 600.0  # commit, merge, add, worktree add/remove, push: hooks, checkouts
+_KILL_GRACE_S = 5.0  # between SIGTERM (git removes its lock files) and SIGKILL
+
+
+def run_git(
+    args: Sequence[str],
+    cwd: Path,
+    timeout_s: float,
+    env: Mapping[str, str] | None = None,
+) -> subprocess.CompletedProcess[str]:
+    """Run `git <args>` in its own process group and return the finished process.
+
+    On timeout the whole group (git and any hook it started) is terminated, then killed, and
+    `subprocess.TimeoutExpired` is raised. Callers map it to their own error. Git runs without a
+    controlling terminal and with stdin closed, so it can never wait on a terminal prompt.
+    """
+    proc = subprocess.Popen(
+        ["git", *args],
+        cwd=cwd,
+        env=dict(env) if env is not None else None,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        start_new_session=True,  # own process group, so a timeout reaches the hooks too
+    )
+    try:
+        out, err = proc.communicate(timeout=timeout_s)
+    except BaseException:  # the timeout, or Ctrl-C (which does not reach the new session)
+        _kill_group(proc)
+        raise
+    return subprocess.CompletedProcess(proc.args, proc.returncode, out, err)
+
+
+def _kill_group(proc: subprocess.Popen[str]) -> None:
+    for sig in (signal.SIGTERM, signal.SIGKILL):
+        with contextlib.suppress(ProcessLookupError, PermissionError):
+            os.killpg(proc.pid, sig)
+        try:
+            proc.communicate(timeout=_KILL_GRACE_S)  # also closes the pipes
+            return
+        except subprocess.TimeoutExpired:
+            continue
+
+
+def timeout_message(args: Sequence[str], timeout_s: float) -> str:
+    shown = list(args)
+    while len(shown) > 1 and shown[0] == "-c":  # leave out `-c key=value` options
+        shown = shown[2:]
+    return (
+        f"git {' '.join(shown)} timed out after {timeout_s:g} s and was stopped "
+        "(a hung hook, a credential prompt or a stale .git/index.lock?)"
+    )
 
 
 class WorkspaceError(Exception):
@@ -106,11 +168,26 @@ def start_ref(run_id: str) -> str:
 
 
 class GitWorkspace:
-    """`Workspace` backed by `git worktree`; worktrees live under `<state_dir>/worktrees/`."""
+    """`Workspace` backed by `git worktree`; worktrees live under `<state_dir>/worktrees/`.
 
-    def __init__(self, repo: Path, state_dir: Path) -> None:
+    `run_hooks=False` passes `--no-verify` to jev's commits and merges, so the repo's
+    pre-commit, commit-msg and pre-merge-commit hooks do not run on jev's branches.
+    """
+
+    def __init__(
+        self,
+        repo: Path,
+        state_dir: Path,
+        *,
+        run_hooks: bool = True,
+        quick_timeout_s: float = GIT_QUICK_TIMEOUT_S,
+        slow_timeout_s: float = GIT_SLOW_TIMEOUT_S,
+    ) -> None:
         self.repo = repo
         self.root = state_dir / "worktrees"
+        self.run_hooks = run_hooks
+        self.quick_timeout_s = quick_timeout_s
+        self.slow_timeout_s = slow_timeout_s
 
     def start_commit(self, run_id: str) -> str:
         ref = start_ref(run_id)
@@ -120,25 +197,28 @@ class GitWorkspace:
 
     def task_workdir(self, run_id: str, task_id: str, depends_on: Sequence[str] = ()) -> Path:
         path = self._run_dir(run_id) / task_id
-        if path.exists():
-            return path
         branch = task_branch(run_id, task_id)
+        if path.exists():
+            if self._is_usable_worktree(path, branch):
+                return path
+            # A stray directory, or a worktree a crash left half-created: build it again.
+            self._remove_worktree(path)
+        self._git("worktree", "prune")  # forget worktrees whose directory is gone
         path.parent.mkdir(parents=True, exist_ok=True)
         if self._ref_exists(f"refs/heads/{branch}"):  # worktree removed; keep the branch's work
-            self._git("worktree", "add", str(path), branch)
+            self._git("worktree", "add", str(path), branch, slow=True)
         else:
             base = self._build_base(run_id, task_id, depends_on)
-            self._git("worktree", "add", "-b", branch, str(path), base)
+            self._git("worktree", "add", "-b", branch, str(path), base, slow=True)
         return path
 
     def commit_task(self, workdir: Path, message: str) -> bool:
-        self._git("add", "-A", cwd=workdir)
-        staged = subprocess.run(
-            ["git", "diff", "--cached", "--quiet"], cwd=workdir, check=False
-        ).returncode
-        if staged == 0:
+        self._git("add", "-A", cwd=workdir, slow=True)
+        if self._run(["diff", "--cached", "--quiet"], workdir, slow=False).returncode == 0:
             return False
-        self._git(*_GIT_IDENTITY, "commit", "-q", "-m", message, cwd=workdir)
+        self._git(
+            *_GIT_IDENTITY, "commit", "-q", *self._no_verify, "-m", message, cwd=workdir, slow=True
+        )
         return True
 
     def task_diff(self, run_id: str, task_id: str) -> str:
@@ -157,7 +237,7 @@ class GitWorkspace:
         path = self._run_dir(run_id) / "_result"
         self._remove_worktree(path)  # a previous integration: start again from scratch
         path.parent.mkdir(parents=True, exist_ok=True)
-        self._git("worktree", "add", "-B", branch, str(path), self.start_commit(run_id))
+        self._git("worktree", "add", "-B", branch, str(path), self.start_commit(run_id), slow=True)
         merged: list[str] = []
         conflicts: list[str] = []
         for task_id in task_ids:
@@ -191,7 +271,7 @@ class GitWorkspace:
         base = base_branch(run_id, task_id)
         tmp = self._run_dir(run_id) / f"_base-{task_id}"
         self._remove_worktree(tmp)  # left over from an interrupted attempt
-        self._git("worktree", "add", "-B", base, str(tmp), start)
+        self._git("worktree", "add", "-B", base, str(tmp), start, slow=True)
         try:
             for dep in depends_on:
                 files = self._merge(tmp, task_branch(run_id, dep))
@@ -209,18 +289,44 @@ class GitWorkspace:
 
     def _merge(self, workdir: Path, branch: str) -> list[str] | None:
         """Merge `branch` into `workdir`; None on success, else the conflicting files."""
-        proc = subprocess.run(
-            ["git", *_GIT_IDENTITY, "merge", "--no-ff", "--no-edit", branch],
-            cwd=workdir,
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        if proc.returncode == 0:
+        args = [*_GIT_IDENTITY, "merge", "--no-ff", "--no-edit", *self._no_verify, branch]
+        if self._run(args, workdir, slow=True).returncode == 0:
             return None
         files = self._git("diff", "--name-only", "--diff-filter=U", cwd=workdir).split()
-        subprocess.run(["git", "merge", "--abort"], cwd=workdir, capture_output=True, check=False)
+        self._run(["merge", "--abort"], workdir, slow=True)
         return files
+
+    @property
+    def _no_verify(self) -> list[str]:
+        return [] if self.run_hooks else ["--no-verify"]
+
+    def _is_usable_worktree(self, path: Path, branch: str) -> bool:
+        """`path` is a complete worktree of this repo, registered, with `branch` checked out.
+
+        `git worktree add` keeps a new worktree locked ("initializing") until its checkout is
+        done, so a locked one is what a crash during `worktree add` leaves behind.
+        """
+        inside = self._run(["rev-parse", "--is-inside-work-tree"], path, slow=False)
+        if inside.stdout.strip() != "true":
+            return False
+        top = self._run(["rev-parse", "--show-toplevel"], path, slow=False).stdout.strip()
+        if not top or Path(top).resolve() != path.resolve():
+            return False  # a plain directory inside some other work tree
+        entry = self._worktree_entry(path)
+        return (
+            entry is not None
+            and f"branch refs/heads/{branch}" in entry
+            and not any(line == "locked" or line.startswith("locked ") for line in entry)
+        )
+
+    def _worktree_entry(self, path: Path) -> list[str] | None:
+        """The `git worktree list --porcelain` lines for `path`, or None if not registered."""
+        target = path.resolve()
+        for block in self._git("worktree", "list", "--porcelain").split("\n\n"):
+            lines = block.splitlines()
+            if lines and Path(lines[0].removeprefix("worktree ")).resolve() == target:
+                return lines
+        return None
 
     def _run_dir(self, run_id: str) -> Path:
         if not _SAFE_NAME.match(run_id):
@@ -233,28 +339,27 @@ class GitWorkspace:
             return
         if not path.resolve().is_relative_to(self.root.resolve()) or path == self.root:
             raise WorkspaceError(f"refusing to remove {path}: not under {self.root}")
-        proc = subprocess.run(
-            ["git", "worktree", "remove", "--force", str(path)],
-            cwd=self.repo,
-            capture_output=True,
-            check=False,
-        )
-        if proc.returncode != 0:  # not a registered worktree: a plain directory
-            shutil.rmtree(path)
+        # Twice --force: also removes a worktree left locked by an interrupted `worktree add`.
+        args = ["worktree", "remove", "--force", "--force", str(path)]
+        if self._run(args, self.repo, slow=True).returncode != 0:
+            shutil.rmtree(path)  # not a registered worktree: a plain directory
 
     def _ref_exists(self, ref: str) -> bool:
-        proc = subprocess.run(
-            ["git", "rev-parse", "--verify", "--quiet", ref],
-            cwd=self.repo,
-            capture_output=True,
-            check=False,
+        return (
+            self._run(["rev-parse", "--verify", "--quiet", ref], self.repo, slow=False).returncode
+            == 0
         )
-        return proc.returncode == 0
 
-    def _git(self, *args: str, cwd: Path | None = None) -> str:
-        proc = subprocess.run(
-            ["git", *args], cwd=cwd or self.repo, capture_output=True, text=True, check=False
-        )
+    def _git(self, *args: str, cwd: Path | None = None, slow: bool = False) -> str:
+        proc = self._run(list(args), cwd or self.repo, slow=slow)
         if proc.returncode != 0:
             raise WorkspaceError(f"git {' '.join(args)} failed: {proc.stderr.strip()}")
         return proc.stdout
+
+    def _run(self, args: list[str], cwd: Path, *, slow: bool) -> subprocess.CompletedProcess[str]:
+        """Run git with the timeout for its kind of call; a timeout raises `WorkspaceError`."""
+        timeout_s = self.slow_timeout_s if slow else self.quick_timeout_s
+        try:
+            return run_git(args, cwd, timeout_s)
+        except subprocess.TimeoutExpired as exc:
+            raise WorkspaceError(timeout_message(args, timeout_s)) from exc

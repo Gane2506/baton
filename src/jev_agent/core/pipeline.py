@@ -15,6 +15,7 @@ Each step reads the run from the store, does one unit of work and persists the n
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -286,7 +287,8 @@ class Pipeline:
 
     async def _execute(self, run: RunRecord) -> None:
         try:
-            self.h.workspace.start_commit(run.id)  # pin the base of every branch of the run
+            # Pin the base of every branch of the run. Git runs off the event loop (#24).
+            await asyncio.to_thread(self.h.workspace.start_commit, run.id)
         except WorkspaceError as exc:
             raise Halt(RunState.FAILED, f"cannot record the start commit: {exc}") from exc
         runner = TaskRunner(self.h, self.settings.test_timeout_s)
@@ -328,7 +330,7 @@ class Pipeline:
             action = "fix_task"  # the gate is a hard limit: never ship while it blocks
         if action == "ship":
             self._move(run.id, RunState.DONE, f"result on branch {result.branch}")
-            self._cleanup(run.id)
+            await self._cleanup(run.id)
         elif action == "fix_task" and outcome.fixable and rounds < max_rounds:
             self._add_fix_task(run, outcome)
             self._move(run.id, RunState.EXECUTING)
@@ -369,10 +371,10 @@ class Pipeline:
         self.store.set_run_plan(run.id, plan, run.plan_round)
         self.store.upsert_tasks(run.id, plan)
 
-    def _cleanup(self, run_id: str) -> None:
+    async def _cleanup(self, run_id: str) -> None:
         """Remove a finished run's worktrees. A failure here does not undo DONE."""
         try:
-            self.h.workspace.cleanup(run_id)
+            await asyncio.to_thread(self.h.workspace.cleanup, run_id)
         except WorkspaceError as exc:
             run = self.store.get_run(run_id)
             reason = f"{run.reason}; worktree cleanup failed: {exc}"
@@ -462,7 +464,7 @@ def build_pipeline(
         state_dir=state_dir,
         dispatcher=GuardedDispatcher(dispatcher or RulesDispatcher(), RulesDispatcher()),
         workers=workers,
-        workspace=workspace or GitWorkspace(repo, state_dir),
+        workspace=workspace or GitWorkspace(repo, state_dir, run_hooks=config.workspace.run_hooks),
         commands=commands or ShellCommandRunner(),
         learning=learning or Learning.for_store(store),
         catalog=catalog,

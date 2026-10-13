@@ -131,6 +131,15 @@ class IntegrationConfig(_Strict):
     max_fix_rounds: int = Field(default=2, ge=0)
 
 
+class WorkspaceConfig(_Strict):
+    """`[workspace]`: the git worktrees jev commits and merges task work in."""
+
+    # Run the repository's git hooks (pre-commit, commit-msg, ...) on jev's own commits and
+    # merges. Off: jev passes `--no-verify`. Hooks are a quality signal, but a hook that hangs
+    # stops the run (git calls time out, issue #24).
+    run_hooks: bool = True
+
+
 class ApprovalConfig(_Strict):
     require_plan_approval: bool = True
 
@@ -466,6 +475,7 @@ class JevConfig(_Strict):
     budget: BudgetConfig = Field(default_factory=BudgetConfig)
     approval: ApprovalConfig = Field(default_factory=ApprovalConfig)
     integration: IntegrationConfig = Field(default_factory=IntegrationConfig)
+    workspace: WorkspaceConfig = Field(default_factory=WorkspaceConfig)
     review: ReviewConfig = Field(default_factory=ReviewConfig)
     quality: QualityConfig = Field(default_factory=QualityConfig)
     learning: LearningConfig = Field(default_factory=LearningConfig)
