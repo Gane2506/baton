@@ -12,8 +12,11 @@ merge, the task stops in NEEDS_HUMAN before any attempt is spent.
 
 from __future__ import annotations
 
+import asyncio
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import TypeVar
 
 from jev_agent.core.assign import Assignment, can_reassign, escalate, quota_fallback, reassign
 from jev_agent.core.commands import CommandResult
@@ -27,6 +30,8 @@ from jev_agent.quality.gate import latest_task_gate, run_gate
 from jev_agent.roles import ReviewResult
 from jev_agent.runlog import log_path
 from jev_agent.workers.base import WorkerOutput
+
+T = TypeVar("T")
 
 _NEXT_STATE = {
     "retry": TaskState.RETRY,
@@ -99,7 +104,7 @@ class TaskRunner:
             raise Halt(RunState.FAILED, reason)
         self.h.check_budget(run_id, task.id)
         assert task.worker is not None, "a DISPATCHED task always has an assignment"
-        workdir = self._workdir(run_id, task)
+        workdir = await self._workdir(run_id, task)
         current = Assignment(task.worker, task.model, task.effort)
         # Render before the attempt is counted: a bad template stops the run without using one.
         prompt, lesson_ids = self._coder_prompt(run_id, task, task.attempts + 1)
@@ -108,19 +113,30 @@ class TaskRunner:
         outcome = await self._work(run_id, task, current, attempt, workdir, prompt, lesson_ids)
         await self._after_attempt(run_id, task, current, attempt, outcome)
 
-    def _workdir(self, run_id: str, task: TaskRecord) -> Path:
+    async def _workdir(self, run_id: str, task: TaskRecord) -> Path:
         """The task's worktree, based on its dependencies (merged in dependency order)."""
         h = self.h
         cards = [t.card for t in h.store.list_tasks(run_id)]
         deps = [c.id for c in topological_order(cards) if c.id in task.card.depends_on]
         try:
-            return h.workspace.task_workdir(run_id, task.id, deps)
+            return await asyncio.to_thread(h.workspace.task_workdir, run_id, task.id, deps)
         except MergeConflict as exc:
             note = f"cannot build the base branch: {exc}; merge the dependencies by hand"
             h.store.set_task_state(run_id, task.id, TaskState.NEEDS_HUMAN, note=note)
             raise Halt(RunState.NEEDS_HUMAN, f"task {task.id}: {exc}") from exc
         except WorkspaceError as exc:
             raise Halt(RunState.FAILED, f"task {task.id}: cannot create worktree: {exc}") from exc
+
+    async def _git(self, task: TaskRecord, what: str, call: Callable[..., T], *args: object) -> T:
+        """A workspace (git) call, off the event loop. If it fails (a repo hook that fails or
+        hangs, a stale lock, a git timeout) the run stops resumably: the worktree keeps the
+        attempt's work, and `jev resume` continues once the cause is fixed."""
+        try:
+            return await asyncio.to_thread(call, *args)
+        except WorkspaceError as exc:
+            raise Halt(
+                RunState.NEEDS_HUMAN, f"task {task.id}: {what} failed: {exc}", resumable=True
+            ) from exc
 
     def _coder_prompt(self, run_id: str, task: TaskRecord, attempt: int) -> tuple[str, list[str]]:
         """The coder's prompt and the ids of the lessons in it."""
@@ -174,7 +190,8 @@ class TaskRunner:
         )
         if output.result.status != "success":
             return AttemptOutcome(output)
-        h.workspace.commit_task(workdir, f"jev: {task.id} attempt {attempt}: {card.title}")
+        message = f"jev: {task.id} attempt {attempt}: {card.title}"
+        await self._git(task, "git commit", h.workspace.commit_task, workdir, message)
 
         tests, test_result = "skipped", None
         if card.test_command:
@@ -199,7 +216,7 @@ class TaskRunner:
                 task=card,
                 number=attempt,
                 workdir=workdir,
-                diff=h.workspace.task_diff(run_id, task.id),
+                diff=await self._git(task, "git diff", h.workspace.task_diff, run_id, task.id),
                 passed_commands=[card.test_command] if card.test_command else [],
             )
             quality, findings = ("failed" if gate.blocked else "passed"), gate.top_findings()
@@ -240,7 +257,9 @@ class TaskRunner:
             "reviewer",
             lessons,
             task=task.card,
-            diff=clip(h.workspace.task_diff(run_id, task.id), 20_000),
+            diff=clip(
+                await self._git(task, "git diff", h.workspace.task_diff, run_id, task.id), 20_000
+            ),
             test_output=None if test_result is None else clip(test_result.output, 4_000),
         )
         output = await h.run_worker_with_fallback(
@@ -290,12 +309,15 @@ class TaskRunner:
             quality_findings=outcome.quality_findings,
         )
         action = (await h.decide(run_id, task.id, req)).answers["action"]
-        if action == "done" and outcome.quality == "failed":
-            action = "retry"  # the gate is a hard limit, like the budget: never done while blocked
+        overridden = _done_blocker(outcome) if action == "done" else None
+        if overridden is not None:
+            action = "retry"  # hard limits, like the budget: never done after a failed attempt
         if action == "done":
             h.store.set_task_state(run_id, task.id, TaskState.DONE)
             return
         feedback = _feedback(attempt, outcome)
+        if overridden is not None:
+            feedback += f"\nD5 answered done, overridden to retry: {overridden}"
         if action == "human":
             h.store.set_task_state(run_id, task.id, TaskState.NEEDS_HUMAN, note=feedback)
             raise Halt(RunState.NEEDS_HUMAN, f"D5: task {task.id} handed to a human")
@@ -307,6 +329,20 @@ class TaskRunner:
         h.store.set_task_assignment(
             run_id, task.id, _NEXT_STATE[action], nxt.worker, nxt.model, nxt.effort, note=feedback
         )
+
+
+def _done_blocker(outcome: AttemptOutcome) -> str | None:
+    """Why the attempt cannot be done whatever D5 answered, or None. Worker success, tests not
+    failed and an unblocked quality gate are preconditions for done (issue #21): a failed
+    worker committed nothing, and failing or blocked code must not be merged."""
+    status = outcome.output.result.status
+    if status != "success":
+        return f"the worker reported {status}"
+    if outcome.tests == "failed":
+        return "the tests failed"
+    if outcome.quality == "failed":
+        return "the quality gate blocked it"
+    return None
 
 
 def _feedback(attempt: int, outcome: AttemptOutcome) -> str:

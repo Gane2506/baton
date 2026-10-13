@@ -14,14 +14,20 @@ Every command an agent sends is checked here before anything reaches `ssh`:
 3. **basic**: an allowlist of read-only commands (`READ_ONLY_COMMANDS`), each with its
    dangerous options refused (`find -exec`, `sort -o`, `tail -f`, ...), optionally piped into
    one read-only filter (`grep`, `head`, `tail`, `wc`, `sort`). No `sudo`. Reads of credential
-   files (`~/.ssh`, private keys, `.env`, `/etc/shadow`, ...) are refused.
+   files (`~/.ssh`, private keys, `.env`, `/etc/shadow`, ...) are refused: by name, and for
+   recursive `grep` (only inside workdir/`allowed_paths`, never `-R`) by credential-name
+   excludes jev adds; nothing that prints environments (`docker inspect`, `systemctl show`,
+   `ps e`). Every `git` runs with hooks and fsmonitor turned off.
 4. **medium**: basic, plus `mkdir`/`cp`/`mv`/`rm`/`touch` inside the write roots
    (`allowed_paths`, default `[workdir]`), `git add|commit|pull|fetch|checkout|switch` in a
    working copy inside them, package installs (`apt-get install -y`, `pip install`,
    `npm install|ci`, the pinned Playwright browser install), `systemctl
    restart|reload|start|stop UNIT` (not ssh) and `docker compose up -d|down|restart|pull`.
    `sudo` is accepted only in front of package installs and `systemctl`, and always runs as
-   `sudo -n` (never prompts).
+   `sudo -n` (never prompts). Nothing is ever written under a `.git` directory (hooks and
+   config run code); recursive `cp` only copies from inside the write roots. Medium still
+   means code execution as the server account: package installs run the packages' own code
+   and a `pip install -r` file's own options are not checked.
 
 `check_command`, `check_read_path` and `check_write_path` return a `Decision`; nothing here
 runs anything.
@@ -127,6 +133,23 @@ def _sensitive_args(args: Sequence[str]) -> None:
         for piece in (arg, arg.partition("=")[2]):
             if piece and (problem := sensitive(piece)):
                 raise _Denied(problem)
+
+
+def _in_git_dir(value: str) -> bool:
+    """`value` is a `.git` directory or file, or inside one (any letter case)."""
+    return any(p.lower() == ".git" for p in value.split("/"))
+
+
+# What jev adds to a recursive grep so it skips credential files (base names) and folders.
+_KEY_GLOBS = ("*.pem", "*.key", "*.p12", "*.pfx", "*.jks", "*.keystore")
+_KEY_FILES = tuple(
+    f"id_{kind}{suffix}" for kind in ("rsa", "dsa", "ecdsa", "ed25519") for suffix in ("", "_sk")
+)
+GREP_EXCLUDES: tuple[str, ...] = (
+    *(f"--exclude={name}" for name in (*sorted(_SECRET_FILES), ".env.*", "authorized_keys")),
+    *(f"--exclude={name}" for name in (*_KEY_GLOBS, *_KEY_FILES)),
+    *(f"--exclude-dir={name}" for name in sorted(_SECRET_DIRS)),
+)
 
 
 # ---- shape -------------------------------------------------------------------------------
@@ -289,7 +312,8 @@ def always_denied(argv: Sequence[str], ctx: PolicyContext) -> str | None:
 
 # ---- basic: read-only commands -----------------------------------------------------------
 
-Checker = Callable[[list[str], PolicyContext], None]
+# A checker raises `_Denied`, or returns the arguments to run instead (None: run as written).
+Checker = Callable[[list[str], PolicyContext], list[str] | None]
 
 
 def _refuse(args: Sequence[str], bad: set[str], what: str) -> None:
@@ -299,6 +323,82 @@ def _refuse(args: Sequence[str], bad: set[str], what: str) -> None:
 
 
 def _plain(args: list[str], ctx: PolicyContext) -> None:
+    _sensitive_args(args)
+
+
+_GREP_VALUE_SHORT = "efmABCdD"  # short options whose value may be the next word
+_GREP_VALUE_LONG = frozenset(
+    {"--regexp", "--file", "--max-count", "--after-context", "--before-context", "--context"}
+    | {"--directories", "--devices", "--exclude", "--include", "--exclude-dir"}
+    | {"--exclude-from", "--label", "--binary-files", "--color", "--colour"}
+)
+
+
+def _grep_words(args: list[str]) -> tuple[set[str], list[str], dict[str, str]]:
+    """(flag letters/long options, operands, option values) of a grep command line."""
+    flags: set[str] = set()
+    operands: list[str] = []
+    values: dict[str, str] = {}
+    i = 0
+    while i < len(args):
+        arg = args[i]
+        if arg == "--":
+            operands += args[i + 1 :]
+            break
+        if arg.startswith("--"):
+            name, eq, value = arg.partition("=")
+            flags.add(name)
+            if not eq and name in _GREP_VALUE_LONG and i + 1 < len(args):
+                value, i = args[i + 1], i + 1
+            values[name] = value
+        elif arg.startswith("-") and arg != "-":
+            for j, letter in enumerate(arg[1:], start=1):
+                flags.add(f"-{letter}")
+                if letter in _GREP_VALUE_SHORT:
+                    value = arg[j + 1 :]
+                    if not value and i + 1 < len(args):
+                        value, i = args[i + 1], i + 1
+                    values[f"-{letter}"] = value
+                    break
+        else:
+            operands.append(arg)
+        i += 1
+    return flags, operands, values
+
+
+def _grep(args: list[str], ctx: PolicyContext) -> list[str] | None:
+    """A recursive grep reads every file under its folders, so the credential rule cannot rest
+    on the names written: refuse `-R` (follows symlinks), allow recursion only inside the
+    workdir/allowed_paths and add excludes for credential files (issue #44)."""
+    _sensitive_args(args)
+    flags, operands, values = _grep_words(args)
+    if flags & {"-R", "--dereference-recursive"}:
+        raise _Denied("grep: -R (follows symlinks) is not allowed; use -r")
+    recurse = "recurse" in (values.get("-d"), values.get("--directories"))
+    if not (recurse or flags & {"-r", "--recursive"}):
+        return None
+    pattern_given = bool(flags & {"-e", "-f", "--regexp", "--file"})
+    paths = operands if pattern_given else operands[1:]
+    roots = tuple(r for r in (ctx.workdir, *ctx.write_roots) if r)
+    for target in paths or ["."]:
+        full = resolve(target, ctx.workdir)
+        if full is None or not within(full, roots):
+            where = ", ".join(roots) or "no workdir set"
+            raise _Denied(f"grep: recursive grep only inside the workdir/allowed_paths ({where})")
+    return [*GREP_EXCLUDES, *args]
+
+
+_PS_VALUE_OPTIONS = frozenset({"-o", "-O", "-p", "-u", "-U", "-g", "-G", "-t", "-C", "-q"})
+_PS_VALUE_OPTIONS |= {"-s", "--format", "--pid", "--ppid", "--user", "--sort", "--cols"}
+
+
+def _ps(args: list[str], ctx: PolicyContext) -> None:
+    """`ps` without BSD-style `e` (it prints each process's environment)."""
+    previous = ""
+    for arg in args:
+        if previous not in _PS_VALUE_OPTIONS and re.fullmatch(r"[A-Za-z]+", arg) and "e" in arg:
+            raise _Denied("ps: the `e` option (process environments) is not allowed")
+        previous = arg
     _sensitive_args(args)
 
 
@@ -334,7 +434,7 @@ def _top(args: list[str], ctx: PolicyContext) -> None:
 def _systemctl_read(args: list[str], ctx: PolicyContext) -> None:
     verbs = [a for a in args if not a.startswith("-")]
     allowed = {"status", "is-active", "is-enabled", "is-failed", "list-units", "list-timers"}
-    allowed |= {"list-unit-files", "show", "cat"}
+    allowed |= {"list-unit-files", "cat"}  # not `show`: it prints Environment= (issue #44)
     if not verbs or verbs[0] not in allowed:
         raise _Denied(f"systemctl: read-only verbs only ({', '.join(sorted(allowed))})")
 
@@ -348,15 +448,17 @@ def _journalctl(args: list[str], ctx: PolicyContext) -> None:
 
 def _docker_read(args: list[str], ctx: PolicyContext) -> None:
     words = [a for a in args if not a.startswith("-")]
-    if words[:1] in (["ps"], ["inspect"], ["images"]):
+    if words[:1] in (["ps"], ["images"]):  # not `inspect`: it prints Config.Env (issue #44)
         return
     if words[:1] == ["logs"] or words[:2] in (["compose", "logs"], ["compose", "ps"]):
         _refuse(args, {"-f", "--follow"}, "docker logs")
         return
-    raise _Denied("docker: only ps, logs, inspect, images, compose ps and compose logs")
+    raise _Denied("docker: only ps, logs, images, compose ps and compose logs")
 
 
 _GIT_READ = frozenset({"status", "log", "diff", "show", "branch", "remote", "rev-parse"})
+# Put in front of every git command: no hooks and no fsmonitor command run (issue #46).
+GIT_SAFE_CONFIG = ("-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false")
 
 
 def _git_args(args: list[str]) -> tuple[str | None, list[str], str | None]:
@@ -376,17 +478,21 @@ def _git_args(args: list[str]) -> tuple[str | None, list[str], str | None]:
     return None, [], directory
 
 
-def _git_read(args: list[str], ctx: PolicyContext) -> None:
+def _git_read(args: list[str], ctx: PolicyContext) -> list[str]:
     sub, rest, _ = _git_args(args)
     if sub not in _GIT_READ:
         raise _Denied(f"git: read-only subcommands only ({', '.join(sorted(_GIT_READ))})")
     if any(a.startswith("--output") or a == "--ext-diff" for a in rest):
         raise _Denied("git: --output and --ext-diff are not allowed")
+    if "--no-index" in rest:
+        raise _Denied("git diff: --no-index (comparing any two folders) is not allowed")
     if sub == "branch" and _flag_set(rest) & {"-d", "-D", "-m", "-M", "-c", "-C", "--delete"}:
         raise _Denied("git branch: listing only")
     if sub == "remote" and [a for a in rest if not a.startswith("-")]:
         raise _Denied("git remote: listing only (`git remote -v`)")
     _sensitive_args(rest)
+    _sensitive_args([a.partition(":")[2] for a in rest])  # `git show REV:path`
+    return [*GIT_SAFE_CONFIG, *args]
 
 
 READ_ONLY_COMMANDS: dict[str, Checker] = {
@@ -394,15 +500,15 @@ READ_ONLY_COMMANDS: dict[str, Checker] = {
     "cat": _plain,
     "head": _plain,
     "tail": _tail,
-    "grep": _plain,
-    "egrep": _plain,
-    "fgrep": _plain,
+    "grep": _grep,
+    "egrep": _grep,
+    "fgrep": _grep,
     "find": _find,
     "df": _plain,
     "du": _plain,
     "free": _plain,
     "uptime": _plain,
-    "ps": _plain,
+    "ps": _ps,
     "top": _top,
     "systemctl": _systemctl_read,
     "journalctl": _journalctl,
@@ -436,6 +542,8 @@ def _writable(value: str, ctx: PolicyContext, *, strictly: bool = False) -> str:
         raise _Denied(f"{value}: use an absolute path (or one relative to the workdir)")
     if problem := sensitive(full):
         raise _Denied(problem)
+    if _in_git_dir(full):
+        raise _Denied(f"{full}: nothing is written under .git (hooks and config run code)")
     if not within(full, ctx.write_roots, strictly=strictly):
         raise _Denied(f"{full} is outside allowed_paths ({', '.join(ctx.write_roots)})")
     return full
@@ -468,6 +576,17 @@ def _cp(args: list[str], ctx: PolicyContext) -> None:
     if len(operands) < 2:
         raise _Denied("cp: SOURCE... DEST")
     _sensitive_args(operands[:-1])
+    for source in operands[:-1]:
+        full = resolve(source, ctx.workdir)
+        if full is not None and _in_git_dir(full):
+            raise _Denied(f"{full}: nothing is copied from or into .git")
+        if _flag_set(args) & {"-r", "-R", "-a", "--recursive"} and (
+            full is None or not within(full, ctx.write_roots, strictly=True)
+        ):
+            raise _Denied(
+                f"cp: recursive cp only from inside allowed_paths ({', '.join(ctx.write_roots)})"
+                f"; {source} may hold credential files"
+            )
     _writable(operands[-1], ctx)
 
 
@@ -493,11 +612,10 @@ def _rm(args: list[str], ctx: PolicyContext) -> None:
 _GIT_WRITE = frozenset({"add", "commit", "pull", "fetch", "checkout", "switch"})
 
 
-def _git_write(args: list[str], ctx: PolicyContext) -> None:
+def _git_write(args: list[str], ctx: PolicyContext) -> list[str]:
     sub, rest, directory = _git_args(args)
     if sub in _GIT_READ:
-        _git_read(args, ctx)
-        return
+        return _git_read(args, ctx)
     if sub not in _GIT_WRITE:
         allowed = ", ".join(sorted(_GIT_READ | _GIT_WRITE))
         raise _Denied(f"git: {sub or 'no subcommand'} is not allowed (allowed: {allowed})")
@@ -508,6 +626,7 @@ def _git_write(args: list[str], ctx: PolicyContext) -> None:
     if sub in {"pull", "fetch"} and any(a.startswith("--upload-pack") for a in rest):
         raise _Denied("git: --upload-pack is not allowed")
     _sensitive_args(rest)
+    return [*GIT_SAFE_CONFIG, *args]
 
 
 _APT_PACKAGE = re.compile(r"^[a-z0-9][a-z0-9+.:~=-]*$")
@@ -709,14 +828,16 @@ def check_command(text: str, ctx: PolicyContext) -> Decision:
         checker = table.get(cmd)
         if checker is None:
             raise _Denied(f"{cmd!r} is not allowed at {ctx.access} access")
-        checker(list(first[1:]), ctx)
+        if (replaced := checker(list(first[1:]), ctx)) is not None:
+            first = [first[0], *replaced]
         parts = [shlex.join((["sudo", "-n"] if sudo else []) + first)]
         if len(segments) == 2:
             pipe = segments[1]
             filt = _FILTER_CHECKS.get(pipe[0])
             if filt is None:
                 raise _Denied("a pipe may only feed grep, head, tail, wc or sort")
-            filt(list(pipe[1:]), ctx)
+            if (replaced := filt(list(pipe[1:]), ctx)) is not None:
+                pipe = [pipe[0], *replaced]
             parts.append(shlex.join(pipe))
     except _Denied as exc:
         return Decision.deny(str(exc))

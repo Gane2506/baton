@@ -38,10 +38,15 @@ class FakeGh:
 
     def __init__(self, state: Path) -> None:
         self.state = state
-        self.responses: dict[str, dict[str, Any]] = {}
+        self.responses: dict[str, Any] = {}
 
     def answer(self, prefix: str, stdout: str = "", code: int = 0, stderr: str = "") -> None:
         self.responses[prefix] = {"stdout": stdout, "code": code, "stderr": stderr}
+        (self.state / "responses.json").write_text(json.dumps(self.responses))
+
+    def answers(self, prefix: str, *answers: dict[str, Any]) -> None:
+        """The Nth call matching `prefix` gets the Nth answer (the last one repeats)."""
+        self.responses[prefix] = list(answers)
         (self.state / "responses.json").write_text(json.dumps(self.responses))
 
     def calls(self) -> list[list[str]]:
@@ -59,9 +64,7 @@ class FakeGh:
 
 @pytest.fixture(autouse=True)
 def _isolate(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
     monkeypatch.setenv(FAKE_WORKERS_ENV, "1")
-    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
 
 
 @pytest.fixture
@@ -310,6 +313,64 @@ def test_retry_after_pr_create_failed_skips_the_push(
     assert code == 0 and "already pushed" in output and "opened PR #7" in output, output
 
 
+def _git_wrapper(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, hang_on: str = "") -> Path:
+    """A `git` first on PATH that logs each call's prompt settings, then runs the real git
+    (or, for `hang_on`, hangs in a child process that keeps the pipes open)."""
+    real_git = shutil.which("git")
+    assert real_git is not None
+    bin_dir = tmp_path / "git-bin"
+    bin_dir.mkdir()
+    log = tmp_path / "git-env.log"
+    wrapper = bin_dir / "git"
+    wrapper.write_text(
+        "#!/bin/sh\n"
+        'echo "$1 prompt=${GIT_TERMINAL_PROMPT-unset} askpass=${GIT_ASKPASS-unset}"'
+        f' >> "{log}"\n'
+        f'if [ -n "{hang_on}" ] && [ "$1" = "{hang_on}" ]; then sleep 60; fi\n'
+        f'exec "{real_git}" "$@"\n'
+    )
+    wrapper.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
+    return log
+
+
+def test_ship_git_never_prompts(
+    done_run: tuple[Path, str], gh: FakeGh, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo, run_id = done_run
+    monkeypatch.setenv("GIT_TERMINAL_PROMPT", "1")
+    monkeypatch.setenv("GIT_ASKPASS", "/usr/bin/some-gui-askpass")
+    log = _git_wrapper(tmp_path, monkeypatch)
+    code, output = _jev(repo, "ship", run_id, "--yes")
+    assert code == 0, output
+    # Every git call of ship.py (kpi.diff_stat's local `git diff` is not one of them).
+    lines = [line for line in log.read_text().splitlines() if not line.startswith("diff ")]
+    assert {"push", "ls-remote"} <= {line.split()[0] for line in lines}, lines
+    assert all(line.endswith(" prompt=0 askpass=") for line in lines), lines
+
+
+def test_ship_git_hang_times_out(
+    done_run: tuple[Path, str],
+    origin: Path,
+    gh: FakeGh,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import time
+
+    import jev_agent.core.ship as ship
+
+    repo, run_id = done_run
+    monkeypatch.setattr(ship, "GIT_QUICK_TIMEOUT_S", 0.5)
+    _git_wrapper(tmp_path, monkeypatch, hang_on="ls-remote")
+    started = time.monotonic()
+    code, output = _jev(repo, "ship", run_id, "--yes")
+    assert code == 1
+    assert "git ls-remote" in output and "timed out after 0.5 s" in output, output
+    assert time.monotonic() - started < 20
+    assert f"jev/{run_id}" not in _remote_branches(origin)
+
+
 def test_base_branch_comes_from_the_remote_head(done_run: tuple[Path, str], gh: FakeGh) -> None:
     from jev_agent.core.ship import _default_base
 
@@ -491,3 +552,120 @@ def test_run_state_done_is_required_even_with_a_result_branch(
         store.set_run_state(run_id, RunState.NEEDS_HUMAN, "stopped")
     code, output = _jev(repo, "ship", run_id, "--yes")
     assert code == 1 and "NEEDS_HUMAN" in output
+
+
+# ---- a PR opened while gh reported failure or timed out (issue #41) -----------------------
+
+
+def _pr_list_prefix(run_id: str) -> str:
+    return f"pr list --repo acme/widgets --head jev/{run_id}"
+
+
+def _listed(number: int, run_id: str, state: str = "OPEN") -> dict[str, Any]:
+    return {
+        "stdout": json.dumps(
+            [
+                {
+                    "number": number,
+                    "url": f"https://github.com/acme/widgets/pull/{number}",
+                    "state": state,
+                    "headRefName": f"jev/{run_id}",
+                }
+            ]
+        )
+    }
+
+
+def test_pr_created_but_reported_failed_is_recorded_not_duplicated(
+    done_run: tuple[Path, str], gh: FakeGh
+) -> None:
+    repo, run_id = done_run
+    # gh opened the PR, then failed; the lookup right after the failure is lost too.
+    gh.answer("pr create", code=1, stderr="error connecting to api.github.com")
+    gh.answers(
+        _pr_list_prefix(run_id), {"code": 1, "stderr": "connection reset"}, _listed(9, run_id)
+    )
+    code, output = _jev(repo, "ship", run_id, "--yes")
+    assert code == 1 and "gh pr create failed" in output, output
+    with _store(repo) as store:
+        assert store.list_shipped_prs() == []
+
+    # The retry finds the PR on the branch and records it instead of opening another.
+    code, output = _jev(repo, "ship", run_id, "--yes")
+    assert code == 0 and "#9" in output, output
+    assert gh.commands().count("pr create") == 1
+    with _store(repo) as store:
+        [pr] = store.list_shipped_prs(run_id)
+        assert (pr.number, pr.url, pr.state) == (
+            9,
+            "https://github.com/acme/widgets/pull/9",
+            "open",
+        )
+        assert store.get_run_kpis(run_id) is not None
+
+
+def test_failed_create_is_checked_at_once_and_a_closed_pr_keeps_its_state(
+    done_run: tuple[Path, str], gh: FakeGh
+) -> None:
+    repo, run_id = done_run
+    gh.answer("pr create", code=1, stderr="HTTP 502")
+    gh.answer(_pr_list_prefix(run_id), **_listed(11, run_id, "MERGED"))
+    code, output = _jev(repo, "ship", run_id, "--yes")
+    assert code == 0 and "#11" in output, output
+    with _store(repo) as store:
+        [pr] = store.list_shipped_prs(run_id)
+        assert (pr.number, pr.state) == (11, "merged")
+    lookup = next(argv for argv in gh.calls() if argv[:2] == ["pr", "list"])
+    assert lookup[lookup.index("--state") + 1] == "all"
+
+
+def test_pr_create_timeout_is_an_unknown_outcome(done_run: tuple[Path, str], gh: FakeGh) -> None:
+    from jev_agent.config.loader import load_config
+    from jev_agent.core.ship import ShipError, execute_ship, prepare_ship
+
+    repo, run_id = done_run
+    gh.answer("pr create", PR_URL + "\n")
+    gh.responses["pr create"]["sleep"] = 5
+    gh.answer("auth status")  # rewrite responses.json with the sleep
+    fast = Gh(repo, timeout_s=0.5)
+    with _store(repo) as store:
+        plan = prepare_ship(repo, load_config(repo), store, run_id, gh=fast)
+        with pytest.raises(ShipError, match="outcome is unknown") as caught:
+            execute_ship(plan, store, repo, gh=fast)
+        assert f"jev ship {run_id}" in str(caught.value)
+        assert store.list_shipped_prs() == []
+    # Meanwhile GitHub did open it: the retry records it, with no second create.
+    gh.answer("pr create", code=1, stderr="must not be called")
+    gh.answer(_pr_list_prefix(run_id), **_listed(12, run_id))
+    code, output = _jev(repo, "ship", run_id, "--yes")
+    assert code == 0 and "#12" in output, output
+    assert gh.commands().count("pr create") == 1
+
+
+@pytest.mark.parametrize(
+    "stdout",
+    [
+        "",
+        "not json",
+        json.dumps({"number": 3}),
+        json.dumps([{"number": "3"}, {"url": "x"}]),
+        json.dumps([{"number": 3, "headRefName": "someone/else"}]),
+    ],
+)
+def test_pr_lookup_is_tolerant_of_unexpected_output(tmp_path: Path, stdout: str) -> None:
+    from jev_agent.core.ship import parse_pr_list
+
+    assert parse_pr_list(stdout, "jev/r1") is None
+
+
+def test_pr_lookup_reads_gh_pr_list() -> None:
+    from jev_agent.core.ship import ExistingPr, parse_pr_list
+
+    text = json.dumps(
+        [
+            {"number": 5, "url": "https://x/pull/5", "state": "CLOSED", "headRefName": "jev/r1"},
+            {"number": 4, "url": "https://x/pull/4", "state": "OPEN"},
+        ]
+    )
+    assert parse_pr_list(text, "jev/r1") == ExistingPr(5, "https://x/pull/5", "closed")
+    assert parse_pr_list(json.dumps([{"number": 4}]), "jev/r1") == ExistingPr(4, None, "open")

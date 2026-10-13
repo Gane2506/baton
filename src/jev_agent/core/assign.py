@@ -8,15 +8,27 @@ Free models (OpenRouter, api worker only; docs/config.md "Free models"):
 
 - escalate from a free model goes straight to the first paid model in the pool.
 - `quota_fallback`: a free model that hit its rate limit moves to the next free model, then to
-  the first paid model; None after that, so the caller reassigns the worker.
+  the first paid model the api worker can run; None after that, so the caller reassigns the
+  worker.
 - `fit_free`: a free model is never sent to a worker other than api.
+
+Every change keeps the pair runnable (`requests.model_fits`: `vendor/name` slugs only on the
+api worker, other model names only on the CLI workers). `fit_free` also repairs a dispatcher's
+mismatched answer: the worker keeps its place and gets its first runnable model in the pool, or
+its default model.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
 
-from jev_agent.dispatch.requests import DEFAULT_EFFORT, DEFAULT_MODEL, FREE_WORKER, RoleOptions
+from jev_agent.dispatch.requests import (
+    DEFAULT_EFFORT,
+    DEFAULT_MODEL,
+    FREE_WORKER,
+    RoleOptions,
+    model_fits,
+)
 
 
 @dataclass(frozen=True)
@@ -42,19 +54,25 @@ def _model_answer(model: str) -> str | None:
     return None if model == DEFAULT_MODEL else model
 
 
-def _paid(options: RoleOptions) -> list[str]:
-    return [m for m in options.models if not options.is_free(m)]
+def _runnable(options: RoleOptions, worker: str) -> list[str]:
+    """The pool's models that `worker` can run, in pool order."""
+    return [m for m in options.models if model_fits(worker, m)]
+
+
+def _paid(options: RoleOptions, worker: str) -> list[str]:
+    return [m for m in _runnable(options, worker) if not options.is_free(m)]
 
 
 def escalate(current: Assignment, options: RoleOptions) -> Assignment:
-    if options.is_free(current.model) and _paid(options):
-        return fit_free(replace(current, model=_model_answer(_paid(options)[0])), options)
+    paid = _paid(options, current.worker)
+    if options.is_free(current.model) and paid:
+        return replace(current, model=_model_answer(paid[0]))
     efforts = [e for e in options.efforts if e != DEFAULT_EFFORT]
     if current.effort in efforts and efforts.index(current.effort) + 1 < len(efforts):
         return replace(current, effort=efforts[efforts.index(current.effort) + 1])
-    models = [m for m in options.models if m != DEFAULT_MODEL]
+    models = [m for m in _runnable(options, current.worker) if m != DEFAULT_MODEL]
     if current.model in models and models.index(current.model) + 1 < len(models):
-        return fit_free(replace(current, model=models[models.index(current.model) + 1]), options)
+        return replace(current, model=models[models.index(current.model) + 1])
     return current  # nothing stronger configured
 
 
@@ -66,21 +84,23 @@ def quota_fallback(current: Assignment, options: RoleOptions) -> Assignment | No
     later = free[free.index(current.model) + 1 :] if current.model in free else []
     if later:
         return replace(current, worker=FREE_WORKER, model=later[0])
-    paid = _paid(options)
+    paid = _paid(options, FREE_WORKER)
     if paid:
-        return fit_free(replace(current, model=_model_answer(paid[0])), options)
+        return replace(current, worker=FREE_WORKER, model=_model_answer(paid[0]))
     return None
 
 
 def fit_free(current: Assignment, options: RoleOptions, keep_worker: bool = False) -> Assignment:
-    """Keep free models on the api worker: move a free model to api if the role has it (unless
-    `keep_worker`), else swap the model for the first paid one (or the worker's default)."""
-    if not options.is_free(current.model) or current.worker == FREE_WORKER:
-        return current
-    if FREE_WORKER in options.workers and not keep_worker:
+    """Make the pair runnable: move a free model to the api worker if the role has it (unless
+    `keep_worker`); otherwise swap a model the worker cannot run (`model_fits`, which free
+    models never fit on a CLI worker) for its first runnable model, or its default."""
+    free_elsewhere = options.is_free(current.model) and current.worker != FREE_WORKER
+    if free_elsewhere and FREE_WORKER in options.workers and not keep_worker:
         return replace(current, worker=FREE_WORKER)
-    paid = _paid(options)
-    return replace(current, model=_model_answer(paid[0]) if paid else None)
+    if model_fits(current.worker, current.model):
+        return current
+    runnable = _runnable(options, current.worker)
+    return replace(current, model=_model_answer(runnable[0]) if runnable else None)
 
 
 def reassign(current: Assignment, options: RoleOptions) -> Assignment:

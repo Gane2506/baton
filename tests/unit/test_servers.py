@@ -9,7 +9,12 @@ from __future__ import annotations
 import asyncio
 import io
 import json
+import os
+import shlex
+import shutil
+import subprocess
 import sys
+import time
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
@@ -45,7 +50,14 @@ from jev_agent.servers.profiles import (
     write_run_profile,
 )
 from jev_agent.servers.service import ServerService
-from jev_agent.servers.ssh import SshResult, SshTransport, ssh_options
+from jev_agent.servers.ssh import (
+    REMOTE_TIMEOUT_EXIT,
+    SshResult,
+    SshTransport,
+    run_process,
+    ssh_options,
+    time_limited,
+)
 from jev_agent.workers.claude_code import mcp_config
 
 runner = CliRunner()
@@ -79,12 +91,15 @@ learning = false
 quality = "basic"
 """
 
+TRUST_ALL = '[trust]\nrepos = ["*"]\n'
+
 
 @pytest.fixture(autouse=True)
 def _isolate(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
+    user_config = tmp_path / "xdg" / "jev" / "config.toml"
+    user_config.parent.mkdir(parents=True, exist_ok=True)
+    user_config.write_text(TRUST_ALL)  # these tests model the user's own repo (issue #16)
     monkeypatch.setenv(FAKE_WORKERS_ENV, "1")
-    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
 
 
 @pytest.fixture
@@ -99,6 +114,12 @@ def _config(text: str = SERVERS_TOML) -> JevConfig:
     return JevConfig.model_validate(tomllib.loads(text))
 
 
+def _script(remote: str) -> str:
+    """The command inside `ssh.time_limited`'s wrapper (the argument of `sh -c`)."""
+    words = shlex.split(remote)
+    return words[words.index("-c") + 1] if words[:1] == ["if"] else remote
+
+
 class FakeSsh:
     """Records every ssh argv; answers by the remote command."""
 
@@ -108,7 +129,7 @@ class FakeSsh:
 
     def __call__(self, argv: Sequence[str], *, stdin: bytes | None, timeout_s: float) -> SshResult:
         self.calls.append((list(argv), stdin))
-        remote = argv[-1]
+        remote = _script(argv[-1])
         for key, result in self.answers.items():
             if key in remote:
                 return result
@@ -119,7 +140,7 @@ class FakeSsh:
 
     @property
     def remotes(self) -> list[str]:
-        return [argv[-1] for argv, _ in self.calls]
+        return [_script(argv[-1]) for argv, _ in self.calls]
 
 
 # ---- config ------------------------------------------------------------------------------
@@ -138,7 +159,7 @@ def test_config_parses_servers_profiles_browser() -> None:
 def test_full_access_is_rejected(fixture_repo: Path, tmp_path: Path) -> None:
     (fixture_repo / "jev.toml").write_text('[servers.x]\nhost = "h"\naccess = "full"\n')
     with pytest.raises(ConfigError, match=r"servers\.x\.access") as info:
-        load_config(fixture_repo, tmp_path / "none.toml")
+        load_config(fixture_repo, tmp_path / "xdg" / "jev" / "config.toml")
     assert FULL_ACCESS_MESSAGE in str(info.value)
     assert FULL_ACCESS_MESSAGE == 'access = "full" is not available yet; see issue #3'
     bad_override = SERVERS_TOML.replace(
@@ -219,7 +240,6 @@ MEDIUM = PolicyContext("medium", "/srv/app", ("/srv/app", "/var/www/site"), tupl
         "journalctl -u nginx -n 200 --no-pager",
         "docker ps -a",
         "docker logs --tail 50 web",
-        "docker inspect web",
         "git status",
         "git log --oneline -n 5",
         "git diff HEAD~1",
@@ -458,6 +478,119 @@ def test_file_paths() -> None:
     assert "authorized_keys" in check_write_path("/srv/app/authorized_keys", MEDIUM).reason
 
 
+# ---- credential files beyond argument names (issue #44) ----------------------------------
+
+
+@pytest.mark.parametrize(
+    ("command", "reason"),
+    [
+        ("grep -r PASSWORD /home/deploy", "recursive grep only inside"),
+        ("grep -rn token /etc", "recursive grep only inside"),
+        ("grep -R x src", "-R"),
+        ("grep --dereference-recursive x src", "-R"),
+        ("grep -d recurse x /", "recursive grep only inside"),
+        ("grep --directories=recurse x /root", "recursive grep only inside"),
+        ("ps aux | grep -r x /home", "recursive grep only inside"),
+        ("docker inspect web", "docker: only"),
+        ("systemctl show app", "read-only verbs"),
+        ("ps auxe", "environment"),
+        ("ps e", "environment"),
+        ("git show HEAD:.env", "keys or passwords"),
+        ("git show HEAD:config/.ssh/id_rsa", "credential"),
+        ("git diff --no-index /home/deploy /srv/app", "--no-index"),
+    ],
+)
+def test_basic_refuses_indirect_credential_reads(command: str, reason: str) -> None:
+    decision = check_command(command, BASIC)
+    assert not decision.allowed, decision.command
+    assert reason in decision.reason, decision.reason
+
+
+def test_recursive_grep_skips_credential_files() -> None:
+    decision = check_command("grep -rn TODO src", BASIC)
+    assert decision.allowed, decision.reason
+    words = shlex.split(decision.command)
+    assert words[0] == "grep" and words[-3:] == ["-rn", "TODO", "src"]
+    for exclude in ("--exclude=.env", "--exclude=.env.*", "--exclude=*.pem", "--exclude=id_rsa"):
+        assert exclude in words
+    for exclude in ("--exclude-dir=.ssh", "--exclude-dir=.aws", "--exclude-dir=.gnupg"):
+        assert exclude in words
+    assert check_command("grep -r x /srv/app", BASIC).allowed  # the workdir itself
+    assert check_command("grep -r -e /etc .", BASIC).allowed  # -e's value is not a path
+    plain = check_command("grep TODO app.log", BASIC)
+    assert plain.command == "grep TODO app.log"  # not recursive: unchanged
+    assert check_command("ps aux", BASIC).allowed and check_command("ps -ef", BASIC).allowed
+    assert check_command("ps -o pid,etime,cmd", BASIC).allowed
+    assert check_command("systemctl cat app", BASIC).allowed
+
+
+@pytest.mark.parametrize(
+    ("command", "reason"),
+    [
+        ("cp -r /home/deploy /var/www/site/h", "recursive cp only from inside allowed_paths"),
+        ("cp -a /etc /srv/app/etc", "recursive cp only from inside allowed_paths"),
+        ("cp -R /srv/app /var/www/site/x", "recursive cp only from inside allowed_paths"),
+        ("cp --recursive ~/conf /srv/app/c", "recursive cp only from inside allowed_paths"),
+    ],
+)
+def test_medium_refuses_recursive_cp_from_outside(command: str, reason: str) -> None:
+    decision = check_command(command, MEDIUM)
+    assert not decision.allowed
+    assert reason in decision.reason, decision.reason
+
+
+def test_medium_allows_recursive_cp_inside_allowed_paths() -> None:
+    assert check_command("cp -r build /var/www/site/static", MEDIUM).allowed
+    assert check_command("cp -a /var/www/site/a /srv/app/b", MEDIUM).allowed
+    assert check_command("cp /etc/hosts /srv/app/hosts", MEDIUM).allowed  # one file
+
+
+# ---- medium: no code execution through git (issue #46) -----------------------------------
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "cp hook /srv/app/.git/hooks/pre-commit",
+        "mv /srv/app/x /srv/app/.git/config",
+        "touch /srv/app/.git/hooks/post-checkout",
+        "mkdir -p /srv/app/sub/.git/hooks",
+        "cp /srv/app/gitfile /srv/app/sub/.git",
+        "cp -r /srv/app/.git /var/www/site/repo",
+        "rm -rf /srv/app/.GIT/hooks",
+    ],
+)
+def test_medium_refuses_writes_under_git_dirs(command: str) -> None:
+    decision = check_command(command, MEDIUM)
+    assert not decision.allowed
+    assert ".git" in decision.reason, decision.reason
+
+
+def test_write_tools_refuse_git_dirs() -> None:
+    decision = check_write_path("/srv/app/.git/hooks/pre-commit", MEDIUM)
+    assert not decision.allowed and ".git" in decision.reason
+    assert not check_write_path(".git/config", MEDIUM).allowed
+    assert check_write_path("/srv/app/.gitignore", MEDIUM).allowed
+
+
+@pytest.mark.parametrize(
+    ("command", "ctx"),
+    [
+        ("git commit -m 'fix'", MEDIUM),
+        ("git -C /var/www/site pull", MEDIUM),
+        ("git checkout main", MEDIUM),
+        ("git status", BASIC),
+        ("git --no-pager log -n 1", BASIC),
+    ],
+)
+def test_git_runs_without_hooks_or_fsmonitor(command: str, ctx: PolicyContext) -> None:
+    decision = check_command(command, ctx)
+    assert decision.allowed, decision.reason
+    words = shlex.split(decision.command)
+    assert words[:5] == ["git", "-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false"]
+    assert words[5:] == shlex.split(command)[1:]
+
+
 # ---- ssh transport -----------------------------------------------------------------------
 
 
@@ -479,8 +612,43 @@ def test_ssh_argv_is_strict_and_non_interactive(tmp_path: Path) -> None:
     assert argv[argv.index("-p") : argv.index("-p") + 2] == ["-p", "2222"]
     assert argv[argv.index("-l") : argv.index("-l") + 2] == ["-l", "deploy"]
     assert "IdentitiesOnly=yes" in argv
-    assert argv[-4:] == ["-T", "--", "web1", "cd -- /srv/app && ls -la"]
+    assert argv[-4:-1] == ["-T", "--", "web1"]
+    assert _script(argv[-1]) == "cd -- /srv/app && ls -la"
     assert (tmp_path / "s").is_dir() and ((tmp_path / "s").stat().st_mode & 0o777) == 0o700
+
+
+def _sh(remote: str, path: str) -> subprocess.CompletedProcess[str]:
+    """Run a remote command line with a local `sh` (the login shell on the server)."""
+    env = {"PATH": path}
+    return subprocess.run(["/bin/sh", "-c", remote], env=env, capture_output=True, text=True)
+
+
+def test_remote_command_is_time_limited_on_the_server(tmp_path: Path) -> None:
+    """The server stops a command the local timeout gave up on (issue #49)."""
+    remote = time_limited("echo started; sleep 30; echo never", timeout_s=4)
+    assert "timeout -k 2 1 sh -c" in remote
+    if shutil.which("timeout") is None:
+        pytest.skip("no `timeout` on this machine")
+    started = time.monotonic()
+    done = _sh(remote, os.environ["PATH"])
+    assert time.monotonic() - started < 10
+    assert done.returncode == REMOTE_TIMEOUT_EXIT
+    assert "started" in done.stdout and "never" not in done.stdout
+
+
+def test_remote_command_runs_unlimited_without_timeout(tmp_path: Path) -> None:
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    (bin_dir / "sh").symlink_to("/bin/sh")  # a server with a shell but no `timeout`
+    done = _sh(time_limited("echo 'it ran' && exit 3", timeout_s=60), str(bin_dir))
+    assert done.returncode == 3 and done.stdout == "it ran\n"
+
+
+def test_remote_timeout_exit_is_reported_as_timed_out() -> None:
+    fake = FakeSsh({"sleep": SshResult(REMOTE_TIMEOUT_EXIT, b"", b"")})
+    result = SshTransport(_config().servers["web"], runner=fake).run("sleep 300", timeout_s=10)
+    assert result.timed_out and not result.ok
+    assert "timeout -k 2 7 sh -c" in fake.calls[0][0][-1]
 
 
 def test_ssh_long_socket_dir_disables_reuse(tmp_path: Path) -> None:
@@ -490,13 +658,63 @@ def test_ssh_long_socket_dir_disables_reuse(tmp_path: Path) -> None:
     assert "-p" not in opts and "-i" not in opts
 
 
-def test_ssh_write_uses_temp_file_and_rename(tmp_path: Path) -> None:
+def _write_script(path: str, data: bytes) -> tuple[str, bytes | None]:
     fake = FakeSsh()
-    SshTransport(_config().servers["web"], runner=fake).write("/srv/app/a b.txt", b"hi")
-    argv, stdin = fake.calls[0]
-    tmp = "'/srv/app/a b.txt.jev-tmp'"
-    assert argv[-1] == f"cat > {tmp} && mv -f -- {tmp} '/srv/app/a b.txt'"
+    SshTransport(_config().servers["web"], runner=fake).write(path, data)
+    ((argv, stdin),) = fake.calls
+    return argv[-1], stdin
+
+
+def _run_remote(remote: str, stdin: bytes | None, path: str) -> subprocess.CompletedProcess[bytes]:
+    env = {"PATH": path}
+    return subprocess.run(["/bin/sh", "-c", remote], input=stdin, env=env, capture_output=True)
+
+
+def test_ssh_write_uses_a_fresh_temp_file_and_rename(tmp_path: Path) -> None:
+    """The temp file comes from mktemp in the target's folder, never a fixed name a symlink
+    could sit on (issue #45)."""
+    remote, stdin = _write_script("/srv/app/a b.txt", b"hi")
+    script = _script(remote)
+    assert "mktemp /srv/app/.jev-tmp.XXXXXXXXXX" in script
+    assert ".txt.jev-tmp" not in script
+    assert "mv -f -- \"$tmp\" '/srv/app/a b.txt'" in script
+    assert 'rm -f -- "$tmp"' in script
     assert stdin == b"hi"
+
+
+def test_ssh_write_never_follows_a_planted_symlink(tmp_path: Path) -> None:
+    site = tmp_path / "site"
+    site.mkdir()
+    outside = tmp_path / "outside.txt"
+    outside.write_text("untouched")
+    target = site / "index.html"
+    (site / "index.html.jev-tmp").symlink_to(outside)  # the old fixed temp name
+    remote, stdin = _write_script(str(target), b"<h1>hi</h1>")
+    done = _run_remote(remote, stdin, os.environ["PATH"])
+    assert done.returncode == 0, done.stderr
+    assert target.read_bytes() == b"<h1>hi</h1>" and not target.is_symlink()
+    assert outside.read_text() == "untouched"
+    mode = target.stat().st_mode & 0o777
+    umask = os.umask(0)
+    os.umask(umask)
+    assert mode == 0o666 & ~umask  # like a file created by `cat >`, not mktemp's 0600
+    assert sorted(p.name for p in site.iterdir()) == ["index.html", "index.html.jev-tmp"]
+
+
+def test_ssh_write_removes_the_temp_file_on_failure(tmp_path: Path) -> None:
+    site = tmp_path / "site"
+    site.mkdir()
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    for tool in ("sh", "mktemp", "cat", "rm", "chmod", "printf", "timeout"):
+        if found := shutil.which(tool):
+            (bin_dir / tool).symlink_to(found)
+    (bin_dir / "mv").write_text("#!/bin/sh\nexit 1\n")
+    (bin_dir / "mv").chmod(0o755)
+    remote, stdin = _write_script(str(site / "a.txt"), b"data")
+    done = _run_remote(remote, stdin, str(bin_dir))
+    assert done.returncode != 0
+    assert list(site.iterdir()) == []
 
 
 # ---- service + audit ---------------------------------------------------------------------
@@ -523,7 +741,10 @@ def test_run_command_allowed_and_audited(tmp_path: Path, monkeypatch: pytest.Mon
     assert not result.is_error
     assert "exit code 0" in result.text and "disk ok [REDACTED]" in result.text
     assert fake.remotes == ["cd -- /var/lib/app && df -h"]
-    (entry,) = AuditLog(audit_path(tmp_path / ".jev")).read()
+    started, entry = AuditLog(audit_path(tmp_path / ".jev")).read()
+    assert started["phase"] == "started" and started["exit_code"] is None
+    assert started["command"] == "df -h" and started["allowed"] is True
+    assert entry["phase"] == "finished"
     assert entry["server"] == "db" and entry["access"] == "basic" and entry["allowed"] is True
     assert entry["run_id"] == "r1" and entry["role"] == "coder" and entry["exit_code"] == 0
     assert entry["command"] == "df -h" and entry["duration_s"] == 0.25
@@ -543,6 +764,77 @@ def test_denied_command_never_reaches_ssh(tmp_path: Path) -> None:
     entries = AuditLog(audit_path(tmp_path / ".jev")).read()
     assert [e["allowed"] for e in entries] == [False, False]
     assert "not allowed at basic" in str(entries[0]["reason"])
+
+
+class _Killed(BaseException):
+    """Stands in for the MCP process being killed while ssh runs."""
+
+
+def test_started_line_is_written_before_ssh_runs(tmp_path: Path) -> None:
+    """A command the agent's timeout killed mid-run is still in the audit log (issue #48)."""
+    log = AuditLog(audit_path(tmp_path / ".jev"))
+    seen: list[list[dict[str, object]]] = []
+
+    def killed(argv: Sequence[str], *, stdin: bytes | None, timeout_s: float) -> SshResult:
+        seen.append(log.read())
+        raise _Killed
+
+    service = ServerService(
+        _config(), tmp_path / ".jev", tmp_path, {"web": "medium"}, runner=killed
+    )
+    with pytest.raises(_Killed):
+        service.run_command("web", "sudo apt-get install -y nginx")
+    (entry,) = seen[0]
+    assert entry["phase"] == "started" and entry["allowed"] is True
+    assert entry["command"] == "sudo -n apt-get install -y nginx"
+    assert log.read() == seen[0]
+
+
+def test_file_operations_log_started_lines(tmp_path: Path) -> None:
+    service = _service(tmp_path, FakeSsh())
+    assert not service.read_file("db", "/etc/hosts").is_error
+    assert not service.write_file("web", "/srv/app/a.txt", "x").is_error
+    entries = AuditLog(audit_path(tmp_path / ".jev")).read()
+    assert [(e["action"], e["phase"]) for e in entries] == [
+        ("read_file", "started"),
+        ("read_file", "finished"),
+        ("write_file", "started"),
+        ("write_file", "finished"),
+    ]
+
+
+def test_audit_failure_is_a_tool_error_not_a_crash(tmp_path: Path) -> None:
+    state = tmp_path / ".jev"
+    state.mkdir()
+    (state / "audit").write_text("a file where the audit folder should be")
+    fake = FakeSsh()
+    service = _service(tmp_path, fake)
+    result = service.run_command("web", "ls")
+    assert result.is_error and "audit log" in result.text and "not run" in result.text
+    assert fake.calls == []  # nothing runs unaudited
+    refused = service.run_command("web", "reboot")
+    assert refused.is_error and "audit log" in refused.text
+    assert service.write_file("web", "/srv/app/x", "y").is_error
+    assert not any(r.startswith("tmp=") for r in fake.remotes)
+    assert service.read_file("db", "/etc/hosts").is_error
+
+
+def test_audit_failure_after_the_command_ran(tmp_path: Path) -> None:
+    calls: list[int] = []
+
+    class FlakyLog(AuditLog):
+        def write(self, entry: Any) -> None:
+            calls.append(1)
+            if entry.phase == "finished":
+                raise OSError("disk full")
+            super().write(entry)
+
+    fake = FakeSsh({"uptime": SshResult(0, b"up 3 days\n", b"")})
+    service = _service(tmp_path, fake)
+    service.audit = FlakyLog(audit_path(tmp_path / ".jev"))
+    result = service.run_command("db", "uptime")
+    assert result.is_error and "up 3 days" in result.text and "disk full" in result.text
+    assert len(calls) == 2
 
 
 def test_failed_command_and_output_clipping(tmp_path: Path) -> None:
@@ -901,7 +1193,8 @@ def test_browser_install_on_server(repo: Path, monkeypatch: pytest.MonkeyPatch) 
     code, out = _jev(repo, "browser", "install", "--server", "web", "--yes")
     assert code == 0, out
     assert fake.remotes == ["cd -- /srv/app && " + " ".join(install_argv())]
-    (entry,) = AuditLog(audit_path(repo / ".jev")).read()
+    started, entry = AuditLog(audit_path(repo / ".jev")).read()
+    assert (started["phase"], entry["phase"]) == ("started", "finished")
     assert entry["role"] == "user" and entry["server"] == "web" and entry["allowed"] is True
 
 
@@ -995,7 +1288,7 @@ def test_doctor_rows(repo: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     assert (
         checks["server web"].status == "fail" and "host key unknown" in checks["server web"].detail
     )
-    assert any(argv[-1] == "true" for argv, _ in fake.calls)
+    assert any(_script(argv[-1]) == "true" for argv, _ in fake.calls)
 
 
 def test_doctor_without_servers_runs_no_ssh(
@@ -1007,3 +1300,239 @@ def test_doctor_without_servers_runs_no_ssh(
     monkeypatch.setattr(doctor_cmd, "ssh_runner", boom)
     names = [c.name for c in doctor_cmd.run_checks(fixture_repo)]
     assert "ssh" not in names and "browser" not in names and "profiles" in names
+
+
+# ---- MCP server robustness (issue #47) ---------------------------------------------------
+
+
+def _call(msg_id: int, name: str, arguments: dict[str, Any]) -> str:
+    """A tools/call line; `allow_nan` so Infinity/NaN go out as JSON-RPC clients send them."""
+    message = {
+        "jsonrpc": "2.0",
+        "id": msg_id,
+        "method": "tools/call",
+        "params": {"name": name, "arguments": arguments},
+    }
+    return json.dumps(message, allow_nan=True) + "\n"
+
+
+def _serve_lines(server: Any, *lines: str) -> list[dict[str, Any]]:
+    stdin, stdout = io.StringIO("".join(lines)), io.StringIO()
+    server.serve(stdin, stdout)
+    return [json.loads(line) for line in stdout.getvalue().splitlines()]
+
+
+_PING = '{"jsonrpc": "2.0", "id": 99, "method": "ping"}\n'
+
+
+@pytest.mark.parametrize(
+    ("name", "arguments", "message"),
+    [
+        ("read_file", {"server": "db", "path": "/etc/hosts", "max_bytes": float("inf")},
+         "max_bytes must be a finite number"),
+        ("read_file", {"server": "db", "path": "/etc/hosts", "max_bytes": float("-inf")},
+         "max_bytes must be a finite number"),
+        ("read_file", {"server": "db", "path": "/etc/hosts", "max_bytes": float("nan")},
+         "max_bytes must be a finite number"),
+        ("read_file", {"server": "db", "path": "/etc/hosts", "max_bytes": 10**400},
+         "max_bytes must be a finite number"),
+        ("run_command", {"server": "db", "command": "uptime", "timeout_s": float("nan")},
+         "timeout_s must be a finite number"),
+        ("run_command", {"server": "db", "command": "uptime", "timeout_s": float("inf")},
+         "timeout_s must be a finite number"),
+        ("run_command", {"server": "db", "command": "uptime", "timeout_s": "10"},
+         "timeout_s must be a number"),
+    ],
+)  # fmt: skip
+def test_mcp_rejects_non_finite_numbers_and_keeps_serving(
+    tmp_path: Path, name: str, arguments: dict[str, Any], message: str
+) -> None:
+    fake = FakeSsh()
+    server = servers_mcp(_service(tmp_path, fake), "1")
+    bad, ping = _serve_lines(server, _call(1, name, arguments), _PING)
+    assert bad["id"] == 1 and bad["result"]["isError"] is True
+    assert bad["result"]["content"][0]["text"] == f"bad arguments: {message}"
+    assert ping == {"jsonrpc": "2.0", "id": 99, "result": {}}
+    assert fake.calls == []  # nothing reached ssh
+
+
+def test_mcp_huge_finite_numbers_are_clamped_by_the_service(tmp_path: Path) -> None:
+    timeouts: list[float] = []
+    fake = FakeSsh({"head -c": SshResult(0, b"hello\n", b"")})
+
+    def runner(argv: Sequence[str], *, stdin: bytes | None, timeout_s: float) -> SshResult:
+        timeouts.append(timeout_s)
+        return fake(argv, stdin=stdin, timeout_s=timeout_s)
+
+    service = ServerService(_config(), tmp_path / ".jev", tmp_path, {"db": "basic"}, runner=runner)
+    read, run = _serve_lines(
+        servers_mcp(service, "1"),
+        _call(1, "read_file", {"server": "db", "path": "/etc/hosts", "max_bytes": 1e300}),
+        _call(2, "run_command", {"server": "db", "command": "uptime", "timeout_s": 1e300}),
+    )
+    assert read["result"] == {"content": [{"type": "text", "text": "hello\n"}], "isError": False}
+    assert f"head -c {256 * 1024 + 1} -- /etc/hosts" in fake.remotes
+    assert run["result"]["isError"] is False and timeouts[-1] == 600
+
+
+def test_mcp_tool_exception_is_an_error_result(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """An OSError (ssh not executable, unreadable upload source) or any other exception in a
+    tool is an isError result without a traceback; it is logged, and the server keeps
+    serving."""
+
+    def broken(argv: Sequence[str], *, stdin: bytes | None, timeout_s: float) -> SshResult:
+        raise PermissionError(13, "Permission denied", "ssh")
+
+    service = ServerService(_config(), tmp_path / ".jev", tmp_path, {"db": "basic"}, runner=broken)
+    server = servers_mcp(service, "1")
+    with caplog.at_level("ERROR", logger="jev_agent.servers.mcp"):
+        failed, ping = _serve_lines(
+            server, _call(1, "run_command", {"server": "db", "command": "uptime"}), _PING
+        )
+    text = failed["result"]["content"][0]["text"]
+    assert failed["result"]["isError"] is True
+    assert text == "run_command failed: PermissionError: [Errno 13] Permission denied: 'ssh'"
+    assert "Traceback" not in text
+    assert ping["result"] == {}
+    (record,) = caplog.records
+    assert "run_command" in record.getMessage() and record.exc_info is not None
+    started = AuditLog(audit_path(tmp_path / ".jev")).read()
+    assert [e["phase"] for e in started] == ["started"]  # the attempt is on record
+
+
+def test_mcp_unreadable_upload_source_is_an_error_result(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (tmp_path / "dist").mkdir()
+    source = tmp_path / "dist" / "app.tar"
+    source.write_bytes(b"tarball")
+    real_read_bytes = Path.read_bytes
+
+    def unreadable(self: Path) -> bytes:
+        if self == source:
+            raise PermissionError(13, "Permission denied", str(self))
+        return real_read_bytes(self)
+
+    monkeypatch.setattr(Path, "read_bytes", unreadable)
+    monkeypatch.chdir(tmp_path)
+    fake = FakeSsh()
+    server = servers_mcp(_service(tmp_path, fake), "1")
+    arguments = {"server": "web", "local_path": "dist/app.tar", "remote_path": "/srv/app/a.tar"}
+    failed, ping = _serve_lines(server, _call(1, "upload", arguments), _PING)
+    assert failed["result"]["isError"] is True
+    assert failed["result"]["content"][0]["text"].startswith("upload failed: PermissionError")
+    assert ping["result"] == {} and fake.calls == []
+
+
+def test_mcp_malformed_lines_get_errors_and_serving_goes_on(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from jev_agent.servers.mcp import McpServer
+
+    server = McpServer("x", "1", [])
+    real_dispatch = server.dispatch
+
+    def dispatch(method: str, params: dict[str, Any]) -> dict[str, Any]:
+        if method == "explode":
+            raise RuntimeError("internal bug")
+        return real_dispatch(method, params)
+
+    monkeypatch.setattr(server, "dispatch", dispatch)
+    replies = _serve_lines(
+        server,
+        "{nope\n",
+        "[1, 2]\n",
+        '{"jsonrpc": "2.0", "id": 5, "method": "explode"}\n',
+        '{"jsonrpc": "2.0", "id": 6, "method": "tools/call", "params": {"name": "x"}}\n',
+        _PING,
+    )
+    assert [r.get("id") for r in replies] == [None, None, 5, 6, 99]
+    assert replies[0]["error"]["code"] == -32700
+    assert replies[1]["error"]["code"] == -32600
+    assert replies[2]["error"] == {"code": -32603, "message": "internal error"}
+    assert replies[3]["error"]["code"] == -32602
+    assert replies[4]["result"] == {}
+
+
+# ---- service failure paths (issue #54) ---------------------------------------------------
+
+
+_CONNECT_FAILED = SshResult(255, b"", b"ssh: connect to host db.internal port 22: refused\n")
+
+
+@pytest.mark.parametrize(
+    ("call", "answers", "text", "is_error", "audit"),
+    [
+        pytest.param(
+            lambda s: s.read_file("db", "/etc/hosts"),
+            {"realpath": _CONNECT_FAILED},
+            "cannot read /etc/hosts: ssh: connect to host db.internal port 22: refused",
+            True,
+            [("", False, None)],
+            id="realpath-ssh-255",
+        ),
+        pytest.param(
+            lambda s: s.run_command("db", "uptime"),
+            {"uptime": SshResult(None, b"partial\n", b"", True, 3.0)},
+            "timed out after 3s\n--- stdout ---\npartial\n",
+            True,
+            [("started", True, None), ("finished", True, None)],
+            id="timed-out",
+        ),
+        pytest.param(
+            lambda s: s.run_command("db", "uptime"),
+            {"uptime": _CONNECT_FAILED},
+            "exit code 255 (ssh could not connect or the remote command failed; see stderr)\n"
+            "--- stderr ---\nssh: connect to host db.internal port 22: refused\n",
+            True,
+            [("started", True, None), ("finished", True, 255)],
+            id="command-ssh-255",
+        ),
+        pytest.param(
+            lambda s: s.read_file("db", "/var/log/big.log"),
+            {"head -c": SshResult(0, b"a" * (256 * 1024 + 1), b"")},
+            "a" * 256 * 1024 + f"\n[truncated at {256 * 1024} bytes]",
+            False,
+            [("started", True, None), ("finished", True, 0)],
+            id="larger-than-read-limit",
+        ),
+        pytest.param(
+            lambda s: s.write_file("web", "/srv/app/a.txt", "x"),
+            {"tmp=": SshResult(1, b"", b"mktemp: failed to create file\n")},
+            "exit code 1\n--- stderr ---\nmktemp: failed to create file\n",
+            True,
+            [("started", True, None), ("finished", True, 1)],
+            id="write-fails",
+        ),
+    ],
+)
+def test_service_failure_paths(
+    tmp_path: Path,
+    call: Any,
+    answers: dict[str, SshResult],
+    text: str,
+    is_error: bool,
+    audit: list[tuple[str, bool, int | None]],
+) -> None:
+    result = call(_service(tmp_path, FakeSsh(answers)))
+    assert result.text == text and result.is_error is is_error
+    entries = AuditLog(audit_path(tmp_path / ".jev")).read()
+    assert [(e["phase"], e["allowed"], e["exit_code"]) for e in entries] == audit
+    if not audit[0][1]:
+        assert "refused" in str(entries[0]["reason"])
+
+
+def test_run_process_timeout_kills_the_child() -> None:
+    """The real runner: a child that sleeps past the timeout is killed (with its process
+    group) and reported as timed out, quickly."""
+    script = "import os, time; print(os.getpid(), flush=True); time.sleep(30)"
+    started = time.monotonic()
+    result = run_process([sys.executable, "-c", script], stdin=None, timeout_s=0.3)
+    elapsed = time.monotonic() - started
+    assert result.timed_out and result.exit_code is None and not result.ok
+    assert elapsed < 5 and 0.3 <= result.duration_s < 5
+    pid = int(result.stdout.split()[0])
+    with pytest.raises(ProcessLookupError):
+        os.kill(pid, 0)  # gone (and reaped)

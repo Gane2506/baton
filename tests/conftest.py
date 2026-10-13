@@ -6,8 +6,14 @@ from pathlib import Path
 import pytest
 
 # The CLI's rich consoles are created at import time and size themselves from COLUMNS. Pin a
-# wide terminal so output does not wrap differently on narrow CI runners.
+# wide terminal for the whole suite, whatever the caller's COLUMNS: rich tables cut cells in a
+# narrow terminal, so most CLI tests could not pass there. Narrow output is checked on purpose
+# in tests/unit/test_narrow_terminal.py (issue #53).
 os.environ["COLUMNS"] = "200"
+
+# Credentials and switches from the developer's shell that change what jev does. Tests that need
+# one set it themselves (monkeypatch.setenv).
+_UNSET_ENV = ("OPENROUTER_API_KEY", "TYPESAFE_API_KEY", "JEV_FAKE_WORKERS")
 
 # The dashboard tests need the `dashboard` extra (`uv sync --all-extras`, as CI does).
 collect_ignore = [] if find_spec("starlette") else ["unit/test_dashboard.py"]
@@ -39,6 +45,26 @@ def fixture_repo(tmp_path: Path) -> Path:
 
 
 @pytest.fixture(autouse=True)
-def _isolated_shared_learning(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    """Shared learning profiles live under XDG_DATA_HOME; never touch the real one in tests."""
+def _isolated_env(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, request: pytest.FixtureRequest
+) -> None:
+    """Keep the developer's own config out of every test (issue #53).
+
+    The user config (`$XDG_CONFIG_HOME/jev/config.toml`, here `tmp_path / "xdg"`), shared
+    learning profiles and caches live under tmp_path; git reads no global or system config
+    (a `commit.gpgsign = true` there would break every commit) and commits as a test identity;
+    API keys and `JEV_FAKE_WORKERS` are unset. Live tests (tests/live) keep the keys and the
+    real config home: they talk to real services and CLIs on purpose.
+    """
+    live = "live" in request.node.path.relative_to(Path(__file__).parent).parts[:1]
+    if not live:
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
+        for name in _UNSET_ENV:
+            monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "xdg-data"))
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "xdg-cache"))
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", os.devnull)
+    monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
+    for role in ("AUTHOR", "COMMITTER"):
+        monkeypatch.setenv(f"GIT_{role}_NAME", "test")
+        monkeypatch.setenv(f"GIT_{role}_EMAIL", "test@example.com")

@@ -11,15 +11,15 @@ from __future__ import annotations
 import json
 import secrets
 import sqlite3
-from collections.abc import Iterator, Sequence
+from collections.abc import Callable, Collection, Iterator, Sequence
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from types import TracebackType
 from typing import Literal, get_args
 
-from jev_agent.core.migrations import SchemaVersionError, apply_migrations
+from jev_agent.core.migrations import SchemaVersionError, apply_migrations, configure_connection
 from jev_agent.core.models import (
     Decision,
     DecisionRequest,
@@ -43,6 +43,7 @@ __all__ = [
     "QueueItem",
     "QueuePriority",
     "QueueStatus",
+    "RunLease",
     "RunRecord",
     "SchemaVersionError",
     "ShippedPrRecord",
@@ -59,6 +60,20 @@ class StoreError(Exception):
 
 class NotFoundError(StoreError, LookupError):
     """A run, task or attempt id does not exist."""
+
+
+@dataclass(frozen=True)
+class LearningCounts:
+    """Lesson changes made by a run's learning steps (`core.learner`), kept as data."""
+
+    added: int
+    updated: int
+    retired: int
+
+    def __add__(self, other: LearningCounts) -> LearningCounts:
+        return LearningCounts(
+            self.added + other.added, self.updated + other.updated, self.retired + other.retired
+        )
 
 
 @dataclass(frozen=True)
@@ -79,8 +94,25 @@ class RunRecord:
     learning_profile: str | None = None
     # What the end-of-run learning step did ("learned: ...", "skipped: ..."); None: not yet.
     learning_outcome: str | None = None
+    # Lessons the run's learning steps added, updated and retired; None: none applied.
+    learning_counts: LearningCounts | None = None
     # The quality gate level this run uses (docs/quality.md); "none" for older runs.
     quality_level: QualityLevel = "none"
+    # `jev run --plan-only` (or a plan-only queue item): stop at the approval gate even when
+    # `[approval] require_plan_approval` is off, also after `jev resume`.
+    plan_only: bool = False
+
+
+@dataclass(frozen=True)
+class RunLease:
+    """Who drives a run right now (issue #61, `core/lease.py`)."""
+
+    run_id: str
+    token: str  # random per claim: tells two holders with the same pid apart
+    pid: int
+    host: str
+    acquired_at: datetime
+    heartbeat_at: datetime
 
 
 @dataclass(frozen=True)
@@ -140,6 +172,7 @@ class DecisionRecord:
 
 
 PrState = Literal["open", "closed", "merged"]
+PR_STATES: tuple[PrState, ...] = get_args(PrState)
 
 
 @dataclass(frozen=True)
@@ -235,9 +268,7 @@ class Store:
         conn = sqlite3.connect(path, isolation_level=None)
         try:
             conn.row_factory = sqlite3.Row
-            conn.execute("PRAGMA foreign_keys = ON")
-            conn.execute("PRAGMA journal_mode = WAL")
-            conn.execute("PRAGMA busy_timeout = 5000")
+            configure_connection(conn)
             apply_migrations(conn)
         except BaseException:
             conn.close()
@@ -276,6 +307,8 @@ class Store:
         idea: Idea,
         learning_profile: str | None = None,
         quality_level: QualityLevel = "none",
+        *,
+        plan_only: bool = False,
     ) -> RunRecord:
         now = _now()
         for _ in range(5):  # retry on the (very unlikely) id collision within one second
@@ -284,7 +317,8 @@ class Store:
                 with self._tx() as db:
                     db.execute(
                         "INSERT INTO runs (id, idea_json, state, created_at, updated_at,"
-                        " learning_profile, quality_level) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                        " learning_profile, quality_level, plan_only)"
+                        " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                         (
                             run_id,
                             idea.model_dump_json(),
@@ -293,6 +327,7 @@ class Store:
                             now,
                             learning_profile,
                             quality_level,
+                            int(plan_only),
                         ),
                     )
             except sqlite3.IntegrityError:
@@ -317,15 +352,30 @@ class Store:
         state: RunState,
         reason: str | None = None,
         resume_state: RunState | None = None,
-    ) -> None:
+        *,
+        unless: Collection[RunState] = (),
+    ) -> bool:
         """Set the run's state. `reason` (why it stopped) replaces any previous reason.
 
         `resume_state` is where `resume` may continue a stopped run from; every state change
         replaces it, so it is only set while the run stays stopped.
+
+        With `unless`, the change happens only if the run is not in one of those states, in the
+        same statement, so a concurrent write (`jev cancel` from another shell, the dashboard)
+        cannot be overwritten between a check and the update. Returns whether it changed.
         """
-        self._update_run(
-            run_id, "state = ?, reason = ?, resume_state = ?", (state, reason, resume_state)
-        )
+        guard = ""
+        if unless:
+            guard = f" AND state NOT IN ({', '.join('?' for _ in unless)})"
+        with self._tx() as db:
+            cur = db.execute(
+                "UPDATE runs SET state = ?, reason = ?, resume_state = ?, updated_at = ?"
+                f" WHERE id = ?{guard}",
+                (state, reason, resume_state, _now(), run_id, *unless),
+            )
+            if cur.rowcount == 0:
+                self._require_run(run_id)
+        return cur.rowcount == 1
 
     def set_run_validation(self, run_id: str, validation: ValidationResult | None) -> None:
         value = None if validation is None else validation.model_dump_json()
@@ -342,6 +392,22 @@ class Store:
 
     def set_run_learning_outcome(self, run_id: str, outcome: str | None) -> None:
         self._update_run(run_id, "learning_outcome = ?", (outcome,))
+
+    def add_run_learning_counts(self, run_id: str, counts: LearningCounts) -> LearningCounts:
+        """Add a learning step's lesson changes to the run's totals; returns the new totals."""
+        with self._tx() as db:
+            row = db.execute(
+                "SELECT learning_counts_json FROM runs WHERE id = ?", (run_id,)
+            ).fetchone()
+            if row is None:
+                raise NotFoundError(f"run {run_id} not found")
+            old = _learning_counts(row["learning_counts_json"])
+            total = counts if old is None else old + counts
+            db.execute(
+                "UPDATE runs SET learning_counts_json = ? WHERE id = ?",
+                (json.dumps(asdict(total)), run_id),
+            )
+        return total
 
     def set_run_quality(self, run_id: str, level: QualityLevel) -> None:
         """Change the quality level the run uses from now on (`jev resume --quality`)."""
@@ -638,14 +704,16 @@ class Store:
         draft: bool,
         head_oid: str | None = None,
         pushed_commits: int | None = None,
+        state: PrState = "open",
     ) -> ShippedPrRecord:
-        """Record a pull request just opened for the run (state `open`)."""
+        """Record a pull request opened for the run (`state`: `open` unless an existing PR
+        was found in another state)."""
         with self._tx() as db:
             self._require_run(run_id)
             cur = db.execute(
                 "INSERT INTO shipped_prs (run_id, remote, repo, branch, base, number, url, title,"
-                " draft, head_oid, pushed_commits, created_at)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                " draft, head_oid, pushed_commits, created_at, state)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     run_id,
                     remote,
@@ -659,6 +727,7 @@ class Store:
                     head_oid,
                     pushed_commits,
                     _now(),
+                    state,
                 ),
             )
             assert cur.lastrowid is not None
@@ -747,6 +816,51 @@ class Store:
         if row is None:
             return None
         return datetime.fromisoformat(row["computed_at"]), str(row["kpis_json"])
+
+    # ---- run lease (`core/lease.py`) -------------------------------------------------------
+
+    def get_run_lease(self, run_id: str) -> RunLease | None:
+        row = self._conn.execute("SELECT * FROM run_leases WHERE run_id = ?", (run_id,)).fetchone()
+        return None if row is None else _run_lease(row)
+
+    def claim_run_lease(
+        self, run_id: str, token: str, pid: int, host: str, stale: Callable[[RunLease], bool]
+    ) -> RunLease | None:
+        """Take the run's lease unless a holder that `stale` calls live has it.
+
+        The check and the write are one transaction, so two claimers never both win. Returns
+        None when the lease was taken (a stale holder's lease is replaced), else the holder.
+        """
+        with self._tx() as db:
+            self._require_run(run_id)
+            row = db.execute("SELECT * FROM run_leases WHERE run_id = ?", (run_id,)).fetchone()
+            if row is not None:
+                holder = _run_lease(row)
+                if not stale(holder):
+                    return holder
+            now = _now()
+            db.execute(
+                "INSERT INTO run_leases (run_id, token, pid, host, acquired_at, heartbeat_at)"
+                " VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT (run_id) DO UPDATE SET"
+                " token = excluded.token, pid = excluded.pid, host = excluded.host,"
+                " acquired_at = excluded.acquired_at, heartbeat_at = excluded.heartbeat_at",
+                (run_id, token, pid, host, now, now),
+            )
+        return None
+
+    def renew_run_lease(self, run_id: str, token: str) -> bool:
+        """Refresh the heartbeat; False when the lease is no longer held with `token`."""
+        with self._tx() as db:
+            cur = db.execute(
+                "UPDATE run_leases SET heartbeat_at = ? WHERE run_id = ? AND token = ?",
+                (_now(), run_id, token),
+            )
+        return cur.rowcount == 1
+
+    def release_run_lease(self, run_id: str, token: str) -> None:
+        """Drop the lease if it is still held with `token` (a new holder's lease stays)."""
+        with self._tx() as db:
+            db.execute("DELETE FROM run_leases WHERE run_id = ? AND token = ?", (run_id, token))
 
     # ---- settings (set by `jev learning`) --------------------------------------------------
 
@@ -846,6 +960,25 @@ class Store:
             )
         return cur.rowcount == 1
 
+    @contextmanager
+    def link_new_run(self, item_id: int) -> Iterator[None]:
+        """While active, link the first run created through this connection to queue item
+        `item_id` (the scheduler's running item), in the transaction that inserts the run.
+
+        A TEMP trigger: it lives only on this connection (no schema change) and is dropped on
+        exit. So a scheduler killed mid-run leaves its item linked to its run, or no run at all.
+        """
+        self._conn.execute("DROP TRIGGER IF EXISTS temp.jev_link_queue_run")
+        self._conn.execute(
+            "CREATE TEMP TRIGGER jev_link_queue_run AFTER INSERT ON main.runs BEGIN"
+            " UPDATE queue SET run_id = NEW.id"
+            f" WHERE id = {int(item_id)} AND status = 'running' AND run_id IS NULL; END"
+        )
+        try:
+            yield
+        finally:
+            self._conn.execute("DROP TRIGGER IF EXISTS temp.jev_link_queue_run")
+
     def set_queue_status(
         self,
         item_id: int,
@@ -878,11 +1011,18 @@ class Store:
                 if cur.rowcount == 0:
                     raise NotFoundError(f"queue item {item_id} not found")
 
-    def delete_queue_item(self, item_id: int) -> None:
+    def delete_queue_item(self, item_id: int, *, keep_running: bool = False) -> bool:
+        """Delete the item; with `keep_running`, only if it is not `running` (one statement,
+        so a scheduler's claim cannot slip in between). False when it was kept."""
+        sql = "DELETE FROM queue WHERE id = ?" + (
+            " AND status != 'running'" if keep_running else ""
+        )
         with self._tx() as db:
-            cur = db.execute("DELETE FROM queue WHERE id = ?", (item_id,))
-            if cur.rowcount == 0:
+            if db.execute(sql, (item_id,)).rowcount == 1:
+                return True
+            if db.execute("SELECT 1 FROM queue WHERE id = ?", (item_id,)).fetchone() is None:
                 raise NotFoundError(f"queue item {item_id} not found")
+        return False
 
     def clear_queued(self) -> int:
         """Delete every item that is still `queued`; returns how many were deleted."""
@@ -960,6 +1100,24 @@ def _shipped_pr(row: sqlite3.Row) -> ShippedPrRecord:
     )
 
 
+def _run_lease(row: sqlite3.Row) -> RunLease:
+    return RunLease(
+        run_id=row["run_id"],
+        token=row["token"],
+        pid=int(row["pid"]),
+        host=row["host"],
+        acquired_at=datetime.fromisoformat(row["acquired_at"]),
+        heartbeat_at=datetime.fromisoformat(row["heartbeat_at"]),
+    )
+
+
+def _learning_counts(text: str | None) -> LearningCounts | None:
+    if text is None:
+        return None
+    data = json.loads(text)
+    return LearningCounts(int(data["added"]), int(data["updated"]), int(data["retired"]))
+
+
 def _run_record(row: sqlite3.Row) -> RunRecord:
     plan_json = row["plan_json"]
     validation_json = row["validation_json"]
@@ -979,7 +1137,9 @@ def _run_record(row: sqlite3.Row) -> RunRecord:
         resume_state=None if row["resume_state"] is None else RunState(row["resume_state"]),
         learning_profile=row["learning_profile"],
         learning_outcome=row["learning_outcome"],
+        learning_counts=_learning_counts(row["learning_counts_json"]),
         quality_level=row["quality_level"] or "none",
+        plan_only=bool(row["plan_only"]),
     )
 
 

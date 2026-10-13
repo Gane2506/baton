@@ -78,7 +78,8 @@ class Harness:
     # ---- roles and prompts -----------------------------------------------------------------
 
     def options(self, role: Role) -> RoleOptions:
-        return role_options(self.config, role, self.workers.names(), self.catalog)
+        # Only workers ready for this role (cli.wiring.worker_readiness drops the rest).
+        return role_options(self.config, role, self.workers.names(role), self.catalog)
 
     def assignment(self, role: Role, answers: dict[str, str]) -> Assignment:
         """The dispatcher's worker, model and effort, with a free model kept on the api worker."""

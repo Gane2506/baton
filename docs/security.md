@@ -127,14 +127,26 @@ machines and web pages. They are off until configured, and:
   in-memory profile (`--isolated`), headless by default. `jev browser install` shows the exact
   command and asks first; on a server it needs medium access and goes through the policy.
 
+## Repository config files
+
+Treat a cloned repository's `jev.toml` as untrusted input. jev only lets it change the keys
+that decide where API keys are sent, which credential variables are read, which commands the
+workers run with which permissions, and which tools, servers and browser agents get, when your
+user config trusts that repository (`[trust] repos`, docs/config.md). A repository cannot trust
+itself. Its test commands (`test_command`) still run in the repository, as running its tests
+always does: read them in the plan before you approve it.
+
 ## Keys and redaction
 
 - Config files never hold secrets: any key named like `*key`, `*token*`, `*secret*` or
   `*password*` is rejected. You name the environment variable with `api_key_env` instead.
 - Keys reach workers only through the environment: an `Authorization` header for HTTP calls,
   the inherited environment for CLIs. They are never put in argv, prompts or config.
-- Every log is redacted before it is written (`jev_agent.runlog.redact`): `sk-...` keys, `Bearer`
-  tokens, the values (8+ characters) of environment variables whose names contain KEY,
+- Every log is redacted before it is written (`jev_agent.runlog.redact`), and text is redacted
+  before it is cut short (summaries), so a cut never leaves part of a secret. Redacted:
+  well-known credential shapes (`sk-...` keys; GitHub `ghp_`/`ghs_`/`github_pat_`, Slack
+  `xox?-`, AWS `AKIA`, Google `AIza` tokens; private-key blocks; JWTs; `Bearer` and
+  `Authorization: token|Basic` values; `user:password@` in URLs), the values (8+ characters) of environment variables whose names contain KEY,
   TOKEN, SECRET, PASSWORD or CREDENTIAL, and the values (4+ characters) of the variables named
   in `JEV_REDACT_NAMES` (set by jev to the MCP servers' variables). The API worker also
   scrubs the literal value of its

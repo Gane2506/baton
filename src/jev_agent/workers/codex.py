@@ -36,10 +36,13 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
+from jev_agent.config.schema import WORKER_EFFORTS
 from jev_agent.core.models import WorkerStatus
 from jev_agent.workers.api import strict_json_schema
 from jev_agent.workers.base import WorkerJob, WorkerOutput
 from jev_agent.workers.subprocess_runner import (
+    EXIT_NOT_EXECUTABLE,
+    EXIT_NOT_FOUND,
     CommandResult,
     CommandRunner,
     append_log_sections,
@@ -48,7 +51,7 @@ from jev_agent.workers.subprocess_runner import (
 from jev_agent.workers.summary import finish_reply, make_output
 from jev_agent.workers.tools import AgentTools, with_redact_names
 
-EFFORTS = frozenset({"low", "medium", "high", "xhigh", "max", "ultra"})
+EFFORTS = WORKER_EFFORTS["codex"]  # other levels are ignored (with a note)
 READ_ONLY_SANDBOX = "read-only"
 SANDBOXES = frozenset({"read-only", "workspace-write", "danger-full-access"})
 SCHEMA_FILE = "schema.json"
@@ -228,6 +231,8 @@ def classify_codex(result: CommandResult, events: list[dict[str, Any]]) -> Worke
     """Map a finished `codex exec --json` run to a worker status.
 
     - timed out -> "timeout"
+    - exit 127/126 without JSON events (`run_command`: the binary is missing or not
+      executable) -> "error"
     - exit 0, a `turn.completed` event and no `turn.failed` -> "success" (transient `error`
       events, such as reconnect notices, are ignored when the turn completed)
     - usage limit (`You've hit your usage limit`, matched with a curly or straight apostrophe;
@@ -238,6 +243,8 @@ def classify_codex(result: CommandResult, events: list[dict[str, Any]]) -> Worke
     """
     if result.timed_out:
         return "timeout"
+    if result.exit_code in (EXIT_NOT_FOUND, EXIT_NOT_EXECUTABLE) and not events:
+        return "error"
     types = [e["type"] for e in events]
     if result.exit_code == 0 and "turn.completed" in types and "turn.failed" not in types:
         return "success"

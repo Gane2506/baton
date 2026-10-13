@@ -37,7 +37,7 @@ from jev_agent.core.models import (
     TaskState,
     WorkerResult,
 )
-from jev_agent.core.store import ShippedPrRecord, Store
+from jev_agent.core.store import LearningCounts, ShippedPrRecord, Store
 from jev_agent.quality.models import CheckResult, Finding, GateResult
 
 
@@ -122,7 +122,7 @@ def test_compute_run_kpis(store: Store, tmp_path: Path) -> None:
         run.id, GateResult(level="basic", scope="task", task_id="T2", blocked=True, reasons=["r"])
     )
     store.add_quality_report(run.id, gate)
-    store.set_run_learning_outcome(run.id, "learned into p: 2 added, 0 updated, 0 retired")
+    store.add_run_learning_counts(run.id, LearningCounts(added=2, updated=0, retired=0))
 
     k = compute_run_kpis(store, run.id, DiffStat(files=3, additions=10, deletions=2))
     assert k.total_cost_usd == 1.25 and k.tasks == 3 and k.tasks_done == 3
@@ -153,6 +153,28 @@ def test_kpis_of_an_empty_run(store: Store, tmp_path: Path) -> None:
     assert k.tasks == 0 and k.attempts_per_task is None and k.first_pass_rate is None
     assert k.fallback_rate is None and k.mean_jev_confidence is None
     assert k.free_model_share is None and k.tests_passed is None and k.lessons_added is None
+
+
+def test_lessons_added_comes_from_structured_counts_not_the_outcome_text(
+    store: Store, tmp_path: Path
+) -> None:
+    """Issue #42: the human-readable outcome line is never parsed."""
+    run = store.create_run(Idea(text="x", repo_path=tmp_path))
+    store.set_run_learning_outcome(run.id, "learned into p: 7 added, 0 updated, 0 retired")
+    assert compute_run_kpis(store, run.id).lessons_added is None
+    store.add_run_learning_counts(run.id, LearningCounts(added=1, updated=2, retired=0))
+    store.add_run_learning_counts(run.id, LearningCounts(added=2, updated=0, retired=1))
+    assert store.get_run(run.id).learning_counts == LearningCounts(added=3, updated=2, retired=1)
+    assert compute_run_kpis(store, run.id).lessons_added == 3
+
+
+def test_github_kpis_state_is_a_known_pr_state() -> None:
+    assert github_kpis({"state": "MERGED"}, None).state == "merged"
+    assert github_kpis({"state": "CLOSED"}, None).state == "closed"
+    # Anything gh might print that is not a PR state reads as open (the column's default).
+    assert github_kpis({"state": "DRAFT?"}, None).state == "open"
+    assert github_kpis({"state": None}, None).state == "open"
+    assert github_kpis({}, None).state == "open"
 
 
 def test_parse_shortstat() -> None:

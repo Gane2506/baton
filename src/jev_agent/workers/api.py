@@ -21,6 +21,7 @@ from typing import Any
 import httpx
 from pydantic import BaseModel, ValidationError
 
+from jev_agent.config.schema import WORKER_EFFORTS
 from jev_agent.core.models import WorkerResult, WorkerStatus
 from jev_agent.runlog.redact import REDACTED, redact
 from jev_agent.workers.base import WorkerJob, WorkerOutput
@@ -29,7 +30,7 @@ from jev_agent.workers.openrouter_models import is_free_slug
 PROJECT_TITLE = "Baton Agent Orchestrator"
 PROJECT_URL = "https://github.com/Gane2506/baton"
 
-EFFORTS = frozenset({"low", "medium", "high"})
+EFFORTS = WORKER_EFFORTS["api"]  # other levels are ignored (with a note)
 RETRY_STATUSES = frozenset({429, 503})
 MAX_RETRY_AFTER_S = 10.0
 DEFAULT_BACKOFF_S = 2.0
@@ -175,9 +176,12 @@ class ApiWorker:
     async def run(self, job: WorkerJob) -> WorkerOutput:
         log = _Log(job.log_path)
         model = job.model or self.default_model
+        effort = f"{job.effort}"
+        if job.effort is not None and job.effort not in EFFORTS:
+            effort += " (not supported; ignored)"
         log.add(
             "request",
-            f"worker: {self.name}\nrole: {job.role}\nmodel: {model}\neffort: {job.effort}\n"
+            f"worker: {self.name}\nrole: {job.role}\nmodel: {model}\neffort: {effort}\n"
             f"schema: {job.output_schema.__name__ if job.output_schema else None}\n"
             f"url: {self.base_url}/chat/completions\ntimeout_s: {job.timeout_s}",
         )
@@ -242,7 +246,11 @@ class ApiWorker:
                 "timeout", f"request timed out after {job.timeout_s}s ({type(exc).__name__})"
             ) from exc
         except httpx.HTTPError as exc:
-            raise _RequestFailed("error", f"network error: {type(exc).__name__}: {exc}") from exc
+            # A dropped or refused connection is transient: this attempt failed. Anything else
+            # (proxy, URL scheme, redirects, our own request) is configuration: an error.
+            transient = isinstance(exc, httpx.NetworkError | httpx.RemoteProtocolError)
+            kind: WorkerStatus = "failure" if transient else "error"
+            raise _RequestFailed(kind, f"network error: {type(exc).__name__}: {exc}") from exc
         raise AssertionError("unreachable")  # pragma: no cover
 
     async def _post(
@@ -280,9 +288,7 @@ class ApiWorker:
             return fail("error", "response has no message content")
         if job.output_schema is None:
             log.add("result", "status: success")
-            return WorkerOutput(
-                result=self._result(job, "success", content[:SUMMARY_CHARS], cost, tokens)
-            )
+            return WorkerOutput(result=self._result(job, "success", content, cost, tokens))
         try:
             parsed = job.output_schema.model_validate(parse_json_content(content))
         except json.JSONDecodeError as exc:
@@ -308,7 +314,7 @@ class ApiWorker:
     ) -> WorkerResult:
         return WorkerResult(
             status=status,
-            summary=redact(summary),
+            summary=redact(summary)[:SUMMARY_CHARS],  # redact first: a cut can split a secret
             cost_usd=cost,
             tokens=tokens,
             raw_log_path=job.log_path,

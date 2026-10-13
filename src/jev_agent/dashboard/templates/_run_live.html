@@ -20,7 +20,11 @@
       {{ csrf_input() }}<button class="primary" type="submit"{% if busy %} disabled{% endif %}>Approve and run</button>
     </form>
     {% endif %}
-    {% if v.can_resume %}
+    {% if v.can_resume and v.resume_risk %}
+    <form class="inline" method="post" action="/runs/{{ run.id }}/resume" data-confirm="Another jev process may be running this run ({{ v.resume_risk }}); resuming starts a second one on the same worktrees and can double the spend. Resume anyway?">
+      {{ csrf_input() }}<input type="hidden" name="force" value="1"><button class="danger" type="submit"{% if busy %} disabled{% endif %}>Force resume</button>
+    </form>
+    {% elif v.can_resume %}
     <form class="inline" method="post" action="/runs/{{ run.id }}/resume" data-confirm="Resume this run from its saved state?">
       {{ csrf_input() }}<button type="submit"{% if busy %} disabled{% endif %}>Resume</button>
     </form>
@@ -37,6 +41,9 @@
     {% endif %}
     {% if busy %}<span class="muted small">working in the background...</span>{% endif %}
   </div>
+  {% if v.can_resume and v.resume_risk %}
+  <p class="small">Possibly still running: {{ v.resume_risk }}. Another jev process may be running this run; resuming starts a second one. Resume only if that process is gone.</p>
+  {% endif %}
   {% if v.shipped %}
   <p class="small">Pull request{{ "s" if v.shipped | length > 1 }}:
     {% for pr in v.shipped %}

@@ -424,7 +424,11 @@ def test_codex_argv_without_tools_has_no_overrides(tmp_path: Path) -> None:
 
 @pytest.fixture
 def git_repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
+    # These tests model the user's own repository: trust it, so its jev.toml may set the
+    # guarded keys (servers, tools, permissions; docs/security.md).
+    trust = tmp_path / "xdg" / "jev" / "config.toml"
+    trust.parent.mkdir(parents=True, exist_ok=True)
+    trust.write_text('[trust]\nrepos = ["*"]\n')
     repo = tmp_path / "repo"
     repo.mkdir(exist_ok=True)
     subprocess.run(["git", "init", "-q", str(repo)], check=True)

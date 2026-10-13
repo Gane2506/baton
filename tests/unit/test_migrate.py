@@ -12,12 +12,6 @@ from jev_agent.cli.app import app
 runner = CliRunner()
 
 
-@pytest.fixture(autouse=True)
-def _isolate_user_config(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
-    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "xdg-data"))
-
-
 def _git(repo: Path, *args: str) -> str:
     return subprocess.run(
         ["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@t", *args],
@@ -140,3 +134,50 @@ def test_migrate_with_nothing_to_do(tmp_path: Path) -> None:
     code, output = _invoke("init", "--migrate", "--repo", str(repo))
     assert code == 0 and "Nothing to migrate" in output
     assert not (repo / ".gitignore").exists()
+
+
+def _log_paths(repo: Path) -> list[str]:
+    conn = sqlite3.connect(repo / ".jev" / "state.db")
+    rows = conn.execute("SELECT log_path FROM attempts ORDER BY id").fetchall()
+    conn.close()
+    return [row[0] for row in rows]
+
+
+def test_migrate_skips_a_conflicting_ref_and_a_rerun_completes(legacy_repo: Path) -> None:
+    repo = legacy_repo
+    # A branch named `jev` makes every `jev/...` branch name impossible (a ref cannot be both a
+    # file and a directory), so `git branch -m jao/r1/T1 jev/r1/T1` fails.
+    _git(repo, "branch", "jev")
+    code, output = _invoke("init", "--migrate", "--repo", str(repo))
+    assert code == 0, output
+    assert "skipped refs/heads/jao/r1/T1: git branch -m jao/r1/T1 jev/r1/T1 failed" in output
+    assert "skipped refs/heads/jao/r1/result" in output
+    # Everything else was done, the state DB included.
+    assert (repo / "jev.toml").exists() and not (repo / ".jao").exists()
+    refs = set(_git(repo, "for-each-ref", "--format=%(refname)").split())
+    assert "refs/jev/r1/start" in refs and "refs/heads/jao/r1/T1" in refs
+    assert _log_paths(repo) == [f"{repo}/.jev/runs/r1/T1/1.log", "/elsewhere/x.log"]
+
+    # A rerun with the conflict still there changes nothing and fails nothing.
+    code, output = _invoke("init", "--migrate", "--repo", str(repo))
+    assert code == 0, output
+    assert "skipped refs/heads/jao/r1/T1" in output
+
+    # Once the user moved the conflicting branch away, a rerun finishes the job.
+    _git(repo, "branch", "-m", "jev", "old-jev")
+    code, output = _invoke("init", "--migrate", "--repo", str(repo))
+    assert code == 0, output
+    refs = set(_git(repo, "for-each-ref", "--format=%(refname)").split())
+    assert {"refs/heads/jev/r1/T1", "refs/heads/jev/r1/result"} <= refs
+    assert "refs/heads/jao/r1/T1" not in refs
+    assert _log_paths(repo) == [f"{repo}/.jev/runs/r1/T1/1.log", "/elsewhere/x.log"]
+
+
+def test_rerun_after_an_interrupted_migration_updates_the_db(legacy_repo: Path) -> None:
+    # What an older `jev init --migrate` left when a ref rename failed: files moved, DB not.
+    repo = legacy_repo
+    (repo / "jao.toml").rename(repo / "jev.toml")
+    (repo / ".jao").rename(repo / ".jev")
+    code, output = _invoke("init", "--migrate", "--repo", str(repo))
+    assert code == 0, output
+    assert _log_paths(repo) == [f"{repo}/.jev/runs/r1/T1/1.log", "/elsewhere/x.log"]

@@ -19,7 +19,7 @@ DISCLAIMER = (
     "_AI review can miss problems and can report problems that are not there. Tool checks only "
     "cover what the installed tools check. Neither replaces a human security review._"
 )
-_STATUS_MARK = {"pass": "pass", "fail": "**fail**", "skipped": "skipped"}
+_STATUS_MARK = {"pass": "pass", "fail": "**fail**", "skipped": "skipped", "error": "**error**"}
 
 
 def cell(text: object) -> str:

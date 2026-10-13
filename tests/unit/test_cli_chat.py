@@ -51,9 +51,12 @@ class ScriptedBackend:
 
 @pytest.fixture(autouse=True)
 def _isolate(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
+    # These tests model the user's own repository: trust it, so its jev.toml may set the
+    # guarded keys (servers, tools, permissions; docs/security.md).
+    trust = tmp_path / "xdg" / "jev" / "config.toml"
+    trust.parent.mkdir(parents=True, exist_ok=True)
+    trust.write_text('[trust]\nrepos = ["*"]\n')
     monkeypatch.setenv(FAKE_WORKERS_ENV, "1")
-    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
     monkeypatch.setattr(chat_cmds, "is_interactive", lambda: False)
 
 

@@ -7,6 +7,7 @@ from typing import Annotated
 
 import typer
 from rich.console import Console
+from rich.markup import escape
 
 from jev_agent.config import CONFIG_FILENAME, STATE_DIRNAME
 
@@ -40,7 +41,7 @@ def find_git_root(start: Path, *, allow_legacy: bool = False) -> Path | None:
     for candidate in (current, *current.parents):
         if (candidate / ".git").exists():  # a directory, or a file in worktrees/submodules
             if not allow_legacy and legacy_layout(candidate):
-                Console().print(f"[red]error:[/red] {LEGACY_MESSAGE}")
+                Console(stderr=True).print(f"[red]error:[/red] {escape(LEGACY_MESSAGE)}")
                 raise typer.Exit(1)
             return candidate
     return None

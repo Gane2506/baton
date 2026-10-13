@@ -92,7 +92,7 @@ class ToolRunner:
         output = redact(result.output)
         if len(output) > MAX_OUTPUT_CHARS:
             output = output[:MAX_OUTPUT_CHARS]
-        return CommandResult(result.exit_code, output)
+        return CommandResult(result.exit_code, output, result.timed_out)
 
     # ---- the diff ---------------------------------------------------------------------------
 

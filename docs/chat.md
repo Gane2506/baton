@@ -105,10 +105,13 @@ fixed brief, so you can try the flow without any model.
 
 ## Workspace profile
 
-`--profile NAME` is stored with the chat. When a run starts, it is passed to `start_run` if
-this jev can apply workspace profiles to runs; until then `/plan` and `/run` refuse with a
-clear message rather than run with different access than you asked for. `/queue` stores the
-profile on the queue item, and the scheduler applies the same rule when it picks the item.
+`--profile NAME` is stored with the chat (`--profile none`: no profile). `/plan` and `/run`
+start their runs with it, as `jev run --profile NAME` would: the run gets that profile's
+servers (SSH at the profile's access level), browser, learning and quality
+([servers.md](servers.md#workspace-profiles)). Without one, launched runs use the repo
+default (`jev profile use`). `/queue` stores the profile on the queue item and the scheduler
+starts the run with it. An unknown profile is refused (the run is not started, the item is
+marked `failed`) instead of running with other access. The chat itself gets no server tools.
 
 ## Saved chats and cost
 

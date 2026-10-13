@@ -10,7 +10,8 @@ GET) with a one-time message.
 from __future__ import annotations
 
 import threading
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -317,16 +318,25 @@ class Dashboard:
 
             return await self.act(request, to, cancel)
 
-        await checked_form(request)
+        form = await checked_form(request)
         kind: RunAction = "approve" if action == "approve" else "resume"
+        force = form.get("force") == "1"
 
         def check() -> str | None:
             with views.open_repo(self.settings.root) as repo:
                 run = repo.store.get_run(run_id)
-            if kind == "approve" and run.state is not RunState.AWAITING_APPROVAL:
-                return f"run {run_id} is {run.state}; only a run awaiting approval can be approved"
-            if kind == "resume" and not views.can_resume(run):
-                return f"run {run_id} is {run.state}; it cannot be resumed"
+                if kind == "approve" and run.state is not RunState.AWAITING_APPROVAL:
+                    return (
+                        f"run {run_id} is {run.state}; only a run awaiting approval can be approved"
+                    )
+                if kind == "resume" and not views.can_resume(run):
+                    return f"run {run_id} is {run.state}; it cannot be resumed"
+                risk = "" if kind != "resume" or force else views.resume_risk(repo, run)
+            if risk:
+                return (
+                    f"not resumed: another jev process may be running this run ({risk}); "
+                    "use Force resume if it is not"
+                )
             return None
 
         try:
@@ -514,6 +524,9 @@ def _learning_forget(repo: views.Repo, form: FormData) -> str:
     return f"retired {lesson.id} from {lesson.profile}"
 
 
+JOB_SHUTDOWN_TIMEOUT_S = 30.0  # per job, for blocking steps that ignore cancellation
+
+
 def create_app(
     settings: DashboardSettings,
     *,
@@ -552,10 +565,18 @@ def create_app(
             request, "error.html", exc.status_code, title=str(exc.status_code), message=exc.detail
         )
 
+    @asynccontextmanager
+    async def lifespan(app: Starlette) -> AsyncIterator[None]:
+        yield
+        # The server is stopping (Ctrl-C, systemd): stop the jobs it started, so their agent
+        # processes do not keep running and spending without anyone watching.
+        await run_in_threadpool(dash.launcher.shutdown, JOB_SHUTDOWN_TIMEOUT_S)
+
     app = Starlette(
         routes=routes,
         middleware=[Middleware(SecurityMiddleware, settings=settings)],
         exception_handlers={HTTPException: http_error},
+        lifespan=lifespan,
     )
     app.state.dashboard = dash
     return app

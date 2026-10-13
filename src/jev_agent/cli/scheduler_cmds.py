@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Annotated, Any
+from typing import Annotated
 
 import typer
 from rich.console import Console
@@ -12,11 +12,16 @@ from rich.markup import escape
 
 from jev_agent.cli.repo import RepoOption
 from jev_agent.cli.run_cmds import print_warnings, start_run
-from jev_agent.cli.wiring import NO_WORKERS_MESSAGE, CliContext, cli_context, fail
+from jev_agent.cli.wiring import (
+    NO_WORKERS_MESSAGE,
+    CliContext,
+    cli_context,
+    fail,
+    repo_context,
+)
 from jev_agent.core.queue import queue_counts
 from jev_agent.core.scheduler import (
     Scheduler,
-    SchedulerLock,
     SchedulerLocked,
     SchedulerOptions,
     scheduler_lock,
@@ -33,28 +38,19 @@ scheduler_app = typer.Typer(
 )
 
 
-def apply_profile(item: QueueItem) -> dict[str, Any]:
-    """Extra keyword arguments for `start_run` that apply the item's workspace profile
-    (docs/servers.md). Items without one use the repo default, like `jev run`; an unknown
-    profile fails the item (ProfileError), never runs it with other access."""
-    return {} if item.profile is None else {"profile": item.profile}
-
-
 async def start_item(ctx: CliContext, item: QueueItem) -> RunRecord:
-    """Start the run for a queue item: the same code path as `jev run`."""
+    """Start the run for a queue item: the same code path as `jev run`. An item without a
+    workspace profile uses the repo default (docs/servers.md); an unknown profile fails the
+    item (ProfileError), never runs it with other access."""
     return await start_run(
         ctx,
         item.idea,
         plan_only=item.plan_only,
         learning=item.learning_profile,
         no_learning=item.no_learning,
-        **({"quality": item.quality} if item.quality else {}),
-        **apply_profile(item),
+        quality=item.quality,
+        profile=item.profile,
     )
-
-
-def lock_for(ctx: CliContext) -> SchedulerLock:
-    return scheduler_lock(ctx.root)
 
 
 @scheduler_app.command("start")
@@ -88,7 +84,7 @@ def start(
     with cli_context(repo) as ctx:
         if not ctx.has_workers:
             raise fail(NO_WORKERS_MESSAGE)
-        lock = lock_for(ctx)
+        lock = scheduler_lock(ctx.root)
         try:
             lock.acquire()
         except SchedulerLocked as exc:
@@ -124,8 +120,8 @@ def start(
 @scheduler_app.command("status")
 def status(repo: RepoOption = Path(".")) -> None:
     """Show whether a scheduler is running, what it works on, and queue counts."""
-    with cli_context(repo) as ctx:
-        holder = lock_for(ctx).read()
+    with repo_context(repo, create=False) as ctx:
+        holder = scheduler_lock(ctx.root).read()
         if holder is None:
             console.print("scheduler: not running")
         else:

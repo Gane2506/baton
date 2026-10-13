@@ -373,7 +373,7 @@ def test_migration_7_adds_shipped_prs_and_run_kpis(tmp_path: Path) -> None:
     with sqlite3.connect(db_path) as conn:
         conn.executescript("".join(MIGRATIONS[:6]) + "\nPRAGMA user_version = 6;")
     with Store.open(db_path) as store:
-        assert _user_version(db_path) == 7
+        assert _user_version(db_path) == SCHEMA_VERSION
         run = store.create_run(Idea(text="x", repo_path=tmp_path))
         pr = store.add_shipped_pr(
             run.id,
@@ -422,3 +422,122 @@ def test_migration_7_adds_shipped_prs_and_run_kpis(tmp_path: Path) -> None:
             store.connection.execute(
                 "UPDATE shipped_prs SET state = 'weird' WHERE id = ?", (pr.id,)
             )
+
+
+def test_migration_8_stores_plan_only_and_keeps_old_runs(tmp_path: Path) -> None:
+    from jev_agent.core.migrations import MIGRATIONS
+    from jev_agent.core.models import Idea
+
+    db_path = tmp_path / "state.db"
+    with sqlite3.connect(db_path) as conn:
+        conn.executescript("".join(MIGRATIONS[:7]) + "\nPRAGMA user_version = 7;")
+        conn.execute(
+            "INSERT INTO runs (id, idea_json, state, created_at, updated_at)"
+            " VALUES ('old', ?, 'PLANNING', ?, ?)",
+            (
+                Idea(text="x", repo_path=tmp_path).model_dump_json(),
+                *["2026-10-01T00:00:00+00:00"] * 2,
+            ),
+        )
+    with Store.open(db_path) as store:
+        assert _user_version(db_path) == SCHEMA_VERSION
+        assert store.get_run("old").plan_only is False
+        new = store.create_run(Idea(text="y", repo_path=tmp_path), plan_only=True)
+        assert store.get_run(new.id).plan_only is True
+
+
+def test_migration_9_keeps_lessons_and_never_reuses_their_ids(tmp_path: Path) -> None:
+    from jev_agent.core.learning import Learning
+    from jev_agent.core.migrations import MIGRATIONS
+    from jev_agent.core.models import Idea
+
+    db_path = tmp_path / "state.db"
+    stamp = "2026-10-01T00:00:00+00:00"
+    with sqlite3.connect(db_path) as conn:
+        conn.executescript("".join(MIGRATIONS[:8]) + "\nPRAGMA user_version = 8;")
+        conn.execute("INSERT INTO learning_profiles VALUES ('p', 1, ?)", (stamp,))
+        for number in (1, 2, 3):
+            conn.execute(
+                "INSERT INTO lessons (id, profile, text, roles_json, tags_json, created_at,"
+                " updated_at, uses, score) VALUES (?, 'p', ?, '[\"coder\"]', '[]', ?, ?, 1, 1)",
+                (number, f"lesson {number}", stamp, stamp),
+            )
+        conn.execute(
+            "INSERT INTO runs (id, idea_json, state, created_at, updated_at, learning_profile)"
+            " VALUES ('old', ?, 'DONE', ?, ?, 'p')",
+            (Idea(text="x", repo_path=tmp_path).model_dump_json(), stamp, stamp),
+        )
+        conn.execute(
+            "INSERT INTO attempts (run_id, attempt_no, role, worker, started_at, lesson_ids)"
+            " VALUES ('old', 1, 'planner', 'fake', ?, '[\"L3\", \"L5\", \"S9\"]')",
+            (stamp,),
+        )
+        # L3 to L5 were deleted before the upgrade; only an old attempt still names L5.
+        conn.execute("DELETE FROM lessons WHERE id = 3")
+    with Store.open(db_path) as store:
+        assert _user_version(db_path) == SCHEMA_VERSION
+        learning = Learning.for_store(store)
+        try:
+            kept = learning.lessons("p")
+            assert [(x.id, x.text, x.uses, x.score) for x in kept] == [
+                ("L1", "lesson 1", 1, 1.0),
+                ("L2", "lesson 2", 1, 1.0),
+            ]
+            db = learning.db_for("p")
+            # L3 (deleted) and L5 (named by an old attempt) are never handed out again.
+            added = db.add_lesson("p", "new", ["coder"], [])
+            assert added.id == "L6"
+            learning.flush("p")
+            assert db.add_lesson("p", "newer", ["coder"], []).id == "L7"
+        finally:
+            learning.close()
+
+
+def test_guarded_state_write_keeps_a_cancellation(tmp_path: Path) -> None:
+    from jev_agent.core.models import Idea, RunState
+
+    with Store.open(tmp_path / "state.db") as store:
+        run = store.create_run(Idea(text="x", repo_path=tmp_path))
+        assert store.set_run_state(run.id, RunState.CANCELLED, "by user")
+        keep = {RunState.CANCELLED}
+        assert not store.set_run_state(run.id, RunState.FAILED, "late", unless=keep)
+        assert store.get_run(run.id).state is RunState.CANCELLED
+        assert store.get_run(run.id).reason == "by user"
+        with pytest.raises(NotFoundError):
+            store.set_run_state("nope", RunState.FAILED, unless=keep)
+
+
+def test_migration_10_backfills_learning_counts_from_old_outcomes(tmp_path: Path) -> None:
+    """Issue #42: runs learned before migration 10 get their counts parsed once, here."""
+    from jev_agent.core.migrations import MIGRATIONS
+    from jev_agent.core.models import Idea
+    from jev_agent.core.store import LearningCounts
+
+    db_path = tmp_path / "state.db"
+    stamp = "2026-10-01T00:00:00+00:00"
+    idea = Idea(text="x", repo_path=tmp_path).model_dump_json()
+    outcomes = {
+        "learned": "learned into my-profile_2: 3 added, 1 updated, 12 retired",
+        "zero": "learned into default: 0 added, 0 updated, 0 retired",
+        "skipped": "skipped: D7 found nothing worth learning",
+        "none": None,
+    }
+    with sqlite3.connect(db_path) as conn:
+        conn.executescript("".join(MIGRATIONS[:9]) + "\nPRAGMA user_version = 9;")
+        for run_id, outcome in outcomes.items():
+            conn.execute(
+                "INSERT INTO runs (id, idea_json, state, created_at, updated_at,"
+                " learning_outcome) VALUES (?, ?, 'DONE', ?, ?, ?)",
+                (run_id, idea, stamp, stamp, outcome),
+            )
+    with Store.open(db_path) as store:
+        assert _user_version(db_path) == SCHEMA_VERSION
+        counts = {run_id: store.get_run(run_id).learning_counts for run_id in outcomes}
+        assert counts == {
+            "learned": LearningCounts(added=3, updated=1, retired=12),
+            "zero": LearningCounts(added=0, updated=0, retired=0),
+            "skipped": None,
+            "none": None,
+        }
+        # The outcome text itself is kept for `jev status` and `jev log`.
+        assert store.get_run("learned").learning_outcome == outcomes["learned"]

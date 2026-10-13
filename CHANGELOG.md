@@ -10,6 +10,14 @@ All notable changes to this project are documented here. The format is based on
 ### Added
 
 - **Skill lookup in every role prompt** ([#67](https://github.com/Gane2506/baton/issues/67)). The built-in planner, validator, coder, reviewer, code reviewer, learner and chat prompts now tell the agent to look for relevant skills first, use the ones already installed, and never install a new skill without the maintainer's approval. See [docs/roles.md](docs/roles.md#skills-in-every-prompt).
+
+- **Contributor guidelines.** A detailed `CONTRIBUTING.md`, a pull request template and issue
+  forms for bugs and features. `SECURITY.md` explains private vulnerability reporting, and
+  `CODE_OF_CONDUCT.md` is the Contributor Covenant 2.1.
+  - `CONTRIBUTING.md` covers finding work, the CI check command, a pre-PR checklist, branch and
+    commit style, the docs that change with code, and review and merge.
+  - Its module map now lists every module (#55).
+
 - **Servers over SSH, virtual browser, workspace profiles**
   ([#3](https://github.com/Gane2506/baton/issues/3), first version: `basic` and `medium`).
   `[servers.<name>]` (host or `~/.ssh/config` alias, `access = "basic" | "medium"`, `workdir`,
@@ -55,6 +63,115 @@ All notable changes to this project are documented here. The format is based on
 
 ### Fixed
 
+- **Two processes can no longer drive the same run** ([#61](https://github.com/Gane2506/baton/issues/61)).
+  `jev run`, `approve`, `resume`, the scheduler and the dashboard hold a run lease in the state
+  DB while they drive a run; a second one fails with "run ... is in use by another jev process,
+  pid P on HOST". A lease whose process died (same host) or whose heartbeat is over 60 s old
+  (another host) is taken over. The dashboard shows Force resume while another process holds
+  the lease. State DB schema version 11.
+- **CLI errors** (#25). They go to stderr with their text verbatim. A state DB from a newer jev
+  gives a one-line error, not a traceback.
+- **Read-only commands no longer build the pipeline** (#26). These commands build no workers,
+  fetch no model list and create no `.jev/`: `status`, `log`, `board`, `queue list`,
+  `learning list/show`, `quality show`, `scheduler status`, `chat --list`, `kpi` and
+  `ship sync`.
+- **Dashboard jobs show the real error** (#51), and they include run-start warnings.
+- **Concurrent state DB upgrades** (#23). Two processes that open an old state DB or shared
+  learning DB at the same time no longer crash. Migrations re-check the version under the write
+  lock, and the switch to WAL mode waits for the lock.
+- **`jev ship` recovers a lost PR response** (#41). If GitHub opened the PR but `gh pr create`
+  failed or timed out, the PR is recorded instead of being refused or opened twice. A timeout is
+  reported as an unknown outcome.
+- **KPIs no longer parse text** (#42). Lessons added are read from counts stored on the run
+  (migration 10), and the PR state is typed.
+- **Config typos are errors** (#30). These used to be ignored silently:
+  - unknown `[dispatcher.jev.instructions]` keys;
+  - effort levels that none of a role's workers accept;
+  - `[dispatcher] fallback` values other than `"rules"`. The key is deprecated.
+- **Test isolation** (#53). The test suite no longer picks up the developer's jev or git config,
+  or their API keys. Narrow-terminal output has its own tests.
+- **Jev call timeout** (#36). `[dispatcher.jev] timeout_s` now bounds the whole call, retry and
+  backoff included. A connect error is retried once, sharing the single retry with 429/5xx.
+
+- **Git calls cannot hang a run** (#24). Worktree and `jev ship` git calls have timeouts (1
+  minute; 10 minutes for commits, merges, checkouts and pushes) and run off the event loop; a
+  failed commit (for example a hook that hangs) stops the run resumably, so `jev resume`
+  continues once it is fixed. `jev ship` never waits on a credential prompt. A half-created or
+  stray worktree directory is rebuilt instead of reused. New `[workspace] run_hooks` (default
+  true) can skip the repo's git hooks on jev's commits and merges.
+- **`jev init --migrate` no longer stops half-way** (#29): `state.db` is updated right after
+  `.jao/` moves, refs it cannot rename are reported, and a rerun completes what is left.
+- **`jev run` / `approve` / `resume` exit 3 when the run stops short of DONE** (#28):
+  NEEDS_HUMAN, FAILED, BUDGET_EXCEEDED or CANCELLED (0 for DONE or awaiting approval, 1 for
+  errors), so `jev approve RUN && jev ship RUN` no longer ships a failed run.
+- **Workspace-profile docs are current** (#31): docs/queue.md and docs/chat.md no longer say
+  profiles are refused; they are applied to scheduled and chat-launched runs. Leftover shims
+  removed.
+- **A killed scheduler no longer leaves its item `running` forever** (#38, #39): the run is
+  linked to its queue item when it is created, the next `jev scheduler start` recovers orphaned
+  items, and `jev queue remove` works when no scheduler is alive. Remove can no longer delete an
+  item being claimed, a removed item no longer crashes the scheduler, and the scheduler lock
+  uses `flock`, so two starters cannot both take over a stale lock.
+- **Learned lesson ids are never reused** (#40) after `jev learning flush`/`delete` (state DB
+  schema 9, shared learning DB version 2); end-of-run scoring only touches the run's own
+  profile and counts each task once, even after a crash and `jev resume`.
+- **CI builds and smoke-tests the wheel; the PyPI publish action is pinned** (#56).
+- **The servers MCP process survives bad input** (#47): non-finite numbers are refused, a
+  failing tool returns an error result, a request that cannot be handled gets a JSON-RPC error,
+  and the next request is served as usual. Tests now cover run failure, cleanup and
+  cancellation paths, migration rollback and server failure paths (#54).
+- **Cancellations stick; `--plan-only` survives `jev resume`** (#14, #22). Run state changes
+  are conditional in the store, so a `jev cancel` (or the dashboard's Cancel) made while a
+  worker runs is no longer overwritten when the worker then fails, and a cancel cannot replace a
+  run that just finished. `--plan-only` is stored on the run (state DB migration 8), so a
+  resumed plan-only run still stops at the approval gate.
+- **The dashboard does not offer a plain Resume for a run that may be running** (#15): an
+  attempt open for less than its worker's timeout plus 5 minutes, or the scheduler's current
+  item. "Force resume" asks for a confirmation that names the risk of a second pipeline.
+- **A task is never DONE after its worker or its tests failed** (#21), whatever the dispatcher
+  answers at D5; the override to retry is noted on the task.
+- **Workers that cannot run are not offered** (#19): a CLI worker whose command is not on
+  `PATH`, the api worker without its key, or without a model it can run for the role (it never
+  runs the coder). Each gives one warning at run start; `jev doctor` uses the same rule.
+- **`jev init` writes every setting commented out** (#20), so a new `jev.toml` no longer
+  overrides your user config (for example a lower spend cap) or trips the trust gate.
+- **Workers are paired only with models they can run** (#33): `vendor/name` slugs run on the
+  api worker, other names on Claude Code / Codex; a mismatched answer gets the worker's first
+  runnable model. A missing or non-executable worker CLI is a worker `error`, and D5 reassigns
+  at once on `error`; dropped API connections are a retryable `failure` (#34).
+- **A repository's `jev.toml` can no longer redirect credentials or widen permissions**
+  (#16, security). Keys that choose where API keys go, which credential variables are read,
+  worker commands and permissions, tools, servers, browser and profiles may be changed by a
+  repo file only when your user config trusts it: `[trust] repos = ["~/code/app"]` (or `"*"`).
+  Otherwise jev stops with an error naming the keys. Before, a cloned repo's `jev.toml` could
+  make even `jev status` send e.g. `GITHUB_TOKEN` to another host. Error messages now print
+  config tables such as `[trust]` verbatim.
+- **Redaction covers common credential formats** (#27, security): GitHub, Slack, AWS and Google
+  tokens, private-key blocks, JWTs, `Authorization: token|Basic` values and `user:password@`
+  in URLs, from one shared list that the quality gate's secret scan and the config check use
+  too. Summaries are redacted before they are shortened, so no token prefix is left.
+- **Quality gate: tool errors block when the tool is required** (#18, #17, security). A check
+  whose tool crashes, times out, prints unparseable output or lists scan errors (bandit,
+  Semgrep), and a check that raises, now reports a new `error` status instead of `skipped` or a
+  fake minor finding; a required check with that status blocks. gitleaks exiting 1 with output
+  that cannot be parsed now fails with a critical finding instead of passing.
+- **Server tools: credential reads, writes, `.git` and audit hardened** (#44, #45, #46, #48,
+  security). Recursive `grep` only inside workdir/allowed_paths and never into credential
+  files (`-R` refused); `docker inspect`, `systemctl show` and `ps e` are no longer allowed;
+  recursive `cp` only from inside allowed_paths; `git show REV:path` is checked and
+  `git diff --no-index` refused. File writes use a fresh `mktemp` file in the target's folder,
+  so a planted symlink can no longer redirect them. Medium access never writes under `.git`,
+  and every `git` runs with hooks and fsmonitor off; the docs now say plainly that medium
+  access means code execution as the server account. The audit log writes a `started` line
+  before ssh runs and a `finished` line after; audit write failures become tool errors.
+- **Processes are cleaned up on cancellation, timeout and shutdown** (#11, #12, #13, #49).
+  Ctrl-C (or any cancellation) now kills the Claude Code / Codex process group instead of
+  leaving it running. Test commands (task, integration and quality tools) run through the
+  same process-group runner, so `[budget] test_timeout_s` and `[quality] timeout_s` are
+  enforced even when the command starts children (`uv run pytest`, `npm test`); a timeout is
+  reported as such rather than as exit code -1. Stopping `jev dashboard` cancels the jobs it
+  started and waits for them. Server tool commands run under the server's `timeout`, so they
+  stop there too.
 - **Fix: Spend page labels** ([#6](https://github.com/Gane2506/baton/issues/6)). Long run
   labels in "Costliest runs" are cut with an ellipsis to fit, with the full label as a tooltip,
   and every value is drawn after its bar, so a $0.00 bar no longer puts its value over the label.

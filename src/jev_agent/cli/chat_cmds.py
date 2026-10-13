@@ -11,7 +11,7 @@ import asyncio
 import os
 import sys
 from pathlib import Path
-from typing import Annotated, Any
+from typing import Annotated
 
 import typer
 from rich.console import Console
@@ -20,10 +20,17 @@ from rich.markup import escape
 from rich.prompt import Prompt
 from rich.table import Table
 
-from jev_agent.cli.queue_cmds import short
 from jev_agent.cli.repo import RepoOption
 from jev_agent.cli.run_cmds import print_outcome, print_warnings, start_run
-from jev_agent.cli.wiring import FAKE_WORKERS_ENV, NO_WORKERS_MESSAGE, CliContext, cli_context, fail
+from jev_agent.cli.text import short
+from jev_agent.cli.wiring import (
+    FAKE_WORKERS_ENV,
+    NO_WORKERS_MESSAGE,
+    CliContext,
+    cli_context,
+    fail,
+    repo_context,
+)
 from jev_agent.config.schema import JevConfig
 from jev_agent.config.servers_schema import NO_PROFILE
 from jev_agent.core.chat import (
@@ -55,6 +62,7 @@ from jev_agent.core.chat import (
     render_system_prompt,
 )
 from jev_agent.core.learning import Learning, LearningError, Lesson, learning_status
+from jev_agent.core.lease import RunInUseError
 from jev_agent.core.pipeline import PipelineError
 from jev_agent.core.store import NotFoundError
 from jev_agent.quality.levels import LEVELS, parse_level
@@ -144,15 +152,6 @@ def make_backend(ctx: CliContext, backend: BackendName, model: str | None) -> Ch
     return ClaudeChatBackend(
         ctx.root, claude.command, model, bare=claude.bare, timeout_s=claude.timeout_s
     )
-
-
-# ---- workspace profile -------------------------------------------------------------------
-
-
-def profile_kwargs(profile: str | None) -> dict[str, Any]:
-    """Extra `start_run` arguments for the chat's workspace profile (docs/servers.md); without
-    one, launched runs use the repo default like `jev run`."""
-    return {} if profile is None else {"profile": profile}
 
 
 # ---- learning ----------------------------------------------------------------------------
@@ -267,9 +266,6 @@ class ChatLoop:
             console.print(f"[red]error:[/red] {escape(NO_WORKERS_MESSAGE)}")
             return
         meta = self.session.meta
-        extra = profile_kwargs(meta.profile)
-        if meta.quality:  # only when set, so a start_run without `quality` keeps working
-            extra["quality"] = meta.quality
         brief = self._current_brief()
         if brief is None:
             return
@@ -283,10 +279,12 @@ class ChatLoop:
                     brief,
                     plan_only=kind == "plan",
                     **meta.learning.run_flags(),
-                    **extra,
+                    quality=meta.quality,
+                    # Without a profile, launched runs use the repo default like `jev run`.
+                    profile=meta.profile,
                 )
             )
-        except (LearningError, PipelineError, ValueError) as exc:
+        except (LearningError, PipelineError, RunInUseError, ValueError) as exc:
             console.print(f"[red]error:[/red] {escape(str(exc))}")
             return
         except KeyboardInterrupt:
@@ -459,8 +457,8 @@ class ChatLoop:
 # ---- the command -------------------------------------------------------------------------
 
 
-def print_chat_list(ctx: CliContext) -> None:
-    chats = list_chats(ctx.root)
+def print_chat_list(root: Path) -> None:
+    chats = list_chats(root)
     if not chats:
         console.print("No saved chats. Start one with `jev chat`.")
         return
@@ -574,10 +572,11 @@ def chat(
     repo: RepoOption = Path("."),
 ) -> None:
     """Talk an idea through with a model, then /plan, /run or /queue the brief."""
+    if list_:  # read-only: no workers, no model list, no new .jev/ (#26)
+        with repo_context(repo, create=False) as listing:
+            print_chat_list(listing.root)
+        return
     with cli_context(repo) as ctx:
-        if list_:
-            print_chat_list(ctx)
-            return
         if learning is not None and no_learning:
             raise fail("--learning and --no-learning cannot be used together")
         if profile is not None and not profile.strip():

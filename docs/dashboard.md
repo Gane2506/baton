@@ -35,9 +35,10 @@ jev dashboard --repo ../other-repo  # any path inside the target git repo
 | `--open / --no-open` | `--open` | Open the URL in a browser after start. |
 | `--token TOKEN` | generated off loopback | Access token, at least 16 characters. Also read from `JEV_DASHBOARD_TOKEN`. |
 
-Ctrl-C stops the server. A run being approved or resumed from the page at that moment is
-interrupted where it is, like Ctrl-C on `jev approve`; it keeps its saved state and continues
-with `jev resume <run>` (or the Resume button).
+Ctrl-C stops the server. Before it exits, it cancels every approve or resume job it started
+and waits for it (up to 30 s per job): the job's agent process is stopped, like Ctrl-C on
+`jev approve`, and the run keeps its saved state; continue it with `jev resume <run>` (or the
+Resume button). A Ship job cannot be cancelled mid-step; shutdown waits for it.
 
 ## Pages
 
@@ -54,6 +55,14 @@ with `jev resume <run>` (or the Resume button).
   Buttons:
   - **Approve and run** for a run awaiting approval (`jev approve`).
   - **Resume** for an interrupted run or a NEEDS_HUMAN run with a resume point (`jev resume`).
+    When another jev process may still be running the run, the page shows **Force resume**
+    instead, with the reason, and a plain resume is refused: resuming would start a second
+    pipeline on the same worktrees and double the spend. The signs are an attempt without a
+    result that started less than its worker's `timeout_s` plus 5 minutes ago (an older one is
+    from a process that died), or a live scheduler lock whose current queue item started this
+    run, or a live run lease held by another process (see below). Force resume asks for
+    confirmation; use it only when that process is gone. It cannot override a live lease: the
+    job then fails with "run ... is in use".
   - **Cancel** for any unfinished run (`jev cancel`; branches and worktrees are kept).
   - **Ship as PR** for a DONE, not yet shipped run when `[ship] enabled = true` (`jev ship`,
     [ship.md](ship.md)): a confirmation page shows the remote, branch, base, title and the
@@ -63,8 +72,10 @@ with `jev resume <run>` (or the Resume button).
   Approve and resume run in a background thread through the same code path as the CLI
   (config, workers and pipeline are built the same way), so the web server stays responsive;
   the page shows the job's status and the run's progress live. Only one job per run id runs at
-  a time; a second click is refused. (This lock is per dashboard process: do not also run
-  `jev resume` for the same run from a terminal at the same time.)
+  a time; a second click is refused. Across processes, the run lease in the state DB
+  (issue #61) keeps a terminal `jev resume`, `jev approve` or the scheduler from driving the
+  same run at the same time: whichever starts second fails with "run ... is in use by another
+  jev process".
 - **Queue** (`/queue`): items in scheduler order with their effective status and flags; add an
   idea (priority, plan only, learning profile or none, quality level, workspace profile name),
   move an item to the top, up or down, remove it; scheduler status (lock holder, current item,

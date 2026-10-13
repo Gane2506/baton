@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import fcntl
 import json
 import os
 import socket
@@ -24,8 +25,9 @@ from pathlib import Path
 from typing import Any
 
 from jev_agent.config.defaults import STATE_DIRNAME
+from jev_agent.core.lease import pid_alive as _pid_alive
 from jev_agent.core.queue import status_for_run
-from jev_agent.core.store import QueueItem, QueueStatus, RunRecord, Store
+from jev_agent.core.store import NotFoundError, QueueItem, QueueStatus, RunRecord, Store
 
 __all__ = [
     "LOCK_FILENAME",
@@ -56,46 +58,52 @@ class LockInfo:
     current_item: int | None = None
 
 
-def _pid_alive(pid: int) -> bool:
-    if pid <= 0:
-        return False
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:  # exists, owned by someone else
-        return True
-    return True
-
-
 class SchedulerLock:
     """`.jev/scheduler.lock`: JSON with the holder's pid, host, start time and current item.
 
-    A lock whose pid is not alive on this host (or that cannot be parsed) is stale and is
-    taken over. A lock from another host is respected: jev cannot check that pid.
+    The holder keeps an exclusive `fcntl.flock` on the file for as long as it runs, so the
+    kernel releases it when the process dies, even on SIGKILL, and two starters can never both
+    take it. Such a lock carries `"flock": true`; without a holder it is stale, whatever its
+    pid. A lock without the marker (written by an older jev) keeps the old rules: it is stale
+    when its pid is not alive on this host or it cannot be parsed, and a lock from another host
+    is respected (jev cannot check that pid).
     """
 
     def __init__(self, path: Path) -> None:
         self.path = path
         self._info: LockInfo | None = None
+        self._fd: int | None = None
 
     def read(self) -> LockInfo | None:
         """The current holder, or None when there is no lock or it is stale."""
         try:
-            data = json.loads(self.path.read_text(encoding="utf-8"))
-            info = LockInfo(
-                pid=int(data["pid"]),
-                host=str(data.get("host", "")),
-                started_at=str(data.get("started_at", "")),
-                current_item=data.get("current_item"),
-            )
+            fd = os.open(self.path, os.O_RDONLY)
         except FileNotFoundError:
             return None
-        except (OSError, ValueError, KeyError, TypeError):
+        except OSError:
             return None  # unreadable: treat as stale
-        if info.host == socket.gethostname() and not _pid_alive(info.pid):
+        try:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_SH | fcntl.LOCK_NB)
+            except BlockingIOError:
+                return self._held_info(fd)
+            fcntl.flock(fd, fcntl.LOCK_UN)
+            parsed = _parse(_read_fd(fd))
+        finally:
+            os.close(fd)
+        if parsed is None:
             return None
-        return info
+        info, flocked = parsed
+        return None if flocked or not _legacy_live(info) else info
+
+    def _held_info(self, fd: int) -> LockInfo:
+        """The holder's info; the holder may be rewriting the file, so retry briefly."""
+        for _ in range(20):
+            parsed = _parse(_read_fd(fd))
+            if parsed is not None:
+                return parsed[0]
+            time.sleep(0.01)
+        return LockInfo(pid=0, host="?", started_at="?")
 
     def acquire(self) -> LockInfo:
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -104,22 +112,30 @@ class SchedulerLock:
             host=socket.gethostname(),
             started_at=datetime.now(UTC).isoformat(timespec="seconds"),
         )
-        for _ in range(2):
+        for _ in range(5):
+            fd = os.open(self.path, os.O_RDWR | os.O_CREAT, 0o644)
             try:
-                fd = os.open(self.path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
-            except FileExistsError:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                os.close(fd)
                 holder = self.read()
-                if holder is not None:
-                    raise SchedulerLocked(
-                        f"another scheduler is running (pid {holder.pid} on {holder.host}, "
-                        f"since {holder.started_at}); lock file: {self.path}"
-                    ) from None
-                with contextlib.suppress(FileNotFoundError):
-                    self.path.unlink()  # stale: take it over
+                if holder is None:
+                    continue  # released meanwhile
+                raise _locked(holder, self.path) from None
+            try:
+                same = os.fstat(fd).st_ino == os.stat(self.path).st_ino
+            except FileNotFoundError:
+                same = False
+            if not same:  # the holder released (and removed) it after we opened it
+                os.close(fd)
                 continue
-            with os.fdopen(fd, "w", encoding="utf-8") as fh:
-                json.dump(info.__dict__, fh)
+            parsed = _parse(_read_fd(fd))
+            if parsed is not None and not parsed[1] and _legacy_live(parsed[0]):
+                os.close(fd)  # an older jev's scheduler, which does not use flock
+                raise _locked(parsed[0], self.path)
+            self._fd = fd
             self._info = info
+            self._write()
             return info
         raise SchedulerLocked(f"could not take the scheduler lock {self.path}")
 
@@ -128,18 +144,54 @@ class SchedulerLock:
         if self._info is None:
             return
         self._info = LockInfo(self._info.pid, self._info.host, self._info.started_at, item)
-        tmp = self.path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(self._info.__dict__), encoding="utf-8")
-        tmp.replace(self.path)
+        self._write()
+
+    def _write(self) -> None:
+        # In place: replacing the file would leave the flock on the old inode.
+        assert self._fd is not None and self._info is not None
+        data = json.dumps({**self._info.__dict__, "flock": True}).encode("utf-8")
+        os.pwrite(self._fd, data, 0)
+        os.ftruncate(self._fd, len(data))
 
     def release(self) -> None:
-        if self._info is None:
+        if self._fd is None:
             return
-        holder = self.read()
-        if holder is not None and holder.pid == self._info.pid:
-            with contextlib.suppress(FileNotFoundError):
-                self.path.unlink()
+        with contextlib.suppress(FileNotFoundError):
+            self.path.unlink()  # still ours: we hold the flock on this inode
+        os.close(self._fd)
+        self._fd = None
         self._info = None
+
+
+def _read_fd(fd: int) -> bytes:
+    return os.pread(fd, 65536, 0)
+
+
+def _parse(data: bytes) -> tuple[LockInfo, bool] | None:
+    """(info, written by a flock holder) from the lock file's content; None if unparseable."""
+    try:
+        raw = json.loads(data.decode("utf-8"))
+        info = LockInfo(
+            pid=int(raw["pid"]),
+            host=str(raw.get("host", "")),
+            started_at=str(raw.get("started_at", "")),
+            current_item=raw.get("current_item"),
+        )
+        return info, raw.get("flock") is True
+    except (ValueError, KeyError, TypeError, AttributeError):
+        return None
+
+
+def _legacy_live(info: LockInfo) -> bool:
+    """A lock without a flock holder, by the old rules: live unless its pid is dead here."""
+    return info.host != socket.gethostname() or _pid_alive(info.pid)
+
+
+def _locked(holder: LockInfo, path: Path) -> SchedulerLocked:
+    return SchedulerLocked(
+        f"another scheduler is running (pid {holder.pid} on {holder.host}, "
+        f"since {holder.started_at}); lock file: {path}"
+    )
 
 
 def scheduler_lock(root: Path) -> SchedulerLock:
@@ -193,9 +245,13 @@ class Scheduler:
         self.now = now
 
     def run(self) -> SchedulerSummary:
-        """Loop until --once/--max-runs/the daily budget says stop, or Ctrl-C."""
+        """Loop until --once/--max-runs/the daily budget says stop, or Ctrl-C.
+
+        The caller holds the repo's scheduler lock, so `running` items left in the queue belong
+        to a scheduler that died; they are recovered first (`recover`)."""
         summary = SchedulerSummary()
         try:
+            self.recover()
             while True:
                 if self.options.max_runs is not None and summary.runs >= self.options.max_runs:
                     summary.stopped_because = f"reached --max-runs {self.options.max_runs}"
@@ -227,16 +283,58 @@ class Scheduler:
             summary.stopped_because = "interrupted"
         return summary
 
+    def recover(self) -> None:
+        """Settle the `running` items of a scheduler that died (killed, crashed, machine off).
+
+        An item with a run (linked when the run was created) takes its run's status; a run
+        that was still in progress is resumable, so the item becomes `waiting` with a note
+        saying `jev resume RUN`. An item without a run never started: it is queued again.
+        """
+        for item in self.store.list_queue(["running"]):
+            run = None
+            if item.run_id is not None:
+                with contextlib.suppress(NotFoundError):
+                    run = self.store.get_run(item.run_id)
+            if run is None:
+                status: QueueStatus = "queued"
+                note = "requeued: the scheduler stopped before its run was created"
+            else:
+                status = status_for_run(run.state)
+                note = f"run {run.state}" + (f": {run.reason}" if run.reason else "")
+                if status == "running":
+                    status = "waiting"
+                    note = f"the scheduler stopped; continue with `jev resume {run.id}`"
+            if self._set_status(item.id, status, run_id=None, note=note):
+                self.log(f"queue item {item.id}: recovered from a stopped scheduler: {note}")
+
+    def _set_status(
+        self, item_id: int, status: QueueStatus, *, run_id: str | None, note: str
+    ) -> bool:
+        """Record the item's outcome; an item removed meanwhile is logged, not an error."""
+        try:
+            self.store.set_queue_status(item_id, status, run_id=run_id, note=note)
+        except NotFoundError:
+            kept = f"; its run {run_id} is kept" if run_id is not None else ""
+            self.log(f"queue item {item_id} was removed from the queue{kept}")
+            return False
+        return True
+
+    def _linked_run(self, item: QueueItem) -> str | None:
+        """The run created for `item` (linked by `Store.link_new_run`), if any."""
+        try:
+            return self.store.get_queue_item(item.id).run_id
+        except NotFoundError:
+            return None
+
     def _run_item(self, item: QueueItem) -> tuple[str, str | None]:
         self.log(f"queue item {item.id}: starting run for {item.idea!r}")
         if self.lock is not None:
             self.lock.set_current(item.id)
-        started = self.now()
         try:
-            record = asyncio.run(self.start(item))
+            with self.store.link_new_run(item.id):
+                record = asyncio.run(self.start(item))
         except KeyboardInterrupt:
-            run = self._find_run(item, started)
-            run_id = None if run is None else run.id
+            run_id = self._linked_run(item)
             note = (
                 f"interrupted; continue with `jev resume {run_id}`"
                 if run_id is not None
@@ -244,32 +342,20 @@ class Scheduler:
             )
             # No run: put it back so the next scheduler start picks it up again.
             status: QueueStatus = "waiting" if run_id is not None else "queued"
-            self.store.set_queue_status(item.id, status, run_id=run_id, note=note)
-            self.log(f"queue item {item.id}: {note}")
+            if self._set_status(item.id, status, run_id=run_id, note=note):
+                self.log(f"queue item {item.id}: {note}")
             raise
         except Exception as exc:  # one bad item must not stop the queue
-            run = self._find_run(item, started)
+            run_id = self._linked_run(item)
             note = f"could not run: {type(exc).__name__}: {exc}"
-            self.store.set_queue_status(
-                item.id, "failed", run_id=None if run is None else run.id, note=note
-            )
-            self.log(f"queue item {item.id}: {note}")
-            return "failed", None if run is None else run.id
+            if self._set_status(item.id, "failed", run_id=run_id, note=note):
+                self.log(f"queue item {item.id}: {note}")
+            return "failed", run_id
         finally:
             if self.lock is not None:
                 self.lock.set_current(None)
         status = status_for_run(record.state)
         note = f"run {record.state}" + (f": {record.reason}" if record.reason else "")
-        self.store.set_queue_status(item.id, status, run_id=record.id, note=note)
-        self.log(f"queue item {item.id}: run {record.id} {record.state} -> {status}")
+        if self._set_status(item.id, status, run_id=record.id, note=note):
+            self.log(f"queue item {item.id}: run {record.id} {record.state} -> {status}")
         return status, record.id
-
-    def _find_run(self, item: QueueItem, since: datetime) -> RunRecord | None:
-        """The run started for `item` when `start` did not return it (interrupt or error):
-        the newest run for the same idea created since the item started."""
-        for run in self.store.list_runs():  # newest first
-            if run.created_at < since.replace(microsecond=0):
-                break
-            if run.idea.text == item.idea:
-                return run
-        return None

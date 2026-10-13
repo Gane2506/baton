@@ -952,7 +952,7 @@ def seed_learning(store: Store, clock: Clock, root: Path, start: datetime) -> No
             lesson = db.add_lesson(PROFILE, text, roles, tags)
             number = int(lesson.id[1:])
             for _ in range(uses):
-                db.record_use(number, score / uses if uses else 0.0)
+                db.record_use(PROFILE, number, score / uses if uses else 0.0)
         learning.create("python-style")
         style = learning.db_for("python-style")
         style.add_lesson(

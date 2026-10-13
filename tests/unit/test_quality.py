@@ -406,7 +406,7 @@ async def test_coverage(tmp_path: Path) -> None:
     )
     assert (await check.run(repo, runner)).status == "pass"
     runner, _ = _runner(repo, installed=("pytest",), outputs={cmd: ["no total here"]})
-    assert (await check.run(repo, runner)).status == "skipped"
+    assert (await check.run(repo, runner)).status == "error"
     plain = _repo(tmp_path / "plain", {"pyproject.toml": ""})
     runner, _ = _runner(plain, installed=("pytest",))
     assert "pytest-cov" in (await check.run(plain, runner)).detail
@@ -586,8 +586,10 @@ def test_policy_by_check_status() -> None:
     advisory = CheckResult(status="fail", detail="cov low", name="coverage", required=False)
     assert blocking_reasons("basic", [failed], []) == ["ruff failed: 2 problems"]
     assert blocking_reasons("medium", [advisory], []) == []
-    skipped = CheckResult(status="skipped", name="mypy", required=True)
+    skipped = CheckResult(status="skipped", name="mypy", required=True)  # not installed
     assert blocking_reasons("production", [skipped], []) == []
+    errored = CheckResult(status="error", detail="crashed", name="mypy", required=True)
+    assert blocking_reasons("production", [errored], []) == ["mypy could not run: crashed"]
 
 
 # ---- reports ---------------------------------------------------------------------------------
@@ -751,7 +753,8 @@ async def test_gate_runs_checks_safely(tmp_path: Path) -> None:
     repo = _repo(tmp_path, {"a.py": ""})
     runner, _ = _runner(repo, diff=_diff_for("a.py"), required=("scanner",))
     broken = await _run_check(_Broken(), "task", "basic", runner)
-    assert broken.status == "skipped" and "RuntimeError: bug in the check" in broken.detail
+    assert broken.status == "error" and "RuntimeError: bug in the check" in broken.detail
+    assert blocking_reasons("basic", [broken], [])  # a required check that errors blocks
     assert broken.name == "broken" and broken.required
     filtered = await _run_check(_WholeRepo(), "task", "basic", runner)
     assert filtered.status == "pass" and filtered.findings == []
@@ -761,3 +764,155 @@ async def test_gate_runs_checks_safely(tmp_path: Path) -> None:
     assert only_integration.detail == "runs on the result branch only"
     not_here = await _run_check(MypyCheck(), "task", "production", runner)
     assert not_here.detail.startswith("not applicable: needs a mypy config")
+
+
+# ---- tool errors: crashes, timeouts, unparseable output (#17, #18) -----------------------------
+
+_PY_REQS_DIFF = (
+    "diff --git a/requirements.txt b/requirements.txt\n--- a/requirements.txt\n"
+    "+++ b/requirements.txt\n@@ -0,0 +1 @@\n+other==1\n"
+)
+_SEMGREP_CMD = (
+    "semgrep scan --config .semgrep.yml --json --metrics=off --disable-version-check --quiet a.py"
+)
+_GITLEAKS_CMD = "gitleaks detect --no-git --no-banner --redact --verbose --exit-code 1 --source ."
+_PY = {"pyproject.toml": "[tool.mypy]\n", "a.py": ""}
+_IAC = {"Dockerfile": "FROM x"}
+
+# (check, repo files, tool, command, exit code, output, scope, diff)
+_BROKEN_TOOLS: list[tuple[Any, dict[str, str], str, str, int, str, str, str]] = [
+    (RuffCheck(), _PY, "ruff", "ruff check --output-format=concise a.py", 2,
+     "error: Failed to parse pyproject.toml", "task", _diff_for("a.py")),
+    (EslintCheck(), {"package.json": "{}", "eslint.config.js": "", "a.ts": ""}, "eslint",
+     "eslint --format unix a.ts", 2, "Oops! Something went wrong!", "task", _diff_for("a.ts")),
+    (PrettierCheck(), {"package.json": "{}", ".prettierrc": "{}", "a.ts": ""}, "prettier",
+     "prettier --check a.ts", 2, "[error] Invalid configuration", "task", _diff_for("a.ts")),
+    (SecretScanCheck(), {"a.py": ""}, "gitleaks", _GITLEAKS_CMD, 126, "permission denied",
+     "task", _diff_for("a.py")),
+    (BanditCheck(), _PY, "bandit", "bandit -q -f json a.py", 2, "Traceback: boom", "task",
+     _diff_for("a.py")),
+    (SemgrepCheck(), {"a.py": "", ".semgrep.yml": "rules: []"}, "semgrep", _SEMGREP_CMD, 2,
+     "Fatal error: invalid rules", "task", _diff_for("a.py")),
+    (PipAuditCheck(), _PY, "pip-audit", "pip-audit . -f json --progress-spinner off", 1,
+     "ERROR: connection refused", "integration", ""),
+    (NpmAuditCheck(), {"package-lock.json": "{}"}, "npm", "npm audit --omit=dev --json", 1,
+     "npm ERR! network", "integration", ""),
+    (CoverageCheck(), {"pyproject.toml": "dev = ['pytest-cov']"}, "pytest",
+     "pytest -q --cov --cov-report=term", 4, "error: unrecognized arguments: --cov",
+     "integration", ""),
+    (MypyCheck(), _PY, "mypy", "mypy --no-error-summary --no-pretty", 2,
+     "mypy: can't read file 'x'", "task", _diff_for("a.py")),
+    (LicenseCheck(), {"pyproject.toml": "", "requirements.txt": ""}, "pip-licenses",
+     "pip-licenses --format=json --packages other", 1, "ModuleNotFoundError", "task",
+     _PY_REQS_DIFF),
+    (TrivyCheck(), _IAC, "trivy", "trivy fs --scanners misconfig,secret --format json --quiet .",
+     1, "FATAL db download failed", "task", _diff_for("Dockerfile")),
+    (HadolintCheck(), _IAC, "hadolint", "hadolint -f json Dockerfile", 1, "parse error",
+     "task", _diff_for("Dockerfile")),
+    (CheckovCheck(), _IAC, "checkov", "checkov -d . --quiet --compact -o json", 1,
+     "Traceback: crash", "task", _diff_for("Dockerfile")),
+]  # fmt: skip
+
+
+@pytest.mark.parametrize(
+    ("check", "files", "tool", "cmd", "code", "output", "scope", "diff"),
+    _BROKEN_TOOLS,
+    ids=[case[0].name for case in _BROKEN_TOOLS],
+)
+async def test_a_broken_tool_is_an_error_not_a_finding_or_a_skip(
+    tmp_path: Path,
+    check: Any,
+    files: dict[str, str],
+    tool: str,
+    cmd: str,
+    code: int,
+    output: str,
+    scope: str,
+    diff: str,
+) -> None:
+    repo = _repo(tmp_path, files)
+    runner, commands = _runner(
+        repo,
+        installed=(tool,),
+        exit_codes={cmd: [code]},
+        outputs={cmd: [output]},
+        scope=scope,
+        diff=diff,
+    )
+    result = await check.run(repo, runner)
+    assert cmd in [called for called, _ in commands.calls]
+    assert result.status == "error" and result.findings == []
+    assert f"exit {code}" in result.detail and output in result.detail
+
+
+class _TimingOut(FakeCommandRunner):
+    """A command runner whose commands all time out."""
+
+    async def run(self, command: str, cwd: Path, log_path: Path, timeout_s: int) -> Any:
+        result = await super().run(command, cwd, log_path, timeout_s)
+        return type(result)(-1, result.output, timed_out=True)
+
+
+@pytest.mark.parametrize("case", [0, 4, 9], ids=["ruff", "bandit", "mypy"])
+async def test_a_timed_out_tool_is_an_error(tmp_path: Path, case: int) -> None:
+    check, files, tool, cmd, _, _, scope, diff = _BROKEN_TOOLS[case]
+    repo = _repo(tmp_path, files)
+    partial = "a.py:1: error: half a line [misc]" if tool == "mypy" else "a.py:1:1: E1 x"
+    runner, _ = _runner(repo, installed=(tool,), scope=scope, diff=diff)
+    runner.commands = _TimingOut(outputs={cmd: [partial]})
+    result = await check.run(repo, runner)
+    assert result.status == "error" and result.findings == []
+    assert "timed out" in result.detail
+
+
+async def test_gitleaks_exit_1_without_parsed_leaks_fails(tmp_path: Path) -> None:
+    repo = _repo(tmp_path, {"src/app.py": ""})
+    runner, _ = _runner(
+        repo,
+        installed=("gitleaks",),
+        diff=DIFF,
+        exit_codes={_GITLEAKS_CMD: [1]},
+        outputs={_GITLEAKS_CMD: ["WRN leaks found: 3"]},
+    )
+    result = await SecretScanCheck().run(repo, runner)
+    assert result.status == "fail"
+    (finding,) = result.findings
+    assert finding.severity == "critical" and finding.category == "security"
+    assert "could not" in finding.title
+    assert blocking_reasons("basic", [result], result.findings)  # blocks at every level
+    runner, _ = _runner(repo, installed=("gitleaks",), diff=DIFF)  # exit 0: no leaks
+    assert (await SecretScanCheck().run(repo, runner)).status == "pass"
+
+
+@pytest.mark.parametrize("check_name", ["bandit", "semgrep"])
+async def test_scanner_errors_in_json_are_an_error(tmp_path: Path, check_name: str) -> None:
+    if check_name == "bandit":
+        check: Any = BanditCheck()
+        repo, cmd = _repo(tmp_path, _PY), "bandit -q -f json a.py"
+        report: Any = {"errors": [{"filename": "a.py", "reason": "syntax error"}], "results": []}
+    else:
+        check = SemgrepCheck()
+        repo, cmd = _repo(tmp_path, {"a.py": "", ".semgrep.yml": ""}), _SEMGREP_CMD
+        report = {"errors": [{"level": "error", "message": "rule parse error"}], "results": []}
+    runner, _ = _runner(
+        repo, installed=(check_name,), diff=_diff_for("a.py"), outputs={cmd: [json.dumps(report)]}
+    )
+    result = await check.run(repo, runner)
+    assert result.status == "error" and "1 error(s)" in result.detail
+
+
+def test_policy_blocks_on_a_required_error_only() -> None:
+    required = CheckResult(status="error", detail="mypy timed out", name="mypy", required=True)
+    advisory = CheckResult(status="error", detail="trivy crashed", name="trivy", required=False)
+    assert blocking_reasons("production", [required], []) == ["mypy could not run: mypy timed out"]
+    assert blocking_reasons("scalable", [advisory], []) == []
+
+
+def test_error_status_in_reports_and_stored_json() -> None:
+    errored = CheckResult(status="error", detail="bandit crashed", name="bandit", required=True)
+    gate = _gate(blocked=True).model_copy(update={"checks": [errored]})
+    assert "| bandit | **error** | bandit crashed |" in render_gate(gate)
+    assert "checks 1 error" in gate.summary_line()
+    assert GateResult.model_validate_json(gate.model_dump_json()) == gate
+    old = _gate().model_dump_json()  # a report stored before the error status existed
+    assert GateResult.model_validate_json(old).checks[1].status == "skipped"

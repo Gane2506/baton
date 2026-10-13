@@ -11,27 +11,26 @@ from jev_agent.quality.base import (
     PY_SUFFIXES,
     BaseCheck,
     dependency_files_changed,
-    failed_without_findings,
     from_level,
     int_or_none,
     is_python,
     load_json,
     mentions,
+    tool_error,
 )
 from jev_agent.quality.checks_basic import pytest_command
 from jev_agent.quality.models import CheckResult, Finding
 from jev_agent.quality.tools import ToolRunner, added_lines, normalize, quote, tail
 from jev_agent.roles.schemas import Severity
-from jev_agent.runlog.redact import SECRET_PATTERNS, secret_env_values
+from jev_agent.runlog.redact import CREDENTIAL_PATTERNS, secret_env_values
 
 # ---- medium: secrets, SAST, dependency audit, coverage ---------------------------------------
 
-_EXTRA_SECRET_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
-    ("AWS access key id", re.compile(r"\b(?:AKIA|ASIA)[0-9A-Z]{16}\b")),
-    ("private key", re.compile(r"-----BEGIN (?:[A-Z]+ )?PRIVATE KEY-----")),
-    ("GitHub token", re.compile(r"\bgh[pousr]_[A-Za-z0-9]{30,}|\bgithub_pat_[A-Za-z0-9_]{30,}")),
-    ("Slack token", re.compile(r"\bxox[abpr]-[A-Za-z0-9-]{10,}")),
-    ("Google API key", re.compile(r"\bAIza[0-9A-Za-z_-]{35}\b")),
+# The credential shapes every log redacts (one list, `runlog.redact`), plus a heuristic that
+# only makes sense for code under review: a long literal assigned to a credential-like name.
+SECRET_PATTERNS_NAMED: list[tuple[str, re.Pattern[str]]] = [
+    (kind, pattern) for kind, pattern, _ in CREDENTIAL_PATTERNS
+] + [
     (
         "hard-coded credential",
         re.compile(
@@ -40,9 +39,6 @@ _EXTRA_SECRET_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
         ),
     ),
 ]
-SECRET_PATTERNS_NAMED: list[tuple[str, re.Pattern[str]]] = [
-    ("API key or bearer token", pattern) for pattern in SECRET_PATTERNS
-] + _EXTRA_SECRET_PATTERNS
 
 
 def scan_added_lines(diff: str, env: dict[str, str] | None = None) -> list[tuple[str, int, str]]:
@@ -98,10 +94,24 @@ class SecretScanCheck(BaseCheck):
                                              int_or_none(current["Line"]),
                                              current.get("RuleID", "secret")))  # fmt: skip
                 current = {}
-        if result.exit_code not in (0, 1):
-            return CheckResult(status="skipped", detail=f"gitleaks error (exit {result.exit_code})")
-        if result.exit_code == 0 or not findings:
+        if result.timed_out or result.exit_code not in (0, 1):
+            return tool_error(self, result)
+        if result.exit_code == 0:
             return CheckResult(status="pass", detail="gitleaks: no leaks")
+        if not findings:  # exit 1 means leaks were found, even when we cannot list them
+            return CheckResult(
+                status="fail",
+                detail=f"gitleaks reported leaks (exit 1) but its output could not be parsed: "
+                f"{tail(result.output, 300)}",
+                findings=[
+                    self.finding(
+                        "critical",
+                        "security",
+                        "gitleaks reported leaks that could not be listed (output unparsed)",
+                        suggestion="run gitleaks detect --no-git --verbose and remove them",
+                    )
+                ],
+            )
         return CheckResult(
             status="fail", detail=f"gitleaks: {len(findings)} leak(s)", findings=findings
         )
@@ -126,6 +136,19 @@ class SecretScanCheck(BaseCheck):
         )
 
 
+def scanner_errors(check: BaseCheck, errors: object, findings: list[Finding]) -> CheckResult:
+    """A scanner's JSON report lists errors (files or rules it could not handle): the scan is
+    incomplete, so status `error`; what it did find is kept and reported."""
+    count = len(errors) if isinstance(errors, list) else 1
+    first = errors[0] if isinstance(errors, list) and errors else errors
+    return CheckResult(
+        status="error",
+        detail=f"{check.tool} reported {count} error(s), the scan is incomplete "
+        f"({len(findings)} finding(s) so far): {str(first)[:300]}",
+        findings=findings,
+    )
+
+
 class BanditCheck(BaseCheck):
     name = "bandit"
     tool = "bandit"
@@ -144,11 +167,13 @@ class BanditCheck(BaseCheck):
         if not files:
             return CheckResult(status="pass", detail="no Python files changed")
         result = await runner.run("bandit", f"{bandit} -q -f json {quote(files)}")
+        if result.timed_out:
+            return tool_error(self, result)
         data = load_json(result.output)
         if not isinstance(data, dict):
             if result.ok:
                 return CheckResult(status="pass", detail="no issues")
-            return failed_without_findings(self, result.exit_code, result.output)
+            return tool_error(self, result)
         severity: dict[str, Severity] = {"HIGH": "major", "MEDIUM": "minor", "LOW": "info"}
         findings = [
             self.finding(
@@ -162,6 +187,8 @@ class BanditCheck(BaseCheck):
             for issue in data.get("results", [])
             if isinstance(issue, dict)
         ]
+        if data.get("errors"):  # files bandit could not scan
+            return scanner_errors(self, data["errors"], findings)
         if not findings:
             return CheckResult(status="pass", detail="no issues")
         return CheckResult(status="fail", detail=f"{len(findings)} issue(s)", findings=findings)
@@ -197,8 +224,8 @@ class SemgrepCheck(BaseCheck):
             f"--quiet {quote(files)}",
         )
         data = load_json(result.output)
-        if not isinstance(data, dict):
-            return failed_without_findings(self, result.exit_code, result.output)
+        if result.timed_out or not isinstance(data, dict):
+            return tool_error(self, result)
         severity: dict[str, Severity] = {"ERROR": "major", "WARNING": "minor", "INFO": "info"}
         findings = []
         for item in data.get("results", []):
@@ -215,6 +242,8 @@ class SemgrepCheck(BaseCheck):
                     int_or_none((item.get("end") or {}).get("line")),
                 )
             )
+        if data.get("errors"):  # rules or files Semgrep could not handle
+            return scanner_errors(self, data["errors"], findings)
         if not findings:
             return CheckResult(status="pass", detail="no matches")
         return CheckResult(status="fail", detail=f"{len(findings)} match(es)", findings=findings)
@@ -241,15 +270,14 @@ class PipAuditCheck(BaseCheck):
             return runner.missing("pip-audit", self.hint)
         target = "-r requirements.txt" if (workdir / "requirements.txt").is_file() else "."
         result = await runner.run("pip-audit", f"{audit} {target} -f json --progress-spinner off")
+        if result.timed_out:
+            return tool_error(self, result)
         data = load_json(result.output)
         deps = data.get("dependencies", []) if isinstance(data, dict) else data
         if not isinstance(deps, list):
             if result.ok:
                 return CheckResult(status="pass", detail="no known vulnerabilities")
-            return CheckResult(
-                status="skipped", detail=f"pip-audit error (exit {result.exit_code}): "
-                f"{tail(result.output, 300)}"
-            )  # fmt: skip
+            return tool_error(self, result)
         findings = []
         for dep in deps:
             if not isinstance(dep, dict):
@@ -288,14 +316,14 @@ class NpmAuditCheck(BaseCheck):
         if npm is None:
             return runner.missing("npm", self.hint)
         result = await runner.run("npm-audit", f"{npm} audit --omit=dev --json")
+        if result.timed_out:
+            return tool_error(self, result)
         data = load_json(result.output)
         vulns = data.get("vulnerabilities") if isinstance(data, dict) else None
         if not isinstance(vulns, dict):
             if result.ok:
                 return CheckResult(status="pass", detail="no known vulnerabilities")
-            return CheckResult(
-                status="skipped", detail=f"npm audit error (exit {result.exit_code})"
-            )
+            return tool_error(self, result)
         severity: dict[str, Severity] = {
             "critical": "critical",
             "high": "major",
@@ -351,11 +379,8 @@ class CoverageCheck(BaseCheck):
         result = await runner.run("coverage", f"{base} --cov --cov-report=term")
         totals = list(_COVERAGE_TOTAL.finditer(result.output))
         match = totals[-1] if totals else None  # the last TOTAL line
-        if match is None:
-            return CheckResult(
-                status="skipped",
-                detail=f"no coverage total in the output (exit {result.exit_code})",
-            )
+        if result.timed_out or match is None:
+            return tool_error(self, result, "no coverage total in the output")
         pct, minimum = float(match.group("pct")), runner.settings.coverage_threshold()
         if pct >= minimum:
             return CheckResult(status="pass", detail=f"coverage {pct:g}% >= {minimum:g}%")

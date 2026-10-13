@@ -18,7 +18,7 @@ from rich.markup import escape
 from rich.table import Table
 
 from jev_agent.cli.repo import RepoOption
-from jev_agent.cli.wiring import CliContext, cli_context, fail
+from jev_agent.cli.wiring import RepoContext, fail, repo_context
 from jev_agent.core.learning import (
     Learning,
     LearningError,
@@ -45,23 +45,23 @@ YesOption = Annotated[bool, typer.Option("--yes", "-y", help="Do not ask for con
 
 
 @contextmanager
-def _context(repo: Path) -> Iterator[tuple[CliContext, Learning]]:
-    with cli_context(repo) as ctx:
-        assert ctx.learning is not None
+def _context(repo: Path, *, create: bool = True) -> Iterator[tuple[RepoContext, Learning]]:
+    """Config, state DB and profiles; `create=False` for the read-only commands (#26)."""
+    with repo_context(repo, create=create) as ctx:
         try:
             yield ctx, ctx.learning
         except LearningError as exc:
             raise fail(str(exc)) from exc
 
 
-def _active(ctx: CliContext) -> str:
+def _active(ctx: RepoContext) -> str:
     return learning_status(ctx.store, ctx.config).profile
 
 
 @learning_app.command("list")
 def list_profiles(repo: RepoOption = Path(".")) -> None:
     """List profiles, with scope, on/off, lesson count and the active one."""
-    with _context(repo) as (ctx, learning):
+    with _context(repo, create=False) as (ctx, learning):
         status = learning_status(ctx.store, ctx.config)
         state = "[green]on[/green]" if status.enabled else "off"
         console.print(
@@ -95,7 +95,7 @@ def show(
     repo: RepoOption = Path("."),
 ) -> None:
     """Show a profile's lessons."""
-    with _context(repo) as (ctx, learning):
+    with _context(repo, create=False) as (ctx, learning):
         name = profile or _active(ctx)
         lessons = learning.lessons(name, include_retired)
         if not lessons:

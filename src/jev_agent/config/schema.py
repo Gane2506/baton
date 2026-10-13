@@ -6,7 +6,7 @@ import re
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from jev_agent.config.servers_schema import (
     BrowserConfig,
@@ -15,9 +15,37 @@ from jev_agent.config.servers_schema import (
     check_servers_config,
 )
 from jev_agent.quality.levels import QualityLevel
+from jev_agent.runlog.redact import SECRET_PATTERNS
 
 DispatcherName = Literal["jev", "rules"]
 Selection = Literal["dispatcher", "fixed"]
+
+# The questions asked at each decision point, in request order (dispatch/requests.py builds
+# the requests; a test checks they match). `[dispatcher.jev.instructions]` keys are checked
+# against this table.
+DECISION_QUESTIONS: dict[str, tuple[str, ...]] = {
+    "D1": ("clear", "worker", "model", "effort"),
+    "D2": ("worker", "model", "effort"),
+    "D3": ("verdict",),
+    "D4": ("complexity", "worker", "model", "effort"),
+    "D5": ("action",),
+    "D6": ("action",),
+    "D7": ("learn", "worker", "model", "effort"),
+}
+
+# Effort levels each worker passes on (docs/verification.md); any other level is ignored by
+# that worker. `[roles.<role>] efforts` must be accepted by at least one of the role's workers.
+WORKER_EFFORTS: dict[str, frozenset[str]] = {
+    "claude_code": frozenset({"low", "medium", "high", "xhigh", "max"}),
+    "codex": frozenset({"low", "medium", "high", "xhigh", "max", "ultra"}),
+    "api": frozenset({"low", "medium", "high"}),
+}
+_EFFORT_ORDER = ("low", "medium", "high", "xhigh", "max", "ultra")
+
+
+def _effort_list(levels: frozenset[str]) -> str:
+    return ", ".join(level for level in _EFFORT_ORDER if level in levels)
+
 
 # Key names that look like they hold a secret. `api_key_env` and `bearer_token_env` are
 # allowed: they name an env var.
@@ -85,6 +113,29 @@ class JevSettings(_Strict):
     # Instruction overrides, keyed "D4.effort" (one point) or "effort" (every point).
     instructions: dict[str, str] = Field(default_factory=dict)
 
+    @field_validator("instructions")
+    @classmethod
+    def _check_instruction_keys(cls, value: dict[str, str]) -> dict[str, str]:
+        questions = sorted({q for qs in DECISION_QUESTIONS.values() for q in qs})
+        for key in value:
+            point, dot, question = key.rpartition(".")
+            if not dot and question in questions:
+                continue
+            if dot and question in DECISION_QUESTIONS.get(point, ()):
+                continue
+            hint = (
+                f"; {point} asks: {', '.join(DECISION_QUESTIONS[point])}"
+                if point in DECISION_QUESTIONS
+                else f"; points are {', '.join(DECISION_QUESTIONS)}"
+                if dot
+                else ""
+            )
+            raise ValueError(
+                f'unknown key {key!r}: use "<point>.<question>" (e.g. "D4.effort") or a '
+                f"question name ({', '.join(questions)}){hint}"
+            )
+        return value
+
     @classmethod
     def for_native(cls, **overrides: Any) -> JevSettings:
         """Settings for calling TypeSafe directly instead of through OpenRouter."""
@@ -99,9 +150,21 @@ class JevSettings(_Strict):
 
 class DispatcherConfig(_Strict):
     primary: DispatcherName = "jev"
-    # Only "rules" is used as the fallback for now: the rules dispatcher always backs up Jev.
-    fallback: DispatcherName = "rules"
     jev: JevSettings = Field(default_factory=JevSettings)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _drop_fallback(cls, data: Any) -> Any:
+        """`fallback` was removed (issue #30): the rules dispatcher always backs up Jev. Old
+        files may still say `fallback = "rules"`; any other value would be silently ignored."""
+        if not isinstance(data, dict) or "fallback" not in data:
+            return data
+        if data["fallback"] != "rules":
+            raise ValueError(
+                f'fallback = {data["fallback"]!r} is not supported: only "rules" is used '
+                "(the rules dispatcher always backs up Jev); remove the key"
+            )
+        return {key: value for key, value in data.items() if key != "fallback"}
 
 
 class BudgetConfig(_Strict):
@@ -128,6 +191,15 @@ class IntegrationConfig(_Strict):
     test_command: str | None = Field(default=None, min_length=1)
     # Fix tasks D6 may add after failing integration tests before a human is asked.
     max_fix_rounds: int = Field(default=2, ge=0)
+
+
+class WorkspaceConfig(_Strict):
+    """`[workspace]`: the git worktrees jev commits and merges task work in."""
+
+    # Run the repository's git hooks (pre-commit, commit-msg, ...) on jev's own commits and
+    # merges. Off: jev passes `--no-verify`. Hooks are a quality signal, but a hook that hangs
+    # stops the run (git calls time out, issue #24).
+    run_hooks: bool = True
 
 
 class ApprovalConfig(_Strict):
@@ -283,13 +355,15 @@ class WorkersConfig(_Strict):
 # --- agent tools: MCP servers, skills, plugins (docs/config.md "Agent tools") ---------------
 
 _TOOL_NAME = r"^[A-Za-z0-9][A-Za-z0-9_-]*$"
-# Literal credentials that must never sit in a config file (args, URLs).
-_LITERAL_SECRET = re.compile(
-    r"\bsk-[A-Za-z0-9_-]{8,}|\bgh[pousr]_[A-Za-z0-9]{8,}|\bgithub_pat_[A-Za-z0-9_]{8,}"
-    r"|\bxox[abpr]-[A-Za-z0-9-]{8,}|\bBearer\s+\S{8,}|://[^/@\s]+:[^/@\s]+@"
-    r"|[?&](?:api_?key|key|token|access_token|secret|password)=",
-    re.IGNORECASE,
-)
+# Credentials in a URL's query string; the other literal credentials that must never sit in a
+# config file (args, URLs) are the shapes every log redacts (`runlog.redact`).
+_SECRET_QUERY = re.compile(r"[?&](?:api_?key|key|token|access_token|secret|password)=", re.I)
+
+
+def _literal_secret(value: str) -> bool:
+    return bool(_SECRET_QUERY.search(value)) or any(p.search(value) for p in SECRET_PATTERNS)
+
+
 McpTransport = Literal["http", "sse"]
 
 
@@ -334,7 +408,7 @@ class McpServerConfig(_Strict):
             if not re.match(_ENV_NAME, name):
                 raise ValueError(f"{name!r} is not an environment variable name")
         for value in [*(self.args), self.url or "", self.command or ""]:
-            if _LITERAL_SECRET.search(value):
+            if _literal_secret(value):
                 raise ValueError(
                     "looks like a literal credential; pass it through an environment variable "
                     "(`env_from`, `bearer_token_env` or `headers_from_env`)"
@@ -451,11 +525,19 @@ def role_can_use_free(config: JevConfig, role: str) -> bool:
     return "api" in getattr(config.roles, role).workers and config.workers.api.enabled
 
 
+class TrustConfig(_Strict):
+    """`[trust]` (user config only): repositories whose jev.toml may change the guarded keys
+    (`config.loader.GUARDED_KEYS`): absolute paths, or `"*"` for every repository."""
+
+    repos: list[str] = Field(default_factory=list)
+
+
 class JevConfig(_Strict):
     dispatcher: DispatcherConfig = Field(default_factory=DispatcherConfig)
     budget: BudgetConfig = Field(default_factory=BudgetConfig)
     approval: ApprovalConfig = Field(default_factory=ApprovalConfig)
     integration: IntegrationConfig = Field(default_factory=IntegrationConfig)
+    workspace: WorkspaceConfig = Field(default_factory=WorkspaceConfig)
     review: ReviewConfig = Field(default_factory=ReviewConfig)
     quality: QualityConfig = Field(default_factory=QualityConfig)
     learning: LearningConfig = Field(default_factory=LearningConfig)
@@ -468,6 +550,7 @@ class JevConfig(_Strict):
     servers: dict[str, ServerConfig] = Field(default_factory=dict)
     browser: BrowserConfig = Field(default_factory=BrowserConfig)
     profiles: dict[str, WorkspaceProfileConfig] = Field(default_factory=dict)
+    trust: TrustConfig = Field(default_factory=TrustConfig)
 
     @model_validator(mode="before")
     @classmethod
@@ -497,6 +580,21 @@ class JevConfig(_Strict):
                             f"roles.{name}.{kind}: unknown {kind} entry {ref!r}: define it in "
                             f"[tools.{kind}] (known: {known})"
                         )
+            accepted = frozenset[str]().union(
+                *(WORKER_EFFORTS.get(w, frozenset()) for w in role.workers)
+            )
+            # A role without workers cannot run (jev doctor reports it); nothing to check.
+            for effort in role.efforts if role.workers else []:
+                if effort not in accepted:
+                    levels = "; ".join(
+                        f"{w} accepts: {_effort_list(WORKER_EFFORTS[w])}"
+                        for w in role.workers
+                        if w in WORKER_EFFORTS
+                    )
+                    raise ValueError(
+                        f"roles.{name}.efforts: {effort!r} is not accepted by any of the role's "
+                        f"workers ({', '.join(role.workers) or 'none'}): {levels or 'none'}"
+                    )
             other = role.prefer_different_vendor_than
             if other is not None and (other == name or other not in role_names):
                 raise ValueError(

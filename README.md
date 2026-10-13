@@ -330,6 +330,16 @@ A run that ends in `NEEDS_HUMAN`, `FAILED` or `BUDGET_EXCEEDED` keeps its branch
 worktrees for inspection. `jev status <run_id>` shows the reason. One `NEEDS_HUMAN` stop can be
 continued: a broken custom prompt template; fix it, then `jev resume <run_id>`.
 
+`jev run`, `jev approve` and `jev resume` exit with a code scripts can test, so
+`jev approve <run_id> && jev ship <run_id>` never ships a run that stopped short:
+
+| Exit code | Meaning |
+|---|---|
+| 0 | The run is `DONE` or `AWAITING_APPROVAL` (or approved without workers, waiting for `jev resume`) |
+| 1 | The command failed: unknown run, bad flag value, no usable worker, not a git repository |
+| 2 | Usage error (unknown option, missing argument) |
+| 3 | The run stopped short of `DONE`: `NEEDS_HUMAN`, `FAILED`, `BUDGET_EXCEEDED` or `CANCELLED`; `jev status <run_id>` says why |
+
 To see the whole flow without any agent CLI or key, set `primary = "rules"` and prefix the
 commands with `JEV_FAKE_WORKERS=1`. Scripted fake workers then plan one task and write a
 placeholder file.
@@ -605,6 +615,18 @@ JEV_LIVE_TESTS=1 OPENROUTER_API_KEY=... uv run pytest tests/live
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the project layout and how to add a worker or change
 a role prompt.
+
+## Contributing
+
+Contributions are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md) first: how to pick an issue,
+how review works, and the checks to run before you open a pull request:
+
+```bash
+uv run ruff format . && uv run ruff check . && uv run mypy && uv run pytest -q
+```
+
+Participation follows the [Code of Conduct](CODE_OF_CONDUCT.md). Report security problems
+privately as described in [SECURITY.md](SECURITY.md), not in a public issue.
 
 ## License
 

@@ -3,11 +3,16 @@ client (no listening socket, no real workers or network)."""
 
 from __future__ import annotations
 
+import asyncio
 import json
+import os
 import re
+import socket
+import sys
 import threading
+import time
 import xml.etree.ElementTree as ET
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -33,7 +38,13 @@ from jev_agent.dashboard.render import (
     render_bar_chart,
     render_markdown,
 )
-from jev_agent.dashboard.runner import RunAction, RunLauncher
+from jev_agent.dashboard.runner import (
+    STOPPED_MESSAGE,
+    Executor,
+    RunAction,
+    RunLauncher,
+    run_job_coroutine,
+)
 from jev_agent.dashboard.security import (
     DashboardConfigError,
     DashboardSettings,
@@ -41,6 +52,7 @@ from jev_agent.dashboard.security import (
 )
 from jev_agent.dashboard.views import spend_by_day
 from jev_agent.quality.models import GateResult
+from jev_agent.workers.subprocess_runner import run_command
 
 cli = CliRunner()
 SECRET = "sk-or-v1-dashboard-test-secret-0123456789"
@@ -48,9 +60,7 @@ SECRET = "sk-or-v1-dashboard-test-secret-0123456789"
 
 @pytest.fixture(autouse=True)
 def _isolate(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
     monkeypatch.setenv(FAKE_WORKERS_ENV, "1")
-    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
 
 
 def _jev(repo: Path, *args: str) -> str:
@@ -88,7 +98,9 @@ class Calls:
         return "run DONE"
 
 
-def _client(repo: Path, executor: Calls | None = None, **settings: object) -> Iterator[TestClient]:
+def _client(
+    repo: Path, executor: Executor | None = None, **settings: object
+) -> Iterator[TestClient]:
     options: dict[str, object] = {"allowed_hosts": frozenset({"testserver"})}
     options.update(settings)
     app = create_app(
@@ -318,6 +330,87 @@ def test_approve_and_resume_refused_in_wrong_state(
     assert client.post(f"/runs/{run_id}/explode").status_code in (403, 404)
 
 
+def _executing_with_open_attempt(repo: Path, run_id: str, age: timedelta | None = None) -> None:
+    """Put the run in EXECUTING with a coder attempt that has no result yet (a worker that is
+    running, or whose process died), started `age` ago (default: just now)."""
+    with _store(repo) as store:
+        store.set_run_state(run_id, RunState.EXECUTING)
+        task = store.list_tasks(run_id)[0]
+        attempt_id = store.start_attempt(run_id, task.id, 1, "coder", "claude_code")
+        if age is not None:
+            started = (datetime.now(UTC) - age).isoformat(timespec="microseconds")
+            store.connection.execute(
+                "UPDATE attempts SET started_at = ? WHERE id = ?", (started, attempt_id)
+            )
+
+
+def test_resume_needs_force_while_an_attempt_may_be_running(planned: tuple[Path, str]) -> None:
+    """Issue #15: an open attempt within its worker's timeout means another jev process may be
+    running the run; a plain Resume is not offered and is refused without force."""
+    repo, run_id = planned
+    _executing_with_open_attempt(repo, run_id)
+    calls = Calls()
+    for client in _client(repo, calls):
+        text = client.get(f"/runs/{run_id}").text
+        assert "Force resume" in text and 'name="force" value="1"' in text
+        assert "resuming starts a second one" in text
+        assert ">Resume</button>" not in text
+        _post(client, f"/runs/{run_id}/resume")
+        text = client.get(f"/runs/{run_id}").text
+        assert "may be running this run" in text and "coder attempt" in text
+        assert calls.calls == []
+        _post(client, f"/runs/{run_id}/resume", {"force": "1"})
+        assert "resume started in the background" in client.get(f"/runs/{run_id}").text
+        _launcher(client).wait(run_id)
+        assert calls.calls == [(repo, run_id, "resume")]
+
+
+def test_interrupted_run_still_offers_plain_resume(planned: tuple[Path, str]) -> None:
+    """An open attempt older than its worker's timeout (plus a margin) is from a dead process."""
+    repo, run_id = planned
+    _executing_with_open_attempt(repo, run_id, age=timedelta(hours=2))
+    calls = Calls()
+    for client in _client(repo, calls):
+        text = client.get(f"/runs/{run_id}").text
+        assert ">Resume</button>" in text and "Force resume" not in text
+        _post(client, f"/runs/{run_id}/resume")
+        assert "resume started in the background" in client.get(f"/runs/{run_id}").text
+        _launcher(client).wait(run_id)
+        assert calls.calls == [(repo, run_id, "resume")]
+
+
+def test_resume_needs_force_while_the_scheduler_runs_the_item(planned: tuple[Path, str]) -> None:
+    repo, run_id = planned
+    with _store(repo) as store:
+        store.set_run_state(run_id, RunState.EXECUTING)
+        run = store.get_run(run_id)
+        item = store.add_queue_item(run.idea.text)
+        assert store.claim_queue_item(item.id)
+        # The run was created after the scheduler claimed the item (its run_id is set later).
+        claimed = (run.created_at - timedelta(seconds=5)).isoformat(timespec="microseconds")
+        store.connection.execute("UPDATE queue SET updated_at = ? WHERE id = ?", (claimed, item.id))
+    lock = repo / ".jev" / "scheduler.lock"
+    lock.write_text(
+        json.dumps(
+            {
+                "pid": os.getpid(),
+                "host": socket.gethostname(),
+                "started_at": "2026-10-12T10:00:00+00:00",
+                "current_item": item.id,
+            }
+        )
+    )
+    calls = Calls()
+    for client in _client(repo, calls):
+        assert "Force resume" in client.get(f"/runs/{run_id}").text
+        _post(client, f"/runs/{run_id}/resume")
+        text = client.get(f"/runs/{run_id}").text
+        assert "may be running this run" in text and f"queue item #{item.id}" in text
+        assert calls.calls == []
+        lock.unlink()  # the scheduler stopped: a plain resume is fine again
+        assert ">Resume</button>" in client.get(f"/runs/{run_id}").text
+
+
 def test_approve_runs_the_real_cli_code_path(planned: tuple[Path, str]) -> None:
     """The default executor is `jev approve`'s path; with fake workers the run finishes."""
     repo, run_id = planned
@@ -347,6 +440,77 @@ def test_executor_errors_are_reported(planned: tuple[Path, str]) -> None:
     assert not launcher.busy(run_id)
     assert launcher.start(run_id, "resume")  # the lock was released
     launcher.wait(run_id)
+
+
+def _wait_for(predicate: Callable[[], bool], timeout: float = 10.0) -> None:
+    deadline = time.monotonic() + timeout
+    while not predicate():
+        assert time.monotonic() < deadline, "timed out waiting"
+        time.sleep(0.02)
+
+
+def test_shutdown_cancels_running_jobs_and_their_processes(planned: tuple[Path, str]) -> None:
+    """Stopping the server stops the jobs it started: the job's task is cancelled, which kills
+    the agent's process group (issue #13)."""
+    repo, run_id = planned
+    pid_file = repo / ".jev" / "child.pid"
+    code = f"import os, time; open({str(pid_file)!r}, 'w').write(str(os.getpid())); time.sleep(60)"
+
+    def agent(root: Path, rid: str, action: RunAction) -> str:
+        argv = [sys.executable, "-c", code]
+        result = run_job_coroutine(run_command(argv, root, dict(os.environ), 60))
+        return f"agent exited {result.exit_code}"
+
+    for client in _client(repo, executor=agent):
+        launcher = _launcher(client)
+        assert launcher.start(run_id, "resume")
+        _wait_for(lambda: pid_file.exists() and bool(pid_file.read_text()))
+    # leaving the client ran the app's lifespan shutdown
+    job = launcher.job(run_id)
+    assert job is not None and job.state == "failed" and job.message == STOPPED_MESSAGE
+    assert not launcher.busy(run_id)
+    pid = int(pid_file.read_text())
+    _wait_for(lambda: not _process_alive(pid))
+
+
+def test_shutdown_before_the_coroutine_starts(planned: tuple[Path, str]) -> None:
+    repo, run_id = planned
+    entered = threading.Event()
+    go = threading.Event()
+
+    def slow_start(root: Path, rid: str, action: RunAction) -> str:
+        entered.set()
+        go.wait(10)  # shutdown is requested while the executor has not reached its coroutine
+        return run_job_coroutine(asyncio.sleep(0, result="never"))
+
+    launcher = RunLauncher(repo, slow_start)
+    assert launcher.start(run_id, "approve")
+    entered.wait(10)
+    stopper = threading.Thread(target=launcher.shutdown, args=(10.0,))
+    stopper.start()
+    _wait_for(lambda: launcher._cancels[run_id].requested)
+    go.set()
+    stopper.join(10)
+    job = launcher.job(run_id)
+    assert job is not None and job.message == STOPPED_MESSAGE
+
+
+def test_run_job_coroutine_outside_a_job_is_asyncio_run() -> None:
+    assert run_job_coroutine(asyncio.sleep(0, result=42)) == 42
+
+
+def _process_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    if not Path("/proc").is_dir():  # macOS: kill(0) succeeded, so it runs
+        return True
+    try:  # a zombie still answers kill(0); it may also be reaped right now
+        state = Path(f"/proc/{pid}/status").read_text()
+    except FileNotFoundError:
+        return False
+    return "\nState:\tZ" not in state
 
 
 def test_learning_page_and_actions(client: TestClient, planned: tuple[Path, str]) -> None:
@@ -866,3 +1030,69 @@ def test_ship_button_confirmation_and_background_job(
         live = client.get(f"/runs/{run_id}/live").text
         assert "https://github.com/acme/widgets/pull/42" in live
         assert "Ship as PR</button>" not in live and "already shipped" not in live
+
+
+# ---- job errors and warnings (#51) ---------------------------------------------------------
+
+
+def _default_job(root: Path, run_id: str, action: RunAction) -> str:
+    launcher = RunLauncher(root)  # the real executor: execute_run
+    assert launcher.start(run_id, action)
+    job = launcher.wait(run_id)
+    assert job is not None and job.state == "failed"
+    return job.message
+
+
+def test_job_shows_not_a_repo_error(tmp_path: Path) -> None:
+    (tmp_path / "plain").mkdir()
+    message = _default_job(tmp_path / "plain", "20261013-000000-abcd", "resume")
+    assert "is not inside a git repository" in message
+
+
+def test_job_shows_config_error(planned: tuple[Path, str]) -> None:
+    repo, run_id = planned
+    (repo / "jev.toml").write_text("[workers.api]\nbogus = 1\n")
+    message = _default_job(repo, run_id, "approve")
+    assert "workers.api.bogus: unknown key" in message
+
+
+def test_job_shows_newer_state_db_error(planned: tuple[Path, str]) -> None:
+    repo, run_id = planned
+    with _store(repo) as store:
+        store.connection.execute("PRAGMA user_version = 999")
+    actions: list[RunAction] = ["approve", "ship"]
+    for action in actions:
+        message = _default_job(repo, run_id, action)
+        assert "database has schema version 999" in message
+
+
+def test_job_message_includes_run_start_warnings(
+    planned: tuple[Path, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo, run_id = planned
+    (repo / "jev.toml").write_text('[dispatcher]\nprimary = "jev"\n')  # its key is unset
+    launcher = RunLauncher(repo)
+    assert launcher.start(run_id, "approve")
+    job = launcher.wait(run_id, timeout=60)
+    assert job is not None and job.state == "finished", job and job.message
+    assert job.message.startswith("run ")
+    assert "; warning: " in job.message
+    assert "is not set, so the Jev dispatcher cannot be reached" in job.message
+
+
+def test_resume_needs_force_while_another_process_holds_the_lease(
+    planned: tuple[Path, str],
+) -> None:
+    """Issue #61: a live run lease means another jev process drives the run, even between
+    worker attempts (no open attempt)."""
+    repo, run_id = planned
+    with _store(repo) as store:
+        store.set_run_state(run_id, RunState.EXECUTING)
+        store.claim_run_lease(run_id, "t", os.getpid(), socket.gethostname(), lambda _: False)
+    calls = Calls()
+    for client in _client(repo, calls):
+        assert "Force resume" in client.get(f"/runs/{run_id}").text
+        _post(client, f"/runs/{run_id}/resume")
+        text = client.get(f"/runs/{run_id}").text
+        assert "may be running this run" in text and f"pid {os.getpid()} on " in text
+        assert calls.calls == []

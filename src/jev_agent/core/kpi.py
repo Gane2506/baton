@@ -23,12 +23,11 @@ from pydantic import BaseModel, Field
 
 from jev_agent.core.integration import fix_rounds
 from jev_agent.core.models import TaskState
-from jev_agent.core.store import ShippedPrRecord, Store
+from jev_agent.core.store import PR_STATES, PrState, ShippedPrRecord, Store
+from jev_agent.core.workspace import GIT_QUICK_TIMEOUT_S, run_git
 from jev_agent.quality.report import latest_per_gate
 from jev_agent.roles.schemas import SEVERITIES
 from jev_agent.workers.openrouter_models import is_free_slug
-
-_ADDED = re.compile(r"(\d+) added")
 
 
 class DiffStat(BaseModel):
@@ -77,13 +76,10 @@ class RunKpis(BaseModel):
 
 def diff_stat(repo: Path, base: str, head: str) -> DiffStat | None:
     """`git diff --shortstat base..head` as numbers; None when git cannot tell."""
-    proc = subprocess.run(
-        ["git", "diff", "--shortstat", f"{base}..{head}"],
-        cwd=repo,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    try:
+        proc = run_git(["diff", "--shortstat", f"{base}..{head}"], repo, GIT_QUICK_TIMEOUT_S)
+    except subprocess.TimeoutExpired:
+        return None
     if proc.returncode != 0:
         return None
     return parse_shortstat(proc.stdout)
@@ -155,7 +151,6 @@ def compute_run_kpis(store: Store, run_id: str, diff: DiffStat | None = None) ->
     api = [a for a in attempts if a.worker == "api"]
     free = [a for a in api if is_free_slug(a.model)]
     lesson_ids = {lesson for a in attempts for lesson in a.lesson_ids}
-    added = _ADDED.search(run.learning_outcome or "")
 
     return RunKpis(
         run_id=run_id,
@@ -186,7 +181,7 @@ def compute_run_kpis(store: Store, run_id: str, diff: DiffStat | None = None) ->
         free_attempts=len(free),
         free_model_share=len(free) / len(api) if api else None,
         lessons_used=len(lesson_ids),
-        lessons_added=int(added.group(1)) if added else None,
+        lessons_added=None if run.learning_counts is None else run.learning_counts.added,
     )
 
 
@@ -251,6 +246,16 @@ def ci_status(rollup: object) -> str:
     return "pending" if pending else "success"
 
 
+def pr_state(value: object) -> PrState:
+    """gh's PR `state` (`OPEN`, `CLOSED`, `MERGED`) as a stored state. gh's value shapes are
+    not verified live (docs/verification.md section 8), so anything else reads as `open`."""
+    text = value.lower() if isinstance(value, str) else ""
+    for state in PR_STATES:
+        if text == state:
+            return state
+    return "open"
+
+
 def _count(value: object) -> int | None:
     return len(value) if isinstance(value, list) else None
 
@@ -261,7 +266,7 @@ def _int(value: object) -> int | None:
 
 @dataclass(frozen=True)
 class GithubKpis:
-    state: str  # open | closed | merged
+    state: PrState
     draft: bool
     created_at: datetime | None
     merged_at: datetime | None
@@ -282,9 +287,7 @@ def github_kpis(view: Mapping[str, Any], pushed_commits: int | None) -> GithubKp
     review comments are not in `gh pr view`'s JSON). `commits_after_open` is the PR's commit
     count minus the commits jev pushed.
     """
-    state = str(view.get("state") or "OPEN").lower()
-    if state not in ("open", "closed", "merged"):
-        state = "open"
+    state = pr_state(view.get("state"))
     reviews = view.get("reviews")
     comments = view.get("comments")
     review_comments: int | None = None

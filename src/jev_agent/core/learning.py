@@ -4,7 +4,8 @@ which profile (if any) a run uses. See docs/learning.md.
 - A **profile** is a named store of **lessons**. Scope `repo` keeps it in the repo's state.db
   (`.jev/state.db`); scope `shared` keeps it in `$XDG_DATA_HOME/jev/learning.db` (else
   `~/.local/share/jev/learning.db`), usable from every repo. Names are unique across scopes;
-  lookups try the repo first. Lesson ids carry their scope: `L12` (repo), `S3` (shared).
+  lookups try the repo first. Lesson ids carry their scope: `L12` (repo), `S3` (shared), and
+  are never reused once deleted.
 - **Selection** (`select_lessons`) is deterministic: lessons for the role, not retired, ranked
   by how many of their tags match the context (task files and title words, idea words), then
   by score, then newest first; capped by `[learning] max_lessons` and `max_chars`.
@@ -28,7 +29,7 @@ from pathlib import Path
 from typing import Literal
 
 from jev_agent.config.schema import PROFILE_NAME_PATTERN, JevConfig
-from jev_agent.core.migrations import SHARED_MIGRATIONS, apply_migrations
+from jev_agent.core.migrations import SHARED_MIGRATIONS, apply_migrations, configure_connection
 from jev_agent.core.models import LESSON_ROLES
 from jev_agent.core.store import Store
 
@@ -149,9 +150,7 @@ class LessonDB:
         conn = sqlite3.connect(path, isolation_level=None)
         try:
             conn.row_factory = sqlite3.Row
-            conn.execute("PRAGMA foreign_keys = ON")
-            conn.execute("PRAGMA journal_mode = WAL")
-            conn.execute("PRAGMA busy_timeout = 5000")
+            configure_connection(conn)
             apply_migrations(conn, SHARED_MIGRATIONS)
         except BaseException:
             conn.close()
@@ -268,26 +267,58 @@ class LessonDB:
         rows = self.conn.execute(sql + " ORDER BY id", (profile,))
         return [self._lesson(row) for row in rows]
 
-    def update_text(self, number: int, text: str) -> None:
+    # Writes to one lesson name its profile too, so a stale id can never change a lesson of
+    # another profile (issue #40).
+
+    def update_text(self, profile: str, number: int, text: str) -> None:
         with self._tx() as db:
             db.execute(
-                "UPDATE lessons SET text = ?, updated_at = ? WHERE id = ?", (text, _now(), number)
+                "UPDATE lessons SET text = ?, updated_at = ? WHERE id = ? AND profile = ?",
+                (text, _now(), number, profile),
             )
 
-    def retire(self, number: int) -> None:
+    def retire(self, profile: str, number: int) -> None:
         with self._tx() as db:
             db.execute(
-                "UPDATE lessons SET retired = 1, updated_at = ? WHERE id = ?", (_now(), number)
+                "UPDATE lessons SET retired = 1, updated_at = ? WHERE id = ? AND profile = ?",
+                (_now(), number, profile),
             )
 
-    def record_use(self, number: int, score_delta: float = 0.0) -> None:
+    def record_use(self, profile: str, number: int, score_delta: float = 0.0) -> None:
         """One more use, plus a score change; retire the lesson if its score is too low."""
         with self._tx() as db:
-            db.execute(
-                "UPDATE lessons SET uses = uses + 1, score = score + ?, updated_at = ?,"
-                " retired = CASE WHEN score + ? <= ? THEN 1 ELSE retired END WHERE id = ?",
-                (score_delta, _now(), score_delta, RETIRE_AT_SCORE, number),
+            self._record_use(db, profile, number, score_delta)
+
+    def score_task(
+        self,
+        profile: str,
+        run_id: str,
+        task_id: str,
+        numbers: Iterable[int],
+        score_delta: float,
+    ) -> bool:
+        """Record one use of each lesson for a task that ended, exactly once per (run, task):
+        the ledger row and the score changes commit together. False if it was scored before."""
+        with self._tx() as db:
+            cur = db.execute(
+                "INSERT OR IGNORE INTO scored_tasks (run_id, task_id, profile, scored_at)"
+                " VALUES (?, ?, ?, ?)",
+                (run_id, task_id, profile, _now()),
             )
+            if cur.rowcount == 0:
+                return False
+            for number in numbers:
+                self._record_use(db, profile, number, score_delta)
+        return True
+
+    @staticmethod
+    def _record_use(db: sqlite3.Connection, profile: str, number: int, delta: float) -> None:
+        db.execute(
+            "UPDATE lessons SET uses = uses + 1, score = score + ?, updated_at = ?,"
+            " retired = CASE WHEN score + ? <= ? THEN 1 ELSE retired END"
+            " WHERE id = ? AND profile = ?",
+            (delta, _now(), delta, RETIRE_AT_SCORE, number, profile),
+        )
 
     def _lesson(self, row: sqlite3.Row) -> Lesson:
         return Lesson(
@@ -395,7 +426,7 @@ class Learning:
     def forget(self, lesson_id: str) -> Lesson:
         """Retire one lesson so it is never injected again; it stays visible with `--all`."""
         db, lesson = self.find_lesson(lesson_id)
-        db.retire(lesson.number)
+        db.retire(lesson.profile, lesson.number)
         return lesson
 
 

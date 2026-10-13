@@ -59,6 +59,23 @@ the remote's default branch (`refs/remotes/<remote>/HEAD`, else
 worked but `gh pr create` failed, run `jev ship RUN` again: the push is skipped when the remote
 branch already holds the same commit. jev never merges a PR and never enables auto-merge.
 
+GitHub may open the PR even when `gh pr create` reports an error or times out (the answer was
+lost). So after such a failure, and before creating a PR on a branch an earlier `jev ship`
+already pushed, jev asks
+`gh pr list --repo <repo> --head <branch> --state all --json number,url,state,headRefName`;
+a PR found there is recorded (with its state) instead of opening a second one. A timeout with
+no PR found is reported as an unknown outcome; run `jev ship RUN` again once GitHub answers.
+The shape of `gh pr list`'s answer is not verified against a live repository, so anything
+unexpected reads as "no PR found" (docs/verification.md section 8).
+
+Nothing waits for input: git runs without a terminal, with `GIT_TERMINAL_PROMPT=0` and an empty
+`GIT_ASKPASS` (no password prompt, no askpass popup; credential helpers such as
+`gh auth setup-git` or the OS keychain still work), and `gh` with `GH_PROMPT_DISABLED=1`. Every
+call has a timeout: 10 minutes for `git push`, 1 minute for the other git calls, 2 minutes for
+`gh`. A push that needs a password you have not stored fails with git's error instead of hanging
+(set up a credential helper or use an SSH remote with a loaded key); a push that timed out may
+still have landed, and running `jev ship RUN` again skips it if it did.
+
 The PR body (Markdown, redacted like every log) has the idea, the plan summary, a task table
 (worker, model, effort, attempts, cost), the quality summary (level, gates, blocking problems
 and non-blocking findings by severity; the full review stays local, `jev quality show RUN`), a
@@ -87,7 +104,7 @@ When a run is shipped, its KPIs are computed and stored as a snapshot (`run_kpis
 | diff | `git diff --shortstat` start..result: files, additions, deletions |
 | decisions | total, by Jev, rules fallbacks, fallback rate (fallbacks / decisions Jev was asked for), mean Jev confidence |
 | free model share | attempts on free models / attempts on the api worker |
-| lessons | distinct lessons injected, lessons added by the learner |
+| lessons | distinct lessons injected, lessons added by the learner (summed over the run's learning steps, stored as data on the run) |
 
 `jev ship sync RUN` (or `--all`) asks GitHub for each PR with
 `gh pr view <number> --repo <repo> --json state,createdAt,mergedAt,closedAt,reviews,comments,commits,additions,deletions,changedFiles,statusCheckRollup,isDraft`

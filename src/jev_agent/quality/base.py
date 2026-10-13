@@ -10,6 +10,7 @@ import tomllib
 from pathlib import Path
 from typing import Any, Protocol
 
+from jev_agent.core.commands import CommandResult
 from jev_agent.quality.levels import LEVELS, QualityLevel
 from jev_agent.quality.models import CheckResult, Finding
 from jev_agent.quality.tools import ToolRunner, normalize, tail
@@ -204,12 +205,17 @@ def load_json(output: str) -> Any:
     return None
 
 
-def failed_without_findings(check: BaseCheck, exit_code: int, output: str) -> CheckResult:
-    """A tool exited non-zero but printed nothing we could parse."""
+def tool_error(check: BaseCheck, result: CommandResult, problem: str = "") -> CheckResult:
+    """The tool is installed but gave no usable answer: it timed out, crashed, or printed
+    output we could not parse. Status `error`, never findings (the coder cannot fix a broken
+    tool); the policy blocks on it when the check is required."""
+    tool = check.tool or check.name
+    if result.timed_out:
+        problem = f"{tool} timed out"
+    elif not problem:
+        problem = f"{tool} failed or printed output that could not be parsed"
     return CheckResult(
-        status="fail",
-        detail=f"exit code {exit_code}: {tail(output)}",
-        findings=[check.finding("minor", "maintainability", f"{check.name} failed (unparsed)")],
+        status="error", detail=f"{problem} (exit {result.exit_code}): {tail(result.output)}"
     )
 
 

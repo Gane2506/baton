@@ -1,0 +1,82 @@
+name: Bug report
+description: Something in jev does not work as documented.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. Security problems do not belong here: report them privately
+        as described in SECURITY.md. Search the open issues first; add to an existing one if
+        it matches.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: The commands you ran, in order. A run on the sample repo (examples/sample-repo) with JEV_FAKE_WORKERS=1 is ideal if the bug shows up there.
+      placeholder: |
+        1. jev init
+        2. jev run --plan-only "..."
+        3. ...
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: jev version
+      description: Output of `jev --version`, or the commit if you run from a clone.
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: OS and Python version
+      placeholder: Ubuntu 24.04, Python 3.12
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      multiple: true
+      options:
+        - run pipeline (plan, approve, resume, cancel)
+        - dispatcher (Jev or rules)
+        - Claude Code worker
+        - Codex worker
+        - API worker / OpenRouter / free models
+        - config or jev init / doctor
+        - learning
+        - queue, scheduler or board
+        - chat
+        - quality gate
+        - dashboard
+        - servers, browser or profiles
+        - ship or KPIs
+        - docs
+        - other
+  - type: textarea
+    id: config
+    attributes:
+      label: Relevant config
+      description: The parts of jev.toml (and your user config) that matter. Keys come from environment variables; never paste a key.
+      render: toml
+  - type: textarea
+    id: logs
+    attributes:
+      label: Output and logs
+      description: Terminal output, `jev log <run_id>`, or the relevant run log under .jev/. Logs are redacted, but read them before you paste them.
+      render: text
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checks
+      options:
+        - label: I removed API keys, tokens and private repository content from everything above.
+          required: true

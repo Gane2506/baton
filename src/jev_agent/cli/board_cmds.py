@@ -22,9 +22,9 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
-from jev_agent.cli.queue_cmds import short
 from jev_agent.cli.repo import RepoOption
-from jev_agent.cli.wiring import cli_context
+from jev_agent.cli.text import short
+from jev_agent.cli.wiring import repo_context
 from jev_agent.core.models import RunState, TaskState
 from jev_agent.core.store import QueueItem, RunRecord, Store, TaskRecord
 
@@ -215,7 +215,7 @@ def board(
     repo: RepoOption = Path("."),
 ) -> None:
     """Kanban board: queued ideas and every run by stage."""
-    with cli_context(repo) as ctx:
+    with repo_context(repo, create=False) as ctx:
 
         def view() -> RenderableType:
             data = load_board(ctx.store, datetime.now(UTC), show_all=show_all)

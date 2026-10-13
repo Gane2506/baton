@@ -19,13 +19,6 @@ runner = CliRunner()
 CONFIG = '[dispatcher]\nprimary = "rules"\n[approval]\nrequire_plan_approval = false\n'
 
 
-@pytest.fixture(autouse=True)
-def _isolate(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
-    monkeypatch.delenv(FAKE_WORKERS_ENV, raising=False)
-    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
-
-
 @pytest.fixture
 def repo(fixture_repo: Path) -> Path:
     (fixture_repo / "jev.toml").write_text(CONFIG)

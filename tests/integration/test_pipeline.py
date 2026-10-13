@@ -10,6 +10,7 @@ import pytest
 
 from jev_agent.config import JevConfig
 from jev_agent.core.commands import FakeCommandRunner
+from jev_agent.core.lease import RunInUseError, hold_run_lease
 from jev_agent.core.models import (
     Decision,
     DecisionRequest,
@@ -19,12 +20,14 @@ from jev_agent.core.models import (
     TaskCard,
     TaskState,
     ValidationResult,
+    WorkerResult,
+    WorkerStatus,
 )
-from jev_agent.core.pipeline import Pipeline, PipelineError, build_pipeline
+from jev_agent.core.pipeline import Pipeline, PipelineError, build_pipeline, cancel_run
 from jev_agent.core.store import RunRecord, Store
 from jev_agent.dispatch.base import Dispatcher, DispatchError
 from jev_agent.roles import ReviewResult
-from jev_agent.workers.base import WorkerJob
+from jev_agent.workers.base import WorkerJob, WorkerOutput
 from jev_agent.workers.fake import FakeStep, FakeWorker, FakeWorkerCrash, ScriptValue
 from jev_agent.workers.registry import WorkerRegistry
 
@@ -509,3 +512,337 @@ async def test_role_tools_reach_worker_jobs(make_env: Any) -> None:
     assert [(s.name, s.path) for s in coder.tools.skills] == [("style", env.repo / "skills/style")]
     assert not coder.tools.mcp
     assert not env.jobs("validator")[0].tools
+
+
+# ---- cancellation is never overwritten; plan-only survives resume (issues #14, #22) ----------
+
+
+class _CancelsThenAnswers:
+    """A worker during which the user runs `jev cancel` from another shell."""
+
+    name = "fake"
+
+    def __init__(self, store: Store, status: WorkerStatus) -> None:
+        self.store, self.status = store, status
+
+    async def run(self, job: WorkerJob) -> WorkerOutput:
+        cancel_run(self.store, self.store.list_runs()[0].id)
+        parsed = ONE_TASK if self.status == "success" else None
+        result = WorkerResult(status=self.status, summary="done", raw_log_path=job.log_path)
+        return WorkerOutput(result=result, parsed=parsed)
+
+
+@pytest.mark.parametrize("status", ["error", "success"])
+async def test_cancel_while_a_worker_runs_is_kept(fixture_repo: Path, status: WorkerStatus) -> None:
+    with Store.open(fixture_repo / ".jev" / "state.db") as store:
+        worker = _CancelsThenAnswers(store, status)
+        registry = WorkerRegistry({n: worker for n in ("claude_code", "codex", "api")})
+        pipeline = build_pipeline(fixture_repo, _config(), store, registry)
+        run = await pipeline.start(_idea(fixture_repo))
+        assert run.state is RunState.CANCELLED, run.reason
+        assert run.reason == "cancelled by user"
+        assert run.learning_outcome is None  # the learning step never ran for it
+
+
+async def test_cancel_does_not_replace_a_finished_run(make_env: Any) -> None:
+    env: Env = make_env({"planner": FakeStep(parsed=ONE_TASK)})
+    run = await env.pipeline.start(_idea(env.repo))
+    assert run.state is RunState.DONE, run.reason
+    with pytest.raises(PipelineError, match="already DONE"):
+        cancel_run(env.store, run.id)
+    assert env.store.get_run(run.id).state is RunState.DONE
+
+
+async def test_plan_only_is_kept_when_the_run_is_resumed(make_env: Any) -> None:
+    env: Env = make_env({"planner": FakeStep(parsed=ONE_TASK)})  # approval not required
+    # A plan-only run that stopped before planning (the process died): resume it.
+    run = env.store.create_run(_idea(env.repo), plan_only=True)
+    assert run.plan_only
+    resumed = await env.pipeline.resume(run.id)
+    assert resumed.state is RunState.AWAITING_APPROVAL, resumed.reason
+    assert env.jobs("coder") == []
+
+
+class _AlwaysDone:
+    """Answers `done` at D5 whatever happened (issue #21); the rules dispatcher elsewhere."""
+
+    name = "always-done"
+
+    def __init__(self) -> None:
+        from jev_agent.dispatch.rules import RulesDispatcher
+
+        self.rules = RulesDispatcher()
+
+    async def decide(self, req: DecisionRequest) -> Decision:
+        if req.point == "D5":
+            return Decision(point="D5", answers={"action": "done"}, dispatcher=self.name)
+        return await self.rules.decide(req)
+
+
+def _d5_actions(env: Env, run_id: str) -> list[str]:
+    return [
+        d.decision.answers["action"]
+        for d in env.store.list_decisions(run_id)
+        if d.decision.point == "D5"
+    ]
+
+
+async def test_done_after_a_failed_worker_is_overridden_to_retry(make_env: Any) -> None:
+    env: Env = make_env(
+        {
+            "planner": FakeStep(parsed=ONE_TASK),
+            "coder:T1": [FakeStep(status="error", summary="worker crashed"), FakeStep()],
+        },
+        dispatcher=_AlwaysDone(),
+    )
+    run = await env.pipeline.start(_idea(env.repo))
+
+    assert run.state is RunState.DONE, run.reason
+    task = env.store.get_task(run.id, "T1")
+    assert task.attempts == 2  # the failed attempt was not accepted as done
+    assert _d5_actions(env, run.id) == ["done", "done"]  # as the dispatcher answered
+    second = env.jobs("coder", "T1")[1]
+    assert "D5 answered done, overridden to retry: the worker reported error" in second.prompt
+
+
+async def test_done_after_failed_tests_is_overridden_to_retry(make_env: Any) -> None:
+    plan = Plan(summary="s", tasks=[_card("T1", test="pytest -q")])
+    env: Env = make_env(
+        {"planner": FakeStep(parsed=plan)},
+        dispatcher=_AlwaysDone(),
+        exit_codes={"pytest -q": [1, 0]},
+    )
+    run = await env.pipeline.start(_idea(env.repo))
+
+    assert run.state is RunState.DONE, run.reason
+    assert env.store.get_task(run.id, "T1").attempts == 2
+    second = env.jobs("coder", "T1")[1]
+    assert "D5 answered done, overridden to retry: the tests failed" in second.prompt
+    assert "Tests failed" in second.prompt
+
+
+async def test_done_never_accepted_while_the_worker_keeps_failing(make_env: Any) -> None:
+    env: Env = make_env(
+        {
+            "planner": FakeStep(parsed=ONE_TASK),
+            "coder:T1": FakeStep(status="timeout", summary="took too long"),
+        },
+        dispatcher=_AlwaysDone(),
+    )
+    run = await env.pipeline.start(_idea(env.repo))
+
+    assert run.state is RunState.FAILED, run.reason
+    task = env.store.get_task(run.id, "T1")
+    assert task.state is TaskState.FAILED and task.attempts == 3
+
+
+# ---- failure, cleanup and cancellation paths (issue #54) -------------------------------------
+
+
+class _Wrapped:
+    """A FakeWorker with a hook that runs before (and may replace) each job."""
+
+    name = "fake"
+
+    def __init__(self, inner: FakeWorker, before: Any) -> None:
+        self.inner, self.before = inner, before
+
+    async def run(self, job: WorkerJob) -> WorkerOutput:
+        self.before(job)
+        return await self.inner.run(job)
+
+
+def _wired(
+    repo: Path,
+    store: Store,
+    worker: Any,
+    *,
+    workspace: Any = None,
+    dispatcher: Dispatcher | None = None,
+) -> Pipeline:
+    registry = WorkerRegistry({n: worker for n in ("claude_code", "codex", "api")})
+    return build_pipeline(
+        repo,
+        _config(),
+        store,
+        registry,
+        dispatcher=dispatcher,
+        workspace=workspace,
+        commands=FakeCommandRunner(),
+    )
+
+
+async def test_a_raising_worker_adapter_becomes_an_error_attempt(fixture_repo: Path) -> None:
+    inner = FakeWorker("fake", {"planner": FakeStep(parsed=ONE_TASK)})
+
+    def boom_once(job: WorkerJob) -> None:
+        if job.role == "coder" and job.attempt == 1:
+            raise RuntimeError("adapter bug")
+
+    with Store.open(fixture_repo / ".jev" / "state.db") as store:
+        run = await _wired(fixture_repo, store, _Wrapped(inner, boom_once)).start(
+            _idea(fixture_repo)
+        )
+        assert run.state is RunState.DONE, run.reason
+        first, second = [a for a in store.list_attempts(run.id) if a.role == "coder"]
+        assert first.result is not None and first.result.status == "error"
+        assert first.result.summary == "worker raised RuntimeError: adapter bug"
+        assert second.result is not None and second.result.status == "success"
+        assert store.get_task(run.id, "T1").attempts == 2
+
+
+def _failing_workspace(repo: Path, method: str) -> Any:
+    from jev_agent.core.workspace import GitWorkspace, WorkspaceError
+
+    class Failing(GitWorkspace):
+        pass
+
+    def fail(self: GitWorkspace, run_id: str) -> Any:
+        raise WorkspaceError(f"git {method} failed: disk full")
+
+    setattr(Failing, method, fail)
+    return Failing(repo, repo / ".jev")
+
+
+async def test_cleanup_failure_after_done_keeps_done(fixture_repo: Path) -> None:
+    worker = FakeWorker("fake", {"planner": FakeStep(parsed=ONE_TASK)})
+    workspace = _failing_workspace(fixture_repo, "cleanup")
+    with Store.open(fixture_repo / ".jev" / "state.db") as store:
+        run = await _wired(fixture_repo, store, worker, workspace=workspace).start(
+            _idea(fixture_repo)
+        )
+        assert run.state is RunState.DONE, run.reason
+        assert run.reason == (
+            f"result on branch jev/{run.id}/result; "
+            "worktree cleanup failed: git cleanup failed: disk full"
+        )
+        assert store.get_run(run.id).state is RunState.DONE
+
+
+async def test_start_commit_failure_halts_failed(fixture_repo: Path) -> None:
+    worker = FakeWorker("fake", {"planner": FakeStep(parsed=ONE_TASK)})
+    workspace = _failing_workspace(fixture_repo, "start_commit")
+    with Store.open(fixture_repo / ".jev" / "state.db") as store:
+        run = await _wired(fixture_repo, store, worker, workspace=workspace).start(
+            _idea(fixture_repo)
+        )
+        assert run.state is RunState.FAILED
+        assert run.reason == "cannot record the start commit: git start_commit failed: disk full"
+        assert [j for j in worker.jobs if j.role == "coder"] == []
+
+
+async def test_validator_without_a_verdict_needs_human(make_env: Any) -> None:
+    env: Env = make_env(
+        {"planner": FakeStep(parsed=ONE_TASK), "validator": FakeStep(parsed=ONE_TASK)}
+    )
+    run = await env.pipeline.start(_idea(env.repo))
+    assert run.state is RunState.NEEDS_HUMAN
+    reason = run.reason or ""
+    assert reason.startswith("validator gave no verdict") and "no valid ValidationResult" in reason
+    assert env.jobs("coder") == [] and env.store.list_tasks(run.id) == []
+
+
+class _EscalatesAtD3:
+    """Answers escalate_human at D3; the rules dispatcher elsewhere."""
+
+    name = "escalates"
+
+    def __init__(self) -> None:
+        from jev_agent.dispatch.rules import RulesDispatcher
+
+        self.rules = RulesDispatcher()
+
+    async def decide(self, req: DecisionRequest) -> Decision:
+        if req.point == "D3":
+            answers = {"verdict": "escalate_human"}
+            return Decision(point="D3", answers=answers, dispatcher=self.name)
+        return await self.rules.decide(req)
+
+
+async def test_d3_escalate_human_needs_human(make_env: Any) -> None:
+    env: Env = make_env({"planner": FakeStep(parsed=ONE_TASK)}, dispatcher=_EscalatesAtD3())
+    run = await env.pipeline.start(_idea(env.repo))
+    assert run.state is RunState.NEEDS_HUMAN
+    assert run.reason == "D3: plan escalated to a human"
+    d3 = env.store.list_decisions(run.id)[-1]
+    assert d3.decision.point == "D3" and d3.fallback_reason is None
+    assert env.jobs("coder") == []
+
+
+async def test_cancel_between_tasks_starts_no_further_coder(fixture_repo: Path) -> None:
+    inner = FakeWorker("fake", {"planner": FakeStep(parsed=TWO_TASKS)})
+    with Store.open(fixture_repo / ".jev" / "state.db") as store:
+
+        class CancelsAfterT1:
+            """`jev cancel` from another shell just as T1's coder returns."""
+
+            name = "fake"
+
+            async def run(self, job: WorkerJob) -> WorkerOutput:
+                output = await inner.run(job)
+                if job.role == "coder" and job.task_id == "T1":
+                    cancel_run(store, store.list_runs()[0].id)
+                return output
+
+        run = await _wired(fixture_repo, store, CancelsAfterT1()).start(_idea(fixture_repo))
+        assert run.state is RunState.CANCELLED, run.reason
+        assert run.reason == "cancelled by user"
+        assert [j.task_id for j in inner.jobs if j.role == "coder"] == ["T1"]
+        assert store.get_task(run.id, "T2").state is TaskState.PENDING
+
+
+class _CancelsAtSecondD4:
+    """`jev cancel` lands while T2 is being assigned (after T1 is done, before its coder)."""
+
+    name = "cancels"
+
+    def __init__(self, store: Store) -> None:
+        from jev_agent.dispatch.rules import RulesDispatcher
+
+        self.store, self.rules, self.d4 = store, RulesDispatcher(), 0
+
+    async def decide(self, req: DecisionRequest) -> Decision:
+        if req.point == "D4":
+            self.d4 += 1
+            if self.d4 == 2:
+                cancel_run(self.store, self.store.list_runs()[0].id)
+        return await self.rules.decide(req)
+
+
+async def test_cancel_while_the_next_task_is_assigned(fixture_repo: Path) -> None:
+    worker = FakeWorker("fake", {"planner": FakeStep(parsed=TWO_TASKS)})
+    with Store.open(fixture_repo / ".jev" / "state.db") as store:
+        pipeline = _wired(fixture_repo, store, worker, dispatcher=_CancelsAtSecondD4(store))
+        run = await pipeline.start(_idea(fixture_repo))
+        assert run.state is RunState.CANCELLED, run.reason
+        assert [j.task_id for j in worker.jobs if j.role == "coder"] == ["T1"]
+        assert store.get_task(run.id, "T2").attempts == 0
+
+
+async def test_another_process_driving_the_run_blocks_resume_and_approve(make_env: Any) -> None:
+    """Issue #61: a second process (a fresh store on the same DB) cannot resume or approve a
+    run while another one holds its lease, and it touches nothing; once that one is gone, it
+    can."""
+    crashing: Env = make_env(
+        {"planner": FakeStep(parsed=TWO_TASKS), "coder:T2:1": FakeStep(crash=True)}
+    )
+    with pytest.raises(FakeWorkerCrash):
+        await crashing.pipeline.start(_idea(crashing.repo))
+    run_id = crashing.store.list_runs()[0].id
+    assert crashing.store.get_run_lease(run_id) is None  # released on the way out
+
+    other: Env = make_env({"planner": FakeStep(parsed=TWO_TASKS)})
+    async with hold_run_lease(crashing.store, run_id):  # "the first process is still running"
+        with pytest.raises(RunInUseError, match="in use by another jev process"):
+            await other.pipeline.resume(run_id)
+        with pytest.raises(RunInUseError):
+            await other.pipeline.approve(run_id)
+        with pytest.raises(RunInUseError):
+            await other.pipeline.advance(run_id)
+        open_attempts = [a for a in other.store.list_attempts(run_id) if a.result is None]
+        assert len(open_attempts) == 1  # the live process's attempt was not closed
+        assert other.worker.jobs == []
+
+    run = await other.pipeline.resume(run_id)
+    assert run.state is RunState.DONE, run.reason
+    assert other.store.get_run_lease(run_id) is None

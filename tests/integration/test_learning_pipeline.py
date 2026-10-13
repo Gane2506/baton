@@ -220,3 +220,27 @@ async def test_failed_run_learns_and_bad_learner_output_is_skipped(make_env: Any
     assert run.learning_outcome == (
         "skipped: the learner gave no valid output (error: model refused)"
     )
+
+
+async def test_flushed_lesson_is_not_scored_into_another_profile(make_env: Any) -> None:
+    """Issue #40: a run injects a lesson of profile a, `a` is flushed and profile b gets a new
+    lesson before the run ends; scoring must not touch b's lesson."""
+    crashing: Env = make_env({"planner": FakeStep(parsed=PLAN), "coder:T1:1": FakeStep(crash=True)})
+    crashing.learning.create("a")
+    crashing.learning.create("b")
+    old = crashing.learning.db_for("a").add_lesson("a", LESSON, ["coder"], [])
+    with pytest.raises(FakeWorkerCrash):
+        await crashing.start(flag_profile="a")
+    run_id = crashing.store.list_runs()[0].id
+    coder = [a for a in crashing.store.list_attempts(run_id) if a.role == "coder"]
+    assert coder[0].lesson_ids == (old.id,)
+
+    assert crashing.learning.flush("a") == 1
+    new = crashing.learning.db_for("b").add_lesson("b", "b's own lesson", ["coder"], [])
+    assert new.id != old.id
+
+    fresh: Env = make_env({"planner": FakeStep(parsed=PLAN), "learner": FakeStep()})
+    run = await fresh.pipeline.resume(run_id)
+    assert run.state is RunState.DONE, run.reason
+    [kept] = fresh.learning.lessons("b")
+    assert (kept.id, kept.uses, kept.score, kept.retired) == (new.id, 0, 0.0, False)

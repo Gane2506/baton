@@ -236,6 +236,16 @@ async def test_timeout(repo: Path) -> None:
     assert out.result.status == "timeout"
 
 
+@pytest.mark.parametrize(
+    ("exit_code", "message"),
+    [(127, "command not found: codex"), (126, "command not executable: codex")],
+)
+async def test_missing_binary_is_an_error(repo: Path, exit_code: int, message: str) -> None:
+    out = await worker(FakeRunner(CommandResult(exit_code, "", message, False, 0.0))).run(job(repo))
+    assert out.result.status == "error"
+    assert message in out.result.summary
+
+
 async def test_quota(repo: Path) -> None:
     runner = FakeRunner(CommandResult(1, fixture("quota_turn_failed_curly.jsonl"), "", False, 1))
     out = await worker(runner).run(job(repo))
@@ -285,6 +295,10 @@ CASES = [
     (None, 1, "You hit your spend cap for this workspace", "quota_exhausted"),
     (None, 1, "Not logged in. Run `codex login` first.", "error"),
     (None, 1, "thread panicked", "failure"),
+    # run_command's codes for a missing or non-executable binary: the worker cannot run.
+    (None, 127, "command not found: codex", "error"),
+    (None, 126, "command not executable: codex", "error"),
+    ("turn_failed_generic.jsonl", 127, "", "failure"),  # codex itself ran: not a start failure
 ]
 
 

@@ -7,6 +7,7 @@ Each entry in `MIGRATIONS` is one SQL script. Script N (1-based) moves the datab
 from __future__ import annotations
 
 import sqlite3
+import time
 
 # Profiles and lessons for recursive learning (docs/learning.md). The same tables live in the
 # repo's state.db (migration 4) and in the shared learning database (`SHARED_MIGRATIONS`).
@@ -35,6 +36,47 @@ LEARNING_TABLES_V1 = """
     );
 
     CREATE INDEX lessons_profile ON lessons (profile);
+"""
+
+# Issue #40: rebuild `lessons` with AUTOINCREMENT so an id is never handed out again after its
+# lesson was deleted (flush, delete), and add the ledger of scored (run, task) pairs, kept in the
+# database that holds the scores so scoring and its record commit together. Ids and data are
+# kept; a lesson whose profile is missing (only possible with foreign keys off) is dropped.
+# Used by migration 9 (state.db) and shared migration 2. Never edit this text.
+LESSONS_AUTOINCREMENT_V2 = """
+    CREATE TABLE lessons_v2 (
+        id           INTEGER PRIMARY KEY AUTOINCREMENT,
+        profile      TEXT NOT NULL REFERENCES learning_profiles (name) ON DELETE CASCADE,
+        text         TEXT NOT NULL,
+        roles_json   TEXT NOT NULL,
+        tags_json    TEXT NOT NULL,
+        source_run   TEXT,
+        source_task  TEXT,
+        created_at   TEXT NOT NULL,
+        updated_at   TEXT NOT NULL,
+        uses         INTEGER NOT NULL DEFAULT 0,
+        score        REAL NOT NULL DEFAULT 0,
+        retired      INTEGER NOT NULL DEFAULT 0
+    );
+
+    INSERT INTO lessons_v2 (id, profile, text, roles_json, tags_json, source_run, source_task,
+                            created_at, updated_at, uses, score, retired)
+        SELECT id, profile, text, roles_json, tags_json, source_run, source_task, created_at,
+               updated_at, uses, score, retired
+        FROM lessons WHERE profile IN (SELECT name FROM learning_profiles);
+
+    DROP TABLE lessons;
+    ALTER TABLE lessons_v2 RENAME TO lessons;
+    CREATE INDEX lessons_profile ON lessons (profile);
+
+    -- One row per task whose injected lessons were scored (docs/learning.md, scoring).
+    CREATE TABLE scored_tasks (
+        run_id     TEXT NOT NULL,
+        task_id    TEXT NOT NULL,
+        profile    TEXT NOT NULL,
+        scored_at  TEXT NOT NULL,
+        PRIMARY KEY (run_id, task_id)
+    );
 """
 
 MIGRATIONS: list[str] = [
@@ -222,12 +264,68 @@ MIGRATIONS: list[str] = [
         kpis_json    TEXT NOT NULL
     );
     """,
+    # 8: `--plan-only` is a property of the run, so `jev resume` keeps stopping at the approval
+    # gate (issue #22). Older runs: 0 (their flag was never stored).
+    """
+    ALTER TABLE runs ADD COLUMN plan_only INTEGER NOT NULL DEFAULT 0;
+    """,
+    # 9: lesson ids are never reused, and scoring is recorded with the scores (issue #40). Ids
+    # deleted before this upgrade are unknown, except the repo-scope (`L`) ids that attempts
+    # still name: the sequence starts after the highest of those too.
+    LESSONS_AUTOINCREMENT_V2
+    + """
+    DELETE FROM sqlite_sequence WHERE name = 'lessons';
+    INSERT INTO sqlite_sequence (name, seq)
+        SELECT 'lessons', top FROM (
+            SELECT MAX(n) AS top FROM (
+                SELECT id AS n FROM lessons
+                UNION ALL
+                SELECT CAST(substr(j.value, 2) AS INTEGER)
+                FROM attempts AS a,
+                     json_each(CASE WHEN json_valid(a.lesson_ids) THEN a.lesson_ids
+                                    ELSE '[]' END) AS j
+                WHERE j.type = 'text' AND upper(substr(j.value, 1, 1)) = 'L'
+            )
+        )
+        WHERE top IS NOT NULL;
+    """,
+    # 10: what the end-of-run learning steps changed, as data (issue #42): a JSON object
+    # {"added", "updated", "retired"} summed over the run's learning steps; NULL: nothing was
+    # applied. Older runs are backfilled once from their outcome line, "learned into <profile>:
+    # A added, U updated, R retired" (profile names have no ": "); nothing parses it after this.
+    """
+    ALTER TABLE runs ADD COLUMN learning_counts_json TEXT;
+    UPDATE runs SET learning_counts_json = json_object(
+            'added', CAST(substr(learning_outcome, instr(learning_outcome, ': ') + 2)
+                          AS INTEGER),
+            'updated', CAST(substr(learning_outcome, instr(learning_outcome, ' added, ') + 8)
+                            AS INTEGER),
+            'retired', CAST(substr(learning_outcome, instr(learning_outcome, ' updated, ') + 10)
+                            AS INTEGER))
+        WHERE learning_outcome GLOB 'learned into *: [0-9]* added, [0-9]* updated, [0-9]* retired';
+    """,
+    # 11: the run lease (issue #61): at most one process drives a run at a time. `token` is
+    # random per claim; `pid` and `host` say who holds it; the holder renews `heartbeat_at`.
+    """
+    CREATE TABLE run_leases (
+        run_id        TEXT PRIMARY KEY REFERENCES runs (id) ON DELETE CASCADE,
+        token         TEXT NOT NULL,
+        pid           INTEGER NOT NULL,
+        host          TEXT NOT NULL,
+        acquired_at   TEXT NOT NULL,
+        heartbeat_at  TEXT NOT NULL
+    );
+    """,
 ]
 
 SCHEMA_VERSION = len(MIGRATIONS)
 
 # Migrations for the shared learning database (`$XDG_DATA_HOME/jev/learning.db`).
-SHARED_MIGRATIONS: list[str] = [LEARNING_TABLES_V1]
+SHARED_MIGRATIONS: list[str] = [
+    LEARNING_TABLES_V1,
+    # 2: lesson ids are never reused; the scored (run, task) ledger (issue #40).
+    LESSONS_AUTOINCREMENT_V2,
+]
 
 
 class SchemaVersionError(RuntimeError):
@@ -239,28 +337,79 @@ def schema_version(conn: sqlite3.Connection) -> int:
     return version
 
 
+def configure_connection(conn: sqlite3.Connection, busy_timeout_ms: int = 5000) -> None:
+    """Set up a fresh connection: foreign keys on, WAL journal, a busy timeout.
+
+    Switching to WAL needs an exclusive lock and SQLite reports a busy database at once,
+    without waiting, so the switch is retried for up to the busy timeout: another process may
+    be opening (or upgrading) the same database right now (issue #23).
+    """
+    conn.execute(f"PRAGMA busy_timeout = {int(busy_timeout_ms)}")
+    conn.execute("PRAGMA foreign_keys = ON")
+    deadline = time.monotonic() + busy_timeout_ms / 1000
+    while True:
+        try:
+            conn.execute("PRAGMA journal_mode = WAL").fetchall()
+            return
+        except sqlite3.OperationalError as exc:
+            if "locked" not in str(exc) or time.monotonic() >= deadline:
+                raise
+            time.sleep(0.02)
+
+
+def _statements(script: str) -> list[str]:
+    """`script` split into complete SQL statements (comments and blank text dropped)."""
+    statements: list[str] = []
+    pending = ""
+    for piece in script.split(";")[:-1]:
+        pending += piece + ";"
+        # A `;` inside a string, comment or trigger body does not end the statement yet.
+        if sqlite3.complete_statement(pending):
+            statements.append(pending)
+            pending = ""
+    pending += script.rsplit(";", 1)[-1] if ";" in script else script
+    code = [ln for ln in pending.splitlines() if ln.strip() and not ln.strip().startswith("--")]
+    if code:  # a last statement without `;`
+        statements.append(pending)
+    return statements
+
+
 def apply_migrations(conn: sqlite3.Connection, migrations: list[str] | None = None) -> None:
     """Bring the database up to the last of `migrations` (default: the state database's
-    `MIGRATIONS`, i.e. `SCHEMA_VERSION`). Safe to call on every open.
+    `MIGRATIONS`, i.e. `SCHEMA_VERSION`). Safe to call on every open, also from several
+    processes at once (issue #23).
 
-    Each script runs in its own transaction together with its `user_version` bump, so a
-    failure leaves the database at the last fully applied version. `conn` must be in
-    autocommit mode (`isolation_level=None`).
+    Each script runs in its own `BEGIN IMMEDIATE` transaction together with its `user_version`
+    bump, so a failure leaves the database at the last fully applied version. The version is
+    read again after the write lock is taken: another process may have upgraded the database
+    in the meantime, and its scripts are then skipped. `conn` must be in autocommit mode
+    (`isolation_level=None`).
     """
     scripts = MIGRATIONS if migrations is None else migrations
     latest = len(scripts)
-    current = schema_version(conn)
-    if current > latest:
-        raise SchemaVersionError(
-            f"database has schema version {current}, but this jev only knows up to "
-            f"{latest}; upgrade jev to open it"
-        )
-    for version in range(current + 1, latest + 1):
-        script = scripts[version - 1]
-        try:
-            conn.executescript(
-                f"BEGIN IMMEDIATE;\n{script}\nPRAGMA user_version = {version};\nCOMMIT;"
+
+    def check(current: int) -> int:
+        if current > latest:
+            raise SchemaVersionError(
+                f"database has schema version {current}, but this jev only knows up to "
+                f"{latest}; upgrade jev to open it"
             )
+        return current
+
+    if check(schema_version(conn)) == latest:
+        return  # up to date: no write lock needed
+    while True:
+        # Not `executescript`: before Python 3.12 it commits an open transaction first.
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            current = check(schema_version(conn))
+            if current == latest:
+                conn.execute("COMMIT")
+                return
+            for statement in _statements(scripts[current]):
+                conn.execute(statement)
+            conn.execute(f"PRAGMA user_version = {current + 1}")
+            conn.execute("COMMIT")
         except BaseException:
             if conn.in_transaction:
                 conn.rollback()
