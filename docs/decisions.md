@@ -2,6 +2,37 @@
 
 Deviations from [PLAN.md](../PLAN.md) and choices it left open. Newest first.
 
+## 2026-10-13: Tune Laya's weights from run outcomes (#69)
+
+- **Outcomes are derived, not recorded** (jev-decide, Jev then Laya: both picked this over an
+  outcome table, ARBITRATED at 0.74 and 0.84). The state DB already holds every decision with
+  its run and task, the tasks' and runs' final states and the D5 answers, so `core/tuning.py`
+  reads them when `jev laya tune` runs. A `decision_outcomes` table written by the pipeline
+  would add a migration and new writes in the run loop without adding information. Rejected
+  too: only printing a `jev.toml` snippet, which drops the issue's "the learning profile
+  carries the weights".
+- **What counts as passed.** D4 passes when the task's next D5 answer is `done`: the most direct
+  signal of whether the assignment worked, and known mid-run. Other decisions wait for an ended
+  run (DONE, FAILED, BUDGET_EXCEEDED): a task's by the task's state, a run-level one by the
+  run's. Cancelled runs and runs waiting for a person are unknown, not failed: a person stopped
+  them, not the work. D7 decides after the outcome and is never counted.
+- **The rule is simple on purpose.** Per criterion, the gap between the chosen answers' mean
+  score in passed and in failed work, applied as a bounded multiplicative step (e^(0.25 x gap),
+  at most +-50% per tune), then renormalised. It is explainable in one table, needs no
+  dependency, and cannot swing the matrix on a handful of runs (5 passed and 5 failed samples
+  at least). A regression over all six criteria was rejected: with tens of correlated samples
+  it overfits and its weights are hard to explain.
+- **Never silent.** `tune` only shows; `--apply` saves on a learning profile, and only runs that
+  learn with that profile use them. Weights in `jev.toml` win, and `--apply` refuses while they
+  are set, so a saved suggestion is never silently ignored. Each decision records the weights
+  it used.
+- **Per run, without shared state.** The harness builds a consensus dispatcher with the run's
+  weights for each decision (`ConsensusDispatcher.with_weights`) instead of changing the shared
+  one, so runs with different profiles in one process (dashboard, scheduler) never mix weights.
+- **Stored weights are validated when read.** A profile's weights that no longer validate (a
+  renamed criterion) stop the run for a person instead of being ignored; `jev laya reset`
+  clears them without reading them.
+
 ## 2026-10-13: Ship and merge after both votes, or ask first (#68)
 
 This reverses the "jev never merges" stance of `jev ship` (below, 2026-10-13: `jev ship`, KPIs

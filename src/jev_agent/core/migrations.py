@@ -79,6 +79,13 @@ LESSONS_AUTOINCREMENT_V2 = """
     );
 """
 
+# Issue #69: a learning profile can carry tuned Laya matrix weights (`jev laya tune --apply`);
+# NULL means the configured weights. Used by migration 13 (state.db) and shared migration 3.
+# Never edit this text.
+PROFILE_LAYA_WEIGHTS = """
+    ALTER TABLE learning_profiles ADD COLUMN laya_weights_json TEXT;
+"""
+
 MIGRATIONS: list[str] = [
     # 1: initial schema
     """
@@ -322,6 +329,8 @@ MIGRATIONS: list[str] = [
     ALTER TABLE runs ADD COLUMN ship_mode TEXT CHECK (ship_mode IN ('merge', 'ask'));
     ALTER TABLE queue ADD COLUMN ship_mode TEXT CHECK (ship_mode IN ('merge', 'ask'));
     """,
+    # 13: tuned Laya weights on a learning profile (issue #69).
+    PROFILE_LAYA_WEIGHTS,
 ]
 
 SCHEMA_VERSION = len(MIGRATIONS)
@@ -331,6 +340,8 @@ SHARED_MIGRATIONS: list[str] = [
     LEARNING_TABLES_V1,
     # 2: lesson ids are never reused; the scored (run, task) ledger (issue #40).
     LESSONS_AUTOINCREMENT_V2,
+    # 3: tuned Laya weights on a learning profile (issue #69).
+    PROFILE_LAYA_WEIGHTS,
 ]
 
 

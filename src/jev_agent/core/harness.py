@@ -28,6 +28,7 @@ from jev_agent.core.models import (
 from jev_agent.core.store import AttemptRecord, Store
 from jev_agent.core.workspace import Workspace
 from jev_agent.dispatch.base import DispatchError
+from jev_agent.dispatch.consensus import ConsensusDispatcher
 from jev_agent.dispatch.guard import GuardedDispatcher
 from jev_agent.dispatch.requests import RoleOptions, role_options
 from jev_agent.roles import ROLE_SCHEMAS, PromptError, load_template, render_prompt
@@ -160,8 +161,15 @@ class Harness:
         Without a fallback (the consensus dispatcher) a missing decision stops the run for a
         human, resumably: `jev resume` asks again once the cause is fixed. With one, both
         dispatchers failed, which only an internal error can cause, so the run fails."""
+        dispatcher = self.dispatcher
+        if isinstance(dispatcher.primary, ConsensusDispatcher):
+            weights = self.laya_weights(run_id)
+            if weights is not None:
+                dispatcher = GuardedDispatcher(
+                    dispatcher.primary.with_weights(weights), dispatcher.fallback
+                )
         try:
-            guarded = await self.dispatcher.decide(req)
+            guarded = await dispatcher.decide(req)
         except DispatchError as exc:
             reason = f"{req.point}: no valid decision: {exc}"
             if self.dispatcher.fallback is None:
@@ -172,6 +180,25 @@ class Harness:
         if decision.cost_usd:
             self.store.add_spend(run_id, task_id, decision.cost_usd)
         return decision
+
+    def laya_weights(self, run_id: str) -> dict[str, float] | None:
+        """Tuned Laya weights from the run's learning profile (`jev laya tune --apply`), or
+        None for the configured ones. Weights set in jev.toml always win."""
+        run = self.store.get_run(run_id)
+        if (
+            "weights" in self.config.dispatcher.laya.model_fields_set
+            or self.learning is None
+            or run.learning_profile is None
+        ):
+            return None
+        if self.learning.get(run.learning_profile) is None:  # deleted after the run started
+            return None
+        try:
+            return self.learning.laya_weights(run.learning_profile)
+        except LearningError as exc:  # stored weights that no longer validate
+            raise Halt(
+                RunState.NEEDS_HUMAN, f"{exc}; `jev laya reset` clears them", resumable=True
+            ) from exc
 
     def last_answers(self, run_id: str, point: str) -> dict[str, str]:
         for record in reversed(self.store.list_decisions(run_id)):

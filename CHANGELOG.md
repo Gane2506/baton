@@ -22,6 +22,14 @@ All notable changes to this project are documented here. The format is based on
   - `jev doctor` fails the dispatcher check under `consensus` when the Jev key env var is unset
     (runs would stop at their first decision); with `jev` it stays a warning.
 
+- **Tune Laya's weights from run outcomes** ([#69](https://github.com/Gane2506/baton/issues/69)).
+  Consensus decisions store Laya's final scores and the weights used. `jev laya tune` derives
+  whether the work each decision chose passed (D4 from the task's next D5; the rest from the
+  ended run and its tasks) and suggests weights that favour the criteria that told passing work
+  from failing work; it never applies them on its own. `--apply` saves them on a learning
+  profile, runs that learn with it use them (weights in `jev.toml` still win), and
+  `jev laya reset` clears them. State DB schema 13, shared learning DB 3.
+
 - **The validator asks "why X, not Y"** ([#67](https://github.com/Gane2506/baton/issues/67)).
   It records a challenge per plan choice (the alternative, the planner's reason, whether it
   holds); a choice without a sound reason is an issue that sends the plan back to the planner,

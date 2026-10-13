@@ -89,7 +89,8 @@ reasons of the earlier rounds in the state. If it is still not settled, the run 
 `NEEDS_HUMAN` and `jev resume` continues it once you have looked. The consensus dispatcher
 never falls back to rules, so a missing key, a network error or an answer outside the allowed
 values also stops the run instead of being decided without Jev. The saved decision records
-both votes, Laya's totals and the reason of every unsettled round. Questions with a single
+both votes, Laya's totals and final scores, the weights used and the reason of every unsettled
+round. Questions with a single
 allowed value are not asked.
 
 With `primary = "jev"`, every decision goes to Jev first. If the call fails (key unset, network
@@ -168,6 +169,10 @@ maintainability = 0.10
 tool_fit = 0.10
 user_preference = 0.10
 ```
+
+`jev laya tune` suggests weights from how past decisions turned out, and `--apply` saves them
+on a learning profile; weights set here win over a profile's. See
+[docs/learning.md](learning.md#laya-weights).
 
 Each round makes two Jev calls, one for the votes and one for Laya's scores (every allowed
 answer on every criterion, in one call), so a decision costs about twice as much as with

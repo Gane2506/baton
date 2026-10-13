@@ -164,7 +164,9 @@ card (state plus allowed answers) and acts on the answer:
 
 By default every decision needs two votes: Jev first, then Laya (Jev scoring each allowed
 answer on the Laya CDA decision matrix). Both must agree confidently; otherwise the question is
-asked again, and then the run stops for a human (`jev resume` continues it). With
+asked again, and then the run stops for a human (`jev resume` continues it). `jev laya tune`
+suggests new matrix weights from how past decisions turned out, and `--apply` saves them on a
+learning profile. With
 `[dispatcher] primary = "jev"`, Jev answers alone and a deterministic rules dispatcher answers
 any decision Jev cannot. `jev log` shows who made each decision and why a fallback happened. The harness
 itself makes no routing choices; it only enforces hard limits (plan rounds, task attempts,

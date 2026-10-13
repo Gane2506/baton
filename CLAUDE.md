@@ -86,7 +86,7 @@ Names (after two renames — don't rename again without being asked):
   dispatcher/workers/pipeline from config (`cli_context`, `start_run(profile=, learning=,
   quality=)`).
 - `core/` — `models.py` (pydantic), `store.py` + `migrations.py` (SQLite `.jev/state.db`,
-  **schema version 11** (shared learning DB: 2): runs (incl. plan_only, learning_counts_json), tasks, attempts, decisions, learning, queue, quality_reports,
+  **schema version 13** (shared learning DB: 3): runs (incl. plan_only, learning_counts_json), tasks, attempts, decisions, learning, queue, quality_reports,
   shipped_prs/run_kpis, run_leases), `lease.py` (run lease, #61), `pipeline.py` (run state machine INTAKE→PLANNING→VALIDATING→
   AWAITING_APPROVAL→EXECUTING→INTEGRATING→DONE), `tasks.py`, `harness.py` (dumb: stores,
   asks dispatcher, executes; enforces budgets/limits), `workspace.py` (git worktrees,

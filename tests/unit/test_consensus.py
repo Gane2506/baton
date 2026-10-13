@@ -444,7 +444,7 @@ async def test_details_shape() -> None:
     assert decision.dispatcher == "consensus"
     assert decision.latency_ms >= 0
     details = decision.details
-    assert set(details) == {"direct", "answers", "laya", "rounds", "usage"}
+    assert set(details) == {"direct", "answers", "laya", "weights", "rounds", "usage"}
     assert details["direct"] == ["worker"]
     assert details["answers"] == {
         "effort": {"choice": "medium", "confidence": 0.8, "probabilities": {"medium": 0.8}}
@@ -454,8 +454,13 @@ async def test_details_shape() -> None:
             "choice": "medium",
             "totals": {"low": 2.0, "medium": 4.0, "high": 3.0},
             "margin": 1.0,
+            "scores": {
+                option: dict.fromkeys(LAYA_CRITERIA, level)
+                for option, level in {"low": 2.0, "medium": 4.0, "high": 3.0}.items()
+            },
         }
     }
+    assert details["weights"] == LayaSettings().weights
     assert details["rounds"] == []
     assert details["usage"] == {
         "calls": 2,
@@ -463,3 +468,26 @@ async def test_details_shape() -> None:
         "output_tokens": 30,
         "cost": pytest.approx(0.003),
     }
+
+
+async def test_with_weights_scores_with_the_given_weights() -> None:
+    # Two criteria disagree: "low" is safest, "high" most correct. Weights decide the winner.
+    def split(_round: int, _question: str, option: str, criterion: str) -> tuple[float, float]:
+        if criterion == "safety":
+            return {"low": 5.0, "medium": 3.0, "high": 1.0}[option], 0.9
+        if criterion == "correctness":
+            return {"low": 1.0, "medium": 3.0, "high": 5.0}[option], 0.9
+        return 3.0, 0.9
+
+    weights = dict.fromkeys(LAYA_CRITERIA, 0.0) | {"safety": 0.6, "correctness": 0.4}
+    dispatcher = _consensus(Server([{"effort": ("low", 0.9)}], split)).with_weights(weights)
+    decision = await dispatcher.decide(_request(effort=EFFORT))
+    assert decision.answers == {"effort": "low"}
+    assert decision.details["weights"] == weights
+    assert decision.details["laya"]["effort"]["scores"]["high"]["safety"] == 1.0
+
+
+def test_with_weights_validates_the_weights() -> None:
+    dispatcher = _consensus(Server([], _both))
+    with pytest.raises(ValueError, match="add up to 1"):
+        dispatcher.with_weights(dict.fromkeys(LAYA_CRITERIA, 0.5))
