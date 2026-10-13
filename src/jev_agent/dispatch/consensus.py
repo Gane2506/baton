@@ -289,8 +289,10 @@ def _is_number(value: object) -> bool:
 
 
 def _no_consensus_message(verdicts: dict[str, Verdict], rounds: int) -> str:
-    unsettled = "; ".join(
-        f"{q}: {', '.join(v.reasons)}" for q, v in verdicts.items() if not v.settled
+    # A reason may contain a comma ("Jev picked a, Laya ranked b first"), so reasons are
+    # joined with "; " and questions with ". ".
+    unsettled = ". ".join(
+        f"{q}: {'; '.join(v.reasons)}" for q, v in verdicts.items() if not v.settled
     )
     return f"Jev and Laya did not agree after {rounds} round(s): {unsettled}"
 
