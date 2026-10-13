@@ -52,6 +52,7 @@ from jev_agent.dispatch.guard import GuardedDispatcher
 from jev_agent.dispatch.requests import d1_intake, d2_validator, d3_after_validation, d6_integration
 from jev_agent.dispatch.rules import RulesDispatcher
 from jev_agent.quality.levels import QualityLevel
+from jev_agent.servers.profiles import snapshot, write_run_profile
 from jev_agent.workers.base import WorkerOutput
 from jev_agent.workers.openrouter_models import ModelCatalog
 from jev_agent.workers.registry import WorkerRegistry
@@ -105,6 +106,7 @@ class Pipeline:
         plan_only: bool = False,
         learning_profile: str | None = None,
         quality: QualityLevel | None = None,
+        profile: str | None = None,
     ) -> RunRecord:
         """Create a run for `idea` and advance it as far as it goes.
 
@@ -113,7 +115,11 @@ class Pipeline:
         level (None: `[quality] level`), also recorded on the run.
         """
         level = self.h.config.quality.level if quality is None else quality
+        # Workspace profile (docs/servers.md): copied to .jev/runs/<id>/profile.json, so a
+        # resumed run reaches the same servers. ProfileError (a ValueError) if unknown.
+        copy = None if profile is None else snapshot(self.h.config, profile)
         run = self.store.create_run(idea, learning_profile, level)
+        write_run_profile(self.h.state_dir, run.id, copy)
         return await self.advance(run.id, plan_only=plan_only)
 
     async def approve(self, run_id: str, execute: bool = True) -> RunRecord:

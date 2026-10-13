@@ -282,6 +282,7 @@ def shots(run_id: str) -> list[Shot]:
         Shot("cli-learning.svg", "jev learning show", [["learning", "show"]]),
         Shot("cli-quality-checks.svg", "jev quality checks", [["quality", "checks"]]),
         Shot("cli-quality.svg", f"jev quality show {run_id}", [["quality", "show", run_id]]),
+        Shot("cli-kpi.svg", "jev kpi --last 10", [["kpi", "--last", "10"]], width=128),
     ]
 
 

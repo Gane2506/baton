@@ -186,6 +186,24 @@ svg.chart .label { fill: var(--text); font: 12px var(--sans); }
 svg.chart .value { fill: var(--muted); font: 12px var(--mono); }
 svg.chart a .label { fill: var(--accent); }
 
+/* KPIs: summary cards and trend charts */
+.stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 10px; margin-bottom: 14px; }
+.stat { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 10px 14px; }
+.stat-label { color: var(--muted); font-size: 0.85em; }
+.stat-value { font-size: 1.45em; font-weight: 700; }
+.regressions { border-color: var(--bad); }
+.regressions h2 { color: var(--bad); margin-top: 0; }
+.trends { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 12px; }
+.trend-card h3 { font-size: 0.95em; margin: 0 0 6px; }
+.trend-card.regressed { border-color: var(--bad); }
+svg.trend { width: 100%; height: auto; display: block; }
+svg.trend .axis { stroke: var(--border); stroke-width: 1; }
+svg.trend .tick { fill: var(--muted); font: 11px var(--mono); }
+svg.trend .line { fill: none; stroke: var(--bar); stroke-width: 2; }
+svg.trend .median { fill: none; stroke: var(--muted); stroke-width: 1.5; stroke-dasharray: 5 4; }
+svg.trend .pt { fill: var(--bar); }
+svg.trend .pt.bad { fill: var(--bad); stroke: var(--surface); stroke-width: 1.5; }
+
 /* Chat transcript */
 .turn { border-left: 3px solid var(--border); padding: 4px 10px; margin: 8px 0; }
 .turn.user { border-color: var(--accent); }

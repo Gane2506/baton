@@ -8,7 +8,6 @@ import pytest
 from rich.console import Console
 from typer.testing import CliRunner
 
-from jev_agent.cli import scheduler_cmds
 from jev_agent.cli.app import app
 from jev_agent.cli.board_cmds import (
     COLUMNS,
@@ -18,7 +17,7 @@ from jev_agent.cli.board_cmds import (
     format_age,
     render_board,
 )
-from jev_agent.cli.scheduler_cmds import ProfileUnsupportedError, apply_profile
+from jev_agent.cli.scheduler_cmds import apply_profile
 from jev_agent.cli.wiring import FAKE_WORKERS_ENV
 from jev_agent.core.models import Idea, Plan, RunState, TaskCard, TaskState
 from jev_agent.core.store import Store
@@ -46,6 +45,9 @@ def _store(repo: Path) -> Store:
 
 
 def test_queue_add_list_move_remove_clear(fixture_repo: Path) -> None:
+    (fixture_repo / "jev.toml").write_text(
+        '[servers.web]\nhost = "web1"\n[profiles.box]\nservers = ["web"]\n'
+    )
     assert _jev(fixture_repo, "queue", "list")[1].startswith("The queue is empty")
     code, output = _jev(fixture_repo, "queue", "add", "first idea")
     assert code == 0 and "queued item 1 (normal)" in output
@@ -155,23 +157,28 @@ def test_scheduler_daily_budget_flag(fixture_repo: Path) -> None:
     assert code == 0 and "daily budget reached" in output and "started 0 run(s)" in output
 
 
-def test_profile_hook(fixture_repo: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_profile_hook(fixture_repo: Path) -> None:
     with _store(fixture_repo) as store:
         plain = store.add_queue_item("a")
         boxed = store.add_queue_item("b", profile="box")
     assert apply_profile(plain) == {}
-
-    async def with_profile(ctx: object, idea: str, *, profile: str | None = None) -> None:
-        return None
-
-    async def without_profile(ctx: object, idea: str) -> None:
-        return None
-
-    monkeypatch.setattr(scheduler_cmds, "start_run", with_profile)
     assert apply_profile(boxed) == {"profile": "box"}
-    monkeypatch.setattr(scheduler_cmds, "start_run", without_profile)
-    with pytest.raises(ProfileUnsupportedError, match="box"):
-        apply_profile(boxed)
+
+
+def test_queue_add_checks_profile(fixture_repo: Path) -> None:
+    code, output = _jev(fixture_repo, "queue", "add", "x", "--profile", "box")
+    assert code == 1 and "no workspace profile named 'box'" in output
+    (fixture_repo / "jev.toml").write_text(
+        '[servers.web]\nhost = "web1"\n[profiles.box]\nservers = ["web"]\n'
+    )
+    code, output = _jev(fixture_repo, "queue", "add", "x", "--profile", "box")
+    assert code == 0 and "profile=box" not in output  # shown by `queue list`
+    code, output = _jev(fixture_repo, "scheduler", "start", "--once")
+    assert code == 0, output
+    with _store(fixture_repo) as store:
+        (run,) = store.list_runs()
+    saved = json.loads((fixture_repo / ".jev" / "runs" / run.id / "profile.json").read_text())
+    assert saved["name"] == "box"
 
 
 # ---- jev board -------------------------------------------------------------------------------

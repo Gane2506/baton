@@ -11,12 +11,11 @@ from typer.testing import CliRunner
 
 from jev_agent.cli import chat_cmds
 from jev_agent.cli.app import app
-from jev_agent.cli.run_cmds import start_run
-from jev_agent.cli.wiring import FAKE_WORKERS_ENV, CliContext
+from jev_agent.cli.wiring import FAKE_WORKERS_ENV
 from jev_agent.config.schema import JevConfig
 from jev_agent.core.chat import BRIEF_CLOSE, BRIEF_OPEN, BRIEF_REQUEST, ChatError, Reply, Turn
 from jev_agent.core.learning import Learning
-from jev_agent.core.store import RunRecord, Store
+from jev_agent.core.store import Store
 
 runner = CliRunner()
 
@@ -222,41 +221,26 @@ def test_budget_stops_model_calls(repo: Path, monkeypatch: pytest.MonkeyPatch) -
     assert len(fake.calls) == 2
 
 
-def test_profile_refused_without_start_run_support(repo: Path, backend: ScriptedBackend) -> None:
-    code, out = _chat(repo, "--profile", "box", input="idea\n/plan\n/run\n/queue\n")
+def test_unknown_profile_refused_at_start(repo: Path, backend: ScriptedBackend) -> None:
+    code, out = _chat(repo, "--profile", "box", input="idea\n")
+    assert code == 1
+    assert "no workspace profile named 'box'" in out
+
+
+def test_profile_passed_to_runs(repo: Path, backend: ScriptedBackend) -> None:
+    (repo / "jev.toml").write_text(
+        CONFIG + '[servers.web]\nhost = "web1"\n[profiles.box]\nservers = ["web"]\n'
+    )
+    code, out = _chat(repo, "--profile", "box", input="idea\n/plan\n/queue\n")
     assert code == 0, out
-    assert out.count("cannot apply workspace profiles to runs yet") == 2
     assert "workspace profile: box" in out
     with _store(repo) as store:
-        assert store.list_runs() == []
+        (run,) = store.list_runs()
         (item,) = store.list_queue()
-    assert item.profile == "box"  # the queue stores it; the scheduler decides
+    saved = json.loads((repo / ".jev" / "runs" / run.id / "profile.json").read_text())
+    assert saved["name"] == "box" and saved["servers"] == ["web"]
+    assert item.profile == "box"
     assert _meta(repo)["profile"] == "box"
-
-
-def test_profile_passed_when_start_run_supports_it(
-    repo: Path, backend: ScriptedBackend, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    seen: dict[str, Any] = {}
-
-    async def start_run_with_profile(
-        ctx: CliContext,
-        idea: str,
-        *,
-        plan_only: bool = False,
-        learning: str | None = None,
-        no_learning: bool = False,
-        profile: str | None = None,
-    ) -> RunRecord:
-        seen.update(profile=profile, plan_only=plan_only, no_learning=no_learning)
-        return await start_run(
-            ctx, idea, plan_only=plan_only, learning=learning, no_learning=no_learning
-        )
-
-    monkeypatch.setattr(chat_cmds, "start_run", start_run_with_profile)
-    code, out = _chat(repo, "--profile", "box", "--no-learning", input="idea\n/plan\n")
-    assert code == 0, out
-    assert seen == {"profile": "box", "plan_only": True, "no_learning": True}
 
 
 def test_start_screen(

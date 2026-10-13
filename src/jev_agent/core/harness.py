@@ -32,10 +32,12 @@ from jev_agent.dispatch.guard import GuardedDispatcher
 from jev_agent.dispatch.requests import RoleOptions, role_options
 from jev_agent.roles import ROLE_SCHEMAS, PromptError, load_template, render_prompt
 from jev_agent.runlog import log_path
+from jev_agent.servers.access import tools_for_run
+from jev_agent.servers.profiles import ProfileError
 from jev_agent.workers.base import WorkerJob, WorkerOutput
 from jev_agent.workers.openrouter_models import ModelCatalog
 from jev_agent.workers.registry import WorkerNotAvailable, WorkerRegistry
-from jev_agent.workers.tools import tools_for_role
+from jev_agent.workers.tools import AgentTools
 
 DEFAULT_TIMEOUT_S = 1200  # for workers without a configured timeout, and for test commands
 
@@ -225,6 +227,7 @@ class Harness:
             worker = self.workers.get(assignment.worker)
         except WorkerNotAvailable as exc:
             raise Halt(RunState.FAILED, str(exc)) from exc
+        tools = self._tools(run_id, role)
         attempt_id = self.store.start_attempt(
             run_id,
             task_id,
@@ -247,7 +250,7 @@ class Harness:
             output_schema=ROLE_SCHEMAS[role],
             task_id=task_id,
             attempt=attempt_no,
-            tools=tools_for_role(self.config, role, self.repo),
+            tools=tools,
         )
         try:
             output = await worker.run(job)
@@ -313,6 +316,13 @@ class Harness:
                 return output
             self.check_budget(run_id, task_id)
             current = nxt
+
+    def _tools(self, run_id: str, role: Role) -> AgentTools:
+        """The role's configured tools plus its servers and browser for this run."""
+        try:
+            return tools_for_run(self.config, role, self.repo, self.state_dir, run_id)
+        except ProfileError as exc:
+            raise Halt(RunState.FAILED, str(exc)) from exc
 
     def _timeout(self, worker: str) -> int:
         timeout: int = getattr(getattr(self.config.workers, worker, None), "timeout_s", 0)

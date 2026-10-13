@@ -9,6 +9,32 @@ All notable changes to this project are documented here. The format is based on
 
 ### Added
 
+- **Servers over SSH, virtual browser, workspace profiles**
+  ([#3](https://github.com/Gane2506/baton/issues/3), first version: `basic` and `medium`).
+  `[servers.<name>]` (host or `~/.ssh/config` alias, `access = "basic" | "medium"`, `workdir`,
+  `allowed_paths`); agents reach them only through jev's stdio MCP server (`jev mcp servers`:
+  `list_servers`, `run_command`, `read_file`, and at medium `write_file`, `upload`), which
+  checks every command against the access policy and an always-blocked list and appends to
+  `.jev/audit/servers.log`. SSH runs with `BatchMode=yes`, `StrictHostKeyChecking=yes` and
+  connection reuse under `.jev/ssh/`. Roles get servers with `[roles.<role>] servers = [...]`;
+  every role but the coder is capped at basic. `[browser]` and `browser = true` give roles the
+  pinned Playwright MCP server (`@playwright/mcp@0.0.83`, headless, isolated);
+  `jev browser install [--server NAME] [--yes] [--dry-run]`. `[profiles.<name>]` bundles
+  servers, lower-only access overrides, browser, learning and quality; `--profile` on
+  `jev run`, `resume`, `queue add` and `chat`, a menu on a terminal, `jev profile
+  list|show|use`; the run's copy lives in `.jev/runs/<id>/profile.json`. `jev doctor` gets
+  server, browser and profile rows and `--connect`. `access = "full"` is rejected ("not
+  available yet; see issue #3"). `python -m jev_agent` now works. See
+  [docs/servers.md](docs/servers.md).
+- **`jev ship`, KPIs and benchmarks** ([#8](https://github.com/Gane2506/baton/issues/8)).
+  Opt-in (`[ship] enabled = true`): `jev ship RUN` pushes a DONE run's result branch to a new
+  branch and opens a (draft) GitHub PR with your `gh` login; the body has the idea, plan, task
+  table, quality summary, a KPI card and decision stats. Never force-pushes, never merges;
+  `--dry-run`, `--yes`, `--force-new`. `jev ship sync` reads state, reviews, CI, follow-up
+  commits and reverts back; `jev kpi [--last N] [--json]` shows per-PR KPIs, medians and
+  regression flags; the dashboard gets a **Ship as PR** button and a **KPIs** page with SVG
+  trend charts (rolling median, regressions in red). New migration 7 (`shipped_prs`,
+  `run_kpis`). See [docs/ship.md](docs/ship.md).
 - **`jev dashboard`.** A local web dashboard (optional `dashboard` extra: Starlette, uvicorn,
   python-multipart, markdown-it-py): live Kanban board, run details (plan, decisions with Jev
   confidences, attempts, learning, quality review, log files) with Approve / Resume / Cancel,

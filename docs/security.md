@@ -10,7 +10,9 @@ sections 2, 3 and 5. Config keys are in [config.md](config.md).
   `.jev/worktrees/<run_id>/`, on a branch `jev/<run_id>/<task_id>`, never on your current
   branch. Integration merges task branches into a local `jev/<run_id>/result` branch for you to
   review.
-- **No push.** jev never runs `git push`. Nothing leaves your machine through git.
+- **No push by default.** jev runs `git push` only when you ship a run as a pull request
+  (`jev ship`, opt-in; see [Shipping PRs](#shipping-prs)). Otherwise nothing leaves your
+  machine through git.
 - **Read-only roles.** The planner, validator and reviewer cannot edit files:
   - Claude Code runs them with `--permission-mode dontAsk`, read tools only
     (`Read Glob Grep`) and write tools explicitly disallowed (`Edit Write NotebookEdit`).
@@ -77,6 +79,53 @@ header; any other address requires a token. Actions are POST-only with a same-or
 a CSRF token; pages are autoescaped under a strict Content-Security-Policy; only files inside
 `.jev/runs/<id>/` are served, as plain text. It speaks plain HTTP: on a server, keep the
 default and use `ssh -L 8765:127.0.0.1:8765 host`.
+
+## Shipping PRs
+
+`jev ship RUN` ([ship.md](ship.md)) is the one command that sends code to a remote. It
+relaxes the "never push" default as an explicit action per run:
+
+- **Opt-in.** Off unless `[ship] enabled = true`; then it still asks before pushing, unless
+  you pass `--yes` (the dashboard's button has its own confirmation page). It refuses runs
+  that are not DONE, and, by default, runs whose quality gate blocked.
+- **What is pushed:** only the run's existing result branch `jev/<run>/result`, to a new branch
+  `<branch_prefix><run>` on `[ship] remote`. Your checkout and other branches are untouched.
+- **Never force.** The push has no `--force`; a branch of that name with other commits on the
+  remote is never overwritten (`--force-new` picks a new name instead).
+- **Never merges.** jev runs `gh pr create` (a draft by default) and later only reads the PR
+  (`gh pr view`, `gh pr list`). It never merges, approves or enables auto-merge.
+- **Your credentials.** git pushes with your git credentials and `gh` acts with your own `gh`
+  login; jev never reads, stores or passes a token. What your account may do, jev may do
+  through it, so the remote's branch protection, required reviews and checks still apply.
+- **What GitHub sees:** the branch's commits, a title from the idea's first line, and a body
+  with the idea, plan, task table, quality summary and KPIs, redacted like every log. The full
+  quality review and the logs stay local. `jev ship RUN --dry-run` shows everything first.
+- `jev ship sync` stores only counts and states from GitHub, not review or comment text.
+
+## Servers and the browser
+
+`[servers.*]`, `[browser]` and workspace profiles ([servers.md](servers.md)) let agents reach
+machines and web pages. They are off until configured, and:
+
+- **No raw SSH for agents.** Agents only get jev's `jev_servers` MCP tools; every command is
+  checked against the server's access level (`basic`: read-only allowlist; `medium`: writes
+  inside `allowed_paths`, package installs, service restarts) and an always-blocked list
+  (disk formatting, reboot, user/sudoers/firewall changes, `rm` on `/`, `authorized_keys`,
+  `git push --force`, `curl | sh`, ...). The words are re-quoted before they reach the remote
+  shell. `access = "full"` (unrestricted) is not available.
+- **Read-only roles stay read-only on servers:** every role but the coder is capped at `basic`;
+  profiles can lower access, never raise it.
+- **SSH is strict and non-interactive:** `BatchMode=yes`, `StrictHostKeyChecking=yes` (never
+  `no` or `accept-new`), `ConnectTimeout=10`; keys come from ssh-agent or an `identity_file`
+  path. jev never stores passwords or key contents, and refuses reads of credential files
+  (`~/.ssh`, private keys, `.env`, `/etc/shadow`, ...).
+- **Audit.** Every server command and file operation, allowed or refused, is a redacted line in
+  `.jev/audit/servers.log`.
+- **Prompt injection.** Output from servers and web pages is untrusted; it can try to steer the
+  agent. The policy bounds the damage; keep levels low and secrets off servers agents read.
+- **Browser.** The Playwright MCP server is pinned (`@playwright/mcp@0.0.83`) and runs with an
+  in-memory profile (`--isolated`), headless by default. `jev browser install` shows the exact
+  command and asks first; on a server it needs medium access and goes through the policy.
 
 ## Keys and redaction
 

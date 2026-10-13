@@ -5,11 +5,12 @@ from __future__ import annotations
 
 import os
 import shutil
+import socket
 import sqlite3
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
+from typing import Annotated, Literal
 
 import typer
 from rich.console import Console
@@ -23,6 +24,19 @@ from jev_agent.config.schema import role_can_use_free, role_prefers_free, role_u
 from jev_agent.core.learning import Learning, learning_status
 from jev_agent.core.store import Store, StoreError
 from jev_agent.roles import ROLE_SCHEMAS, PromptError, load_template
+from jev_agent.runlog.redact import redact
+from jev_agent.servers.access import WRITE_ROLE
+from jev_agent.servers.audit import AuditEntry, AuditLog, audit_path
+from jev_agent.servers.browser import PLAYWRIGHT_MCP_VERSION
+from jev_agent.servers.profiles import repo_default
+from jev_agent.servers.ssh import (
+    SSH_COMMAND,
+    SshRunner,
+    SshTransport,
+    control_dir,
+    run_process,
+    ssh_options,
+)
 from jev_agent.workers.openrouter_models import ModelCatalog, cache_path
 from jev_agent.workers.tools import tools_for_role
 
@@ -45,9 +59,13 @@ class Check:
 
 def doctor(
     repo: RepoOption = Path("."),
+    connect: Annotated[
+        bool,
+        typer.Option("--connect", help="Also log in to each server (`ssh HOST true`)."),
+    ] = False,
 ) -> None:
-    """Check git state, config validity, worker CLIs and API keys."""
-    checks = run_checks(repo)
+    """Check git state, config validity, worker CLIs, API keys, servers and the browser."""
+    checks = run_checks(repo, connect=connect)
     table = Table(title="jev doctor")
     table.add_column("check")
     table.add_column("status")
@@ -62,7 +80,7 @@ def doctor(
         raise typer.Exit(1)
 
 
-def run_checks(repo: Path) -> list[Check]:
+def run_checks(repo: Path, *, connect: bool = False) -> list[Check]:
     checks: list[Check] = []
     root = find_git_root(repo)
     if root is None:
@@ -96,7 +114,138 @@ def run_checks(repo: Path) -> list[Check]:
         checks.extend(_free_model_checks(config, root))
         checks.extend(_prompt_checks(config, root))
         checks.extend(_tool_checks(config, root))
+        checks.extend(_server_checks(config, state_dir, connect))
     return checks
+
+
+# ---- servers, browser, profiles (docs/servers.md) -----------------------------------------
+
+# Indirections so tests never run ssh or touch DNS.
+ssh_runner: SshRunner = run_process
+
+
+def resolve_host(host: str) -> bool:
+    try:
+        socket.getaddrinfo(host, None)
+    except (OSError, UnicodeError):
+        return False
+    return True
+
+
+def _ssh_hostname(config: JevConfig, name: str) -> str | None:
+    """What `ssh -G HOST` (config evaluation only, no connection) says the host name is."""
+    server = config.servers[name]
+    argv = [SSH_COMMAND, "-G", *ssh_options(server, None), "--", server.host]
+    result = ssh_runner(argv, stdin=None, timeout_s=10)
+    if not result.ok:
+        return None
+    for line in result.stdout.decode("utf-8", errors="replace").splitlines():
+        key, _, value = line.partition(" ")
+        if key == "hostname":
+            return value.strip() or None
+    return None
+
+
+def _server_checks(config: JevConfig, state_dir: Path, connect: bool) -> list[Check]:
+    checks: list[Check] = []
+    if config.servers:
+        ssh_path = which(SSH_COMMAND)
+        if ssh_path is None:
+            checks.append(Check("ssh", "fail", "`ssh` not found on PATH; servers cannot be used"))
+        else:
+            checks.append(Check("ssh", "ok", ssh_path))
+        for name in config.servers:
+            checks.append(_server_check(config, name, state_dir, connect and ssh_path is not None))
+    for role in ROLE_SCHEMAS:
+        names = getattr(config.roles, role).servers
+        if names and role != WRITE_ROLE:
+            checks.append(
+                Check(
+                    f"role {role} servers",
+                    "note",
+                    f"{', '.join(names)}: capped at basic (read-only role)",
+                )
+            )
+    checks.extend(_browser_checks(config))
+    checks.append(_profiles_check(config, state_dir))
+    return checks
+
+
+def _server_check(config: JevConfig, name: str, state_dir: Path, connect: bool) -> Check:
+    server = config.servers[name]
+    label = f"server {name}"
+    about = f"access {server.access}"
+    roots = server.write_roots()
+    if server.access == "medium":
+        about += f", writes in {', '.join(roots)}" if roots else ", no allowed_paths: no writes"
+    if which(SSH_COMMAND) is None:
+        return Check(label, "warn", f"{server.host}: {about}; ssh missing")
+    hostname = _ssh_hostname(config, name)
+    if hostname is None:
+        return Check(label, "warn", f"{server.host}: `ssh -G` failed; {about}")
+    via = f"{server.host} -> {hostname}" if hostname != server.host else server.host
+    if not resolve_host(hostname):
+        return Check(label, "warn", f"{via}: does not resolve (DNS); {about}")
+    if not connect:
+        return Check(label, "ok", f"{via}: resolves; {about} (`jev doctor --connect` logs in)")
+    transport = SshTransport(server, sockets=control_dir(state_dir), runner=ssh_runner)
+    result = transport.check()
+    AuditLog(audit_path(state_dir)).write(
+        AuditEntry(
+            run_id=None, role="doctor", server=name, access=server.access, action="connect",
+            command="true", allowed=True, exit_code=result.exit_code,
+            duration_s=result.duration_s,
+        )
+    )  # fmt: skip
+    if result.ok:
+        return Check(label, "ok", f"{via}: login works (BatchMode); {about}")
+    lines = result.stderr.decode("utf-8", errors="replace").strip().splitlines()
+    err = redact(lines[-1] if lines else f"exit {result.exit_code}")
+    hint = (
+        " (host key unknown: connect once by hand to check and accept it)"
+        if "host key" in err.lower()
+        else ""
+    )
+    return Check(label, "fail", f"{via}: cannot log in: {err}{hint}")
+
+
+def _browser_checks(config: JevConfig) -> list[Check]:
+    roles = [r for r in ROLE_SCHEMAS if getattr(config.roles, r).browser]
+    profiles = [n for n, p in config.profiles.items() if p.browser]
+    if not (config.browser.enabled or roles or profiles):
+        return []
+    users = []
+    if roles:
+        users.append(f"roles: {', '.join(roles)}")
+    if profiles:
+        users.append(f"profiles (coder): {', '.join(profiles)}")
+    used_by = "; ".join(users) or "no role has browser = true"
+    if roles and not config.browser.enabled:
+        return [Check("browser", "warn", f"{used_by}, but [browser] enabled = false")]
+    npx = which("npx")
+    if npx is None:
+        return [Check("browser", "warn", f"`npx` not found on PATH (install Node.js); {used_by}")]
+    mode = "headless" if config.browser.headless else "headed (needs a display)"
+    return [
+        Check(
+            "browser",
+            "ok",
+            f"Playwright MCP {PLAYWRIGHT_MCP_VERSION}, {mode}; {used_by}; "
+            "install Chromium with `jev browser install`",
+        )
+    ]
+
+
+def _profiles_check(config: JevConfig, state_dir: Path) -> Check:
+    default = repo_default(state_dir)
+    if not config.profiles:
+        if default:
+            return Check("profiles", "warn", f".jev/profile names {default!r}, but none defined")
+        return Check("profiles", "ok", "none defined")
+    names = ", ".join(config.profiles)
+    if default and default not in config.profiles:
+        return Check("profiles", "warn", f"{names}; default {default!r} is not defined")
+    return Check("profiles", "ok", f"{names}; default: {default or 'none'}")
 
 
 def _tool_checks(config: JevConfig, root: Path) -> list[Check]:

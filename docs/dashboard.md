@@ -55,6 +55,10 @@ with `jev resume <run>` (or the Resume button).
   - **Approve and run** for a run awaiting approval (`jev approve`).
   - **Resume** for an interrupted run or a NEEDS_HUMAN run with a resume point (`jev resume`).
   - **Cancel** for any unfinished run (`jev cancel`; branches and worktrees are kept).
+  - **Ship as PR** for a DONE, not yet shipped run when `[ship] enabled = true` (`jev ship`,
+    [ship.md](ship.md)): a confirmation page shows the remote, branch, base, title and the
+    rendered PR body; confirming pushes and opens the PR in the background, and the run page
+    then links it.
 
   Approve and resume run in a background thread through the same code path as the CLI
   (config, workers and pipeline are built the same way), so the web server stays responsive;
@@ -73,6 +77,12 @@ with `jev resume <run>` (or the Resume button).
 - **Chats** (`/chats`): saved `jev chat` sessions and their transcripts, read-only.
 - **Spend** (`/spend`): spend per day for the last 30 days and the costliest runs, as
   server-rendered SVG bar charts, plus every run's spend.
+- **KPIs** (`/kpis`, `?last=N`, default 20): PRs opened by `jev ship` with their KPIs (cost,
+  run time, attempts per task, first-pass rate, findings, CI, time to merge), summary cards
+  (median cost per PR, median time to merge, first-pass rate, fallback rate, merged share),
+  regressions in the latest PR, and one server-rendered SVG trend chart per KPI with its
+  rolling median and red regression points. Without shipped PRs it explains `jev ship`. See
+  [ship.md](ship.md).
 - **Settings** (`/settings`): the effective config (read-only), the environment variables the
   config names with whether each is set (names only, never values), and the `jev doctor`
   checks (local checks only).
@@ -87,6 +97,8 @@ still works (reload to refresh).
 | ![Run detail](images/dashboard-run.png) | ![Queue](images/dashboard-queue.png) |
 | **Learning** | **Spend** |
 | ![Learning](images/dashboard-learning.png) | ![Spend](images/dashboard-spend.png) |
+| **KPIs** | |
+| ![KPIs](images/dashboard-kpis.png) | |
 
 The Board in dark mode: [images/dashboard-board-dark.png](images/dashboard-board-dark.png).
 
@@ -194,6 +206,7 @@ shot 1440 1400 docs/images/dashboard-run.png /runs/RUN_ID   # the id the seed sc
 shot 1440 900 docs/images/dashboard-queue.png /queue
 shot 1440 900 docs/images/dashboard-learning.png /learning
 shot 1440 1580 docs/images/dashboard-spend.png /spend
+shot 1440 1700 docs/images/dashboard-kpis.png /kpis
 # dashboard-quality.png: a tall shot of /runs/RUN_ID (1440x3400), cropped to the
 # "Quality review" section, e.g. `sips -c 1320 1440 --cropOffset Y 0 full.png --out ...`
 

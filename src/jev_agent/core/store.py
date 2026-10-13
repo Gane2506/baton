@@ -45,6 +45,7 @@ __all__ = [
     "QueueStatus",
     "RunRecord",
     "SchemaVersionError",
+    "ShippedPrRecord",
     "Store",
     "StoreError",
     "TaskRecord",
@@ -136,6 +137,48 @@ class DecisionRecord:
     decision: Decision
     fallback_reason: str | None  # why the rules dispatcher was used instead, if it was
     created_at: datetime
+
+
+PrState = Literal["open", "closed", "merged"]
+
+
+@dataclass(frozen=True)
+class ShippedPrRecord:
+    """A pull request opened by `jev ship` for a run, and what `jev ship sync` last read from
+    GitHub (None: not synced yet, or GitHub did not say)."""
+
+    id: int
+    run_id: str
+    remote: str
+    repo: str  # owner/name
+    branch: str  # the pushed head branch
+    base: str
+    number: int | None
+    url: str | None
+    title: str
+    draft: bool
+    head_oid: str | None  # the commit pushed
+    pushed_commits: int | None  # commits the pushed branch had over its base
+    created_at: datetime
+    state: PrState = "open"
+    merged_at: datetime | None = None
+    closed_at: datetime | None = None
+    review_comments: int | None = None
+    reviews: int | None = None
+    ci_status: str | None = None  # success | failure | pending | none
+    commits_after_open: int | None = None
+    additions: int | None = None
+    deletions: int | None = None
+    changed_files: int | None = None
+    reverted: bool | None = None
+    last_synced_at: datetime | None = None
+    raw: dict[str, object] | None = None  # the last `gh pr view --json` answer
+
+    @property
+    def time_to_merge_h(self) -> float | None:
+        if self.merged_at is None:
+            return None
+        return max((self.merged_at - self.created_at).total_seconds(), 0.0) / 3600
 
 
 QueuePriority = Literal["high", "normal", "low"]
@@ -579,6 +622,132 @@ class Store:
         )
         return [_quality_record(row) for row in rows]
 
+    # ---- shipped pull requests and KPI snapshots (`jev ship`, `jev kpi`) -------------------
+
+    def add_shipped_pr(
+        self,
+        run_id: str,
+        *,
+        remote: str,
+        repo: str,
+        branch: str,
+        base: str,
+        number: int | None,
+        url: str | None,
+        title: str,
+        draft: bool,
+        head_oid: str | None = None,
+        pushed_commits: int | None = None,
+    ) -> ShippedPrRecord:
+        """Record a pull request just opened for the run (state `open`)."""
+        with self._tx() as db:
+            self._require_run(run_id)
+            cur = db.execute(
+                "INSERT INTO shipped_prs (run_id, remote, repo, branch, base, number, url, title,"
+                " draft, head_oid, pushed_commits, created_at)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    run_id,
+                    remote,
+                    repo,
+                    branch,
+                    base,
+                    number,
+                    url,
+                    title,
+                    int(draft),
+                    head_oid,
+                    pushed_commits,
+                    _now(),
+                ),
+            )
+            assert cur.lastrowid is not None
+            pr_id = cur.lastrowid
+        return self.get_shipped_pr(pr_id)
+
+    def get_shipped_pr(self, pr_id: int) -> ShippedPrRecord:
+        row = self._conn.execute("SELECT * FROM shipped_prs WHERE id = ?", (pr_id,)).fetchone()
+        if row is None:
+            raise NotFoundError(f"shipped PR {pr_id} not found")
+        return _shipped_pr(row)
+
+    def list_shipped_prs(self, run_id: str | None = None) -> list[ShippedPrRecord]:
+        """Shipped PRs (of one run, if given), oldest first."""
+        if run_id is None:
+            rows = self._conn.execute("SELECT * FROM shipped_prs ORDER BY created_at, id")
+        else:
+            rows = self._conn.execute(
+                "SELECT * FROM shipped_prs WHERE run_id = ? ORDER BY created_at, id", (run_id,)
+            )
+        return [_shipped_pr(row) for row in rows]
+
+    def update_shipped_pr(
+        self,
+        pr_id: int,
+        *,
+        state: PrState,
+        draft: bool,
+        merged_at: datetime | None,
+        closed_at: datetime | None,
+        review_comments: int | None,
+        reviews: int | None,
+        ci_status: str | None,
+        commits_after_open: int | None,
+        additions: int | None,
+        deletions: int | None,
+        changed_files: int | None,
+        reverted: bool | None,
+        raw: dict[str, object] | None,
+    ) -> ShippedPrRecord:
+        """Store what `jev ship sync` read from GitHub."""
+        with self._tx() as db:
+            cur = db.execute(
+                "UPDATE shipped_prs SET state = ?, draft = ?, merged_at = ?, closed_at = ?,"
+                " review_comments = ?, reviews = ?, ci_status = ?, commits_after_open = ?,"
+                " additions = ?, deletions = ?, changed_files = ?, reverted = ?,"
+                " last_synced_at = ?, raw_json = ? WHERE id = ?",
+                (
+                    state,
+                    int(draft),
+                    _iso(merged_at),
+                    _iso(closed_at),
+                    review_comments,
+                    reviews,
+                    ci_status,
+                    commits_after_open,
+                    additions,
+                    deletions,
+                    changed_files,
+                    None if reverted is None else int(reverted),
+                    _now(),
+                    None if raw is None else json.dumps(raw),
+                    pr_id,
+                ),
+            )
+            if cur.rowcount == 0:
+                raise NotFoundError(f"shipped PR {pr_id} not found")
+        return self.get_shipped_pr(pr_id)
+
+    def set_run_kpis(self, run_id: str, kpis_json: str) -> None:
+        """Store (replace) the run's KPI snapshot, a JSON document (`core.kpi.RunKpis`)."""
+        with self._tx() as db:
+            self._require_run(run_id)
+            db.execute(
+                "INSERT INTO run_kpis (run_id, computed_at, kpis_json) VALUES (?, ?, ?)"
+                " ON CONFLICT (run_id) DO UPDATE SET"
+                " computed_at = excluded.computed_at, kpis_json = excluded.kpis_json",
+                (run_id, _now(), kpis_json),
+            )
+
+    def get_run_kpis(self, run_id: str) -> tuple[datetime, str] | None:
+        """(computed_at, JSON) of the run's KPI snapshot, or None."""
+        row = self._conn.execute(
+            "SELECT computed_at, kpis_json FROM run_kpis WHERE run_id = ?", (run_id,)
+        ).fetchone()
+        if row is None:
+            return None
+        return datetime.fromisoformat(row["computed_at"]), str(row["kpis_json"])
+
     # ---- settings (set by `jev learning`) --------------------------------------------------
 
     def get_setting(self, key: str) -> str | None:
@@ -748,6 +917,47 @@ class Store:
 
 def _time(value: str | None) -> datetime | None:
     return None if value is None else datetime.fromisoformat(value)
+
+
+def _iso(value: datetime | None) -> str | None:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=UTC)
+    return value.astimezone(UTC).isoformat(timespec="microseconds")
+
+
+def _shipped_pr(row: sqlite3.Row) -> ShippedPrRecord:
+    raw = row["raw_json"]
+    reverted = row["reverted"]
+    return ShippedPrRecord(
+        id=row["id"],
+        run_id=row["run_id"],
+        remote=row["remote"],
+        repo=row["repo"],
+        branch=row["branch"],
+        base=row["base"],
+        number=row["number"],
+        url=row["url"],
+        title=row["title"],
+        draft=bool(row["draft"]),
+        head_oid=row["head_oid"],
+        pushed_commits=row["pushed_commits"],
+        created_at=datetime.fromisoformat(row["created_at"]),
+        state=row["state"],
+        merged_at=_time(row["merged_at"]),
+        closed_at=_time(row["closed_at"]),
+        review_comments=row["review_comments"],
+        reviews=row["reviews"],
+        ci_status=row["ci_status"],
+        commits_after_open=row["commits_after_open"],
+        additions=row["additions"],
+        deletions=row["deletions"],
+        changed_files=row["changed_files"],
+        reverted=None if reverted is None else bool(reverted),
+        last_synced_at=_time(row["last_synced_at"]),
+        raw=None if raw is None else json.loads(raw),
+    )
 
 
 def _run_record(row: sqlite3.Row) -> RunRecord:

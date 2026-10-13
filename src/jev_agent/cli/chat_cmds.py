@@ -8,7 +8,6 @@ same code path as `jev run`, and queue items with the queue store API, as `jev q
 from __future__ import annotations
 
 import asyncio
-import inspect
 import os
 import sys
 from pathlib import Path
@@ -26,6 +25,7 @@ from jev_agent.cli.repo import RepoOption
 from jev_agent.cli.run_cmds import print_outcome, print_warnings, start_run
 from jev_agent.cli.wiring import FAKE_WORKERS_ENV, NO_WORKERS_MESSAGE, CliContext, cli_context, fail
 from jev_agent.config.schema import JevConfig
+from jev_agent.config.servers_schema import NO_PROFILE
 from jev_agent.core.chat import (
     BACKENDS,
     COMMANDS,
@@ -58,12 +58,9 @@ from jev_agent.core.learning import Learning, LearningError, Lesson, learning_st
 from jev_agent.core.pipeline import PipelineError
 from jev_agent.core.store import NotFoundError
 from jev_agent.quality.levels import LEVELS, parse_level
+from jev_agent.servers.profiles import ProfileError, get_profile
 
 console = Console()
-
-
-class ProfileUnsupportedError(RuntimeError):
-    """The chat names a workspace profile but this build's `start_run` cannot apply one."""
 
 
 def is_interactive() -> bool:
@@ -153,20 +150,9 @@ def make_backend(ctx: CliContext, backend: BackendName, model: str | None) -> Ch
 
 
 def profile_kwargs(profile: str | None) -> dict[str, Any]:
-    """Extra `start_run` arguments for the chat's workspace profile.
-
-    PROFILE HOOK (as in `scheduler_cmds.apply_profile`): passed through when `start_run`
-    accepts `profile`; otherwise a chat with a profile refuses to launch rather than run with
-    different access than asked for.
-    """
-    if profile is None:
-        return {}
-    if "profile" in inspect.signature(start_run).parameters:
-        return {"profile": profile}
-    raise ProfileUnsupportedError(
-        f"this chat uses workspace profile {profile!r}, but this jev cannot apply workspace "
-        "profiles to runs yet; /queue still stores it, or start a new chat without --profile"
-    )
+    """Extra `start_run` arguments for the chat's workspace profile (docs/servers.md); without
+    one, launched runs use the repo default like `jev run`."""
+    return {} if profile is None else {"profile": profile}
 
 
 # ---- learning ----------------------------------------------------------------------------
@@ -281,11 +267,7 @@ class ChatLoop:
             console.print(f"[red]error:[/red] {escape(NO_WORKERS_MESSAGE)}")
             return
         meta = self.session.meta
-        try:
-            extra = profile_kwargs(meta.profile)
-        except ProfileUnsupportedError as exc:
-            console.print(f"[red]error:[/red] {escape(str(exc))}")
-            return
+        extra = profile_kwargs(meta.profile)
         if meta.quality:  # only when set, so a start_run without `quality` keeps working
             extra["quality"] = meta.quality
         brief = self._current_brief()
@@ -600,6 +582,11 @@ def chat(
             raise fail("--learning and --no-learning cannot be used together")
         if profile is not None and not profile.strip():
             raise fail("--profile needs a name")
+        if profile is not None and profile != NO_PROFILE:
+            try:
+                get_profile(ctx.config, profile)
+            except ProfileError as exc:
+                raise fail(str(exc)) from exc
         try:
             session = open_session(
                 ctx,

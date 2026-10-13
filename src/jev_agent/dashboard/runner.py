@@ -1,4 +1,4 @@
-"""Approve and resume runs from the dashboard without blocking the web server.
+"""Approve, resume and ship runs from the dashboard without blocking the web server.
 
 `RunLauncher.start` runs the work in a background thread, through the same code path as
 `jev approve` / `jev resume` (`cli_context` + `approve_run` / `resume_run`), so it builds its
@@ -20,18 +20,32 @@ from typing import Literal
 import typer
 
 from jev_agent.cli.run_cmds import approve_run, resume_run
+from jev_agent.cli.ship_cmds import describe_pr, ship_repo
 from jev_agent.cli.wiring import NO_WORKERS_MESSAGE, cli_context
 from jev_agent.core.pipeline import PipelineError
+from jev_agent.core.ship import Gh, prepare_ship
+from jev_agent.core.ship import execute_ship as ship_now
 
-RunAction = Literal["approve", "resume"]
+RunAction = Literal["approve", "resume", "ship"]
 JobState = Literal["running", "finished", "failed"]
 
 # (repo root, run id, action) -> a one-line outcome; raises on failure. Blocking.
 Executor = Callable[[Path, str, RunAction], str]
 
 
+def execute_ship(root: Path, run_id: str) -> str:
+    """`jev ship RUN --yes`: check everything again, push and open the PR."""
+    with ship_repo(root) as r:
+        gh = Gh(r.root)
+        plan = prepare_ship(r.root, r.config, r.store, run_id, gh=gh)
+        record = ship_now(plan, r.store, r.root, gh)
+    return f"opened {describe_pr(record)}"
+
+
 def execute_run(root: Path, run_id: str, action: RunAction) -> str:
-    """Approve or resume `run_id` exactly as the CLI does, and describe how the run ended."""
+    """Approve, resume or ship `run_id` exactly as the CLI does, and describe the outcome."""
+    if action == "ship":
+        return execute_ship(root, run_id)
     with cli_context(root) as ctx:
         if action == "approve":
             record = asyncio.run(approve_run(ctx, run_id))

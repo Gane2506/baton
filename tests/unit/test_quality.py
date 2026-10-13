@@ -697,7 +697,7 @@ def test_migration_6_and_quality_reports(tmp_path: Path) -> None:
             (Idea(text="x", repo_path=tmp_path).model_dump_json(),),
         )
     with Store.open(db_path) as store:
-        assert SCHEMA_VERSION == 6
+        assert SCHEMA_VERSION >= 6
         assert store.get_run("old").quality_level == "none"
         run = store.create_run(Idea(text="y", repo_path=tmp_path), quality_level="medium")
         assert store.get_run(run.id).quality_level == "medium"

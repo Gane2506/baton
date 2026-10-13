@@ -98,9 +98,15 @@ terminal images; see [docs/dashboard.md](docs/dashboard.md#screenshots)).
   </tr>
   <tr>
     <td><b>Budgets and audit</b><br>Hard per-run and per-task caps; every decision and attempt is logged with its cost. <a href="#cost">Cost</a></td>
-    <td><b>Isolated, local, dashboard</b><br>Each task in its own worktree and branch; jev never pushes. <code>jev dashboard</code> binds 127.0.0.1. <a href="#safety-defaults">Safety</a> · <a href="#dashboard">Dashboard</a></td>
+    <td><b>Isolated, local, dashboard</b><br>Each task in its own worktree and branch; nothing is pushed unless you ship a run. <code>jev dashboard</code> binds 127.0.0.1. <a href="#safety-defaults">Safety</a> · <a href="#dashboard">Dashboard</a></td>
   </tr>
   <tr><td colspan="2"><img alt="Dashboard spend page: spend per day and the costliest runs" src="docs/images/dashboard-spend.png" width="760"></td></tr>
+  <tr><td colspan="2"><b>Ship PRs and track KPIs</b><br>Opt-in <code>jev ship RUN</code> pushes a finished run's branch and opens a draft GitHub PR with your <code>gh</code> login (never force-pushes, never merges). <code>jev kpi</code> and the KPIs page track cost, attempts, first-pass rate, fallbacks, time to merge and CI per PR, with trend charts and regression flags. <a href="#ship-prs-and-track-kpis">Ship and KPIs</a></td></tr>
+  <tr>
+    <td><img alt="Dashboard KPIs page: summary cards, regressions, shipped PRs and trend charts with rolling medians" src="docs/images/dashboard-kpis.png"></td>
+    <td><img alt="jev kpi --last 10: one row per shipped PR, medians and regression flags" src="docs/images/cli-kpi.svg"></td>
+  </tr>
+  <tr><td colspan="2"><b>Servers, virtual browser and workspace profiles</b><br>Let agents check (<code>basic</code>, read-only) or maintain (<code>medium</code>: writes inside allowed paths, package installs, service restarts) your servers over SSH through jev's own policy-checked, audited MCP tools; give roles a pinned headless Playwright browser; pick servers, access and browser per run with <code>--profile</code>. <a href="#servers-browser-and-profiles">Servers</a></td></tr>
 </table>
 
 ## How it works
@@ -473,8 +479,8 @@ jev dashboard              # http://127.0.0.1:8765/, opens a browser (--no-open 
   reasons), attempts, learning, the quality review and log files; **Approve**, **Resume** and
   **Cancel** buttons (runs execute in the background, one at a time per run).
 - **Queue** (add, reorder, remove; scheduler status), **Learning** (profiles and lessons),
-  **Chats** (read-only transcripts), **Spend** (per run and per day) and **Settings**
-  (effective config, env var names, `jev doctor`).
+  **Chats** (read-only transcripts), **Spend** (per run and per day), **KPIs** (shipped PRs and
+  trends) and **Settings** (effective config, env var names, `jev doctor`).
 
 Screenshots of every page are in [Features](#features) above and in
 [docs/dashboard.md](docs/dashboard.md#screenshots).
@@ -483,16 +489,63 @@ It listens on 127.0.0.1 only. On a VPS keep it that way and use an SSH tunnel
 (`ssh -L 8765:127.0.0.1:8765 host`). Any other `--host` requires a token, which jev generates
 and prints. Details: [docs/dashboard.md](docs/dashboard.md).
 
+## Ship PRs and track KPIs
+
+Opt-in (`[ship] enabled = true` in `jev.toml`, plus the [GitHub CLI](https://cli.github.com)
+logged in):
+
+```bash
+jev ship RUN_ID --dry-run   # the PR body and the exact commands, nothing run
+jev ship RUN_ID             # push jev/RUN/result to jev/RUN, gh pr create (draft); asks first
+jev ship sync --all         # read state, reviews, CI and merges back from GitHub
+jev kpi --last 10           # per-PR KPIs, medians and regression flags (--json for scripts)
+```
+
+Only DONE runs whose quality gate passed are shipped. jev never force-pushes, never merges and
+never enables auto-merge; branch protection still applies. The dashboard run page has a
+**Ship as PR** button and the **KPIs** page charts each KPI against its rolling median.
+Details: [docs/ship.md](docs/ship.md).
+
+## Servers, browser and profiles
+
+```toml
+[servers.web]
+host = "web1"                 # ~/.ssh/config alias; key from ssh-agent, host key already known
+access = "medium"             # "basic" = read-only commands
+workdir = "/srv/app"
+allowed_paths = ["/srv/app"]
+
+[profiles.prod]
+servers = ["web"]
+access_overrides = { web = "basic" }   # may only lower
+```
+
+```bash
+jev doctor --connect                       # check ssh login (BatchMode, strict host keys)
+jev run "why are we serving 502s?" --profile prod
+jev profile list | show prod | use prod    # repo default: .jev/profile
+jev browser install --dry-run              # pinned Playwright Chromium; asks before running
+```
+
+Agents never get raw SSH: they call `list_servers`, `run_command`, `read_file` (and at medium
+`write_file`, `upload`) on jev's MCP server, which checks every command against the access
+level and an always-blocked list (reboots, disk formatting, user/firewall changes,
+`rm -rf /`, `curl | sh`, `git push --force`, ...) and logs it to `.jev/audit/servers.log`.
+Every role but the coder is capped at `basic`. `access = "full"` is not available yet.
+Details, including the allow/deny tables and a VPS browser setup: [docs/servers.md](docs/servers.md).
+
 ## Safety defaults
 
 - Coder tasks run in separate git worktrees under `.jev/worktrees/`, never on your branch.
-- jev never runs `git push`.
+- jev never runs `git push`, except `jev ship` (opt-in, never `--force`, never merges).
 - The planner, validator and reviewer get read-only access. The `api` worker has no file
   access at all.
 - Claude Code's coder may only use read and edit tools plus `git status` and `git diff` unless
   you allow more. Codex's coder runs in its `workspace-write` sandbox.
 - Flags that skip permission prompts are off and opt-in only; `jev doctor` warns when one is on.
 - Keys come only from environment variables, never from config files. Logs are redacted.
+- Servers are reached only through jev's policy-checked, audited tools (`basic` read-only or
+  `medium`); SSH runs with `BatchMode=yes` and `StrictHostKeyChecking=yes`.
 - Run jev only on repositories you trust: agent CLIs load project files such as `CLAUDE.md`
   and hooks.
 
@@ -523,6 +576,8 @@ caps: jev's budget does not limit Codex spend, only `max_task_attempts` and the 
 - [docs/queue.md](docs/queue.md): idea queue, scheduler and kanban board
 - [docs/chat.md](docs/chat.md): talking an idea through before a run
 - [docs/dashboard.md](docs/dashboard.md): the web dashboard and its security model
+- [docs/ship.md](docs/ship.md): `jev ship` pull requests, `jev kpi` and the benchmarks
+- [docs/servers.md](docs/servers.md): servers over SSH, access levels, audit log, browser, profiles
 - [docs/security.md](docs/security.md): isolation, permissions, keys, terms of use
 - [docs/decisions.md](docs/decisions.md): design decisions and deviations from the plan
 - [CHANGELOG.md](CHANGELOG.md): what changed in each release

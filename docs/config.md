@@ -142,6 +142,23 @@ model call (the learner) whenever there is something to learn.
 Precedence: `jev run --learning NAME` / `--no-learning` > settings from `jev learning` > this
 table > the defaults. The learner's workers and models are set in `[roles.learner]`.
 
+## `[ship]`
+
+`jev ship RUN` pushes a DONE run's result branch to a new branch on your remote and opens a
+GitHub pull request with your own `gh` login. See [ship.md](ship.md) and
+[security.md](security.md#shipping-prs). Off by default; jev never force-pushes and never
+merges.
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `enabled` | `false` | Allow `jev ship` (and the dashboard's "Ship as PR" button) in this repo. |
+| `remote` | `"origin"` | Git remote to push to. Its URL gives the GitHub `owner/repo` (else `gh repo view`). |
+| `base` | `""` | Base branch of the PR. Empty: the repo's default branch (`refs/remotes/<remote>/HEAD`, else `gh repo view --json defaultBranchRef`), else the branch checked out in the repo. |
+| `branch_prefix` | `"jev/"` | The pushed branch is `<branch_prefix><run_id>` (`-2`, `-3`, ... for `--force-new`). |
+| `draft` | `true` | Open the PR as a draft. |
+| `labels` | `[]` | Labels to add (`gh pr create --label`); they must already exist in the repo. |
+| `require_quality_pass` | `true` | Refuse a run whose latest quality gate (any task or the integration) blocked. |
+
 ## `[models]`
 
 Free OpenRouter models for roles that can use the api worker. See [Free models](#free-models)
@@ -217,6 +234,8 @@ lessons at the end of a run when learning is on ([learning.md](learning.md)), an
 | `mcp` | `[]` | MCP servers this role's agent may use, by name from `[tools.mcp]`. |
 | `skills` | `[]` | Skills this role's agent gets, by name from `[tools.skills]`. |
 | `plugins` | `[]` | Claude Code plugins this role's agent gets, by name from `[tools.plugins]`. |
+| `servers` | `[]` | Servers this role's agent may reach through jev's server tools, by name from `[servers.<name>]` ([servers.md](servers.md)). Every role except `coder` is capped at `basic` access. |
+| `browser` | `false` | Give this role the virtual browser (Playwright MCP server); needs `[browser] enabled = true`. |
 | `prompt_file` | unset | Your own Jinja2 prompt template for this role, replacing the built-in one in `src/jev_agent/roles/<role>/prompt.md`. Relative paths are resolved against the repo root. `jev doctor` fails if the file is missing or not valid Jinja2. A bad template, or a variable it uses that jev does not provide, stops the run in `NEEDS_HUMAN`; fix it and `jev resume` (see [roles.md](roles.md#overriding-a-prompt)). |
 
 A `[roles.<role>]` table is layered on top of that role's defaults, so a table that sets only
@@ -236,6 +255,54 @@ Default `workers` per role:
 | `reviewer` | `["api", "codex"]` | |
 | `code_reviewer` | `["api", "codex", "claude_code"]` | Read-only. Only used when `[quality] level` is not `"none"`; without a usable worker the AI review is skipped. |
 | `learner` | `["claude_code", "api", "codex"]` | Read-only, like the planner. Without a usable worker, `jev doctor` warns and runs skip the learning step. |
+
+## `[servers.<name>]`
+
+Machines agents may reach over SSH, through jev's own MCP server (`jev mcp servers`), which
+checks every command against the access level and writes `.jev/audit/servers.log`. Give them to
+roles with `[roles.<role>] servers = [...]` or through a workspace profile. Details, the full
+allow/deny tables and VPS notes: [servers.md](servers.md).
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `host` | required | Host name, address or `~/.ssh/config` alias (`Host` entry). |
+| `user` | unset | Login user (`ssh -l`); unset: `~/.ssh/config` or your local user. |
+| `port` | unset | SSH port; unset: `~/.ssh/config` or 22. |
+| `identity_file` | unset | Path to a private key file (never the key itself); adds `-i FILE -o IdentitiesOnly=yes`. Unset: ssh-agent / `~/.ssh/config`. |
+| `access` | `"basic"` | `"basic"` (read-only allowlist) or `"medium"` (also writes inside `allowed_paths`, package installs, service restarts). `"full"` is rejected: not available yet (issue #3). |
+| `workdir` | unset | Absolute path commands run in; relative paths are resolved against it. |
+| `allowed_paths` | `[workdir]` | Absolute paths `medium` writes may touch. `/`, top-level system folders and anything under `.ssh` are refused. |
+| `description` | `""` | Shown to agents by `list_servers` and in `jev profile show`. |
+
+No passwords: jev runs `ssh` with `BatchMode=yes` and `StrictHostKeyChecking=yes`, so the key
+must come from ssh-agent or `identity_file`, and the host key must already be in `known_hosts`.
+
+## `[browser]`
+
+The virtual browser: Playwright's Chromium driven through the Playwright MCP server (pinned
+version, see [servers.md](servers.md#virtual-browser)).
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `enabled` | `false` | Roles with `browser = true` get the browser. A workspace profile with `browser = true` gives it to the coder even when this is `false`. |
+| `headless` | `true` | `false` runs a visible window (needs a display, for example Xvfb on a VPS). |
+| `install_target` | `"local"` | Where `jev browser install` installs Chromium: `"local"` or a `[servers.<name>]` name (needs `medium`). |
+
+## `[profiles.<name>]`
+
+Workspace profiles bundle what a run may reach. Pick one with `--profile NAME` on `jev run`,
+`jev resume`, `jev queue add` and `jev chat` (`--profile none` for none); `jev profile use NAME`
+sets the repo default (`.jev/profile`). With more than one profile, `jev run` on a terminal asks.
+The profile a run started with is copied to `.jev/runs/<run_id>/profile.json`.
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `servers` | `[]` | Servers for this run: the coder gets them at their level, every other role at `basic`. |
+| `access_overrides` | `{}` | Per server, a lower level for this profile (`{ web = "basic" }`). Raising is rejected. |
+| `browser` | `false` | Give the coder the browser in these runs. |
+| `learning` | unset | A learning profile name, or `false` for no learning; unset follows the usual setting. `--learning` / `--no-learning` still win. |
+| `quality` | unset | Quality gate level for these runs; `--quality` still wins. |
+| `description` | `""` | Shown in `jev profile list` and the run menu. |
 
 ## Free models
 

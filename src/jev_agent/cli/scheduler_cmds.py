@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import inspect
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated, Any
@@ -34,26 +33,11 @@ scheduler_app = typer.Typer(
 )
 
 
-class ProfileUnsupportedError(RuntimeError):
-    """The item names a workspace profile but this build's `start_run` cannot apply one."""
-
-
 def apply_profile(item: QueueItem) -> dict[str, Any]:
-    """Extra keyword arguments for `start_run` that apply the item's workspace profile.
-
-    PROFILE HOOK: workspace profiles are owned by the profile feature. When `start_run`
-    accepts a `profile` argument, the stored name is passed straight through. Until then an
-    item that names a profile fails (rather than silently running with the wrong access
-    level); items without one run normally.
-    """
-    if item.profile is None:
-        return {}
-    if "profile" in inspect.signature(start_run).parameters:
-        return {"profile": item.profile}
-    raise ProfileUnsupportedError(
-        f"queue item {item.id} asks for workspace profile {item.profile!r}, "
-        "but this jev cannot apply workspace profiles to runs yet"
-    )
+    """Extra keyword arguments for `start_run` that apply the item's workspace profile
+    (docs/servers.md). Items without one use the repo default, like `jev run`; an unknown
+    profile fails the item (ProfileError), never runs it with other access."""
+    return {} if item.profile is None else {"profile": item.profile}
 
 
 async def start_item(ctx: CliContext, item: QueueItem) -> RunRecord:

@@ -63,6 +63,18 @@ profile = "default"                # lesson store to use; `jev learning list` sh
 max_lessons = 8                    # most lessons added to one prompt
 max_chars = 2000                   # most characters of lesson text added to one prompt
 
+# Open a GitHub pull request for a finished run (docs/ship.md): `jev ship RUN` pushes
+# jev/<run>/result to a new branch on `remote` and runs `gh pr create` with your gh login.
+# Off by default. It never force-pushes and never merges; branch protection still applies.
+[ship]
+enabled = false
+remote = "origin"
+base = ""                          # PR base branch; "" = the repo's default branch
+branch_prefix = "jev/"             # pushed branch: <branch_prefix><run_id>
+draft = true                       # open PRs as drafts
+labels = []                        # e.g. ["jev"]; the labels must exist in the repo
+require_quality_pass = true        # refuse runs whose latest quality gate blocked
+
 # Free OpenRouter models (docs/config.md "Free models"): no cost, but rate-limited (OpenRouter
 # documents 20 requests/minute and 50/day, or 1000/day once you bought 10 credits), and free
 # providers may log or train on prompts (check https://openrouter.ai/settings/privacy). They
@@ -153,4 +165,37 @@ models = []
 # [tools.plugins.deploy-tools]     # Claude Code only (--plugin-dir)
 # path = "tools/deploy-tools"
 # allowed_tools = ["mcp__plugin_deploy-tools_api__*"]
+
+# Servers over SSH (docs/servers.md): agents reach them only through jev's server tools, which
+# check every command against the access level and log it to .jev/audit/servers.log. Keys come
+# from ssh-agent or ~/.ssh/config (never passwords); the host key must already be known.
+# access: "basic" (read-only commands) | "medium" (+ writes inside allowed_paths, package
+# installs, service restarts). Give servers to roles (`servers = ["web"]` under [roles.coder])
+# or to a workspace profile; every role but the coder is capped at basic.
+#
+# [servers.web]
+# host = "web1"                    # host name or ~/.ssh/config alias
+# user = "deploy"
+# access = "basic"
+# workdir = "/srv/app"
+# allowed_paths = ["/srv/app"]     # medium writes; default [workdir]
+# description = "production web server"
+
+# Virtual browser (Playwright MCP + headless Chromium) for roles with `browser = true`.
+# Install Chromium with `jev browser install` (locally or `--server NAME`).
+[browser]
+enabled = false
+headless = true
+install_target = "local"           # "local" or a [servers.NAME] (needs medium access)
+
+# Workspace profiles: pick with `jev run --profile NAME` (or a menu); `jev profile use NAME`
+# sets the repo default.
+#
+# [profiles.prod]
+# servers = ["web"]
+# access_overrides = { web = "basic" }  # may only lower a server's access
+# browser = false
+# learning = "default"             # a learning profile, or false
+# quality = "basic"
+# description = "read-only look at production"
 """

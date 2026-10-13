@@ -1,13 +1,14 @@
 """Fill a repo's `.jev/` with illustrative demo state for the dashboard screenshots.
 
 Everything written here is made up: the runs, plans, decisions, attempts, costs, quality
-reviews, lessons and the saved chat only look like what a few days of real use produce. No
+reviews, lessons, the saved chat and the shipped pull requests (with their GitHub state) only
+look like what a few days of real use produce; nothing is pushed and GitHub is never called. No
 agent, model or network is called. It exists so the screenshots in `docs/images/` can be
 regenerated (`dashboard-*.png` with Chrome, `cli-*.svg` with `examples/demo/capture.py`).
 
 It also edits the demo's `jev.toml` (rules dispatcher, free models for the planner, example
-MCP servers and a skill given to roles; variable names only, no secrets), adds an example
-skill folder, and caches an OpenRouter model list built from the test fixture
+MCP servers and a skill given to roles, `[ship] enabled`; variable names only, no secrets),
+adds an example skill folder, and caches an OpenRouter model list built from the test fixture
 `tests/fixtures/openrouter/models.json`, so `jev models list --free` and `jev doctor` work
 offline.
 
@@ -54,6 +55,7 @@ from jev_agent.core.chat import (
     Reply,
     Turn,
 )
+from jev_agent.core.kpi import DiffStat, compute_run_kpis
 from jev_agent.core.learning import Learning, enable_learning, use_profile
 from jev_agent.core.models import (
     Decision,
@@ -69,6 +71,7 @@ from jev_agent.core.models import (
     WorkerStatus,
 )
 from jev_agent.core.queue import add_idea
+from jev_agent.core.ship import pr_title
 from jev_agent.core.store import Store
 from jev_agent.quality.gate import RUN_REVIEW_FILENAME, quality_dir
 from jev_agent.quality.models import CheckResult, GateResult
@@ -821,6 +824,74 @@ def seed_simple(store: Store, clock: Clock, root: Path, now: datetime, spec: Sim
     return run_id
 
 
+# ---- shipped pull requests (`jev ship`, `jev kpi`, the KPIs page) ------------------------------
+
+SHIP_REPO = "example/textstats"  # made up; nothing is pushed and GitHub is never called
+# Per shipped PR, oldest first: (state, hours to merge or close, review comments, CI status,
+# commits after open, reverted). Times and counts are illustrative.
+SHIP_OUTCOMES: list[tuple[str, float | None, int, str, int, bool]] = [
+    ("merged", 6.5, 2, "success", 0, False),
+    ("merged", 3.0, 1, "success", 0, False),
+    ("merged", 20.0, 4, "success", 1, False),
+    ("closed", 30.0, 3, "failure", 0, False),
+    ("merged", 5.0, 0, "success", 0, True),
+    ("merged", 2.5, 1, "success", 0, False),
+    ("merged", 9.0, 2, "success", 1, False),
+    ("merged", 4.0, 1, "success", 0, False),
+    ("open", None, 1, "pending", 0, False),
+    ("open", None, 1, "success", 2, False),
+]
+
+
+def seed_shipped(store: Store, clock: Clock, now: datetime) -> None:
+    """Ship the latest DONE runs as made-up PRs #12, #13, ...: a KPI snapshot per run (from
+    the seeded data, as `jev ship` takes it) and GitHub data as `jev ship sync` would store."""
+    done = sorted(
+        (r for r in store.list_runs() if r.state is RunState.DONE), key=lambda r: r.created_at
+    )[-len(SHIP_OUTCOMES) :]
+    for n, (run, outcome) in enumerate(zip(done, SHIP_OUTCOMES, strict=False)):
+        state, hours, comments, ci, after, reverted = outcome
+        tasks = store.list_tasks(run.id)
+        files = len({f for t in tasks for f in t.card.files_hint}) + 1
+        diff = DiffStat(files=files, additions=24 + 37 * len(tasks) + 9 * n, deletions=3 + 2 * n)
+        kpis = compute_run_kpis(store, run.id, diff)
+        opened = run.updated_at + timedelta(minutes=12)
+        clock.set(opened)
+        number = 12 + n
+        pr = store.add_shipped_pr(
+            run.id,
+            remote="origin",
+            repo=SHIP_REPO,
+            branch=f"jev/{run.id}",
+            base="main",
+            number=number,
+            url=f"https://github.com/{SHIP_REPO}/pull/{number}",
+            title=pr_title(run.idea.text),
+            draft=True,
+            head_oid=None,
+            pushed_commits=len(tasks) + 1,
+        )
+        store.set_run_kpis(run.id, kpis.model_dump_json())
+        ended = None if hours is None else min(opened + timedelta(hours=hours), now)
+        clock.set(now - timedelta(minutes=5))
+        store.update_shipped_pr(
+            pr.id,
+            state=state,  # type: ignore[arg-type]
+            draft=state == "open" and n % 2 == 0,
+            merged_at=ended if state == "merged" else None,
+            closed_at=ended,
+            review_comments=comments,
+            reviews=1 + comments // 2,
+            ci_status=ci,
+            commits_after_open=after,
+            additions=diff.additions,
+            deletions=diff.deletions,
+            changed_files=diff.files,
+            reverted=reverted if state == "merged" else None,
+            raw=None,
+        )
+
+
 # ---- learning and queue ------------------------------------------------------------------------
 
 LESSONS: list[tuple[str, list[str], list[str], int, float]] = [
@@ -970,6 +1041,7 @@ def configure_demo(root: Path) -> None:
             ("roles.planner", "mcp", '["github", "docs"]'),
             ("roles.coder", "skills", '["house-style"]'),
             ("roles.code_reviewer", "mcp", '["github"]'),
+            ("ship", "enabled", "true                   # demo: PRs are made up, never opened"),
         ]
         for table, key, value in edits:
             text = _set_in_table(text, table, key, value)
@@ -1249,6 +1321,7 @@ def seed(root: Path) -> None:
         )
         seed_queue(store, clock, now)
         seed_chat(root, clock, now - timedelta(hours=4, minutes=10))
+        seed_shipped(store, clock, now)
     print(f"Seeded demo state in {root / STATE_DIRNAME}; richest run: {rich}")
 
 

@@ -11,12 +11,23 @@ from rich.console import Console
 from rich.markup import escape
 
 from jev_agent.cli.repo import RepoOption
+from jev_agent.cli.server_cmds import pick_profile_for_run
 from jev_agent.cli.wiring import NO_WORKERS_MESSAGE, CliContext, cli_context, fail
+from jev_agent.config import STATE_DIRNAME
+from jev_agent.config.servers_schema import NO_PROFILE
 from jev_agent.core.learning import Learning, LearningError, check_profile_name, resolve_learning
 from jev_agent.core.models import Idea, RunState
 from jev_agent.core.pipeline import PipelineError
 from jev_agent.core.store import NotFoundError, RunRecord
 from jev_agent.quality.levels import LEVELS, QualityLevel, parse_level
+from jev_agent.servers.profiles import (
+    ProfileError,
+    effective_name,
+    get_profile,
+    read_run_profile,
+    snapshot,
+    write_run_profile,
+)
 
 console = Console()
 
@@ -38,6 +49,14 @@ QualityOption = Annotated[
         "--quality",
         metavar="LEVEL",
         help=f"Quality gate level for the run ({' | '.join(LEVELS)}); overrides [quality] level.",
+    ),
+]
+ProfileOption = Annotated[
+    str | None,
+    typer.Option(
+        "--profile",
+        metavar="NAME",
+        help="Workspace profile (servers, browser, learning) for the run; `none` for none.",
     ),
 ]
 
@@ -75,6 +94,12 @@ def print_outcome(run: RunRecord) -> None:
         console.print(f"  learning: {escape(run.learning_outcome)}")
     if run.quality_level != "none":
         console.print(f"  quality: {run.quality_level}; report: `jev quality show {run.id}`")
+    try:
+        workspace = read_run_profile(run.idea.repo_path / STATE_DIRNAME, run.id)
+    except ProfileError:
+        workspace = None
+    if workspace is not None:
+        console.print(f"  workspace profile: {escape(workspace.name)}")
     console.print(f"  spent ${run.spend_usd:.2f}; timeline: `jev log {run.id}`")
 
 
@@ -91,6 +116,7 @@ async def start_run(
     learning: str | None = None,
     no_learning: bool = False,
     quality: str | None = None,
+    profile: str | None = None,
 ) -> RunRecord:
     """Start a run for `idea` and advance it as far as it goes (the body of `jev run`).
 
@@ -99,15 +125,41 @@ async def start_run(
     unknown profile or both flags at once. `quality` is the quality gate level (None: the
     config's `[quality] level`); ValueError for an unknown level. Reusable by other front
     ends (the chat, the scheduler).
+
+    `profile` is the workspace profile (`none`: none); without it the repo default applies
+    (`jev profile use`). The profile's `learning` and `quality` apply when no flag says
+    otherwise. ProfileError (a ValueError) for an unknown profile.
     """
+    workspace = effective_name(ctx.config, profile, ctx.root / STATE_DIRNAME)
+    if workspace is not None:
+        settings = get_profile(ctx.config, workspace)
+        if learning is None and not no_learning and settings.learning is not None:
+            if settings.learning is False:
+                no_learning = True
+            else:
+                learning = settings.learning
+        if quality is None and settings.quality is not None:
+            quality = settings.quality
     level = None if quality is None else parse_level(quality)
-    profile = resolve_learning(ctx.store, _learning(ctx), ctx.config, learning, no_learning)
+    learning_profile = resolve_learning(
+        ctx.store, _learning(ctx), ctx.config, learning, no_learning
+    )
     return await ctx.pipeline.start(
         Idea(text=idea, repo_path=ctx.root),
         plan_only=plan_only,
-        learning_profile=profile,
+        learning_profile=learning_profile,
         quality=level,
+        profile=workspace,
     )
+
+
+def set_run_profile(ctx: CliContext, run_id: str, profile: str | None) -> None:
+    """`jev resume --profile NAME|none`: replace the run's workspace profile."""
+    if profile is None:
+        return
+    ctx.store.get_run(run_id)  # NotFoundError for an unknown run
+    copy = None if profile == NO_PROFILE else snapshot(ctx.config, profile)
+    write_run_profile(ctx.root / STATE_DIRNAME, run_id, copy)
 
 
 def set_run_learning(ctx: CliContext, run_id: str, learning: str | None, no_learning: bool) -> None:
@@ -140,9 +192,11 @@ async def resume_run(
     learning: str | None = None,
     no_learning: bool = False,
     quality: QualityLevel | None = None,
+    profile: str | None = None,
 ) -> RunRecord:
     """Apply the resume flags, then continue the run (the body of `jev resume`)."""
     set_run_learning(ctx, run_id, learning, no_learning)
+    set_run_profile(ctx, run_id, profile)
     if quality is not None:
         ctx.store.set_run_quality(run_id, quality)
     return await ctx.pipeline.resume(run_id)
@@ -156,6 +210,7 @@ def run(
     learning: LearningOption = None,
     no_learning: NoLearningOption = False,
     quality: QualityOption = None,
+    profile: ProfileOption = None,
     repo: RepoOption = Path("."),
 ) -> None:
     """Take an idea through planning, validation, approval, execution and integration."""
@@ -166,6 +221,7 @@ def run(
         if not ctx.has_workers:
             raise fail(NO_WORKERS_MESSAGE)
         print_warnings(ctx)
+        profile = pick_profile_for_run(ctx.config, ctx.root, profile)
         try:
             record = asyncio.run(
                 start_run(
@@ -175,9 +231,10 @@ def run(
                     learning=learning,
                     no_learning=no_learning,
                     quality=level,
+                    profile=profile,
                 )
             )
-        except LearningError as exc:
+        except (LearningError, ProfileError) as exc:
             raise fail(str(exc)) from exc
         print_outcome(record)
 
@@ -201,6 +258,7 @@ def resume(
     learning: LearningOption = None,
     no_learning: NoLearningOption = False,
     quality: QualityOption = None,
+    profile: ProfileOption = None,
     repo: RepoOption = Path("."),
 ) -> None:
     """Continue a run from its last saved state (with the learning profile and quality level
@@ -214,9 +272,16 @@ def resume(
         print_warnings(ctx)
         try:
             record = asyncio.run(
-                resume_run(ctx, run_id, learning=learning, no_learning=no_learning, quality=level)
+                resume_run(
+                    ctx,
+                    run_id,
+                    learning=learning,
+                    no_learning=no_learning,
+                    quality=level,
+                    profile=profile,
+                )
             )
-        except (NotFoundError, PipelineError, LearningError) as exc:
+        except (NotFoundError, PipelineError, LearningError, ProfileError) as exc:
             raise fail(str(exc)) from exc
         print_outcome(record)
 

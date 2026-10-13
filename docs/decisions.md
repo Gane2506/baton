@@ -2,6 +2,113 @@
 
 Deviations from [PLAN.md](../PLAN.md) and choices it left open. Newest first.
 
+## 2026-10-13: Servers over SSH, virtual browser, workspace profiles
+
+Code: `src/jev_agent/servers/` (policy, ssh, audit, service, mcp, access, profiles, browser),
+`config/servers_schema.py`, `cli/server_cmds.py`, `src/jev_agent/__main__.py`; tests in
+`tests/unit/test_servers.py`. User docs: [servers.md](servers.md). Issue #3, option 1.
+Verification: [verification.md](verification.md) section 9.
+
+- **`full` access is deferred.** Only `basic` and `medium` exist; config validation rejects
+  `access = "full"` (also in `access_overrides` and `--allow NAME:full`) with "access = \"full\"
+  is not available yet; see issue #3". An unrestricted level means an agent can run anything
+  with the server account's rights, including the destructive commands the always-blocked list
+  exists for; that needs its own design (explicit confirmation, maybe a separate account) and
+  a maintainer decision about Claude Code's permission settings. Adding it later is an
+  additive change to `AccessLevel` and the policy.
+- **Policy in an MCP server, not raw SSH for agents.** Agents never see an `ssh` binary or a
+  shell on the server. Giving an agent `Bash(ssh *)` would leave enforcement to command-line
+  pattern matching in each CLI's permission system (different in Claude Code and Codex, and
+  bypassable through shell syntax in the remote command). Instead jev synthesizes a
+  `jev_servers` MCP entry (`python -m jev_agent mcp servers --allow web:medium --role coder
+  --run-id R`) next to the role's own tools; it parses each command, refuses shell syntax,
+  re-quotes every word for the remote shell, checks it against one policy module
+  (`servers/policy.py`) and audits it. The same code serves Claude Code and Codex.
+- **A minimal MCP server, no SDK.** `mcp` 2.3.0 brings starlette, uvicorn, httpx2, pyjwt,
+  jsonschema and opentelemetry for transports jev never uses; stdio JSON-RPC with
+  `initialize`, `server/discover`, `ping`, `tools/list` and `tools/call` is ~200 lines and
+  answers both legacy (handshake) and 2026-07-28 (per-request `_meta`) clients.
+- **Policy shape.** Allowlist per level, not a denylist: a command is refused unless its
+  checker accepts it. The always-blocked list is checked first at every level, so its message
+  is clear and it still holds if an allowlist grows. Paths are normalized lexically for
+  commands; the file tools also resolve symlinks on the server (`realpath -m`) before writing
+  or reading. No globbing (words are quoted). `sudo` only as `sudo -n` before package
+  installs, `systemctl` and the pinned browser install (the issue said "sudo only for
+  package installs"; service restarts need root too, so `systemctl` was added). `ssh` units
+  are never stopped or restarted (lock-out). Medium also allows `rm`/`mv`/`touch` strictly
+  inside `allowed_paths` and `git add`/`switch` (needed for `commit`/`checkout`); `git push` is
+  not allowed at all in this version. Reads of credential files are refused at every level.
+- **Role caps.** Every role but the coder (planner, validator, reviewer, code_reviewer,
+  learner, chat) is capped at `basic`, whatever the server or profile says. A profile's
+  servers go to every role (others at basic), its `browser = true` to the coder only;
+  `[roles.<role>] browser = true` needs `[browser] enabled`.
+- **SSH.** System `ssh` (keys, agent, `~/.ssh/config`, `ProxyJump` all work as for the user),
+  `BatchMode=yes`, `StrictHostKeyChecking=yes` (never `no`/`accept-new`: the user accepts a
+  host key once by hand), `ConnectTimeout=10`, `ControlMaster=auto` with `%C` sockets under
+  `.jev/ssh/` (0700, `ControlPersist=60`; off when the socket path would be too long). Files go
+  through `head -c` and `cat > tmp && mv`, so no scp/sftp. `SSH_AUTH_SOCK` is forwarded to the
+  MCP process because MCP clients start stdio servers with a reduced environment.
+- **No migrations.** Issue #8 owns the store this cycle, so state lives in files: the repo's
+  default profile in `.jev/profile`, the run's copy of its profile in
+  `.jev/runs/<id>/profile.json` (a snapshot, so resume and config edits do not change a running
+  run's servers; servers removed from config are skipped), and the audit log in
+  `.jev/audit/servers.log`. `Pipeline.start(profile=...)` writes the copy; the harness reads it
+  when it builds each job's tools.
+- **Profile hooks.** `start_run` now takes `profile`, so the scheduler and the chat pass a
+  stored profile straight through (the `inspect.signature` hooks and their
+  `ProfileUnsupportedError` are gone). `jev queue add` and `jev chat` reject unknown profile
+  names up front; a queued item whose profile was removed later fails that item.
+- **Browser.** Pinned `@playwright/mcp@0.0.83` with `--browser chromium --isolated` (and
+  `--headless` by default); the install uses the exact Playwright version that release
+  depends on, so the browser build matches. `jev browser install` always prints the command and
+  asks (or `--yes`); on a server it needs medium and runs through the policy, which allows only
+  that exact argv. Xvfb/noVNC are documented, not automated.
+- **Chat itself gets no server tools** in this version; the chat's profile applies to the runs
+  it launches.
+
+## 2026-10-13: `jev ship`, KPIs and benchmarks
+
+Code: `core/ship.py`, `core/kpi.py`, `core/benchmarks.py`, migration 7, `cli/ship_cmds.py`,
+`dashboard/` (Ship as PR, the KPIs page, `render.render_trend_chart`); tests in
+`tests/unit/test_ship.py` (local bare `origin`, fake `gh` from `tests/fixtures/gh/`),
+`tests/unit/test_kpi.py`, `tests/unit/test_dashboard.py`. User docs: [ship.md](ship.md).
+Issue #8.
+
+- **Relaxes "never push" as an explicit, per-run action.** PLAN.md's default was that jev
+  never pushes. `jev ship RUN` is the one exception: off unless `[ship] enabled = true`, asks
+  for confirmation (`--yes` skips; the dashboard has a confirmation page), refuses runs that
+  are not DONE or whose latest quality gate blocked (`require_quality_pass`). It pushes the
+  existing `jev/<run>/result` branch with a plain `git push` (never `--force`; an existing
+  remote branch with other commits stops it, `--force-new` takes `<prefix><run>-2`), opens the
+  PR with `gh pr create` (draft by default) and never merges or enables auto-merge. The user's
+  checkout is never touched. Security notes: [security.md](security.md#shipping-prs).
+- **`gh`, not the GitHub API.** The user's own `gh` login does the work: jev never handles a
+  token, and GitHub Enterprise hosts work as gh does. Verified flags and JSON fields are in
+  [verification.md](verification.md) section 8.
+- **One command, `jev ship RUN | sync`.** `jev ship sync [RUN | --all]` is dispatched from the
+  same Typer command (a run id can never be `sync`), because a Typer group with both a
+  positional run id and subcommands is ambiguous.
+- **Storage: migration 7.** `shipped_prs` (one row per PR, with the GitHub data from the last
+  sync, plus `title`, `head_oid` and `pushed_commits` beyond the issue's list: they drive the
+  revert heuristic and "commits after open") and `run_kpis` (a JSON snapshot per run taken at
+  ship time, so KPIs stay stable when branches or logs are cleaned up; runs without one are
+  computed on the fly). `raw_json` keeps `gh pr view`'s answer with review and comment bodies
+  reduced to counts.
+- **KPI definitions.** Retries/escalations/reassigns count D5 answers (a `done` overridden by
+  a blocking gate is not visible there). Fallback rate = rules fallbacks / decisions Jev was
+  asked to make (None with `primary = "rules"`). Free model share = free-model attempts / api
+  attempts. Review comments = conversation comments + reviews with a body (inline comments are
+  not in `gh pr view --json`). Commits after open = PR commits - pushed commits. Reverted =
+  a merged PR whose body says `Reverts owner/repo#N` or titled `Revert "<title>"`, searched with
+  `gh pr list --state merged --search`.
+- **Benchmarks.** Rolling median over 5; a point regresses against the median of the up to 5
+  previous values (at least 3): costs, times and counts above 1.5x (never against 0), rates
+  and confidence 15 points worse. Direction per KPI (`core.benchmarks.KPI_DEFS`). Pure
+  functions, unit-tested; the dashboard draws them as server-side SVG (no JavaScript, CSS
+  classes only under the strict CSP).
+- **No new dependency**, no new decision point; `jev doctor` is unchanged (it would need a
+  network call to check `gh auth status`; `jev ship` checks it itself).
+
 ## 2026-10-12: Web dashboard (`jev dashboard`)
 
 Code: `src/jev_agent/dashboard/` (app, views, security, runner, render, templates, static),

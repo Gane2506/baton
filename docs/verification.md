@@ -509,3 +509,148 @@ Checked on 2026-10-12 against the OpenRouter docs and one unauthenticated `GET /
 - jev does **not** send the `models` fallback array: one attempt would then be served and
   billed by a model jev did not choose (possibly a paid one), which breaks per-attempt model
   records and budget reasoning. The fallback chain is explicit, one attempt per model, instead.
+
+---
+
+## 8. GitHub CLI (`jev ship`)
+
+Checked on 2026-10-13 with the locally installed `gh` 2.86.0, by reading its help only
+(`gh --help`, `gh pr create --help`, `gh pr view --help`, `gh repo view --help`,
+`gh pr list --help`). No `gh` command was run against any repository, and no login,
+push or API call was made; the tests use a fake `gh` and a local bare repo.
+
+### Findings
+- **`gh pr create`** takes `--repo/-R OWNER/REPO` (inherited), `--head/-H branch` ("explicitly
+  skip any forking or pushing behavior"), `--base/-B`, `--title/-t`, `--body-file/-F`,
+  `--draft/-d` and `--label/-l` (repeatable). "Upon success, the URL of the created pull
+  request will be printed." It has no merge or auto-merge flags.
+- **`gh pr view [<number> | <url> | <branch>] --json fields`**: the JSON field list printed by
+  the help includes every field jev asks for: `state`, `createdAt`, `mergedAt`, `closedAt`,
+  `reviews`, `comments`, `commits`, `additions`, `deletions`, `changedFiles`,
+  `statusCheckRollup`, `isDraft` (also `number`, `url`).
+- **`gh repo view --json`** lists `nameWithOwner` and `defaultBranchRef`.
+- **`gh pr list`** has `--state {open|closed|merged|all}`, `--search query` (GitHub search
+  syntax) and `--json` with `number`, `title`, `body`.
+- **Value shapes** (not exercised against a live PR: **UNVERIFIED** beyond GitHub's GraphQL
+  schema): `state` is `OPEN`, `CLOSED` or `MERGED`; times are ISO 8601 with `Z`; `reviews`,
+  `comments` and `commits` are arrays (reviews and comments carry a `body`);
+  `statusCheckRollup` mixes check runs (`status` such as `COMPLETED`, `IN_PROGRESS`, and
+  `conclusion` such as `SUCCESS`, `FAILURE`, `NEUTRAL`, `SKIPPED`, `CANCELLED`, `TIMED_OUT`,
+  `ACTION_REQUIRED`) and commit statuses (`state`: `SUCCESS`, `FAILURE`, `ERROR`, `PENDING`,
+  `EXPECTED`). jev treats unknown values as pending and missing fields as unknown.
+- **`gh auth status`** exits non-zero when not logged in. It may contact the GitHub host to
+  check the token.
+
+### Recommendation for implementation (done)
+- Push with plain `git push <remote> <src>:refs/heads/<dst>` (never `--force`), then
+  `gh pr create --head <dst>` so gh neither pushes nor forks.
+- Take the PR number from the printed URL; fall back to `gh pr view <branch> --json number,url`.
+- Set `GH_PROMPT_DISABLED=1` so gh never waits for input.
+- Inline review comments are not part of `gh pr view --json`; "review comments" counts
+  conversation comments plus reviews with a body. Reverts are detected heuristically (the body
+  `Reverts owner/repo#N` or title `Revert "<title>"` that GitHub's revert button writes).
+
+---
+
+## 9. Servers, SSH and browsers (issue #3)
+
+Checked 2026-10-13 against the local OpenSSH (`ssh -V`: OpenSSH_9.9p2, LibreSSL 3.3.6) and its
+man pages (`man ssh_config`, `man ssh`), PyPI and npm registry metadata (read-only JSON), the
+MCP specification and the Playwright, Playwright MCP and noVNC docs cited below. No SSH
+connection was opened, nothing was installed and no browser was started.
+
+### Findings: OpenSSH, non-interactive use
+- **`BatchMode=yes`**: "user interaction such as password prompts and host key confirmation
+  requests will be disabled", meant for "scripts and other batch jobs". Source: ssh_config(5).
+- **`StrictHostKeyChecking`**: `yes` means ssh "will never automatically add host keys to the
+  ~/.ssh/known_hosts file, and refuses to connect to hosts whose host key has changed";
+  `accept-new` adds unknown keys but refuses changed ones; `no`/`off` adds new keys and still
+  connects to hosts with changed keys "subject to some restrictions"; `ask` is the default.
+  jev uses `yes`: the user connects once by hand to check and accept a new host's key.
+  Source: ssh_config(5).
+- **`ConnectTimeout`**: seconds, applied to the TCP connect and "the initial SSH protocol
+  handshake and key exchange". Source: ssh_config(5).
+- **Connection reuse**: `ControlMaster=auto` uses a master if one is listening on
+  `ControlPath`, else becomes one ("opportunistic multiplexing"); `ControlPersist=<seconds>`
+  keeps the master in the background until idle that long; the docs recommend a `ControlPath`
+  with `%C` ("Hash of %l%h%p%r%j") "placed in a directory that is not writable by other users".
+  `ControlPath=none` disables sharing. `ssh -O check|exit` controls a master. Source:
+  ssh_config(5) (ControlMaster, ControlPath, ControlPersist, TOKENS); ssh(1) (`-O`).
+- **Socket path length**: a Unix socket path is limited (104 bytes on macOS, 108 on Linux) and
+  ssh creates the master under a temporary name with a random suffix first; jev turns reuse off
+  when `.jev/ssh/<%C>` would not fit. The exact suffix length is from OpenSSH's source
+  (mux.c), not the man page: **UNVERIFIED** in docs; jev keeps an 18-byte margin.
+- **`IdentitiesOnly=yes`**: use only the configured identity files "even if ssh-agent ... offers
+  more identities". jev sets it together with `-i` when `identity_file` is set. Source:
+  ssh_config(5).
+- **`~/.ssh/config` aliases**: the destination is matched against `Host` patterns, so an alias
+  works as `host`. `ssh -G HOST` prints the evaluated configuration (including `hostname`)
+  without connecting; `jev doctor` uses it, then a DNS lookup, and connects only with
+  `--connect` (`ssh -o BatchMode=yes ... HOST true`). Source: ssh(1) (`-G`).
+- **`-T`** disables pseudo-terminal allocation (no tty for commands). `--` ends options before
+  the destination. Source: ssh(1).
+- **Remote commands** are a single string run by the remote user's login shell, so jev builds
+  it only from `shlex.quote`d words (servers/policy.py), never from raw agent text.
+
+### Findings: MCP server (Python)
+- **SDK**: `mcp` 2.3.0 on PyPI (Python >= 3.10) depends on anyio, httpx2, jsonschema, mcp-types,
+  opentelemetry-api, pydantic, pyjwt[crypto], python-multipart, sse-starlette, starlette,
+  typing-extensions, typing-inspection and uvicorn. Source: https://pypi.org/pypi/mcp/json
+- **stdio transport**: the client starts the server as a subprocess; "Messages are delimited by
+  newlines, and MUST NOT contain embedded newlines"; the server "MUST NOT write anything to its
+  stdout that is not a valid MCP message"; stderr is for logs. Source:
+  https://modelcontextprotocol.io/specification/2025-11-25/basic/transports
+- **Versions**: the current revision is **2026-07-28**: no handshake; each request carries
+  `_meta["io.modelcontextprotocol/protocolVersion"]`; servers MUST implement `server/discover`
+  (returns `supportedVersions`, `capabilities`, `_meta[...serverInfo]`) and answer unknown
+  versions with error `-32022` ("Unsupported protocol version", `data.supported`). Revisions
+  2025-11-25 and earlier are "legacy" (the `initialize` handshake); a "dual-era" server answers
+  `initialize` with legacy semantics and modern requests statelessly. Sources:
+  https://modelcontextprotocol.io/specification/versioning,
+  https://modelcontextprotocol.io/specification/2026-07-28/basic/versioning,
+  https://modelcontextprotocol.io/specification/2026-07-28/server/discover
+- Whether Claude Code and Codex (the versions jev drives) send `initialize` (legacy) or
+  modern requests to stdio servers today is **UNVERIFIED**; jev's server answers both.
+- MCP clients start stdio servers with a reduced environment (the TypeScript SDK's default
+  passes only HOME, LOGNAME, PATH, SHELL, TERM, USER plus the configured `env`): **UNVERIFIED**
+  for Claude Code specifically. jev therefore lists `SSH_AUTH_SOCK` in the synthesized entry's
+  `env_from`, so ssh keeps access to the agent's keys.
+
+### Findings: Playwright MCP and the browser
+- **`@playwright/mcp`**: latest `0.0.83`, published 2026-09-28 (npm `dist-tags`); it depends on
+  `playwright` and `playwright-core` `1.64.0-alpha-1790635538000`; bin `playwright-mcp`; Node
+  >= 18. Source: https://registry.npmjs.org/@playwright/mcp (and `/0.0.83`).
+- **Run command**: the README's standard config is `"command": "npx"`, `"args":
+  ["@playwright/mcp@latest"]`. Options used by jev: `--headless` ("run browser in headless
+  mode, headed by default"), `--browser` ("browser or chrome channel to use, possible values:
+  chrome, firefox, webkit, msedge"; the Docker example uses `--browser chromium`), `--isolated`
+  ("keep the browser profile in memory, do not save it to disk"), `--output-dir`. Other
+  relevant options: `--allowed-origins`, `--no-sandbox`, `--user-data-dir`. Source:
+  https://github.com/microsoft/playwright-mcp/blob/v0.0.83/README.md
+- **Browser install**: `npx playwright install --with-deps chromium` installs the browser and
+  its OS dependencies "with a single command" ("useful for CI environments"). Headless runs use
+  a separate "chromium headless shell" unless the `chromium` channel is chosen (then
+  `--no-shell` skips it). Whether `--with-deps` calls `sudo` itself on Linux is not stated in
+  the docs: **UNVERIFIED** (it needs root to install packages). Source:
+  https://playwright.dev/docs/browsers
+- The browser build must match the Playwright version the MCP server uses, so jev pins the
+  install to `playwright@1.64.0-alpha-1790635538000` (the MCP server's dependency), not
+  `playwright@latest` (1.64.0 at the time). That this alpha's Chromium revision differs from
+  1.64.0's is **UNVERIFIED**; pinning the same version avoids the question.
+- **Xvfb + noVNC** (documented only, not automated): run a virtual display (`Xvfb :99`), a VNC
+  server on it (`x11vnc -display :99 -localhost`), and noVNC's proxy (`./utils/novnc_proxy
+  --vnc localhost:5900 --listen localhost:6080`, which "can automatically download and start
+  websockify"); then start the browser headed with `DISPLAY=:99` and open noVNC through an SSH
+  tunnel. Source: https://github.com/novnc/noVNC/blob/master/README.md (Quick start); Xvfb(1)
+  and x11vnc(1) usage from their man pages, not checked on a server here: **UNVERIFIED**.
+
+### Recommendation for implementation (done)
+- `ssh` with `-o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=10`, connection
+  reuse under `.jev/ssh/` (`%C`, mode 0700, `ControlPersist=60`), `-T`, `--`; files through
+  `ssh ... 'head -c N -- PATH'` and `cat > TMP && mv -f -- TMP PATH` (no scp/sftp needed).
+- A minimal dual-era stdio MCP server in jev (about 200 lines, no new dependency) instead of the
+  `mcp` SDK, whose HTTP stack (starlette, uvicorn, httpx2, pyjwt, opentelemetry) jev would never
+  use. Supported: `initialize` (2024-11-05 to 2025-11-25), `server/discover`, per-request
+  `_meta` versions, `ping`, `tools/list`, `tools/call`.
+- Playwright MCP pinned to `@playwright/mcp@0.0.83 --browser chromium --isolated [--headless]`;
+  install with `npx -y playwright@1.64.0-alpha-1790635538000 install --with-deps chromium`.

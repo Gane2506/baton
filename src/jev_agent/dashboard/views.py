@@ -23,7 +23,9 @@ from jev_agent.cli.queue_cmds import item_flags, short
 from jev_agent.cli.status_cmds import format_answers, learning_line, quality_line
 from jev_agent.cli.wiring import FAKE_WORKERS_ENV, STATE_DB_FILENAME
 from jev_agent.config import STATE_DIRNAME, JevConfig, load_config
+from jev_agent.core.benchmarks import DEFAULT_LAST, Summary, Trend, summarize, trends
 from jev_agent.core.chat import ChatMeta, list_chats, read_transcript
+from jev_agent.core.kpi import PrKpis, load_pr_kpis
 from jev_agent.core.learning import Learning, LearningStatus, Lesson, Profile, learning_status
 from jev_agent.core.models import RunState
 from jev_agent.core.pipeline import STOPPED
@@ -35,11 +37,13 @@ from jev_agent.core.store import (
     QueueItem,
     QueueStatus,
     RunRecord,
+    ShippedPrRecord,
     Store,
     TaskRecord,
 )
 from jev_agent.core.workspace import result_branch
 from jev_agent.dashboard.render import BarChart, bar_chart, render_markdown
+from jev_agent.quality.report import latest_per_gate
 
 RUN_ID = re.compile(r"^\d{8}-\d{6}-[0-9a-f]{4}$")
 MAX_LOG_FILES = 500
@@ -162,6 +166,11 @@ class RunView:
     can_cancel: bool
     column: str
     reports: list[QualityReportRecord] = field(default_factory=list)
+    # `jev ship`: PRs opened for this run, and whether the "Ship as PR" button shows.
+    shipped: list[ShippedPrRecord] = field(default_factory=list)
+    ship_enabled: bool = False
+    can_ship: bool = False
+    ship_note: str = ""  # why it cannot be shipped (yet), when ship is enabled
 
 
 def run_dir(repo: Repo, run_id: str) -> Path:
@@ -249,7 +258,32 @@ def run_view(repo: Repo, run_id: str) -> RunView:
         can_cancel=run.state not in STOPPED,
         column=COLUMN_FOR_STATE[run.state],
         reports=reports,
+        **ship_state(repo, run, reports),
     )
+
+
+def ship_state(repo: Repo, run: RunRecord, reports: list[QualityReportRecord]) -> dict[str, Any]:
+    """The run page's ship fields. The button shows for a DONE, not yet shipped run whose
+    quality gate did not block; `jev ship` itself checks everything again (remote, gh, ...)."""
+    shipped = repo.store.list_shipped_prs(run.id)
+    settings = repo.config.ship
+    note = ""
+    if not settings.enabled:
+        note = "shipping is off (`[ship] enabled = false`)"
+    elif run.state is not RunState.DONE:
+        note = "only a DONE run can be shipped"
+    elif shipped:
+        note = "already shipped; `jev ship RUN --force-new` opens another PR"
+    elif settings.require_quality_pass and any(
+        g.blocked for g in latest_per_gate([r.result for r in reports])
+    ):
+        note = "the quality gate blocked this run"
+    return {
+        "shipped": shipped,
+        "ship_enabled": settings.enabled,
+        "can_ship": settings.enabled and not note,
+        "ship_note": note,
+    }
 
 
 def safe_run_file(repo: Repo, run_id: str, relative: str) -> Path | None:
@@ -389,6 +423,34 @@ def spend_view(repo: Repo, days: int = 30, top_runs: int = 25) -> SpendView:
         row=18,
     )
     return SpendView(runs, sum(r.spend_usd for r in runs), by_run, by_day, days)
+
+
+# ---- KPIs --------------------------------------------------------------------------------
+
+
+@dataclass
+class KpiView:
+    rows: list[PrKpis]  # newest first, for the table
+    summary: Summary
+    trends: list[Trend]
+    last: int
+    ship_enabled: bool
+
+    @property
+    def regressions(self) -> list[Trend]:
+        return [t for t in self.trends if t.regressed]
+
+
+def kpi_view(repo: Repo, last: int = DEFAULT_LAST) -> KpiView:
+    """`jev kpi --last N`: the shipped PRs with their KPIs, medians and trends."""
+    rows = load_pr_kpis(repo.store, last)
+    return KpiView(
+        rows=list(reversed(rows)),
+        summary=summarize(rows),
+        trends=trends(rows, last),
+        last=last,
+        ship_enabled=repo.config.ship.enabled,
+    )
 
 
 # ---- settings ----------------------------------------------------------------------------

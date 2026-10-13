@@ -14,6 +14,7 @@ from rich.table import Table
 from jev_agent.cli.repo import RepoOption
 from jev_agent.cli.run_cmds import QualityOption, quality_level
 from jev_agent.cli.wiring import cli_context, fail
+from jev_agent.config.servers_schema import NO_PROFILE
 from jev_agent.core.queue import (
     ACTIVE_STATUSES,
     QueueError,
@@ -24,6 +25,7 @@ from jev_agent.core.queue import (
     run_states,
 )
 from jev_agent.core.store import NotFoundError, QueueItem
+from jev_agent.servers.profiles import ProfileError, get_profile
 
 console = Console()
 
@@ -90,6 +92,11 @@ def add(
     level = quality_level(quality)
     with cli_context(repo) as ctx:
         assert ctx.learning is not None
+        if profile is not None and profile.strip() and profile != NO_PROFILE:
+            try:
+                get_profile(ctx.config, profile)
+            except ProfileError as exc:
+                raise fail(str(exc)) from exc
         try:
             item = add_idea(
                 ctx.store,

@@ -361,3 +361,64 @@ def test_migrates_a_version_1_database(db_path: Path) -> None:
     with Store.open(db_path) as s:
         assert s.list_runs() == []
     assert _user_version(db_path) == SCHEMA_VERSION
+
+
+def test_migration_7_adds_shipped_prs_and_run_kpis(tmp_path: Path) -> None:
+    from datetime import UTC, datetime
+
+    from jev_agent.core.migrations import MIGRATIONS
+    from jev_agent.core.models import Idea
+
+    db_path = tmp_path / "state.db"
+    with sqlite3.connect(db_path) as conn:
+        conn.executescript("".join(MIGRATIONS[:6]) + "\nPRAGMA user_version = 6;")
+    with Store.open(db_path) as store:
+        assert _user_version(db_path) == 7
+        run = store.create_run(Idea(text="x", repo_path=tmp_path))
+        pr = store.add_shipped_pr(
+            run.id,
+            remote="origin",
+            repo="a/b",
+            branch="jev/x",
+            base="main",
+            number=3,
+            url="https://github.com/a/b/pull/3",
+            title="x",
+            draft=True,
+            head_oid="abc",
+            pushed_commits=2,
+        )
+        assert pr.state == "open" and pr.time_to_merge_h is None and pr.raw is None
+        merged = datetime(2030, 1, 1, tzinfo=UTC)
+        pr = store.update_shipped_pr(
+            pr.id,
+            state="merged",
+            draft=False,
+            merged_at=merged,
+            closed_at=merged,
+            review_comments=2,
+            reviews=1,
+            ci_status="success",
+            commits_after_open=0,
+            additions=5,
+            deletions=1,
+            changed_files=2,
+            reverted=False,
+            raw={"state": "MERGED"},
+        )
+        assert pr.merged_at == merged and pr.reverted is False and pr.raw == {"state": "MERGED"}
+        assert pr.time_to_merge_h is not None and pr.last_synced_at is not None
+        assert store.list_shipped_prs(run.id) == [pr] and store.list_shipped_prs("other") == []
+        assert store.get_run_kpis(run.id) is None
+        store.set_run_kpis(run.id, '{"a": 1}')
+        store.set_run_kpis(run.id, '{"a": 2}')
+        snapshot = store.get_run_kpis(run.id)
+        assert snapshot is not None and snapshot[1] == '{"a": 2}'
+        with pytest.raises(NotFoundError):
+            store.get_shipped_pr(999)
+        with pytest.raises(NotFoundError):
+            store.set_run_kpis("nope", "{}")
+        with pytest.raises(sqlite3.IntegrityError):
+            store.connection.execute(
+                "UPDATE shipped_prs SET state = 'weird' WHERE id = ?", (pr.id,)
+            )

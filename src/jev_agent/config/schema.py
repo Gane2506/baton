@@ -8,6 +8,12 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from jev_agent.config.servers_schema import (
+    BrowserConfig,
+    ServerConfig,
+    WorkspaceProfileConfig,
+    check_servers_config,
+)
 from jev_agent.quality.levels import QualityLevel
 
 DispatcherName = Literal["jev", "rules"]
@@ -19,11 +25,15 @@ _SECRET_KEY = re.compile(r"(api_)?key$|token|secret|password", re.IGNORECASE)
 _ALLOWED_SECRET_LOOKALIKES = frozenset({"api_key_env", "bearer_token_env"})
 # Tables whose keys are names chosen by the user (MCP server, skill and plugin names, HTTP
 # header names), not settings: a server called "secrets" or a header "X-Api-Key" is fine.
-_NAME_TABLES = frozenset({"tools.mcp", "tools.skills", "tools.plugins"})
+_NAME_TABLES = frozenset({"tools.mcp", "tools.skills", "tools.plugins", "servers", "profiles"})
 
 
 def _keys_are_names(prefix: str) -> bool:
-    return prefix in _NAME_TABLES or prefix.endswith(".headers_from_env")
+    return (
+        prefix in _NAME_TABLES
+        or prefix.endswith(".headers_from_env")
+        or (prefix.startswith("profiles.") and prefix.endswith(".access_overrides"))
+    )
 
 
 def find_secret_keys(data: Any, prefix: str = "") -> list[str]:
@@ -176,6 +186,36 @@ class QualityConfig(_Strict):
         for tool in self.required_tools:
             if not re.match(_TOOL_NAME_PATTERN, tool):
                 raise ValueError(f"required_tools: {tool!r} is not a tool name")
+        return self
+
+
+_BRANCH_PREFIX = r"^[A-Za-z0-9][A-Za-z0-9._/-]*$"
+_REMOTE_NAME = r"^[A-Za-z0-9][A-Za-z0-9._-]*$"
+
+
+class ShipConfig(_Strict):
+    """`[ship]`: `jev ship RUN` pushes a DONE run's result branch and opens a GitHub pull
+    request with `gh` (docs/ship.md). Off by default; it never force-pushes and never merges."""
+
+    enabled: bool = False
+    remote: str = Field(default="origin", pattern=_REMOTE_NAME)
+    # Base branch of the PR; empty: the repo's default branch (from the remote's HEAD or
+    # `gh repo view`), else the branch checked out in the repo.
+    base: str = ""
+    branch_prefix: str = Field(default="jev/", pattern=_BRANCH_PREFIX)
+    draft: bool = True
+    labels: list[str] = Field(default_factory=list)
+    require_quality_pass: bool = True
+
+    @model_validator(mode="after")
+    def _check(self) -> ShipConfig:
+        if self.base and not re.match(_BRANCH_PREFIX, self.base):
+            raise ValueError(f"base: {self.base!r} is not a branch name")
+        if ".." in self.branch_prefix or ".." in self.base:
+            raise ValueError("branch names cannot contain `..`")
+        for label in self.labels:
+            if not label.strip() or label.startswith("-"):
+                raise ValueError(f"labels: {label!r} is not a label name")
         return self
 
 
@@ -350,6 +390,9 @@ class RoleConfig(_Strict):
     mcp: list[str] = Field(default_factory=list)
     skills: list[str] = Field(default_factory=list)
     plugins: list[str] = Field(default_factory=list)
+    # Servers and the browser for this role (docs/servers.md); read-only roles get basic access.
+    servers: list[str] = Field(default_factory=list)
+    browser: bool = False
 
 
 # Per-role defaults. A partial `[roles.<role>]` table is layered on top of these, so setting
@@ -416,10 +459,15 @@ class JevConfig(_Strict):
     review: ReviewConfig = Field(default_factory=ReviewConfig)
     quality: QualityConfig = Field(default_factory=QualityConfig)
     learning: LearningConfig = Field(default_factory=LearningConfig)
+    ship: ShipConfig = Field(default_factory=ShipConfig)
     models: ModelsConfig = Field(default_factory=ModelsConfig)
     workers: WorkersConfig = Field(default_factory=WorkersConfig)
     roles: RolesConfig = Field(default_factory=RolesConfig)
     tools: ToolsConfig = Field(default_factory=ToolsConfig)
+    # Servers, browser and workspace profiles (docs/servers.md).
+    servers: dict[str, ServerConfig] = Field(default_factory=dict)
+    browser: BrowserConfig = Field(default_factory=BrowserConfig)
+    profiles: dict[str, WorkspaceProfileConfig] = Field(default_factory=dict)
 
     @model_validator(mode="before")
     @classmethod
@@ -455,4 +503,18 @@ class JevConfig(_Strict):
                     f"roles.{name}.prefer_different_vendor_than: must name another role "
                     f"(one of: {', '.join(r for r in role_names if r != name)})"
                 )
+        return self
+
+    @model_validator(mode="after")
+    def _check_servers(self) -> JevConfig:
+        reserved = {"jev_servers", "jev_browser"} & set(self.tools.mcp)
+        if reserved:
+            raise ValueError(f"tools.mcp: {', '.join(sorted(reserved))} is reserved for jev")
+        check_servers_config(
+            self.servers,
+            self.browser,
+            self.profiles,
+            {name: role.servers for name, role in self.roles.items()},
+            PROFILE_NAME_PATTERN,
+        )
         return self

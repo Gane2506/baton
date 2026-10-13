@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% from "macros.html" import csrf_input with context %}
+{% block title %}Ship {{ plan.run_id }}{% endblock %}
+{% block content %}
+<h1>Ship run <span class="mono">{{ plan.run_id }}</span> as a pull request?</h1>
+<section class="card">
+  <p>This pushes <code>{{ plan.source }}</code> to a new branch and opens a pull request with your
+  <code>gh</code> login. jev never force-pushes and never merges; branch protection and reviews
+  still apply.</p>
+  <dl class="facts">
+  {% for name, value in plan.summary() %}
+    <dt>{{ name }}</dt><dd>{{ value }}</dd>
+  {% endfor %}
+  </dl>
+  {% for warning in plan.warnings %}<p class="flash error">{{ warning }}</p>{% endfor %}
+  <div class="actions">
+    <form class="inline" method="post" action="/runs/{{ plan.run_id }}/ship">
+      {{ csrf_input() }}
+      <input type="hidden" name="confirm" value="yes">
+      <button class="primary" type="submit">Push and open the PR</button>
+    </form>
+    <a class="button" href="/runs/{{ plan.run_id }}">Not now</a>
+  </div>
+</section>
+<h2>Pull request body</h2>
+<section class="card markdown">{{ body_html }}</section>
+{% endblock %}

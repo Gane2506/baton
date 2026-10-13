@@ -1,0 +1,143 @@
+# Shipping PRs and tracking KPIs
+
+`jev ship RUN` turns a finished run into a GitHub pull request. `jev ship sync` reads the PR
+back from GitHub, and `jev kpi` and the dashboard's **KPIs** page show what each shipped PR
+cost, how it went, and how that trends over time. Everything here is opt-in and runs with your
+own `gh` login. Safety details: [security.md](security.md#shipping-prs).
+
+![The dashboard KPIs page: summary cards, regressions, shipped PRs and trend charts](images/dashboard-kpis.png)
+
+## Setup
+
+1. Install the [GitHub CLI](https://cli.github.com) and log in: `gh auth login`.
+2. Turn shipping on in `jev.toml` ([config.md](config.md#ship)):
+
+   ```toml
+   [ship]
+   enabled = true
+   remote = "origin"            # where the branch is pushed
+   base = ""                    # "" = the repo's default branch
+   branch_prefix = "jev/"
+   draft = true
+   labels = []                  # labels must already exist in the repo
+   require_quality_pass = true
+   ```
+
+## `jev ship RUN`
+
+```bash
+jev ship 20261012-153012-ab12 --dry-run   # show the PR body and the commands; run nothing
+jev ship 20261012-153012-ab12             # asks before pushing
+jev ship 20261012-153012-ab12 --yes       # no question
+jev ship 20261012-153012-ab12 --force-new # another PR for an already shipped run
+```
+
+It refuses, with the reason, unless all of these hold:
+
+- `[ship] enabled = true`;
+- the run is `DONE` and its result branch `jev/<run>/result` exists;
+- with `require_quality_pass` (the default), no task's or the integration's latest quality
+  gate blocked;
+- the remote exists, `gh` is installed and `gh auth status` succeeds;
+- the run has not been shipped yet (`--force-new` opens a second PR from a new branch,
+  `<prefix><run>-2`); a branch of that name on the remote with other commits is never
+  overwritten.
+
+Then it shows the remote, repository, branch, base, title and a summary of the body, asks for
+confirmation, and runs:
+
+```bash
+git push <remote> jev/<run>/result:refs/heads/<branch_prefix><run>     # never --force
+gh pr create --repo <owner/repo> --head <branch> --base <base> \
+  --title "<first line of the idea, at most 72 characters>" --body-file <tmp> [--draft] [--label ...]
+```
+
+Your checkout is never touched: the result branch already exists locally and is pushed as is.
+The repository comes from the remote URL (else `gh repo view`); the base is `[ship] base`, else
+the remote's default branch (`refs/remotes/<remote>/HEAD`, else
+`gh repo view --json defaultBranchRef`), else the branch checked out in the repo. If the push
+worked but `gh pr create` failed, run `jev ship RUN` again: the push is skipped when the remote
+branch already holds the same commit. jev never merges a PR and never enables auto-merge.
+
+The PR body (Markdown, redacted like every log) has the idea, the plan summary, a task table
+(worker, model, effort, attempts, cost), the quality summary (level, gates, blocking problems
+and non-blocking findings by severity; the full review stays local, `jev quality show RUN`), a
+KPI card and the decision statistics (Jev answers, rules fallbacks, mean Jev confidence),
+ending with "Opened by Baton Agent Orchestrator (`jev ship`)".
+
+The dashboard's run page has a **Ship as PR** button for a DONE, not yet shipped run when
+shipping is enabled. It shows the same summary and the rendered body on a confirmation page;
+confirming runs `jev ship RUN --yes` in the background, and the run page then links the PR.
+
+## KPIs
+
+When a run is shipped, its KPIs are computed and stored as a snapshot (`run_kpis` in
+`.jev/state.db`), so later changes (cleaned branches, deleted logs) do not move them:
+
+| KPI | Meaning |
+| --- | --- |
+| total cost | the run's reported spend (Codex reports none) |
+| wall-clock time | from the run's creation to its last recorded activity |
+| tasks, attempts per task | coder attempts over all tasks, and their mean |
+| first-pass rate | tasks DONE on their first attempt / tasks |
+| retries, escalations, reassigns | D5 answers |
+| fix rounds | fix tasks added after integration |
+| quality findings | by severity, from the latest gate of each task and the integration; plus how many gates blocked along the way |
+| tests | the integration tests at the last D6 (passed, failed, not run) |
+| diff | `git diff --shortstat` start..result: files, additions, deletions |
+| decisions | total, by Jev, rules fallbacks, fallback rate (fallbacks / decisions Jev was asked for), mean Jev confidence |
+| free model share | attempts on free models / attempts on the api worker |
+| lessons | distinct lessons injected, lessons added by the learner |
+
+`jev ship sync RUN` (or `--all`) asks GitHub for each PR with
+`gh pr view <number> --repo <repo> --json state,createdAt,mergedAt,closedAt,reviews,comments,commits,additions,deletions,changedFiles,statusCheckRollup,isDraft`
+and stores:
+
+- **state** (open, closed, merged) and **time to merge** (merged - opened);
+- **review comments**: conversation comments plus reviews with a non-empty body (inline review
+  comments are not in this JSON), and the number of reviews;
+- **CI status**: `failure` if any check failed (or errored, timed out, was cancelled),
+  `pending` if any is unfinished, `success` otherwise, `none` without checks;
+- **commits after open**: the PR's commits minus the commits jev pushed (pushing to the branch
+  or GitHub's "Update branch" both count);
+- additions, deletions, changed files as GitHub counts them;
+- **reverted** (merged PRs only): a merged PR whose body says `Reverts owner/repo#N` or whose
+  title is `Revert "<title>"`, which is what GitHub's Revert button writes. It is found with
+  `gh pr list --state merged --search '"owner/repo#N"'`; a revert written by hand without
+  either marker is not detected.
+
+Review and comment bodies are not stored, only their counts.
+
+## `jev kpi`
+
+```bash
+jev ship sync --all     # refresh GitHub data first
+jev kpi                 # the last 20 shipped PRs
+jev kpi --last 10
+jev kpi --json          # every PR with its run KPIs, medians, trends and regressions
+```
+
+![jev kpi --last 10](images/cli-kpi.svg)
+
+One row per PR (cost, run time, attempts per task, first-pass rate, findings, fallback rate,
+time to merge, CI), a median row, and the regression flags below.
+
+## Benchmarks: trends and regressions
+
+For each KPI (cost per PR, run time, attempts per task, first-pass rate, rules fallback rate,
+mean Jev confidence, quality findings, time to merge, review comments) over the last N shipped
+PRs (default 20, oldest first; PRs without a value are skipped):
+
+- the **rolling median** of up to 5 values ending at each point;
+- a point is a **regression** when it is worse than the median of the up to 5 values before
+  it (at least 3 needed):
+  - costs, times and counts: more than 1.5x that median when higher is worse (never against a
+    median of 0);
+  - rates and the confidence (0 to 1): more than 15 percentage points past it in the bad
+    direction (first-pass rate and confidence: lower is worse; fallback rate: higher is worse).
+
+`jev kpi` prints a line per KPI whose latest PR is a regression. The KPIs page draws one SVG
+chart per KPI: the values as a solid line, the rolling median dashed, and regressions as red
+points (hover for the numbers); summary cards show the median cost per PR, median time to
+merge, first-pass rate, fallback rate and the share of PRs merged. Without shipped PRs it
+explains how to start.

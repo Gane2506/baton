@@ -107,8 +107,8 @@ RUN` executes it in your terminal).
 
 To let queued runs go all the way through without you, set `require_plan_approval = false` in
 `jev.toml`. Only do this for ideas and repos where you are happy for agents to write code
-unreviewed (always on separate branches and worktrees; jev never pushes). `--plan-only` on an
-item always stops at the plan, whatever the setting.
+unreviewed (always on separate branches and worktrees; jev never pushes unless you
+`jev ship` a run). `--plan-only` on an item always stops at the plan, whatever the setting.
 
 ### Cost
 

@@ -36,6 +36,7 @@ from jev_agent import __version__
 from jev_agent.cli.board_cmds import format_age
 from jev_agent.cli.status_cmds import format_time
 from jev_agent.config import ConfigError
+from jev_agent.core.benchmarks import DEFAULT_LAST, format_value
 from jev_agent.core.chat import ChatError
 from jev_agent.core.learning import (
     LearningError,
@@ -46,9 +47,10 @@ from jev_agent.core.learning import (
 from jev_agent.core.models import RunState
 from jev_agent.core.pipeline import PipelineError, cancel_run
 from jev_agent.core.queue import Move, QueueError, add_idea, move_item, remove_item
+from jev_agent.core.ship import Gh, ShipError, ShipPlan, prepare_ship
 from jev_agent.core.store import QUEUE_PRIORITIES, NotFoundError
 from jev_agent.dashboard import views
-from jev_agent.dashboard.render import render_bar_chart
+from jev_agent.dashboard.render import render_bar_chart, render_markdown, render_trend_chart
 from jev_agent.dashboard.runner import Executor, RunAction, RunLauncher, execute_run
 from jev_agent.dashboard.security import (
     CSRF_FIELD,
@@ -66,6 +68,7 @@ NAV = (
     ("/learning", "Learning"),
     ("/chats", "Chats"),
     ("/spend", "Spend"),
+    ("/kpis", "KPIs"),
     ("/settings", "Settings"),
 )
 
@@ -103,6 +106,8 @@ def _environment() -> Environment:
     env.globals["version"] = __version__
     env.globals["csrf_field"] = CSRF_FIELD
     env.globals["bar_chart_svg"] = render_bar_chart
+    env.globals["trend_chart_svg"] = render_trend_chart
+    env.globals["fmt"] = format_value
     return env
 
 
@@ -275,6 +280,13 @@ class Dashboard:
     def spend_page(self, request: Request) -> Response:
         return self.page(request, "spend.html", lambda repo: {"s": views.spend_view(repo)})
 
+    def kpis_page(self, request: Request) -> Response:
+        try:
+            last = min(max(int(request.query_params.get("last", DEFAULT_LAST)), 1), 200)
+        except ValueError:
+            last = DEFAULT_LAST
+        return self.page(request, "kpis.html", lambda repo: {"k": views.kpi_view(repo, last)})
+
     def settings_page(self, request: Request) -> Response:
         return self.page(
             request,
@@ -293,8 +305,10 @@ class Dashboard:
         run_id: str = request.path_params["run_id"]
         action: str = request.path_params["action"]
         to = f"/runs/{run_id}"
-        if not views.valid_run_id(run_id) or action not in ("approve", "resume", "cancel"):
+        if not views.valid_run_id(run_id) or action not in ("approve", "resume", "cancel", "ship"):
             raise HTTPException(404, "no such action")
+        if action == "ship":
+            return await self.ship(request, run_id)
         if action == "cancel":
 
             def cancel(repo: views.Repo, form: FormData) -> str:
@@ -323,6 +337,35 @@ class Dashboard:
             self.flash(request, "error", problem)
         elif self.launcher.start(run_id, kind):
             self.flash(request, "ok", f"{kind} started in the background; this page updates")
+        else:
+            self.flash(request, "error", f"run {run_id} is already being worked on here")
+        return self.back(to)
+
+    async def ship(self, request: Request, run_id: str) -> Response:
+        """Two steps, like `jev ship`'s prompt: the first POST checks everything and shows the
+        PR (remote, branch, base, title, body) on a confirmation page; only the confirmed POST
+        starts `jev ship` in the background."""
+        form = await checked_form(request)
+        to = f"/runs/{run_id}"
+
+        def plan() -> ShipPlan:
+            with views.open_repo(self.settings.root) as repo:
+                return prepare_ship(repo.root, repo.config, repo.store, run_id, gh=Gh(repo.root))
+
+        try:
+            ready = await run_in_threadpool(plan)
+        except (ShipError, NotFoundError, ConfigError) as exc:
+            self.flash(request, "error", str(exc))
+            return self.back(to)
+        if form.get("confirm") != "yes":
+            return self.render(
+                request,
+                "confirm_ship.html",
+                plan=ready,
+                body_html=render_markdown(ready.body),
+            )
+        if self.launcher.start(run_id, "ship"):
+            self.flash(request, "ok", "ship started in the background; the PR link shows here")
         else:
             self.flash(request, "error", f"run {run_id} is already being worked on here")
         return self.back(to)
@@ -496,6 +539,7 @@ def create_app(
         Route("/chats", dash.chats_page),
         Route("/chats/{chat_id}", dash.chat_page),
         Route("/spend", dash.spend_page),
+        Route("/kpis", dash.kpis_page),
         Route("/settings", dash.settings_page),
         Mount("/static", app=StaticFiles(directory=STATIC_DIR), name="static"),
     ]

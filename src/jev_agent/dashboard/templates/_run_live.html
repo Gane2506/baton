@@ -30,8 +30,23 @@
       {{ csrf_input() }}<button class="danger" type="submit">Cancel</button>
     </form>
     {% endif %}
+    {% if v.can_ship %}
+    <form class="inline" method="post" action="/runs/{{ run.id }}/ship">
+      {{ csrf_input() }}<button type="submit"{% if busy %} disabled{% endif %}>Ship as PR</button>
+    </form>
+    {% endif %}
     {% if busy %}<span class="muted small">working in the background...</span>{% endif %}
   </div>
+  {% if v.shipped %}
+  <p class="small">Pull request{{ "s" if v.shipped | length > 1 }}:
+    {% for pr in v.shipped %}
+      {% if pr.url %}<a href="{{ pr.url }}" rel="noopener noreferrer">#{{ pr.number }}</a>{% else %}<code>{{ pr.branch }}</code>{% endif %}
+      {{ badge(pr.state, "ok" if pr.state == "merged" else ("fail" if pr.state == "closed" else "running")) }}{% if not loop.last %}, {% endif %}
+    {% endfor %}
+    <span class="muted">(<a href="/kpis">KPIs</a>)</span></p>
+  {% elif v.ship_enabled and v.ship_note and run.state == "DONE" %}
+  <p class="small muted">Ship as PR: {{ v.ship_note }}</p>
+  {% endif %}
 </section>
 
 <h2>Tasks</h2>

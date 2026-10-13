@@ -8,7 +8,9 @@ import re
 import threading
 import xml.etree.ElementTree as ET
 from collections.abc import Iterator
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any
 
 import httpx
 import pytest
@@ -705,3 +707,162 @@ def test_cli_generates_token_off_loopback(
         cli_app, ["dashboard", "--no-open", "--token", "short", "--repo", str(fixture_repo)]
     )
     assert result.exit_code == 1 and "at least 16" in result.output
+
+
+# ---- jev ship and the KPIs page ----------------------------------------------------------
+
+
+def _shipped(repo: Path, run_id: str, number: int, **sync: object) -> None:
+    with _store(repo) as store:
+        pr = store.add_shipped_pr(
+            run_id,
+            remote="origin",
+            repo="acme/widgets",
+            branch=f"jev/{run_id}-{number}",
+            base="main",
+            number=number,
+            url=f"https://github.com/acme/widgets/pull/{number}",
+            title="add <b>search</b>",
+            draft=True,
+            pushed_commits=2,
+        )
+        if sync:
+            fields: dict[str, Any] = {
+                "state": "open",
+                "draft": False,
+                "merged_at": None,
+                "closed_at": None,
+                "review_comments": 1,
+                "reviews": 1,
+                "ci_status": "success",
+                "commits_after_open": 0,
+                "additions": 10,
+                "deletions": 1,
+                "changed_files": 2,
+                "reverted": None,
+                "raw": None,
+            }
+            fields.update(sync)
+            store.update_shipped_pr(pr.id, **fields)
+
+
+def test_kpis_page_empty_state(client: TestClient) -> None:
+    text = client.get("/kpis").text
+    assert 'href="/kpis" class="active"' in text
+    assert "No shipped pull requests yet" in text and "jev ship RUN_ID" in text
+    assert "enabled = true" in text  # shipping is off by default
+
+
+def test_kpis_page_lists_prs_cards_and_trends(
+    client: TestClient, planned: tuple[Path, str]
+) -> None:
+    repo, run_id = planned
+    for number in (11, 12, 13):
+        _shipped(repo, run_id, number)
+    _shipped(repo, run_id, 14, state="merged", merged_at=datetime.now(UTC) + timedelta(hours=5))
+    response = client.get("/kpis?last=3")
+    assert response.status_code == 200
+    text = response.text
+    assert "Median cost per PR" in text and "Merged" in text and "1 of 3" in text
+    assert "https://github.com/acme/widgets/pull/14" in text and ">#11<" not in text
+    assert "add &lt;b&gt;search&lt;/b&gt;" in text and "<b>search</b>" not in text
+    assert text.count('<svg class="trend"') >= 5
+    assert "<script" not in text.split("</head>")[1]
+    assert client.get("/kpis?last=oops").status_code == 200
+
+
+def test_render_trend_chart_marks_regressions_and_escapes() -> None:
+    from jev_agent.core.benchmarks import KPI_BY_KEY, trend
+    from jev_agent.dashboard.render import render_trend_chart
+
+    series = [(f"#{n}<x>", v) for n, v in enumerate([1.0, 1.1, 0.9, 1.0, 3.0])]
+    chart = str(render_trend_chart(trend(KPI_BY_KEY["cost_usd"], series)))
+    root = ET.fromstring(chart)
+    circles = [el for el in root.iter() if el.tag.endswith("circle")]
+    assert len(circles) == 5
+    assert [c.get("class") for c in circles].count("pt bad") == 1
+    assert circles[-1].get("class") == "pt bad"
+    assert "#4&lt;x&gt;" in chart and "<x>" not in chart
+    assert 'class="median"' in chart and "style=" not in chart
+    empty = str(render_trend_chart(trend(KPI_BY_KEY["cost_usd"], [("#1", None)])))
+    assert "No data yet" in empty and "<svg" not in empty
+    single = str(render_trend_chart(trend(KPI_BY_KEY["cost_usd"], [("#1", 2.0)])))
+    ET.fromstring(single)
+
+
+def test_ship_button_confirmation_and_background_job(
+    planned: tuple[Path, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from jev_agent.core.kpi import RunKpis
+    from jev_agent.core.ship import ShipError, ShipPlan
+    from jev_agent.dashboard import app as app_module
+
+    repo, run_id = planned
+    with _store(repo) as store:
+        store.set_run_state(run_id, RunState.DONE)
+    calls = Calls()
+    for client in _client(repo, calls):
+        assert "Ship as PR" not in client.get(f"/runs/{run_id}").text  # off by default
+        (repo / "jev.toml").write_text("[ship]\nenabled = true\n")
+        assert "Ship as PR" in client.get(f"/runs/{run_id}").text
+
+        def refuse(*args: object, **kwargs: object) -> ShipPlan:
+            raise ShipError("this repo has no remote 'origin'")
+
+        monkeypatch.setattr(app_module, "prepare_ship", refuse)
+        response = _post(client, f"/runs/{run_id}/ship")
+        assert response.status_code == 303
+        assert "no remote" in client.get(f"/runs/{run_id}").text
+
+        plan = ShipPlan(
+            run_id=run_id,
+            remote="origin",
+            remote_url="git@github.com:acme/widgets.git",
+            repo="acme/widgets",
+            branch=f"jev/{run_id}",
+            base="main",
+            title="add <b>search</b>",
+            body="## Idea\n\n> add <script>x</script>\n",
+            draft=True,
+            labels=[],
+            head_oid="0" * 40,
+            pushed_commits=1,
+            kpis=RunKpis.model_validate(
+                {
+                    "run_id": run_id,
+                    "total_cost_usd": 0,
+                    "wall_clock_s": 1,
+                    "tasks": 1,
+                    "tasks_done": 1,
+                    "attempts_total": 1,
+                    "attempts_per_task": 1,
+                    "first_pass_rate": 1,
+                    "retries": 0,
+                    "escalations": 0,
+                    "reassigns": 0,
+                    "fix_rounds": 0,
+                    "quality_level": "none",
+                }
+            ),
+        )
+
+        def ready(*args: object, plan: ShipPlan = plan, **kwargs: object) -> ShipPlan:
+            return plan
+
+        monkeypatch.setattr(app_module, "prepare_ship", ready)
+        response = _post(client, f"/runs/{run_id}/ship")
+        assert response.status_code == 200
+        text = response.text
+        assert "Push and open the PR" in text and 'name="confirm" value="yes"' in text
+        assert "add &lt;b&gt;search&lt;/b&gt;" in text and "<script>x" not in text
+        assert calls.calls == []  # nothing runs before the confirmation
+
+        response = _post(client, f"/runs/{run_id}/ship", {"confirm": "yes"})
+        assert response.status_code == 303
+        _launcher(client).wait(run_id)
+        assert calls.calls == [(repo, run_id, "ship")]
+
+        _shipped(repo, run_id, 42)
+        live = client.get(f"/runs/{run_id}/live").text
+        assert "https://github.com/acme/widgets/pull/42" in live
+        assert "Ship as PR</button>" not in live and "already shipped" not in live

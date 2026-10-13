@@ -15,6 +15,8 @@ from jev_agent.cli.quality_cmds import quality_app
 from jev_agent.cli.queue_cmds import queue_app
 from jev_agent.cli.run_cmds import approve, cancel, resume, run
 from jev_agent.cli.scheduler_cmds import scheduler_app
+from jev_agent.cli.server_cmds import browser_app, mcp_app, profile_app
+from jev_agent.cli.ship_cmds import kpi, ship
 from jev_agent.cli.status_cmds import log, status
 
 app = typer.Typer(
@@ -59,9 +61,14 @@ app.add_typer(models_app, name="models")
 app.add_typer(queue_app, name="queue")
 app.add_typer(quality_app, name="quality")
 app.add_typer(scheduler_app, name="scheduler")
+app.add_typer(profile_app, name="profile")
+app.add_typer(browser_app, name="browser")
+app.add_typer(mcp_app, name="mcp")
 app.command("board")(board)
 app.command("chat")(chat)
 app.command("dashboard")(dashboard)
+app.command("ship")(ship)
+app.command("kpi")(kpi)
 
 
 def main() -> None:

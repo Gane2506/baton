@@ -179,6 +179,49 @@ MIGRATIONS: list[str] = [
 
     CREATE INDEX quality_reports_run ON quality_reports (run_id);
     """,
+    # 7: `jev ship` (docs/ship.md). One row per pull request opened for a run, with what
+    # `jev ship sync` last read from GitHub; `pushed_commits` is how many commits the pushed
+    # branch had over its base (for "commits after open"). `run_kpis` keeps the run's KPIs as
+    # computed when it was shipped, so they stay stable when logs or branches go away.
+    """
+    CREATE TABLE shipped_prs (
+        id                  INTEGER PRIMARY KEY,
+        run_id              TEXT NOT NULL REFERENCES runs (id),
+        remote              TEXT NOT NULL,
+        repo                TEXT NOT NULL,
+        branch              TEXT NOT NULL,
+        base                TEXT NOT NULL,
+        number              INTEGER,
+        url                 TEXT,
+        title               TEXT NOT NULL DEFAULT '',
+        draft               INTEGER NOT NULL DEFAULT 0,
+        head_oid            TEXT,
+        pushed_commits      INTEGER,
+        created_at          TEXT NOT NULL,
+        state               TEXT NOT NULL DEFAULT 'open'
+                            CHECK (state IN ('open', 'closed', 'merged')),
+        merged_at           TEXT,
+        closed_at           TEXT,
+        review_comments     INTEGER,
+        reviews             INTEGER,
+        ci_status           TEXT,
+        commits_after_open  INTEGER,
+        additions           INTEGER,
+        deletions           INTEGER,
+        changed_files       INTEGER,
+        reverted            INTEGER,
+        last_synced_at      TEXT,
+        raw_json            TEXT
+    );
+
+    CREATE INDEX shipped_prs_run ON shipped_prs (run_id);
+
+    CREATE TABLE run_kpis (
+        run_id       TEXT PRIMARY KEY REFERENCES runs (id),
+        computed_at  TEXT NOT NULL,
+        kpis_json    TEXT NOT NULL
+    );
+    """,
 ]
 
 SCHEMA_VERSION = len(MIGRATIONS)
