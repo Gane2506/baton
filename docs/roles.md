@@ -68,7 +68,8 @@ A plan with a dependency cycle stops the run in `FAILED`. No valid plan at all s
 
 ## Validator
 
-**Purpose.** Decide whether the plan is good enough to hand to coders.
+**Purpose.** Decide whether the plan is good enough to hand to coders, and question every
+significant choice in it: why this instead of the obvious alternative, and what is the reason?
 
 **Template variables.**
 
@@ -85,9 +86,19 @@ A plan with a dependency cycle stops the run in `FAILED`. No valid plan at all s
 | --- | --- | --- |
 | `verdict` | string | `"approve"` or `"revise"`. |
 | `issues` | list of strings | Problems to fix; empty on approve. |
+| `challenges` | list of objects | One per plan choice questioned (optional; see below). |
 
-The dispatcher (D3) reads the verdict and decides to approve, revise or escalate to a human.
-`revise` sends the plan and the issues back to the planner, up to `[budget] max_plan_rounds`.
+Each challenge has `choice` (what the plan does, required), `alternative` (the option not
+taken), `reason` (the planner's reason, or `(not stated)`), `holds` (bool, required) and `note`
+(why it holds or not). A challenge holds when the stated reason is sound or, when none is
+stated, a sound reason clearly exists. One that does not hold is a mistake: it is added to
+`issues` and the verdict becomes `revise`, whatever the reply said, so the planner gets it back.
+Results stored before challenges existed load with an empty list.
+
+The dispatcher (D3) reads the verdict, the issues and the failed challenges (choice,
+alternative, reason and note, at most five) and decides to approve, revise or escalate to a
+human. `revise` sends the plan and the issues back to the planner, up to
+`[budget] max_plan_rounds`.
 
 ## Coder
 

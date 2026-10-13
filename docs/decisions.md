@@ -2,6 +2,28 @@
 
 Deviations from [PLAN.md](../PLAN.md) and choices it left open. Newest first.
 
+## 2026-10-13: The validator challenges every plan choice (#67)
+
+The validator now records, for each significant choice in the plan, the alternative it did not
+take, the planner's reason and whether that reason holds (`ChoiceChallenge` in
+`core/models.py`). Jev made both calls below with the jev-decide skill.
+
+- **The rule lives in the model** (ARBITRATED, confidence 0.48, over deriving it in
+  `Pipeline._validate` and over rejecting inconsistent replies). A validator on
+  `ValidationResult` turns each challenge that does not hold into an issue and sets the
+  verdict to `revise`. Every parse, from a worker reply or from the store, gives a consistent
+  result; a reply that flags a choice but approves is corrected rather than stopping the run.
+  The planner gets the mistake through the `issues` it already reads, so its prompt and
+  `_plan` are unchanged. Reloading is idempotent: an issue already present is not added again.
+- **An unstated reason is not a failure by itself** (ARBITRATED, confidence 0.78, over failing
+  every unstated reason). The planner prompt does not ask for reasons, so failing those would
+  send most plans back until `max_plan_rounds` ran out. The validator writes `(not stated)` and
+  fails the challenge only when the stated reason is wrong or no sound reason exists.
+- **D3 sees the failed challenges** (choice, alternative, reason and note, clipped, at most
+  five) plus the counts, so Jev and Laya vote on them. Sound challenges are only counted.
+- **Compatibility.** `challenges` defaults to empty; runs stored before this load unchanged,
+  and the rules dispatcher still reads only the (now enforced) verdict.
+
 ## 2026-10-13: Consensus dispatcher, Jev then Laya (#66)
 
 `[dispatcher] primary = "consensus"` is the new default. Every decision needs two votes that

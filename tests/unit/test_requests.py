@@ -1,7 +1,7 @@
 from pathlib import Path
 
 from jev_agent.config import JevConfig
-from jev_agent.core.models import Idea, Plan, TaskCard, ValidationResult
+from jev_agent.core.models import ChoiceChallenge, Idea, Plan, TaskCard, ValidationResult
 from jev_agent.dispatch import requests as r
 
 
@@ -83,3 +83,23 @@ def test_requests_have_stable_questions_and_compact_state(tmp_path: Path) -> Non
     d6 = r.d6_integration(1, True, [], "passed", fix_rounds=1, max_fix_rounds=2)
     assert d6.questions == {"action": ["ship", "fix_task", "human"]}
     assert (d6.state["fix_rounds"], d6.state["max_fix_rounds"]) == (1, 2)
+
+
+def test_d3_carries_the_failed_challenges_compactly() -> None:
+    challenges = [ChoiceChallenge(choice="kept", holds=True)] + [
+        ChoiceChallenge(choice=f"c{i}", alternative="y", reason="r" * 500, holds=False)
+        for i in range(7)
+    ]
+    card = r.d3_after_validation(ValidationResult(verdict="revise", challenges=challenges), 1, 3)
+    validation = card.state["validation"]
+    assert (validation["challenge_count"], validation["failed_challenge_count"]) == (8, 7)
+    failed = validation["failed_challenges"]
+    assert [c["choice"] for c in failed] == ["c0", "c1", "c2", "c3", "c4"]
+    assert len(failed[0]["reason"]) == 160 and "kept" not in str(failed)
+
+
+def test_d3_without_challenges() -> None:
+    validation = r.d3_after_validation(ValidationResult(verdict="approve"), 1, 3).state[
+        "validation"
+    ]
+    assert (validation["challenge_count"], validation["failed_challenges"]) == (0, [])

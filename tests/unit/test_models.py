@@ -3,7 +3,14 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from jev_agent.core.models import Decision, DecisionRequest, Plan, TaskCard
+from jev_agent.core.models import (
+    ChoiceChallenge,
+    Decision,
+    DecisionRequest,
+    Plan,
+    TaskCard,
+    ValidationResult,
+)
 
 
 def _task(tid: str, deps: list[str] | None = None) -> TaskCard:
@@ -52,3 +59,48 @@ def test_worker_result_path() -> None:
 
     r = WorkerResult(status="success", summary="ok", raw_log_path=Path("x.log"))
     assert r.files_changed == []
+
+
+def _unsound(note: str = "the alternative is simpler") -> ChoiceChallenge:
+    return ChoiceChallenge(
+        choice="a new module",
+        alternative="extend utils.py",
+        reason="(not stated)",
+        holds=False,
+        note=note,
+    )
+
+
+def test_failed_challenge_is_an_issue_and_forces_revise() -> None:
+    sound = ChoiceChallenge(choice="pytest", alternative="unittest", holds=True)
+    result = ValidationResult(verdict="approve", challenges=[sound, _unsound()])
+    assert result.verdict == "revise"
+    assert result.issues == [
+        "Choice: a new module instead of extend utils.py. the alternative is simpler "
+        "(planner's reason: (not stated))"
+    ]
+
+
+def test_sound_challenges_keep_the_verdict() -> None:
+    sound = ChoiceChallenge(choice="pytest", holds=True)
+    assert ValidationResult(verdict="approve", challenges=[sound]).issues == []
+    assert ValidationResult(verdict="approve", challenges=[sound]).verdict == "approve"
+
+
+def test_challenge_issues_are_idempotent_on_reload() -> None:
+    result = ValidationResult(verdict="revise", challenges=[_unsound(), _unsound()])
+    assert len(result.issues) == 1  # the same mistake is reported once
+    assert ValidationResult.model_validate_json(result.model_dump_json()) == result
+
+
+def test_validation_without_challenges_loads() -> None:
+    # Runs stored before #67 have no `challenges` key.
+    old = ValidationResult.model_validate_json('{"verdict": "approve", "issues": []}')
+    assert (old.verdict, old.issues, old.challenges) == ("approve", [], [])
+
+
+def test_challenge_needs_a_choice_and_a_holds_flag() -> None:
+    with pytest.raises(ValidationError):
+        ChoiceChallenge.model_validate({"holds": True})
+    with pytest.raises(ValidationError):
+        ChoiceChallenge.model_validate({"choice": "x"})

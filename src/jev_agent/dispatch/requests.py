@@ -239,11 +239,24 @@ def d2_validator(
 def d3_after_validation(
     validation: ValidationResult, plan_round: int, max_rounds: int
 ) -> DecisionRequest:
+    failed = [c for c in validation.challenges if not c.holds]
     state = {
         "validation": {
             "verdict": validation.verdict,
             "issue_count": len(validation.issues),
             "issues": [clip(issue, 200) for issue in validation.issues[:5]],
+            # The validator's "why X, not Y" per plan choice; the failed ones in full (#67).
+            "challenge_count": len(validation.challenges),
+            "failed_challenge_count": len(failed),
+            "failed_challenges": [
+                {
+                    "choice": clip(c.choice, 120),
+                    "alternative": clip(c.alternative, 120),
+                    "reason": clip(c.reason, 160),
+                    "note": clip(c.note, 200),
+                }
+                for c in failed[:5]
+            ],
         },
         "round": plan_round,
         "max_rounds": max_rounds,

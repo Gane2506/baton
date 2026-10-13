@@ -12,6 +12,7 @@ from jev_agent.config import JevConfig
 from jev_agent.core.commands import FakeCommandRunner
 from jev_agent.core.lease import RunInUseError, hold_run_lease
 from jev_agent.core.models import (
+    ChoiceChallenge,
     Decision,
     DecisionRequest,
     Idea,
@@ -164,6 +165,38 @@ async def test_plan_revision_loop(make_env: Any) -> None:
     second_prompt = env.jobs("planner")[1].prompt
     assert "split T1 by module" in second_prompt
     assert "Previous plan" in second_prompt
+
+
+async def test_unsound_choice_sends_the_plan_back(make_env: Any) -> None:
+    # The validator flags a choice but still approves: the plan goes back anyway (#67).
+    flagged = ValidationResult(
+        verdict="approve",
+        challenges=[
+            ChoiceChallenge(choice="one task", alternative="a task per module", holds=True),
+            ChoiceChallenge(
+                choice="a regex parser",
+                alternative="the stdlib json module",
+                reason="(not stated)",
+                holds=False,
+                note="json input needs a real parser",
+            ),
+        ],
+    )
+    env: Env = make_env(
+        {"planner": FakeStep(parsed=ONE_TASK), "validator": [FakeStep(parsed=flagged), FakeStep()]}
+    )
+    run = await env.pipeline.start(_idea(env.repo))
+
+    assert run.state is RunState.DONE, run.reason
+    assert run.plan_round == 2
+    d3 = next(r for r in env.store.list_decisions(run.id) if r.request.point == "D3")
+    assert d3.decision.answers == {"verdict": "revise"}
+    card = d3.request.state["validation"]
+    assert (card["challenge_count"], card["failed_challenge_count"]) == (2, 1)
+    assert card["failed_challenges"][0]["choice"] == "a regex parser"
+    second_prompt = env.jobs("planner")[1].prompt
+    assert "a regex parser instead of the stdlib json module" in second_prompt
+    assert "json input needs a real parser" in second_prompt
 
 
 async def test_plan_rounds_exhausted_needs_human(make_env: Any) -> None:

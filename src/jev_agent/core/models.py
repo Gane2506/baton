@@ -86,9 +86,42 @@ class Plan(BaseModel):
         return self
 
 
+class ChoiceChallenge(BaseModel):
+    """The validator's "why X, not Y" on one choice the planner made."""
+
+    choice: str  # what the plan does
+    alternative: str = ""  # the option the plan did not take
+    reason: str = ""  # the planner's reason, or "(not stated)"
+    holds: bool  # whether the choice is justified over the alternative
+    note: str = ""  # the validator's assessment; for a failed challenge, what is wrong
+
+    def as_issue(self) -> str:
+        """The issue a failed challenge sends back to the planner."""
+        versus = f" instead of {self.alternative}" if self.alternative else ""
+        why = self.note or "the reason does not hold"
+        return f"Choice: {self.choice}{versus}. {why} (planner's reason: {self.reason or 'none'})"
+
+
 class ValidationResult(BaseModel):
     verdict: Literal["approve", "revise"]
     issues: list[str] = Field(default_factory=list)
+    challenges: list[ChoiceChallenge] = Field(default_factory=list)  # empty in pre-#67 runs
+
+    @model_validator(mode="after")
+    def _failed_challenges_are_issues(self) -> ValidationResult:
+        """A choice without a sound reason is an issue and the plan goes back for revision.
+
+        Enforced here so a reply that flags a choice but still approves is consistent, and the
+        planner gets the mistake through `issues`. Idempotent: a stored result reloads as is.
+        """
+        for challenge in self.challenges:
+            if challenge.holds:
+                continue
+            self.verdict = "revise"
+            issue = challenge.as_issue()
+            if issue not in self.issues:
+                self.issues.append(issue)
+        return self
 
 
 class WorkerResult(BaseModel):

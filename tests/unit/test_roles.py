@@ -215,3 +215,10 @@ def test_extract_coder_summary() -> None:
     assert extract_coder_summary(text) == CoderSummary(summary="last", files_changed=["a.py"])
     assert extract_coder_summary("no block") is None
     assert extract_coder_summary("```jev-summary\nnot json\n```") is None
+
+
+def test_validator_prompt_asks_why_x_not_y() -> None:
+    text = render_prompt("validator", **VARS["validator"])
+    assert "## Challenge every choice" in text
+    assert "why this instead of the" in text and "`(not stated)`" in text
+    assert '"challenges": [' in text
