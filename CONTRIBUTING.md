@@ -13,19 +13,20 @@ most failed pull requests so far skipped `uv run ruff format .` or `uv run mypy`
 2. [Finding work](#finding-work)
 3. [Setup](#setup)
 4. [Project layout](#project-layout)
-5. [Design rules](#design-rules)
-6. [Code style](#code-style)
-7. [Testing](#testing)
-8. [Docs that change with the code](#docs-that-change-with-the-code)
-9. [Adding a worker adapter](#adding-a-worker-adapter)
-10. [Changing a role prompt](#changing-a-role-prompt)
-11. [Recording decisions](#recording-decisions)
-12. [Branches and commits](#branches-and-commits)
-13. [Before you open a pull request](#before-you-open-a-pull-request)
-14. [Pull requests and review](#pull-requests-and-review)
-15. [Security](#security)
-16. [License](#license)
-17. [Code of conduct](#code-of-conduct)
+5. [Code-quality bar](#code-quality-bar)
+6. [Changes written with a coding agent](#changes-written-with-a-coding-agent)
+7. [Code style](#code-style)
+8. [Testing](#testing)
+9. [Docs that change with the code](#docs-that-change-with-the-code)
+10. [Adding a worker adapter](#adding-a-worker-adapter)
+11. [Changing a role prompt](#changing-a-role-prompt)
+12. [Recording decisions](#recording-decisions)
+13. [Branches and commits](#branches-and-commits)
+14. [Before you open a pull request](#before-you-open-a-pull-request)
+15. [Pull requests and review](#pull-requests-and-review)
+16. [Security](#security)
+17. [License](#license)
+18. [Code of conduct](#code-of-conduct)
 
 ## Ways to contribute
 
@@ -238,31 +239,108 @@ Module by module (every file under `src/jev_agent/`, except package `__init__.py
 
 If you add a module, add a row here in the same pull request.
 
-## Design rules
+## Code-quality bar
 
-These come from [PLAN.md](PLAN.md) section 0. Pull requests that break them will be asked to
-change.
+Well-written code here is code another contributor can understand, change safely and debug
+without its original author. Review checks every pull request against the points below. Each
+says what it means in this codebase and where to see it done; follow the existing example
+rather than inventing a new pattern.
 
-1. **The harness stays dumb.** Routing intelligence belongs to the dispatcher. The harness
-   stores state, asks the dispatcher what to do, checks the answer and executes it. It only
-   enforces hard limits (rounds, attempts, budgets). If you are adding an `if` in `core/` that
-   picks a worker, model or effort, it belongs in `dispatch/` instead.
-2. **Every external call goes through an interface and is faked in tests.** Dispatchers,
-   workers, model APIs, shell commands and subprocesses each sit behind a protocol or an
-   injectable dependency (`Dispatcher`, `Worker`, `CommandRunner`, an `httpx` client or
-   transport).
-3. **No network in tests.** No test may hit a real network or a real agent CLI. Use recorded
-   fixtures, fakes or `httpx.MockTransport`. Real calls go in `tests/live/` behind
-   `JEV_LIVE_TESTS=1`.
-4. **Small, readable modules.** A contributor should understand any file in five minutes.
-   Prefer a plain function over a class hierarchy, and a clear name over a comment.
-5. **Do not invent external APIs.** Check the current official docs before relying on a CLI
-   flag or API field, and record what you found in `docs/verification.md` (see
-   [Recording decisions](#recording-decisions)).
+The review question behind all of them: **can a contributor trace what this change does,
+understand how it fails, and verify it without guessing?**
 
-Also keep these compatible unless an issue says otherwise: `jev.toml` keys, CLI commands and
-flags, and the state database. A change to the database schema needs a new migration in
-`core/migrations.py`, never an edit to an old one.
+1. **Execution is easy to trace.** A reader can follow a command from `cli/` through
+   `cli/wiring.py` to `core/pipeline.py` and the worker that runs, and back to the result and
+   cleanup. Wire things with plain function calls and constructor arguments, not factories,
+   registries or wrappers (`workers/registry.py` is a plain map from name to worker).
+   **The harness stays dumb:** it stores state, asks the dispatcher, checks the answer and
+   executes it, enforcing only hard limits (rounds, attempts, budgets). An `if` in `core/` that
+   picks a worker, model or effort belongs in `dispatch/`.
+2. **Every resource has an owner.** Know which component creates and closes each process,
+   connection, temporary file, worktree and background task, and make cleanup run after
+   success, failure and cancellation (`try`/`finally`, `async with`). Examples:
+   `workers/subprocess_runner.py` runs each CLI in its own process group and kills the group on
+   timeout or cancellation; `core/lease.py` releases the run lease in a `finally`, even when
+   the block fails.
+3. **States are explicit.** Runs and tasks are `StrEnum` state machines (`RunState`,
+   `TaskState` in `core/models.py`); worker outcomes are one `WorkerStatus` value. Add a state
+   or a status value rather than a second boolean that can contradict the first.
+4. **Decisions are separate from side effects.** Choosing (dispatch, validation, policy,
+   result interpretation) is plain code over data; doing (filesystem, network, processes, git)
+   sits behind an injectable interface: `Dispatcher`, `Worker`, `CommandRunner`, an `httpx`
+   client. `quality/policy.py` decides what blocks; `quality/gate.py` runs the checks.
+5. **Abstractions earn their place.** Add an interface when it marks a real boundary or has
+   more than one implementation you actually ship or test with (`Worker` has Claude Code,
+   Codex, API and fake). No speculative extension points, base classes with one subclass, or
+   options nobody sets. Prefer a plain function to a class hierarchy.
+6. **Inputs are validated at the boundary.** Config is checked once by the pydantic schema in
+   `config/schema.py` (unknown and secret-looking keys are errors); Jev's answers by
+   `dispatch/guard.py`; agent replies against the role's output schema (`roles/schemas.py`).
+   Past the boundary, code trusts the typed value instead of re-checking it.
+7. **Failures keep their meaning.** An empty result, a timeout and an execution failure are
+   different outcomes: workers map them to `success`, `failure`, `error`, `quota_exhausted` or
+   `timeout`, and never raise for an agent's failure. Errors name the operation that failed and
+   its cause, and user-facing ones say what to do next. Catch an exception only where you
+   recover, translate it or add context; never swallow it.
+8. **Retries are a correctness question.** Retry only failures that are safe to repeat, with a
+   bound (the Jev dispatcher posts once and retries once, inside one overall timeout). Before
+   adding a retry, decide what happens if the first attempt succeeded and only its response was
+   lost: `jev ship` looks for a PR already open for the branch before opening another.
+9. **Concurrent work is isolated.** No mutable module-level state for a run. Shared state lives
+   in the store, behind visible synchronization (the run lease, SQLite transactions). Tests
+   cover two executions overlapping and one being cancelled (`test_lease.py`,
+   `test_migrations_concurrency.py`).
+10. **Tests cover behaviour that could break.** Test contracts, failure paths, cleanup and the
+    interactions between components, not private helpers; a harmless refactor should not break
+    a test. Integration tests run the whole pipeline against a real temporary git repo with
+    fakes for agents. **Every external call is faked** and **no test touches the network or a
+    real CLI**, except the opt-in live tests in `tests/live/` (see [Testing](#testing)).
+11. **Tests are repeatable.** Control time, randomness, environment variables and temporary
+    directories (`tmp_path`, `monkeypatch`; `tests/conftest.py` already isolates XDG dirs, keys
+    and git config). A failure should point at a defect, never at test order or the machine.
+12. **Dependencies are deliberate.** Each runtime dependency has a reason in its issue, sits
+    behind the module that needs it (the dashboard's Starlette stays in `dashboard/`, behind the
+    optional extra), and is locked in `uv.lock`. Remove what is no longer used.
+13. **Names explain the work.** `terminate_worker`, not `handle_action`. A module has one
+    purpose you can state in its first-line docstring; a growing `utils` module means ownership
+    needs sorting out.
+14. **Comments give reasons.** Explain constraints, verified API quirks, unusual behaviour and
+    trade-offs, with a link to the issue or `docs/decisions.md` entry. Do not restate the code.
+    When behaviour changes, update the docs that describe it in the same pull request.
+15. **Public contracts are dependable.** `jev.toml` keys, CLI commands and flags, the state
+    database, role output schemas and the worker interface are public. Keep them compatible
+    unless an issue says otherwise; a database change is a new migration in
+    `core/migrations.py`, never an edit to an old one. Document observable behaviour, and call
+    out breaking changes in the pull request and `CHANGELOG.md`. **Do not invent external
+    APIs:** check the official docs before relying on a CLI flag or API field and record what
+    you found in `docs/verification.md`.
+16. **Contributions stay straightforward.** A fresh checkout works with the commands in
+    [Setup](#setup) and [Before you open a pull request](#before-you-open-a-pull-request). Keep
+    each pull request to one coherent change a reviewer can understand in one sitting.
+
+## Changes written with a coding agent
+
+Using Claude Code, Codex or another agent to write a contribution is welcome; jev itself is
+built that way. The author who opens the pull request is responsible for every line of it,
+and review holds it to the same bar. Agent-written changes most often fail review for clutter,
+so make sure the agent, and you before you push:
+
+- **Inspects before editing.** Read the module, its tests and the newest `docs/decisions.md`
+  entries, and follow the conventions already there.
+- **Makes the smallest coherent change** that solves the issue. No drive-by refactors,
+  reformatting of untouched code, or "while I was here" fixes (open an issue for those).
+- **Leaves no clutter.** Remove unused helpers, speculative parameters and extension points,
+  abandoned code paths, commented-out code, debug output and comments that narrate the code.
+- **Never weakens a check to pass.** No new `# type: ignore`, `# noqa`, `cast` or `Any` to
+  silence a real error, no skipped or loosened tests, no edits to lint or mypy settings. Fix the
+  cause.
+- **Verifies and reports exactly what was checked.** The pull request says which commands ran
+  and what passed, and which behaviour was not verified. "Should work" is not a test result.
+- **Justifies each new abstraction or dependency** in the pull request description: what
+  complexity it removes, or why the standard library and the existing code cannot do it.
+
+Say in the pull request that an agent helped, and which parts it wrote. Agents read
+`CLAUDE.md` for project context, but the rules for contributions are the ones in this file.
 
 ## Code style
 
@@ -488,8 +566,8 @@ Checklist:
    workflow run before CI starts. A pull request is reviewed only once CI is green; if a job
    fails, open its log, fix the cause and push again.
 2. **The maintainer reviews.** This is a project with one maintainer, so a review can take a
-   few days; a polite ping on the pull request after a week is fine. Review checks the design
-   rules above, tests, docs and scope.
+   few days; a polite ping on the pull request after a week is fine. Review checks the
+   [code-quality bar](#code-quality-bar), tests, docs and scope.
 3. **You address the comments** by pushing to the same branch. Reply to each comment or
    resolve it; say if you disagree, with a reason. Squash fix-up commits before the final
    merge (see [Branches and commits](#branches-and-commits)).
@@ -498,8 +576,8 @@ Checklist:
    `CHANGELOG.md` under that version.
 
 A pull request may be closed without merging if it is out of scope, duplicates other work,
-breaks a design rule and the author does not want to change it, or has had no response to
-review for about a month. You can always reopen it or start again later.
+falls short of the code-quality bar and the author does not want to change it, or has had no
+response to review for about a month. You can always reopen it or start again later.
 
 ## Security
 
