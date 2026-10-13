@@ -559,7 +559,7 @@ def config_summary(repo: Repo) -> list[tuple[str, str]]:
         ("budget.per_run_usd", f"{c.budget.per_run_usd:g}"),
         ("budget.per_task_usd", f"{c.budget.per_task_usd:g}"),
         ("budget.max_task_attempts", str(c.budget.max_task_attempts)),
-        ("approval.require_plan_approval", str(c.approval.require_plan_approval).lower()),
+        ("approval.require_plan_approval", str(c.plan_approval_required).lower()),
         ("integration.test_command", c.integration.test_command or "-"),
         ("review.enabled", str(c.review.enabled).lower()),
         ("quality.level", c.quality.level),

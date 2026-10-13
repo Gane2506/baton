@@ -298,7 +298,7 @@ class Pipeline:
             self._move(run.id, RunState.PLANNING)
             return
         self.store.upsert_tasks(run.id, plan)
-        gate = run.plan_only or h.config.approval.require_plan_approval
+        gate = run.plan_only or h.config.plan_approval_required
         self._move(run.id, RunState.AWAITING_APPROVAL if gate else RunState.EXECUTING)
 
     async def _execute(self, run: RunRecord) -> None:

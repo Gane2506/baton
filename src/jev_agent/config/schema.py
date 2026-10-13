@@ -253,7 +253,9 @@ class WorkspaceConfig(_Strict):
 
 
 class ApprovalConfig(_Strict):
-    require_plan_approval: bool = True
+    # Stop for a human after the plan is validated. Unset: off under the consensus dispatcher,
+    # whose D3 approve vote (Jev and Laya agreeing) is the gate, and on otherwise (issue #66).
+    require_plan_approval: bool | None = None
 
 
 # Learning profile names: letters, digits, `-` and `_`, starting with a letter or digit.
@@ -601,6 +603,12 @@ class JevConfig(_Strict):
     browser: BrowserConfig = Field(default_factory=BrowserConfig)
     profiles: dict[str, WorkspaceProfileConfig] = Field(default_factory=dict)
     trust: TrustConfig = Field(default_factory=TrustConfig)
+
+    @property
+    def plan_approval_required(self) -> bool:
+        """Whether a validated plan waits for a human (`[approval] require_plan_approval`)."""
+        required = self.approval.require_plan_approval
+        return self.dispatcher.primary != "consensus" if required is None else required
 
     @model_validator(mode="before")
     @classmethod
