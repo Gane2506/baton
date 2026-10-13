@@ -9,7 +9,12 @@ from __future__ import annotations
 import asyncio
 import io
 import json
+import os
+import shlex
+import shutil
+import subprocess
 import sys
+import time
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
@@ -45,7 +50,13 @@ from jev_agent.servers.profiles import (
     write_run_profile,
 )
 from jev_agent.servers.service import ServerService
-from jev_agent.servers.ssh import SshResult, SshTransport, ssh_options
+from jev_agent.servers.ssh import (
+    REMOTE_TIMEOUT_EXIT,
+    SshResult,
+    SshTransport,
+    ssh_options,
+    time_limited,
+)
 from jev_agent.workers.claude_code import mcp_config
 
 runner = CliRunner()
@@ -99,6 +110,12 @@ def _config(text: str = SERVERS_TOML) -> JevConfig:
     return JevConfig.model_validate(tomllib.loads(text))
 
 
+def _script(remote: str) -> str:
+    """The command inside `ssh.time_limited`'s wrapper (the argument of `sh -c`)."""
+    words = shlex.split(remote)
+    return words[words.index("-c") + 1] if words[:1] == ["if"] else remote
+
+
 class FakeSsh:
     """Records every ssh argv; answers by the remote command."""
 
@@ -108,7 +125,7 @@ class FakeSsh:
 
     def __call__(self, argv: Sequence[str], *, stdin: bytes | None, timeout_s: float) -> SshResult:
         self.calls.append((list(argv), stdin))
-        remote = argv[-1]
+        remote = _script(argv[-1])
         for key, result in self.answers.items():
             if key in remote:
                 return result
@@ -119,7 +136,7 @@ class FakeSsh:
 
     @property
     def remotes(self) -> list[str]:
-        return [argv[-1] for argv, _ in self.calls]
+        return [_script(argv[-1]) for argv, _ in self.calls]
 
 
 # ---- config ------------------------------------------------------------------------------
@@ -479,8 +496,43 @@ def test_ssh_argv_is_strict_and_non_interactive(tmp_path: Path) -> None:
     assert argv[argv.index("-p") : argv.index("-p") + 2] == ["-p", "2222"]
     assert argv[argv.index("-l") : argv.index("-l") + 2] == ["-l", "deploy"]
     assert "IdentitiesOnly=yes" in argv
-    assert argv[-4:] == ["-T", "--", "web1", "cd -- /srv/app && ls -la"]
+    assert argv[-4:-1] == ["-T", "--", "web1"]
+    assert _script(argv[-1]) == "cd -- /srv/app && ls -la"
     assert (tmp_path / "s").is_dir() and ((tmp_path / "s").stat().st_mode & 0o777) == 0o700
+
+
+def _sh(remote: str, path: str) -> subprocess.CompletedProcess[str]:
+    """Run a remote command line with a local `sh` (the login shell on the server)."""
+    env = {"PATH": path}
+    return subprocess.run(["/bin/sh", "-c", remote], env=env, capture_output=True, text=True)
+
+
+def test_remote_command_is_time_limited_on_the_server(tmp_path: Path) -> None:
+    """The server stops a command the local timeout gave up on (issue #49)."""
+    remote = time_limited("echo started; sleep 30; echo never", timeout_s=4)
+    assert "timeout -k 2 1 sh -c" in remote
+    if shutil.which("timeout") is None:
+        pytest.skip("no `timeout` on this machine")
+    started = time.monotonic()
+    done = _sh(remote, os.environ["PATH"])
+    assert time.monotonic() - started < 10
+    assert done.returncode == REMOTE_TIMEOUT_EXIT
+    assert "started" in done.stdout and "never" not in done.stdout
+
+
+def test_remote_command_runs_unlimited_without_timeout(tmp_path: Path) -> None:
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    (bin_dir / "sh").symlink_to("/bin/sh")  # a server with a shell but no `timeout`
+    done = _sh(time_limited("echo 'it ran' && exit 3", timeout_s=60), str(bin_dir))
+    assert done.returncode == 3 and done.stdout == "it ran\n"
+
+
+def test_remote_timeout_exit_is_reported_as_timed_out() -> None:
+    fake = FakeSsh({"sleep": SshResult(REMOTE_TIMEOUT_EXIT, b"", b"")})
+    result = SshTransport(_config().servers["web"], runner=fake).run("sleep 300", timeout_s=10)
+    assert result.timed_out and not result.ok
+    assert "timeout -k 2 7 sh -c" in fake.calls[0][0][-1]
 
 
 def test_ssh_long_socket_dir_disables_reuse(tmp_path: Path) -> None:
@@ -495,7 +547,7 @@ def test_ssh_write_uses_temp_file_and_rename(tmp_path: Path) -> None:
     SshTransport(_config().servers["web"], runner=fake).write("/srv/app/a b.txt", b"hi")
     argv, stdin = fake.calls[0]
     tmp = "'/srv/app/a b.txt.jev-tmp'"
-    assert argv[-1] == f"cat > {tmp} && mv -f -- {tmp} '/srv/app/a b.txt'"
+    assert _script(argv[-1]) == f"cat > {tmp} && mv -f -- {tmp} '/srv/app/a b.txt'"
     assert stdin == b"hi"
 
 
@@ -995,7 +1047,7 @@ def test_doctor_rows(repo: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     assert (
         checks["server web"].status == "fail" and "host key unknown" in checks["server web"].detail
     )
-    assert any(argv[-1] == "true" for argv, _ in fake.calls)
+    assert any(_script(argv[-1]) == "true" for argv, _ in fake.calls)
 
 
 def test_doctor_without_servers_runs_no_ssh(

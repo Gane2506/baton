@@ -54,6 +54,14 @@ All notable changes to this project are documented here. The format is based on
 
 ### Fixed
 
+- **Processes are cleaned up on cancellation, timeout and shutdown** (#11, #12, #13, #49).
+  Ctrl-C (or any cancellation) now kills the Claude Code / Codex process group instead of
+  leaving it running. Test commands (task, integration and quality tools) run through the
+  same process-group runner, so `[budget] test_timeout_s` and `[quality] timeout_s` are
+  enforced even when the command starts children (`uv run pytest`, `npm test`); a timeout is
+  reported as such rather than as exit code -1. Stopping `jev dashboard` cancels the jobs it
+  started and waits for them. Server tool commands run under the server's `timeout`, so they
+  stop there too.
 - **Fix: Spend page labels** ([#6](https://github.com/Gane2506/baton/issues/6)). Long run
   labels in "Costliest runs" are cut with an ellipsis to fit, with the full label as a tooltip,
   and every value is drawn after its bar, so a $0.00 bar no longer puts its value over the label.

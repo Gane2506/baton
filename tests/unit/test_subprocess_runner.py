@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 import sys
 import time
 from pathlib import Path
+
+import pytest
 
 from jev_agent.workers.subprocess_runner import REDACTED, append_log_sections, redact, run_command
 
@@ -60,6 +63,40 @@ async def test_timeout_kills_process_group(tmp_path: Path) -> None:
     assert "started" in result.stdout
     assert time.monotonic() - started < 15
     assert "timed out" in (tmp_path / "t.log").read_text()
+
+
+def _alive(pid: int) -> bool:
+    """True while `pid` runs (a zombie waiting for its parent to reap it counts as dead)."""
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    status = Path(f"/proc/{pid}/status")
+    return not (status.exists() and "\nState:\tZ" in status.read_text())
+
+
+async def test_cancellation_kills_process_group(tmp_path: Path) -> None:
+    # Ctrl-C cancels the awaiting task; the child runs in its own session, so nothing else
+    # would stop it or its grandchild (issue #11).
+    pids = tmp_path / "pids"
+    code = (
+        "import os, subprocess, sys, time; "
+        f"g = subprocess.Popen([{PY!r}, '-c', 'import time; time.sleep(60)']); "
+        f"open({str(pids)!r}, 'w').write(f'{{os.getpid()}} {{g.pid}}'); time.sleep(60)"
+    )
+    task = asyncio.create_task(run_command([PY, "-c", code], tmp_path, _env(), 60))
+    for _ in range(100):
+        if pids.exists() and len(pids.read_text().split()) == 2:
+            break
+        await asyncio.sleep(0.05)
+    child, grandchild = (int(p) for p in pids.read_text().split())
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    deadline = time.monotonic() + 15
+    while (_alive(child) or _alive(grandchild)) and time.monotonic() < deadline:
+        await asyncio.sleep(0.05)
+    assert not _alive(child) and not _alive(grandchild)
 
 
 async def test_missing_binary_is_reported_not_raised(tmp_path: Path) -> None:

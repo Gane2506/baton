@@ -35,9 +35,10 @@ jev dashboard --repo ../other-repo  # any path inside the target git repo
 | `--open / --no-open` | `--open` | Open the URL in a browser after start. |
 | `--token TOKEN` | generated off loopback | Access token, at least 16 characters. Also read from `JEV_DASHBOARD_TOKEN`. |
 
-Ctrl-C stops the server. A run being approved or resumed from the page at that moment is
-interrupted where it is, like Ctrl-C on `jev approve`; it keeps its saved state and continues
-with `jev resume <run>` (or the Resume button).
+Ctrl-C stops the server. Before it exits, it cancels every approve or resume job it started
+and waits for it (up to 30 s per job): the job's agent process is stopped, like Ctrl-C on
+`jev approve`, and the run keeps its saved state; continue it with `jev resume <run>` (or the
+Resume button). A Ship job cannot be cancelled mid-step; shutdown waits for it.
 
 ## Pages
 

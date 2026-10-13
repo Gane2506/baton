@@ -196,7 +196,7 @@ class TestSuiteCheck(BaseCheck):
         result = await runner.run("tests", command)
         if result.ok:
             return CheckResult(status="pass", detail=f"`{command}` passed")
-        timed_out = " (timed out)" if result.exit_code == -1 else ""
+        timed_out = " (timed out)" if result.timed_out else ""
         return CheckResult(
             status="fail",
             detail=f"`{command}` failed with exit code {result.exit_code}{timed_out}: "

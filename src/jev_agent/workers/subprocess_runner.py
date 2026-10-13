@@ -113,6 +113,14 @@ async def _run(
     except TimeoutError:
         timed_out = True
         await _kill_group(proc)
+    except BaseException:
+        # Cancelled (Ctrl-C cancels the main task) or failed while waiting: the child is in
+        # its own session, so the terminal's SIGINT never reached it. Kill the group even if
+        # we are cancelled again meanwhile, then let the cancellation through.
+        await asyncio.shield(_kill_group(proc))
+        for reader in readers:
+            reader.cancel()
+        raise
     try:
         async with asyncio.timeout(DRAIN_TIMEOUT_S):
             await asyncio.gather(*readers)

@@ -125,7 +125,10 @@ which exposes:
 
 - `list_servers`: name, your level, workdir, writable paths, description;
 - `run_command`: one checked command, with exit code, stdout and stderr (clipped to 64 KiB,
-  redacted), timeout 120 s by default (at most 600 s);
+  redacted), timeout 120 s by default (at most 600 s). The command also runs under the
+  server's `timeout` (stopped a few seconds before the local limit, reported as timed out), so
+  it does not keep running on the server after jev gave up on it; a server without `timeout`
+  (stock macOS) runs it unlimited;
 - `read_file`: a text file, up to 256 KiB;
 - `write_file` and `upload`: only when a medium server is granted.
 

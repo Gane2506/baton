@@ -10,7 +10,8 @@ GET) with a one-time message.
 from __future__ import annotations
 
 import threading
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -514,6 +515,9 @@ def _learning_forget(repo: views.Repo, form: FormData) -> str:
     return f"retired {lesson.id} from {lesson.profile}"
 
 
+JOB_SHUTDOWN_TIMEOUT_S = 30.0  # per job, for blocking steps that ignore cancellation
+
+
 def create_app(
     settings: DashboardSettings,
     *,
@@ -552,10 +556,18 @@ def create_app(
             request, "error.html", exc.status_code, title=str(exc.status_code), message=exc.detail
         )
 
+    @asynccontextmanager
+    async def lifespan(app: Starlette) -> AsyncIterator[None]:
+        yield
+        # The server is stopping (Ctrl-C, systemd): stop the jobs it started, so their agent
+        # processes do not keep running and spending without anyone watching.
+        await run_in_threadpool(dash.launcher.shutdown, JOB_SHUTDOWN_TIMEOUT_S)
+
     app = Starlette(
         routes=routes,
         middleware=[Middleware(SecurityMiddleware, settings=settings)],
         exception_handlers={HTTPException: http_error},
+        lifespan=lifespan,
     )
     app.state.dashboard = dash
     return app

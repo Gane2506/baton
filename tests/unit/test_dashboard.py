@@ -3,11 +3,15 @@ client (no listening socket, no real workers or network)."""
 
 from __future__ import annotations
 
+import asyncio
 import json
+import os
 import re
+import sys
 import threading
+import time
 import xml.etree.ElementTree as ET
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -33,7 +37,13 @@ from jev_agent.dashboard.render import (
     render_bar_chart,
     render_markdown,
 )
-from jev_agent.dashboard.runner import RunAction, RunLauncher
+from jev_agent.dashboard.runner import (
+    STOPPED_MESSAGE,
+    Executor,
+    RunAction,
+    RunLauncher,
+    run_job_coroutine,
+)
 from jev_agent.dashboard.security import (
     DashboardConfigError,
     DashboardSettings,
@@ -41,6 +51,7 @@ from jev_agent.dashboard.security import (
 )
 from jev_agent.dashboard.views import spend_by_day
 from jev_agent.quality.models import GateResult
+from jev_agent.workers.subprocess_runner import run_command
 
 cli = CliRunner()
 SECRET = "sk-or-v1-dashboard-test-secret-0123456789"
@@ -88,7 +99,9 @@ class Calls:
         return "run DONE"
 
 
-def _client(repo: Path, executor: Calls | None = None, **settings: object) -> Iterator[TestClient]:
+def _client(
+    repo: Path, executor: Executor | None = None, **settings: object
+) -> Iterator[TestClient]:
     options: dict[str, object] = {"allowed_hosts": frozenset({"testserver"})}
     options.update(settings)
     app = create_app(
@@ -347,6 +360,72 @@ def test_executor_errors_are_reported(planned: tuple[Path, str]) -> None:
     assert not launcher.busy(run_id)
     assert launcher.start(run_id, "resume")  # the lock was released
     launcher.wait(run_id)
+
+
+def _wait_for(predicate: Callable[[], bool], timeout: float = 10.0) -> None:
+    deadline = time.monotonic() + timeout
+    while not predicate():
+        assert time.monotonic() < deadline, "timed out waiting"
+        time.sleep(0.02)
+
+
+def test_shutdown_cancels_running_jobs_and_their_processes(planned: tuple[Path, str]) -> None:
+    """Stopping the server stops the jobs it started: the job's task is cancelled, which kills
+    the agent's process group (issue #13)."""
+    repo, run_id = planned
+    pid_file = repo / ".jev" / "child.pid"
+    code = f"import os, time; open({str(pid_file)!r}, 'w').write(str(os.getpid())); time.sleep(60)"
+
+    def agent(root: Path, rid: str, action: RunAction) -> str:
+        argv = [sys.executable, "-c", code]
+        result = run_job_coroutine(run_command(argv, root, dict(os.environ), 60))
+        return f"agent exited {result.exit_code}"
+
+    for client in _client(repo, executor=agent):
+        launcher = _launcher(client)
+        assert launcher.start(run_id, "resume")
+        _wait_for(lambda: pid_file.exists() and bool(pid_file.read_text()))
+    # leaving the client ran the app's lifespan shutdown
+    job = launcher.job(run_id)
+    assert job is not None and job.state == "failed" and job.message == STOPPED_MESSAGE
+    assert not launcher.busy(run_id)
+    pid = int(pid_file.read_text())
+    _wait_for(lambda: not _process_alive(pid))
+
+
+def test_shutdown_before_the_coroutine_starts(planned: tuple[Path, str]) -> None:
+    repo, run_id = planned
+    entered = threading.Event()
+    go = threading.Event()
+
+    def slow_start(root: Path, rid: str, action: RunAction) -> str:
+        entered.set()
+        go.wait(10)  # shutdown is requested while the executor has not reached its coroutine
+        return run_job_coroutine(asyncio.sleep(0, result="never"))
+
+    launcher = RunLauncher(repo, slow_start)
+    assert launcher.start(run_id, "approve")
+    entered.wait(10)
+    stopper = threading.Thread(target=launcher.shutdown, args=(10.0,))
+    stopper.start()
+    _wait_for(lambda: launcher._cancels[run_id].requested)
+    go.set()
+    stopper.join(10)
+    job = launcher.job(run_id)
+    assert job is not None and job.message == STOPPED_MESSAGE
+
+
+def test_run_job_coroutine_outside_a_job_is_asyncio_run() -> None:
+    assert run_job_coroutine(asyncio.sleep(0, result=42)) == 42
+
+
+def _process_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    status = Path(f"/proc/{pid}/status")
+    return not (status.exists() and "\nState:\tZ" in status.read_text())
 
 
 def test_learning_page_and_actions(client: TestClient, planned: tuple[Path, str]) -> None:

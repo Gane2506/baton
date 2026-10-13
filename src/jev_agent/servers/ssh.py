@@ -17,8 +17,10 @@ Every call is
   `IdentitiesOnly=yes`. jev never reads key files or passwords.
 
 `REMOTE_COMMAND` always comes from `servers.policy` (re-quoted words) or from the fixed file
-helpers below; it is never text an agent wrote. Output is clipped and decoded here; callers
-redact before logging. The runner is injectable so tests never open a connection.
+helpers below; it is never text an agent wrote. It runs under the server's `timeout` (see
+`time_limited`), so a command the local timeout gave up on does not keep running remotely.
+Output is clipped and decoded here; callers redact before logging. The runner is injectable
+so tests never open a connection.
 """
 
 from __future__ import annotations
@@ -30,7 +32,7 @@ import signal
 import subprocess
 import time
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Protocol
 
@@ -44,6 +46,8 @@ MAX_OUTPUT_BYTES = 64 * 1024
 # suffix while it sets the master up.
 _MAX_SOCKET_PATH = 104 - 18
 SSH_COMMAND = "ssh"
+REMOTE_KILL_GRACE_S = 2  # `timeout -k`: SIGKILL this long after SIGTERM on the server
+REMOTE_TIMEOUT_EXIT = 124  # what `timeout` exits with when it stopped the command
 SSH_DIRNAME = "ssh"
 
 
@@ -87,6 +91,19 @@ def run_process(argv: Sequence[str], *, stdin: bytes | None, timeout_s: float) -
         out, err = proc.communicate()
         return SshResult(None, out, err, True, time.monotonic() - started)
     return SshResult(proc.returncode, out, err, False, time.monotonic() - started)
+
+
+def time_limited(script: str, timeout_s: float) -> str:
+    """`script` for the remote login shell, stopped by the server's `timeout` before the local
+    timeout gives up on ssh (killing the local ssh would leave it running there). Servers
+    without `timeout` (stock macOS, some minimal images) run it unlimited, as before."""
+    limit = max(1, int(timeout_s) - REMOTE_KILL_GRACE_S - 1)
+    quoted = shlex.quote(script)
+    return (
+        "if command -v timeout >/dev/null 2>&1 ; "
+        f"then exec timeout -k {REMOTE_KILL_GRACE_S} {limit} sh -c {quoted} ; "
+        f"else exec sh -c {quoted} ; fi"
+    )
 
 
 def control_dir(state_dir: Path) -> Path:
@@ -158,11 +175,17 @@ class SshTransport:
         stdin: bytes | None = None,
         timeout_s: float = DEFAULT_TIMEOUT_S,
     ) -> SshResult:
-        """Run `remote_command` (already quoted) on the server, in `cwd` when given."""
+        """Run `remote_command` (already quoted) on the server, in `cwd` when given, for at
+        most `timeout_s`. A remote command stopped by the server's `timeout` (exit 124) is
+        reported as timed out, like one the local timeout stopped."""
         if cwd is not None:
             remote_command = f"cd -- {shlex.quote(cwd)} && {remote_command}"
         self._prepare()
-        return self.runner(self.argv(remote_command), stdin=stdin, timeout_s=timeout_s)
+        argv = self.argv(time_limited(remote_command, timeout_s))
+        result = self.runner(argv, stdin=stdin, timeout_s=timeout_s)
+        if result.exit_code == REMOTE_TIMEOUT_EXIT and not result.timed_out:
+            return replace(result, timed_out=True)
+        return result
 
     def check(self, timeout_s: float = CONNECT_TIMEOUT_S + 5) -> SshResult:
         """`ssh ... HOST true`: can we log in without any prompt?"""
