@@ -40,6 +40,8 @@ from jev_agent.core.models import WorkerStatus
 from jev_agent.workers.api import strict_json_schema
 from jev_agent.workers.base import WorkerJob, WorkerOutput
 from jev_agent.workers.subprocess_runner import (
+    EXIT_NOT_EXECUTABLE,
+    EXIT_NOT_FOUND,
     CommandResult,
     CommandRunner,
     append_log_sections,
@@ -228,6 +230,8 @@ def classify_codex(result: CommandResult, events: list[dict[str, Any]]) -> Worke
     """Map a finished `codex exec --json` run to a worker status.
 
     - timed out -> "timeout"
+    - exit 127/126 without JSON events (`run_command`: the binary is missing or not
+      executable) -> "error"
     - exit 0, a `turn.completed` event and no `turn.failed` -> "success" (transient `error`
       events, such as reconnect notices, are ignored when the turn completed)
     - usage limit (`You've hit your usage limit`, matched with a curly or straight apostrophe;
@@ -238,6 +242,8 @@ def classify_codex(result: CommandResult, events: list[dict[str, Any]]) -> Worke
     """
     if result.timed_out:
         return "timeout"
+    if result.exit_code in (EXIT_NOT_FOUND, EXIT_NOT_EXECUTABLE) and not events:
+        return "error"
     types = [e["type"] for e in events]
     if result.exit_code == 0 and "turn.completed" in types and "turn.failed" not in types:
         return "success"

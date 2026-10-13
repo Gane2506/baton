@@ -12,7 +12,7 @@ from collections.abc import Callable
 from typing import Any
 
 from jev_agent.core.models import Decision, DecisionRequest
-from jev_agent.dispatch.requests import FREE_WORKER, vendor_of
+from jev_agent.dispatch.requests import FREE_WORKER, model_fits, vendor_of
 
 _COMPLEXITY_EFFORT = {"trivial": "low", "standard": "medium", "hard": "high"}
 
@@ -52,16 +52,18 @@ def _free(state: dict[str, Any]) -> tuple[list[str], bool, str]:
 
 
 def _compatible(worker: str, model: str, state: dict[str, Any]) -> bool:
-    """Free models only run on the api worker."""
+    """`worker` can run `model` (`model_fits`), and free models only run on the api worker."""
     free, _, free_worker = _free(state)
-    return model not in free or worker == free_worker
+    return model_fits(worker, model) and (model not in free or worker == free_worker)
 
 
 def _assignment(
     q: dict[str, list[str]], effort: str | None = None, state: dict[str, Any] | None = None
 ) -> Answers:
     """First worker and model, middle effort. With prefer_free: the first free model on the
-    api worker (free models are listed first); a free model never goes to another worker."""
+    api worker (free models are listed first); a free model never goes to another worker.
+    A worker never gets a model it cannot run: the worker's first runnable model instead, else
+    the first worker that can run the model."""
     efforts = q["effort"]
     worker, model = _first(q["worker"]), _first(q["model"])
     free, prefer, free_worker = _free(state or {})
@@ -75,6 +77,13 @@ def _assignment(
                 worker = free_worker
             elif paid:
                 model = paid[0]
+    if not _compatible(worker, model, state or {}):
+        runnable = [m for m in q["model"] if _compatible(worker, m, state or {})]
+        others = [w for w in q["worker"] if _compatible(w, model, state or {})]
+        if runnable:
+            model = runnable[0]
+        elif others:
+            worker = others[0]
     return {
         "worker": worker,
         "model": model,
@@ -150,11 +159,14 @@ def _d5(req: DecisionRequest) -> Answers:
 
     Out of quota: retry when a fallback model is named (a free model hit its rate limit: the
     harness moves to the next free model, then the first paid one), else reassign.
+    Worker `error` (it could not run: missing CLI, not logged in, bad key): reassign at once.
     """
     s = req.state
     if s["worker_status"] == "quota_exhausted":
         if s.get("quota_fallback_model"):
             return {"action": "retry"}
+        return {"action": "reassign" if s["can_reassign"] else "human"}
+    if s["worker_status"] == "error":  # the worker could not run: retrying it cannot help
         return {"action": "reassign" if s["can_reassign"] else "human"}
     if (
         s["worker_status"] == "success"

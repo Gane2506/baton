@@ -54,6 +54,25 @@ All notable changes to this project are documented here. The format is based on
 
 ### Fixed
 
+- **Cancellations stick; `--plan-only` survives `jev resume`** (#14, #22). Run state changes
+  are conditional in the store, so a `jev cancel` (or the dashboard's Cancel) made while a
+  worker runs is no longer overwritten when the worker then fails, and a cancel cannot replace a
+  run that just finished. `--plan-only` is stored on the run (state DB migration 8), so a
+  resumed plan-only run still stops at the approval gate.
+- **The dashboard does not offer a plain Resume for a run that may be running** (#15): an
+  attempt open for less than its worker's timeout plus 5 minutes, or the scheduler's current
+  item. "Force resume" asks for a confirmation that names the risk of a second pipeline.
+- **A task is never DONE after its worker or its tests failed** (#21), whatever the dispatcher
+  answers at D5; the override to retry is noted on the task.
+- **Workers that cannot run are not offered** (#19): a CLI worker whose command is not on
+  `PATH`, the api worker without its key, or without a model it can run for the role (it never
+  runs the coder). Each gives one warning at run start; `jev doctor` uses the same rule.
+- **`jev init` writes every setting commented out** (#20), so a new `jev.toml` no longer
+  overrides your user config (for example a lower spend cap) or trips the trust gate.
+- **Workers are paired only with models they can run** (#33): `vendor/name` slugs run on the
+  api worker, other names on Claude Code / Codex; a mismatched answer gets the worker's first
+  runnable model. A missing or non-executable worker CLI is a worker `error`, and D5 reassigns
+  at once on `error`; dropped API connections are a retryable `failure` (#34).
 - **A repository's `jev.toml` can no longer redirect credentials or widen permissions**
   (#16, security). Keys that choose where API keys go, which credential variables are read,
   worker commands and permissions, tools, servers, browser and profiles may be changed by a

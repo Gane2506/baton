@@ -55,6 +55,14 @@ Resume button). A Ship job cannot be cancelled mid-step; shutdown waits for it.
   Buttons:
   - **Approve and run** for a run awaiting approval (`jev approve`).
   - **Resume** for an interrupted run or a NEEDS_HUMAN run with a resume point (`jev resume`).
+    When another jev process may still be running the run, the page shows **Force resume**
+    instead, with the reason, and a plain resume is refused: resuming would start a second
+    pipeline on the same worktrees and double the spend. The signs are an attempt without a
+    result that started less than its worker's `timeout_s` plus 5 minutes ago (an older one is
+    from a process that died), or a live scheduler lock whose current queue item started this
+    run. Force resume asks for confirmation; use it only when that process is gone. (A run
+    between worker attempts, for example while tests run, shows no sign; the store has no run
+    lease yet.)
   - **Cancel** for any unfinished run (`jev cancel`; branches and worktrees are kept).
   - **Ship as PR** for a DONE, not yet shipped run when `[ship] enabled = true` (`jev ship`,
     [ship.md](ship.md)): a confirmation page shows the remote, branch, base, title and the

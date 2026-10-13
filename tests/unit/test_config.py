@@ -324,8 +324,64 @@ def test_init_template_keys_are_documented() -> None:
             out.extend(keys(value) if isinstance(value, dict) else [key])
         return out
 
-    undocumented = [k for k in keys(tomllib.loads(DEFAULT_CONFIG_TOML)) if f"`{k}`" not in docs]
+    # The template sets no values (issue #20): its keys are the commented `# key = value` lines.
+    commented = re.findall(r"^#? ?([A-Za-z_]+) = ", DEFAULT_CONFIG_TOML, re.MULTILINE)
+    assert len(commented) > 50
+    names = [*keys(tomllib.loads(DEFAULT_CONFIG_TOML)), *commented]
+    undocumented = sorted({k for k in names if f"`{k}`" not in docs})
     assert undocumented == []
+
+
+def _leaves(table: dict[str, Any]) -> list[str]:
+    return [
+        leaf
+        for key, value in table.items()
+        for leaf in (_leaves(value) if isinstance(value, dict) else [key])
+    ]
+
+
+def test_init_template_sets_no_values() -> None:
+    # Only (empty) table headers: every value is a comment, so the user config applies.
+    assert _leaves(tomllib.loads(DEFAULT_CONFIG_TOML)) == []
+
+
+# A user config that differs from the defaults, including guarded keys (issue #16).
+USER_SETTINGS = """\
+[dispatcher.jev]
+base_url = "https://api.typesafe.ai/v1"
+model = "jev-latest"
+api_key_env = "TYPESAFE_API_KEY"
+[budget]
+per_run_usd = 2.0
+[workers.api]
+enabled = false
+[workers.codex]
+enabled = false
+command = "/opt/codex"
+[workers.claude_code]
+permission_mode = "default"
+[roles.planner]
+workers = ["claude_code"]
+models = ["sonnet"]
+"""
+
+
+def test_init_template_keeps_the_user_config(repo: Path, user_cfg: Path) -> None:
+    _write(user_cfg, USER_SETTINGS + '[trust]\nrepos = ["*"]\n')
+    expected = load_config(repo, user_cfg)
+    _write(repo / "jev.toml", DEFAULT_CONFIG_TOML)
+    cfg = load_config(repo, user_cfg)
+    assert cfg == expected
+    assert cfg.dispatcher.jev.api_key_env == "TYPESAFE_API_KEY"
+    assert cfg.budget.per_run_usd == 2.0
+    assert not cfg.workers.api.enabled and not cfg.workers.codex.enabled
+    assert cfg.roles.planner.workers == ["claude_code"]
+
+
+def test_init_template_loads_in_an_untrusted_repo(repo: Path, user_cfg: Path) -> None:
+    _write(user_cfg, USER_SETTINGS)  # no [trust]: the repo is untrusted
+    _write(repo / "jev.toml", DEFAULT_CONFIG_TOML)
+    assert load_config(repo, user_cfg).workers.codex.command == "/opt/codex"
 
 
 def test_example_config_is_header_plus_init_template() -> None:

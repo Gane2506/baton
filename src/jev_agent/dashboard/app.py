@@ -318,16 +318,25 @@ class Dashboard:
 
             return await self.act(request, to, cancel)
 
-        await checked_form(request)
+        form = await checked_form(request)
         kind: RunAction = "approve" if action == "approve" else "resume"
+        force = form.get("force") == "1"
 
         def check() -> str | None:
             with views.open_repo(self.settings.root) as repo:
                 run = repo.store.get_run(run_id)
-            if kind == "approve" and run.state is not RunState.AWAITING_APPROVAL:
-                return f"run {run_id} is {run.state}; only a run awaiting approval can be approved"
-            if kind == "resume" and not views.can_resume(run):
-                return f"run {run_id} is {run.state}; it cannot be resumed"
+                if kind == "approve" and run.state is not RunState.AWAITING_APPROVAL:
+                    return (
+                        f"run {run_id} is {run.state}; only a run awaiting approval can be approved"
+                    )
+                if kind == "resume" and not views.can_resume(run):
+                    return f"run {run_id} is {run.state}; it cannot be resumed"
+                risk = "" if kind != "resume" or force else views.resume_risk(repo, run)
+            if risk:
+                return (
+                    f"not resumed: another jev process may be running this run ({risk}); "
+                    "use Force resume if it is not"
+                )
             return None
 
         try:

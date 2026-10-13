@@ -236,7 +236,8 @@ def test_quota_fallback_chain() -> None:
     assert c == Assignment("api", MINI, "medium")  # first paid model
     assert c is not None
     assert quota_fallback(c, OPTS) is None  # paid: reassign instead
-    assert reassign(c, OPTS) == Assignment("claude_code", MINI, "medium")
+    # claude_code cannot run an OpenRouter slug and the pool has no CLI model: its default.
+    assert reassign(c, OPTS) == Assignment("claude_code", None, "medium")
 
 
 def test_escalate_from_free_goes_to_paid() -> None:
@@ -245,13 +246,16 @@ def test_escalate_from_free_goes_to_paid() -> None:
 
 def test_fit_free_keeps_free_models_on_api() -> None:
     assert fit_free(Assignment("claude_code", NEMOTRON, None), OPTS).worker == "api"
-    no_api = RoleOptions("planner", ["claude_code"], [NEMOTRON, MINI], ["low"], free=(NEMOTRON,))
-    assert fit_free(Assignment("claude_code", NEMOTRON, None), no_api).model == MINI
+    no_api = RoleOptions(
+        "planner", ["claude_code"], [NEMOTRON, MINI, "sonnet"], ["low"], free=(NEMOTRON,)
+    )
+    assert fit_free(Assignment("claude_code", NEMOTRON, None), no_api).model == "sonnet"
     only_free = RoleOptions("planner", ["claude_code"], [NEMOTRON], ["low"], free=(NEMOTRON,))
     assert fit_free(Assignment("claude_code", NEMOTRON, None), only_free).model is None
-    # Reassigning away from api swaps the free model for a paid one instead of bouncing back.
+    # Reassigning away from api swaps the free model for one claude_code can run (here none in
+    # the pool: its default) instead of bouncing back.
     assert reassign(Assignment("api", NEMOTRON, None), OPTS) == Assignment(
-        "claude_code", MINI, None
+        "claude_code", None, None
     )
 
 
@@ -313,7 +317,7 @@ async def test_planner_falls_back_free_then_paid_then_other_worker(fixture_repo:
             "approval": {"require_plan_approval": False},
             "models": {"prefer_free": True},
             "roles": {
-                "planner": {"workers": ["api", "claude_code"], "models": ["free", MINI]},
+                "planner": {"workers": ["api", "claude_code"], "models": ["free", MINI, "sonnet"]},
                 "coder": {"workers": ["claude_code"]},
             },
         }
@@ -331,7 +335,7 @@ async def test_planner_falls_back_free_then_paid_then_other_worker(fixture_repo:
             ("api", LING),
             ("api", APODEX),
             ("api", MINI),
-            ("claude_code", MINI),
+            ("claude_code", "sonnet"),  # the first model claude_code can run
         ]
         assert [a.attempt_no for a in planner] == [1, 2, 3, 4, 5]
 

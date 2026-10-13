@@ -45,6 +45,8 @@ from typing import Any
 from jev_agent.core.models import WorkerStatus
 from jev_agent.workers.base import WorkerJob, WorkerOutput
 from jev_agent.workers.subprocess_runner import (
+    EXIT_NOT_EXECUTABLE,
+    EXIT_NOT_FOUND,
     CommandResult,
     CommandRunner,
     append_log_sections,
@@ -323,6 +325,8 @@ def classify_claude_code(result: CommandResult, payload: dict[str, Any] | None) 
     """Map a finished `claude -p` run to a worker status.
 
     - timed out -> "timeout"
+    - exit 127/126 without a result (`run_command`: the binary is missing or not
+      executable) -> "error"
     - exit 0, result subtype "success", `is_error` false -> "success"
     - usage/rate limit (`You've hit your ... limit`, `Credit balance is too low`,
       `Request rejected (429)`, `credits_required`, a rejected `rate_limit_event`, an
@@ -335,6 +339,8 @@ def classify_claude_code(result: CommandResult, payload: dict[str, Any] | None) 
     """
     if result.timed_out:
         return "timeout"
+    if _not_started(result, payload):
+        return "error"
     subtype = payload.get("subtype") if payload else None
     is_error = bool(payload.get("is_error")) if payload else True
     if result.exit_code == 0 and subtype == "success" and not is_error:
@@ -354,6 +360,13 @@ def classify_claude_code(result: CommandResult, payload: dict[str, Any] | None) 
     if result.exit_code != 0:
         return "failure"
     return "error"
+
+
+def _not_started(result: CommandResult, payload: dict[str, Any] | None) -> bool:
+    """`claude` never ran: `run_command`'s exit code for a missing or non-executable binary,
+    with no result and no JSON events on stdout."""
+    missing = result.exit_code in (EXIT_NOT_FOUND, EXIT_NOT_EXECUTABLE)
+    return missing and payload is None and not _json_lines(result.stdout)
 
 
 def usage_from(payload: dict[str, Any] | None) -> tuple[float | None, dict[str, int] | None]:

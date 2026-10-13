@@ -290,12 +290,15 @@ class TaskRunner:
             quality_findings=outcome.quality_findings,
         )
         action = (await h.decide(run_id, task.id, req)).answers["action"]
-        if action == "done" and outcome.quality == "failed":
-            action = "retry"  # the gate is a hard limit, like the budget: never done while blocked
+        overridden = _done_blocker(outcome) if action == "done" else None
+        if overridden is not None:
+            action = "retry"  # hard limits, like the budget: never done after a failed attempt
         if action == "done":
             h.store.set_task_state(run_id, task.id, TaskState.DONE)
             return
         feedback = _feedback(attempt, outcome)
+        if overridden is not None:
+            feedback += f"\nD5 answered done, overridden to retry: {overridden}"
         if action == "human":
             h.store.set_task_state(run_id, task.id, TaskState.NEEDS_HUMAN, note=feedback)
             raise Halt(RunState.NEEDS_HUMAN, f"D5: task {task.id} handed to a human")
@@ -307,6 +310,20 @@ class TaskRunner:
         h.store.set_task_assignment(
             run_id, task.id, _NEXT_STATE[action], nxt.worker, nxt.model, nxt.effort, note=feedback
         )
+
+
+def _done_blocker(outcome: AttemptOutcome) -> str | None:
+    """Why the attempt cannot be done whatever D5 answered, or None. Worker success, tests not
+    failed and an unblocked quality gate are preconditions for done (issue #21): a failed
+    worker committed nothing, and failing or blocked code must not be merged."""
+    status = outcome.output.result.status
+    if status != "success":
+        return f"the worker reported {status}"
+    if outcome.tests == "failed":
+        return "the tests failed"
+    if outcome.quality == "failed":
+        return "the quality gate blocked it"
+    return None
 
 
 def _feedback(attempt: int, outcome: AttemptOutcome) -> str:

@@ -19,12 +19,14 @@ from jev_agent.core.models import (
     TaskCard,
     TaskState,
     ValidationResult,
+    WorkerResult,
+    WorkerStatus,
 )
-from jev_agent.core.pipeline import Pipeline, PipelineError, build_pipeline
+from jev_agent.core.pipeline import Pipeline, PipelineError, build_pipeline, cancel_run
 from jev_agent.core.store import RunRecord, Store
 from jev_agent.dispatch.base import Dispatcher, DispatchError
 from jev_agent.roles import ReviewResult
-from jev_agent.workers.base import WorkerJob
+from jev_agent.workers.base import WorkerJob, WorkerOutput
 from jev_agent.workers.fake import FakeStep, FakeWorker, FakeWorkerCrash, ScriptValue
 from jev_agent.workers.registry import WorkerRegistry
 
@@ -509,3 +511,125 @@ async def test_role_tools_reach_worker_jobs(make_env: Any) -> None:
     assert [(s.name, s.path) for s in coder.tools.skills] == [("style", env.repo / "skills/style")]
     assert not coder.tools.mcp
     assert not env.jobs("validator")[0].tools
+
+
+# ---- cancellation is never overwritten; plan-only survives resume (issues #14, #22) ----------
+
+
+class _CancelsThenAnswers:
+    """A worker during which the user runs `jev cancel` from another shell."""
+
+    name = "fake"
+
+    def __init__(self, store: Store, status: WorkerStatus) -> None:
+        self.store, self.status = store, status
+
+    async def run(self, job: WorkerJob) -> WorkerOutput:
+        cancel_run(self.store, self.store.list_runs()[0].id)
+        parsed = ONE_TASK if self.status == "success" else None
+        result = WorkerResult(status=self.status, summary="done", raw_log_path=job.log_path)
+        return WorkerOutput(result=result, parsed=parsed)
+
+
+@pytest.mark.parametrize("status", ["error", "success"])
+async def test_cancel_while_a_worker_runs_is_kept(fixture_repo: Path, status: WorkerStatus) -> None:
+    with Store.open(fixture_repo / ".jev" / "state.db") as store:
+        worker = _CancelsThenAnswers(store, status)
+        registry = WorkerRegistry({n: worker for n in ("claude_code", "codex", "api")})
+        pipeline = build_pipeline(fixture_repo, _config(), store, registry)
+        run = await pipeline.start(_idea(fixture_repo))
+        assert run.state is RunState.CANCELLED, run.reason
+        assert run.reason == "cancelled by user"
+        assert run.learning_outcome is None  # the learning step never ran for it
+
+
+async def test_cancel_does_not_replace_a_finished_run(make_env: Any) -> None:
+    env: Env = make_env({"planner": FakeStep(parsed=ONE_TASK)})
+    run = await env.pipeline.start(_idea(env.repo))
+    assert run.state is RunState.DONE, run.reason
+    with pytest.raises(PipelineError, match="already DONE"):
+        cancel_run(env.store, run.id)
+    assert env.store.get_run(run.id).state is RunState.DONE
+
+
+async def test_plan_only_is_kept_when_the_run_is_resumed(make_env: Any) -> None:
+    env: Env = make_env({"planner": FakeStep(parsed=ONE_TASK)})  # approval not required
+    # A plan-only run that stopped before planning (the process died): resume it.
+    run = env.store.create_run(_idea(env.repo), plan_only=True)
+    assert run.plan_only
+    resumed = await env.pipeline.resume(run.id)
+    assert resumed.state is RunState.AWAITING_APPROVAL, resumed.reason
+    assert env.jobs("coder") == []
+
+
+class _AlwaysDone:
+    """Answers `done` at D5 whatever happened (issue #21); the rules dispatcher elsewhere."""
+
+    name = "always-done"
+
+    def __init__(self) -> None:
+        from jev_agent.dispatch.rules import RulesDispatcher
+
+        self.rules = RulesDispatcher()
+
+    async def decide(self, req: DecisionRequest) -> Decision:
+        if req.point == "D5":
+            return Decision(point="D5", answers={"action": "done"}, dispatcher=self.name)
+        return await self.rules.decide(req)
+
+
+def _d5_actions(env: Env, run_id: str) -> list[str]:
+    return [
+        d.decision.answers["action"]
+        for d in env.store.list_decisions(run_id)
+        if d.decision.point == "D5"
+    ]
+
+
+async def test_done_after_a_failed_worker_is_overridden_to_retry(make_env: Any) -> None:
+    env: Env = make_env(
+        {
+            "planner": FakeStep(parsed=ONE_TASK),
+            "coder:T1": [FakeStep(status="error", summary="worker crashed"), FakeStep()],
+        },
+        dispatcher=_AlwaysDone(),
+    )
+    run = await env.pipeline.start(_idea(env.repo))
+
+    assert run.state is RunState.DONE, run.reason
+    task = env.store.get_task(run.id, "T1")
+    assert task.attempts == 2  # the failed attempt was not accepted as done
+    assert _d5_actions(env, run.id) == ["done", "done"]  # as the dispatcher answered
+    second = env.jobs("coder", "T1")[1]
+    assert "D5 answered done, overridden to retry: the worker reported error" in second.prompt
+
+
+async def test_done_after_failed_tests_is_overridden_to_retry(make_env: Any) -> None:
+    plan = Plan(summary="s", tasks=[_card("T1", test="pytest -q")])
+    env: Env = make_env(
+        {"planner": FakeStep(parsed=plan)},
+        dispatcher=_AlwaysDone(),
+        exit_codes={"pytest -q": [1, 0]},
+    )
+    run = await env.pipeline.start(_idea(env.repo))
+
+    assert run.state is RunState.DONE, run.reason
+    assert env.store.get_task(run.id, "T1").attempts == 2
+    second = env.jobs("coder", "T1")[1]
+    assert "D5 answered done, overridden to retry: the tests failed" in second.prompt
+    assert "Tests failed" in second.prompt
+
+
+async def test_done_never_accepted_while_the_worker_keeps_failing(make_env: Any) -> None:
+    env: Env = make_env(
+        {
+            "planner": FakeStep(parsed=ONE_TASK),
+            "coder:T1": FakeStep(status="timeout", summary="took too long"),
+        },
+        dispatcher=_AlwaysDone(),
+    )
+    run = await env.pipeline.start(_idea(env.repo))
+
+    assert run.state is RunState.FAILED, run.reason
+    task = env.store.get_task(run.id, "T1")
+    assert task.state is TaskState.FAILED and task.attempts == 3

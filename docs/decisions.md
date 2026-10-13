@@ -2,7 +2,7 @@
 
 Deviations from [PLAN.md](../PLAN.md) and choices it left open. Newest first.
 
-## 2026-10-13: Fixes from the full code review (batches A and B)
+## 2026-10-13: Fixes from the full code review (batches A to D)
 
 Tracking issue #59. Each design choice below was decided with the `jev-decide` skill
 (`.claude/skills/jev-decide/`): Jev's direct pick plus a gated weighted matrix; disagreements go
@@ -27,6 +27,34 @@ back to Jev, which arbitrates. Decision logs are kept with the review notes, not
   replacement) is used for redaction, by the quality gate's secret scan (plus its
   code-only "hard-coded credential" heuristic) and by the config check for literal secrets.
   Text is redacted before it is truncated.
+- **Cancellation wins; plan-only is stored (#14, #22).** `Store.set_run_state(..., unless=)`
+  is a conditional update; the pipeline writes with `unless={CANCELLED}` and `cancel_run`
+  with `unless=STOPPED`, so neither a running step nor a cancel can overwrite the other
+  between a check and the write (Jev, during the review: ARBITRATED 0.46 for guarded writes
+  over a full transition table). Stopping the running worker on cancel is still a follow-up.
+  `runs.plan_only` (migration 8) replaces the per-call `Pipeline._plan_only` attribute.
+- **Resume while running (#15).** The dashboard treats a run as possibly running when it has an
+  attempt with no result younger than its worker's `timeout_s` plus 300 s, or when the live
+  scheduler lock's current queue item started it; plain Resume is then refused and Force
+  resume needs a confirmation (Jev: ARBITRATED 0.72 for attempt age over "any open attempt"
+  and over ownership only). A run lease (pid, host, heartbeat) remains the real fix.
+- **D5 done preconditions (#21).** Worker success, tests not failed and an unblocked quality
+  gate are hard preconditions for `done`; otherwise the action becomes `retry`, with the
+  reason in the task note (Jev: ARBITRATED 0.16 for retry over the rules dispatcher's answer).
+- **Worker readiness and the init template (#19, #20).** One predicate
+  (`cli.wiring.worker_readiness`) for runs and `jev doctor`: CLI workers need their command on
+  PATH; api needs its key and, per role, a runnable model, and never runs the coder. Unready
+  workers are dropped with a warning; api without a model for some roles is hidden from those
+  roles via `WorkerRegistry.names(role)` (Jev: ARBITRATED 0.66, per role over per worker). The
+  `jev init` template comments out every value, so defaults < user < repo holds again.
+- **Runnable (worker, model) pairs; error vs failure (#33, #34).** `requests.model_fits` infers
+  compatibility from the name (`/` means api only, otherwise CLI only, the default fits all);
+  `assign.fit_free` repairs dispatcher answers, escalation and reassignment by keeping the
+  worker and taking its first runnable pool model or its default (Jev: ARBITRATED 0.92 over a
+  per-worker model list). Codex custom providers with `/` names are unsupported. Exit 127/126
+  without output is `error`, and D5 rules reassign on `error` at once (Jev: ARBITRATED 0.97);
+  the api worker maps `httpx.NetworkError` and `RemoteProtocolError` to `failure`, other
+  transport errors to `error` (Jev: ARBITRATED 0.33).
 - **Server policy hardening (#44, #45, #46, #48).** Recursive `grep` only inside
   workdir/allowed_paths, with `--exclude`/`--exclude-dir` for credential names and `-R`
   refused (Jev: ARBITRATED 0.35). `docker inspect` and `systemctl show` are dropped rather than

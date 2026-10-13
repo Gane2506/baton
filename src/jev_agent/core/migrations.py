@@ -222,6 +222,11 @@ MIGRATIONS: list[str] = [
         kpis_json    TEXT NOT NULL
     );
     """,
+    # 8: `--plan-only` is a property of the run, so `jev resume` keeps stopping at the approval
+    # gate (issue #22). Older runs: 0 (their flag was never stored).
+    """
+    ALTER TABLE runs ADD COLUMN plan_only INTEGER NOT NULL DEFAULT 0;
+    """,
 ]
 
 SCHEMA_VERSION = len(MIGRATIONS)

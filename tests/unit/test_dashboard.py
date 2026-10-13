@@ -331,6 +331,89 @@ def test_approve_and_resume_refused_in_wrong_state(
     assert client.post(f"/runs/{run_id}/explode").status_code in (403, 404)
 
 
+def _executing_with_open_attempt(repo: Path, run_id: str, age: timedelta | None = None) -> None:
+    """Put the run in EXECUTING with a coder attempt that has no result yet (a worker that is
+    running, or whose process died), started `age` ago (default: just now)."""
+    with _store(repo) as store:
+        store.set_run_state(run_id, RunState.EXECUTING)
+        task = store.list_tasks(run_id)[0]
+        attempt_id = store.start_attempt(run_id, task.id, 1, "coder", "claude_code")
+        if age is not None:
+            started = (datetime.now(UTC) - age).isoformat(timespec="microseconds")
+            store.connection.execute(
+                "UPDATE attempts SET started_at = ? WHERE id = ?", (started, attempt_id)
+            )
+
+
+def test_resume_needs_force_while_an_attempt_may_be_running(planned: tuple[Path, str]) -> None:
+    """Issue #15: an open attempt within its worker's timeout means another jev process may be
+    running the run; a plain Resume is not offered and is refused without force."""
+    repo, run_id = planned
+    _executing_with_open_attempt(repo, run_id)
+    calls = Calls()
+    for client in _client(repo, calls):
+        text = client.get(f"/runs/{run_id}").text
+        assert "Force resume" in text and 'name="force" value="1"' in text
+        assert "resuming starts a second one" in text
+        assert ">Resume</button>" not in text
+        _post(client, f"/runs/{run_id}/resume")
+        text = client.get(f"/runs/{run_id}").text
+        assert "may be running this run" in text and "coder attempt" in text
+        assert calls.calls == []
+        _post(client, f"/runs/{run_id}/resume", {"force": "1"})
+        assert "resume started in the background" in client.get(f"/runs/{run_id}").text
+        _launcher(client).wait(run_id)
+        assert calls.calls == [(repo, run_id, "resume")]
+
+
+def test_interrupted_run_still_offers_plain_resume(planned: tuple[Path, str]) -> None:
+    """An open attempt older than its worker's timeout (plus a margin) is from a dead process."""
+    repo, run_id = planned
+    _executing_with_open_attempt(repo, run_id, age=timedelta(hours=2))
+    calls = Calls()
+    for client in _client(repo, calls):
+        text = client.get(f"/runs/{run_id}").text
+        assert ">Resume</button>" in text and "Force resume" not in text
+        _post(client, f"/runs/{run_id}/resume")
+        assert "resume started in the background" in client.get(f"/runs/{run_id}").text
+        _launcher(client).wait(run_id)
+        assert calls.calls == [(repo, run_id, "resume")]
+
+
+def test_resume_needs_force_while_the_scheduler_runs_the_item(planned: tuple[Path, str]) -> None:
+    import socket
+
+    repo, run_id = planned
+    with _store(repo) as store:
+        store.set_run_state(run_id, RunState.EXECUTING)
+        run = store.get_run(run_id)
+        item = store.add_queue_item(run.idea.text)
+        assert store.claim_queue_item(item.id)
+        # The run was created after the scheduler claimed the item (its run_id is set later).
+        claimed = (run.created_at - timedelta(seconds=5)).isoformat(timespec="microseconds")
+        store.connection.execute("UPDATE queue SET updated_at = ? WHERE id = ?", (claimed, item.id))
+    lock = repo / ".jev" / "scheduler.lock"
+    lock.write_text(
+        json.dumps(
+            {
+                "pid": os.getpid(),
+                "host": socket.gethostname(),
+                "started_at": "2026-10-12T10:00:00+00:00",
+                "current_item": item.id,
+            }
+        )
+    )
+    calls = Calls()
+    for client in _client(repo, calls):
+        assert "Force resume" in client.get(f"/runs/{run_id}").text
+        _post(client, f"/runs/{run_id}/resume")
+        text = client.get(f"/runs/{run_id}").text
+        assert "may be running this run" in text and f"queue item #{item.id}" in text
+        assert calls.calls == []
+        lock.unlink()  # the scheduler stopped: a plain resume is fine again
+        assert ">Resume</button>" in client.get(f"/runs/{run_id}").text
+
+
 def test_approve_runs_the_real_cli_code_path(planned: tuple[Path, str]) -> None:
     """The default executor is `jev approve`'s path; with fake workers the run finishes."""
     repo, run_id = planned

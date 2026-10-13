@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
+from jev_agent.cli import wiring
 from jev_agent.cli.app import app
 from jev_agent.cli.status_cmds import format_answers, format_time
 from jev_agent.cli.wiring import (
@@ -136,11 +137,14 @@ def test_build_dispatcher_from_config(monkeypatch: pytest.MonkeyPatch) -> None:
     assert isinstance(jev, JevDispatcher) and warnings == []
 
 
-def test_build_registry_registers_api_worker_from_config() -> None:
+def test_build_registry_registers_api_worker_from_config(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(wiring, "which", lambda cmd: f"/fake/bin/{cmd}")
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-v1-fake")
     config = JevConfig.model_validate(
         {"workers": {"api": {"base_url": "https://example.test/v1/", "default_model": "m/x"}}}
     )
-    registry = build_registry(config)
+    registry, warnings = build_registry(config)
+    assert warnings == []
     assert sorted(registry.names()) == ["api", "claude_code", "codex"]
     api = registry.get("api")
     assert isinstance(api, ApiWorker)
@@ -150,7 +154,7 @@ def test_build_registry_registers_api_worker_from_config() -> None:
         "m/x",
     )
     disabled = JevConfig.model_validate({"workers": {"api": {"enabled": False}}})
-    assert "api" not in build_registry(disabled).names()
+    assert "api" not in build_registry(disabled)[0].names()
 
 
 def test_build_cli_workers_from_config() -> None:
@@ -192,7 +196,7 @@ def test_build_cli_workers_from_config() -> None:
 
 def test_fake_workers_replace_real_ones(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv(FAKE_WORKERS_ENV, "1")
-    registry = build_registry(JevConfig())
+    registry, _ = build_registry(JevConfig())
     assert sorted(registry.names()) == ["api", "claude_code", "codex"]
     assert all(isinstance(registry.get(n), FakeWorker) for n in registry.names())
 

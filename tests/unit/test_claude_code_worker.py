@@ -235,6 +235,18 @@ async def test_timeout(tmp_path: Path) -> None:
     assert "timed out" in out.result.summary
 
 
+@pytest.mark.parametrize(
+    ("exit_code", "message"),
+    [(127, "command not found: claude"), (126, "command not executable: claude")],
+)
+async def test_missing_binary_is_an_error(tmp_path: Path, exit_code: int, message: str) -> None:
+    out = await worker(FakeRunner(CommandResult(exit_code, "", message, False, 0.0))).run(
+        job(tmp_path)
+    )
+    assert out.result.status == "error"
+    assert message in out.result.summary
+
+
 async def test_quota_result(tmp_path: Path) -> None:
     runner = FakeRunner(CommandResult(1, fixture("quota_session_limit.json"), "", False, 2.0))
     out = await worker(runner).run(job(tmp_path))
@@ -288,6 +300,10 @@ CASES = [
     (None, 1, "Not logged in · Please run /login", "error"),
     (None, 1, "Error: something crashed", "failure"),
     (None, 0, "", "error"),
+    # run_command's codes for a missing or non-executable binary: the worker cannot run.
+    (None, 127, "command not found: claude", "error"),
+    (None, 126, "command not executable: claude", "error"),
+    ("error_max_turns.json", 127, "", "failure"),  # claude itself answered: not a start failure
 ]
 
 

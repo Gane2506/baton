@@ -46,9 +46,23 @@ D7_LEARN = ["learn", "skip"]
 _WORKER_VENDORS = {"claude_code": "anthropic", "codex": "openai"}
 
 
+# The worker that calls an OpenRouter-style API; it takes `vendor/name` model slugs.
+API_WORKER = "api"
 # Free models run only on this worker (OpenRouter); see docs/config.md "Free models".
-FREE_WORKER = "api"
+FREE_WORKER = API_WORKER
 FREE_DESCRIPTION = "free (rate-limited)"
+
+
+def model_fits(worker: str, model: str | None) -> bool:
+    """Whether `worker` can run `model` (docs/config.md `[roles.<role>]`, "Workers and models").
+
+    A model slug with a `/` (`anthropic/claude-sonnet-4.5`) runs only on the api worker; a name
+    without one (`sonnet`, `gpt-5.2-codex`) only on the CLI workers. The worker's default model
+    (None or `"default"`) fits every worker.
+    """
+    if model is None or model == DEFAULT_MODEL:
+        return True
+    return ("/" in model) == (worker == API_WORKER)
 
 
 @dataclass(frozen=True)

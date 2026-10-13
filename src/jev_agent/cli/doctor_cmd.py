@@ -19,6 +19,7 @@ from rich.table import Table
 
 from jev_agent.cli.quality_cmds import missing_tools
 from jev_agent.cli.repo import RepoOption, find_git_root
+from jev_agent.cli.wiring import worker_readiness
 from jev_agent.config import CONFIG_FILENAME, STATE_DIRNAME, ConfigError, JevConfig, load_config
 from jev_agent.config.schema import role_can_use_free, role_prefers_free, role_uses_free
 from jev_agent.core.learning import Learning, learning_status
@@ -107,7 +108,7 @@ def run_checks(repo: Path, *, connect: bool = False) -> list[Check]:
 
     if config is not None:
         checks.append(_dispatcher_check(config))
-        worker_checks = _worker_checks(config)
+        worker_checks = _worker_checks(config, ModelCatalog.load(cache_path(root)))
         checks.extend(worker_checks)
         checks.append(_learning_check(config, state_dir, worker_checks))
         checks.append(_quality_check(config, root, worker_checks))
@@ -494,40 +495,41 @@ def _permission_checks(config: JevConfig) -> list[Check]:
     return checks
 
 
-def _worker_checks(config: JevConfig) -> list[Check]:
+def _worker_checks(config: JevConfig, catalog: ModelCatalog | None) -> list[Check]:
+    """Each worker and role, by the rule runs use (`wiring.worker_readiness`, issue #19)."""
     checks: list[Check] = []
-    usable: set[str] = set()
+    readiness = worker_readiness(config, catalog, find=which)
     workers = config.workers
     for name, cli in (("claude_code", workers.claude_code), ("codex", workers.codex)):
         label = f"worker {name}"
         if not cli.enabled:
             checks.append(Check(label, "ok", "disabled"))
-        elif (found := which(cli.command)) is None:
-            checks.append(
-                Check(label, "warn", f"`{cli.command}` not found on PATH; install or disable it")
-            )
+        elif name in readiness.problems:
+            checks.append(Check(label, "warn", readiness.problems[name]))
         else:
-            usable.add(name)
-            checks.append(Check(label, "ok", found))
+            checks.append(Check(label, "ok", readiness.paths[name]))
 
     checks.extend(_permission_checks(config))
 
     api = workers.api
     if not api.enabled:
         checks.append(Check("worker api", "ok", "disabled"))
-    elif os.environ.get(api.api_key_env):  # never print the value
-        usable.add("api")
-        model = api.default_model or "none; roles using api need `models`"
+    elif "api" in readiness.problems:
+        checks.append(Check("worker api", "warn", readiness.problems["api"]))
+    else:
+        model = api.default_model or "none; roles use their `models`"
         checks.append(
             Check("worker api", "ok", f"{api.api_key_env} is set; default model: {model}")
         )
-    else:
-        checks.append(Check("worker api", "warn", f"{api.api_key_env} is not set"))
+    usable = {n for n in workers.names() if workers.is_enabled(n) and readiness.ready(n)}
 
     for role_name, role in config.roles.items():
-        candidates = [w for w in role.workers if w in usable]
+        candidates = [w for w in role.workers if w in usable and readiness.ready_for(role_name, w)]
+        skipped = readiness.role_problems.get(role_name, {})
         if candidates:
-            checks.append(Check(f"role {role_name}", "ok", ", ".join(candidates)))
+            detail = ", ".join(candidates)
+            detail += "".join(f"; {w} skipped: {why}" for w, why in skipped.items())
+            checks.append(Check(f"role {role_name}", "ok", detail))
         elif role_name == "learner":  # only needed when learning is on
             checks.append(
                 Check("role learner", "warn", "no usable worker; learning cannot add lessons")
@@ -542,7 +544,9 @@ def _worker_checks(config: JevConfig) -> list[Check]:
                 )
             )
         else:
-            checks.append(Check(f"role {role_name}", "fail", "no usable worker"))
+            detail = "no usable worker"
+            detail += "".join(f"; {w} skipped: {why}" for w, why in skipped.items())
+            checks.append(Check(f"role {role_name}", "fail", detail))
 
     if "codex" in usable and any("codex" in role.workers for _, role in config.roles.items()):
         checks.append(

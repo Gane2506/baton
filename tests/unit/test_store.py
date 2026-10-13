@@ -373,7 +373,7 @@ def test_migration_7_adds_shipped_prs_and_run_kpis(tmp_path: Path) -> None:
     with sqlite3.connect(db_path) as conn:
         conn.executescript("".join(MIGRATIONS[:6]) + "\nPRAGMA user_version = 6;")
     with Store.open(db_path) as store:
-        assert _user_version(db_path) == 7
+        assert _user_version(db_path) == SCHEMA_VERSION
         run = store.create_run(Idea(text="x", repo_path=tmp_path))
         pr = store.add_shipped_pr(
             run.id,
@@ -422,3 +422,39 @@ def test_migration_7_adds_shipped_prs_and_run_kpis(tmp_path: Path) -> None:
             store.connection.execute(
                 "UPDATE shipped_prs SET state = 'weird' WHERE id = ?", (pr.id,)
             )
+
+
+def test_migration_8_stores_plan_only_and_keeps_old_runs(tmp_path: Path) -> None:
+    from jev_agent.core.migrations import MIGRATIONS
+    from jev_agent.core.models import Idea
+
+    db_path = tmp_path / "state.db"
+    with sqlite3.connect(db_path) as conn:
+        conn.executescript("".join(MIGRATIONS[:7]) + "\nPRAGMA user_version = 7;")
+        conn.execute(
+            "INSERT INTO runs (id, idea_json, state, created_at, updated_at)"
+            " VALUES ('old', ?, 'PLANNING', ?, ?)",
+            (
+                Idea(text="x", repo_path=tmp_path).model_dump_json(),
+                *["2026-10-01T00:00:00+00:00"] * 2,
+            ),
+        )
+    with Store.open(db_path) as store:
+        assert _user_version(db_path) == 8
+        assert store.get_run("old").plan_only is False
+        new = store.create_run(Idea(text="y", repo_path=tmp_path), plan_only=True)
+        assert store.get_run(new.id).plan_only is True
+
+
+def test_guarded_state_write_keeps_a_cancellation(tmp_path: Path) -> None:
+    from jev_agent.core.models import Idea, RunState
+
+    with Store.open(tmp_path / "state.db") as store:
+        run = store.create_run(Idea(text="x", repo_path=tmp_path))
+        assert store.set_run_state(run.id, RunState.CANCELLED, "by user")
+        keep = {RunState.CANCELLED}
+        assert not store.set_run_state(run.id, RunState.FAILED, "late", unless=keep)
+        assert store.get_run(run.id).state is RunState.CANCELLED
+        assert store.get_run(run.id).reason == "by user"
+        with pytest.raises(NotFoundError):
+            store.set_run_state("nope", RunState.FAILED, unless=keep)

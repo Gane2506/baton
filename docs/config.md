@@ -1,7 +1,11 @@
 # Configuration
 
 `jev init` writes a commented `jev.toml` to the root of your repository. Every key is optional;
-an empty file (or no file) gives the defaults below.
+an empty file (or no file) gives the defaults below. The template sets no values: each key is a
+commented-out line showing its built-in default (`# per_run_usd = 5.00`), so your user config
+still applies until you uncomment a line. A `jev.toml` written by an older `jev init` sets every
+key to the default of that time and so overrides your user config; delete the lines you did not
+mean to set.
 
 ## Where config comes from
 
@@ -203,8 +207,9 @@ below for how they are chosen and what happens when one hits its rate limit.
 
 ## `[workers.claude_code]` and `[workers.codex]`
 
-Local agent CLIs. Both are registered whenever `enabled = true`; `jev doctor` warns if the
-command is not on `PATH`. See [security.md](security.md) for the permission model.
+Local agent CLIs. Each is used when `enabled = true` and its `command` is found on `PATH`;
+otherwise a run leaves it out with a warning at the start, and `jev doctor` warns too (see
+[Worker readiness](#worker-readiness)). See [security.md](security.md) for the permission model.
 
 Shared keys:
 
@@ -241,12 +246,26 @@ An OpenAI-compatible HTTP API.
 | `enabled` | `true` | Whether this worker may be used. |
 | `base_url` | `"https://openrouter.ai/api/v1"` | API base URL. |
 | `api_key_env` | `"OPENROUTER_API_KEY"` | Name of the environment variable holding the key. Must be a valid variable name. |
-| `default_model` | unset | Model used when the role's `models` pool is empty. If unset, a role that picks `api` without a model fails that attempt with an error. |
+| `default_model` | unset | Model used when the role's `models` pool is empty. If unset, `api` is not offered to a role whose pool is empty (and has no free models). |
 | `timeout_s` | `600` | Per-attempt timeout in seconds (> 0), retries included. |
 
 The API worker runs the planner, validator and reviewer roles (it cannot edit files, so never
-the coder). It is registered whenever `enabled = true`; a missing key makes its attempts fail
-with status `error`, which the pipeline handles like any other failed attempt.
+the coder). It is used when `enabled = true` and the `api_key_env` variable is set, and only
+for roles it has a model for; see [Worker readiness](#worker-readiness).
+
+### Worker readiness
+
+Runs and `jev doctor` use one rule to decide which enabled workers can run (in fake-worker mode,
+`JEV_FAKE_WORKERS=1`, every enabled worker is used):
+
+- `claude_code` and `codex`: the `command` is found on `PATH`.
+- `api`: the `api_key_env` variable is set, and, per role, a model it can run is available:
+  `default_model`, a `vendor/name` slug in the role's `models`, or free models (`"free"` or
+  `prefer_free` with a cached model list). It is never offered to the coder.
+
+A worker that is not ready is not offered to the dispatcher, with one warning at the start of a
+run (`api` that has a model for some roles only is offered to those). `jev doctor` shows the
+same result per worker and per role.
 
 ## `[roles.<role>]`
 
@@ -275,6 +294,25 @@ A `[roles.<role>]` table is layered on top of that role's defaults, so a table t
 
 `models` is ordered weakest to strongest: escalation moves to the next model once the effort is
 already at the highest level. An empty pool means "let the worker use its default model".
+
+### Workers and models
+
+A role's `models` pool is shared by all its `workers`, so jev checks each (worker, model) pair
+by the model's name:
+
+- a name with a `/` (an OpenRouter slug such as `anthropic/claude-sonnet-4.5`) runs only on
+  `api`;
+- a name without one (`sonnet`, `opus`, `claude-sonnet-4-6`, `gpt-5.2-codex`) runs only on
+  `claude_code` and `codex`;
+- the worker's default model (an empty pool) fits every worker.
+
+The rules dispatcher only picks runnable pairs. Jev answers worker and model separately (it is
+told the rule when the pool mixes both kinds); if the pair cannot run, jev keeps the worker and
+gives it its first runnable model in the pool, or its default model when there is none. The
+same applies on escalation (it skips models the worker cannot run) and when a task is
+reassigned to another worker. So a mixed pool such as `["sonnet", "anthropic/claude-sonnet-4.5"]`
+lets `claude_code` and `api` each run their own model. Codex with a custom `model_provider` whose
+model names contain `/` is not supported: the name is treated as an OpenRouter slug.
 
 Default `workers` per role:
 
@@ -361,7 +399,8 @@ prefer_free = false                       # this role keeps paying
 - **Where they apply.** Only on the `api` worker. A role whose `workers` do not include `api`
   (the coder, on Claude Code or Codex) ignores `prefer_free` and drops `"free"`; `jev doctor`
   notes this. A free model chosen for another worker is moved to `api`, or replaced by the
-  first paid model when the role cannot use `api`.
+  first model that worker can run when the role cannot use `api` (see
+  [Workers and models](#workers-and-models)).
 - **`"free"` in `models`** expands, when a run starts, to at most `free_models_limit` free
   models from the cached list. Roles that answer with JSON (planner, validator, reviewer,
   learner) skip models whose `supported_parameters` lack `structured_outputs`; models that
@@ -371,9 +410,10 @@ prefer_free = false                       # this role keeps paying
   pool has none). The rules dispatcher then picks the first free model on the api worker; Jev
   sees each free option described as "free (rate-limited)" and is told to prefer free models
   unless the task is hard or earlier attempts failed. Escalation from a free model goes to
-  the first paid model.
+  the first paid model the api worker can run.
 - **Rate limits.** A 429 from a free model counts as `quota_exhausted`. jev then tries the
-  next free model, then the first paid model in the pool, then one other worker of the role.
+  next free model, then the first paid model in the pool that the api worker can run, then one
+  other worker of the role (with its first runnable model).
   For the planner, validator, learner and reviewer this happens inside the same step; for a
   task it is the D5 decision (`retry` moves to the fallback model). Each try is an attempt.
 - **The model list** is cached in `.jev/cache/openrouter-models.json` and fetched again when

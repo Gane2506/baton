@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 import secrets
 import sqlite3
-from collections.abc import Iterator, Sequence
+from collections.abc import Collection, Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -81,6 +81,9 @@ class RunRecord:
     learning_outcome: str | None = None
     # The quality gate level this run uses (docs/quality.md); "none" for older runs.
     quality_level: QualityLevel = "none"
+    # `jev run --plan-only` (or a plan-only queue item): stop at the approval gate even when
+    # `[approval] require_plan_approval` is off, also after `jev resume`.
+    plan_only: bool = False
 
 
 @dataclass(frozen=True)
@@ -276,6 +279,8 @@ class Store:
         idea: Idea,
         learning_profile: str | None = None,
         quality_level: QualityLevel = "none",
+        *,
+        plan_only: bool = False,
     ) -> RunRecord:
         now = _now()
         for _ in range(5):  # retry on the (very unlikely) id collision within one second
@@ -284,7 +289,8 @@ class Store:
                 with self._tx() as db:
                     db.execute(
                         "INSERT INTO runs (id, idea_json, state, created_at, updated_at,"
-                        " learning_profile, quality_level) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                        " learning_profile, quality_level, plan_only)"
+                        " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                         (
                             run_id,
                             idea.model_dump_json(),
@@ -293,6 +299,7 @@ class Store:
                             now,
                             learning_profile,
                             quality_level,
+                            int(plan_only),
                         ),
                     )
             except sqlite3.IntegrityError:
@@ -317,15 +324,30 @@ class Store:
         state: RunState,
         reason: str | None = None,
         resume_state: RunState | None = None,
-    ) -> None:
+        *,
+        unless: Collection[RunState] = (),
+    ) -> bool:
         """Set the run's state. `reason` (why it stopped) replaces any previous reason.
 
         `resume_state` is where `resume` may continue a stopped run from; every state change
         replaces it, so it is only set while the run stays stopped.
+
+        With `unless`, the change happens only if the run is not in one of those states, in the
+        same statement, so a concurrent write (`jev cancel` from another shell, the dashboard)
+        cannot be overwritten between a check and the update. Returns whether it changed.
         """
-        self._update_run(
-            run_id, "state = ?, reason = ?, resume_state = ?", (state, reason, resume_state)
-        )
+        guard = ""
+        if unless:
+            guard = f" AND state NOT IN ({', '.join('?' for _ in unless)})"
+        with self._tx() as db:
+            cur = db.execute(
+                "UPDATE runs SET state = ?, reason = ?, resume_state = ?, updated_at = ?"
+                f" WHERE id = ?{guard}",
+                (state, reason, resume_state, _now(), run_id, *unless),
+            )
+            if cur.rowcount == 0:
+                self._require_run(run_id)
+        return cur.rowcount == 1
 
     def set_run_validation(self, run_id: str, validation: ValidationResult | None) -> None:
         value = None if validation is None else validation.model_dump_json()
@@ -980,6 +1002,7 @@ def _run_record(row: sqlite3.Row) -> RunRecord:
         learning_profile=row["learning_profile"],
         learning_outcome=row["learning_outcome"],
         quality_level=row["quality_level"] or "none",
+        plan_only=bool(row["plan_only"]),
     )
 
 

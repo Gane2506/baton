@@ -135,8 +135,20 @@ def test_doctor_only_codex_and_api_is_enough_for_all_roles(
     assert _init(git_repo)[0] == 0
     monkeypatch.setattr(doctor_cmd, "which", lambda cmd: "/bin/codex" if cmd == "codex" else None)
     monkeypatch.setenv("OPENROUTER_API_KEY", "x")
+    (git_repo / "jev.toml").write_text('[workers.api]\ndefault_model = "vendor/model"\n')
     checks = doctor_cmd.run_checks(git_repo)
     assert [c.name for c in checks if c.status == "fail"] == []
+
+
+def test_doctor_api_without_a_model_is_not_usable(
+    git_repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    assert _init(git_repo)[0] == 0
+    monkeypatch.setattr(doctor_cmd, "which", lambda cmd: "/bin/codex" if cmd == "codex" else None)
+    monkeypatch.setenv("OPENROUTER_API_KEY", "x")
+    checks = {c.name: c for c in doctor_cmd.run_checks(git_repo)}
+    assert checks["worker api"].status == "warn" and "no model" in checks["worker api"].detail
+    assert checks["role planner"].status == "fail"
 
 
 def test_doctor_reports_jev_dispatcher_key(git_repo: Path, monkeypatch: pytest.MonkeyPatch) -> None:
