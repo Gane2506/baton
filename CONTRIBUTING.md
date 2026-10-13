@@ -555,7 +555,10 @@ Checklist:
   manual check (for example a run on the sample repo with `JEV_FAKE_WORKERS=1`);
 - anything that changes behaviour for existing users: config keys, defaults, CLI output, the
   state database, what an agent is allowed to do;
-- screenshots for dashboard changes;
+- for a change to what the dashboard or the CLI shows: the regenerated images, committed in
+  `docs/images/` by `uv run python examples/demo/screenshots.py` (never edited or drawn by
+  hand), with the changed ones shown in the description. CI uploads the same captures of every
+  pull request as the `screenshots` artifact, so reviewers can compare;
 - anything you are unsure about. Draft pull requests are welcome for early feedback.
 
 **What happens next:**

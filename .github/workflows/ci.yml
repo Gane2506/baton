@@ -44,3 +44,18 @@ jobs:
       - run: uv build
       - run: uv run --isolated --no-project --with dist/*.whl jev --version
       - run: uv run --isolated --no-project --with "$(ls dist/*.whl)[dashboard]" python -c "import jev_agent.dashboard.app"
+
+  screenshots:
+    # The dashboard and CLI images, captured from this commit's running app with the demo
+    # data (examples/demo/screenshots.py): a preview artifact for every pull request, and a
+    # failure when the seed script or a page stops rendering. Chrome is the runner's own.
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.3.0
+      - run: uv sync --locked --all-extras
+      - run: uv run python examples/demo/screenshots.py --out preview
+      - uses: actions/upload-artifact@v7
+        with:
+          name: screenshots
+          path: preview/

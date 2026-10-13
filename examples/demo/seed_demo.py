@@ -12,15 +12,17 @@ adds an example skill folder, and caches an OpenRouter model list built from the
 `tests/fixtures/openrouter/models.json`, so `jev models list --free` and `jev doctor` work
 offline.
 
-Usage (from a clone of this repo; see docs/dashboard.md "Screenshots"):
+Usage: `examples/demo/screenshots.py` sets up a scratch repo, runs this script and captures
+every image (see docs/dashboard.md "Screenshots"). By hand, keep the user config inside the
+demo repo, since the script adds the demo to its `[trust] repos`:
 
     DEMO=$(mktemp -d /tmp/baton-demo.XXXX)
     cp -R examples/sample-repo/. "$DEMO"/
     git -C "$DEMO" init -q && git -C "$DEMO" add -A
     git -C "$DEMO" -c user.name=demo -c user.email=demo@example.com commit -qm "sample"
+    export XDG_DATA_HOME="$DEMO/.xdg/data" XDG_CONFIG_HOME="$DEMO/.xdg/config"
     (cd "$DEMO" && uv run --project "$OLDPWD" --all-extras jev init)
     uv run --all-extras python examples/demo/seed_demo.py "$DEMO"
-    uv run --all-extras python examples/demo/capture.py "$DEMO"   # optional: cli-*.svg
 
 Run it on a freshly initialised repo only: it adds runs, queue items and a learning profile
 next to whatever is already there. Timestamps are placed in the past relative to now, so the
@@ -45,6 +47,7 @@ import jev_agent.core.chat as chat_mod
 import jev_agent.core.learning as learning_mod
 import jev_agent.core.store as store_mod
 from jev_agent.config import STATE_DIRNAME, load_config
+from jev_agent.config.loader import default_user_config_path
 from jev_agent.core.chat import (
     BRIEF_CLOSE,
     BRIEF_OPEN,
@@ -1052,6 +1055,23 @@ def configure_demo(root: Path) -> None:
     body = json.loads(FIXTURE_MODELS.read_text(encoding="utf-8"))
     catalog = ModelCatalog(parse_models(body), time.time(), "https://openrouter.ai/api/v1/models")
     catalog.save(cache_path(root))
+    trust_demo(root)
+
+
+def trust_demo(root: Path) -> None:
+    """Trust the demo repo in the user config, so its `jev.toml` may name tools and skills. Only
+    a user config inside the demo repo is written (set `XDG_CONFIG_HOME` under it, as
+    docs/dashboard.md shows): never your own."""
+    path = default_user_config_path()
+    if not path.resolve().is_relative_to(root):
+        raise SystemExit(
+            f"refusing to edit {path}: set XDG_CONFIG_HOME to a directory inside {root} "
+            "(see docs/dashboard.md, Screenshots)"
+        )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    text = path.read_text(encoding="utf-8") if path.is_file() else ""
+    if "[trust]" not in text:
+        path.write_text(text + f'[trust]\nrepos = ["{root}"]\n', encoding="utf-8")
 
 
 # ---- a saved chat ------------------------------------------------------------------------------

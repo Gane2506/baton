@@ -7,6 +7,20 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Changed
+
+- **Screenshots come from the running app** ([#83](https://github.com/Gane2506/baton/issues/83)).
+  `examples/demo/screenshots.py` builds a demo repo, starts `jev dashboard` and captures every
+  image in `docs/images/` with headless Chrome; all of them are recaptured from v0.3.0 (the old
+  dashboard images showed v0.2.0, without the KPIs page or Laya's votes). CI's new
+  `screenshots` job uploads the same captures for every pull request, and a pull request that
+  changes the UI commits the regenerated images.
+
+### Fixed
+
+- `examples/demo/seed_demo.py` failed on a fresh repo since repo-level tools and skills need
+  `[trust]`; it now trusts the demo in a user config inside the demo repo, and only there.
+
 ## [0.3.0] - 2026-10-13
 
 ### Added
