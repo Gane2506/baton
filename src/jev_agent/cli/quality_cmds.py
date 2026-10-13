@@ -11,7 +11,7 @@ from rich.table import Table
 
 from jev_agent.cli.repo import RepoOption, find_git_root
 from jev_agent.cli.run_cmds import RunId
-from jev_agent.cli.wiring import cli_context, fail
+from jev_agent.cli.wiring import fail, repo_context
 from jev_agent.config import STATE_DIRNAME, ConfigError, JevConfig, load_config
 from jev_agent.core.store import NotFoundError, QualityReportRecord, RunRecord
 from jev_agent.quality import tools
@@ -45,7 +45,7 @@ def review_text(root: Path, run: RunRecord, reports: list[QualityReportRecord]) 
 @quality_app.command("show")
 def show(run_id: RunId, repo: RepoOption = Path(".")) -> None:
     """Print the run's quality review (review.md)."""
-    with cli_context(repo) as ctx:
+    with repo_context(repo, create=False) as ctx:
         try:
             run = ctx.store.get_run(run_id)
             reports = ctx.store.list_quality_reports(run_id)

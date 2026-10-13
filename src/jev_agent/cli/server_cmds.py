@@ -15,8 +15,9 @@ from rich.markup import escape
 from rich.table import Table
 
 from jev_agent import __version__
-from jev_agent.cli.repo import RepoOption, find_git_root
-from jev_agent.config import STATE_DIRNAME, ConfigError, JevConfig, load_config
+from jev_agent.cli.repo import RepoOption
+from jev_agent.cli.wiring import cli_errors, fail, repo_config, repo_root
+from jev_agent.config import STATE_DIRNAME, JevConfig
 from jev_agent.config.servers_schema import NO_PROFILE
 from jev_agent.servers.access import (
     READ_ONLY_ROLES,
@@ -41,7 +42,6 @@ from jev_agent.servers.service import ServerService
 from jev_agent.servers.ssh import SshRunner, run_process
 
 console = Console()
-err_console = Console(stderr=True)
 
 mcp_app = typer.Typer(name="mcp", help="MCP servers jev provides to agents.", no_args_is_help=True)
 browser_app = typer.Typer(
@@ -69,15 +69,9 @@ def stdin_is_tty() -> bool:
 
 
 def _load(repo: Path) -> tuple[Path, JevConfig]:
-    root = find_git_root(repo)
-    if root is None:
-        err_console.print(f"[red]error:[/red] {repo.resolve()} is not inside a git repository")
-        raise typer.Exit(1)
-    try:
-        return root, load_config(root)
-    except ConfigError as exc:
-        err_console.print(f"[red]error:[/red] {escape(str(exc))}")
-        raise typer.Exit(1) from exc
+    with cli_errors():
+        root = repo_root(repo)
+        return root, repo_config(root)
 
 
 # ---- jev mcp servers ---------------------------------------------------------------------
@@ -108,8 +102,7 @@ def mcp_servers(
     try:
         grants = allowed_grants(config, role, parse_allow(allow))
     except ValueError as exc:
-        err_console.print(f"[red]error:[/red] {escape(str(exc))}")
-        raise typer.Exit(1) from exc
+        raise fail(str(exc)) from exc
     service = ServerService(
         config, root / STATE_DIRNAME, root, grants, run_id=run_id, role=role, runner=ssh_runner
     )
@@ -144,27 +137,20 @@ def browser_install(
             raise typer.Exit(1)
         code = local_runner(argv)
         if code != 0:
-            console.print(f"[red]error:[/red] the install exited with {code}")
-            raise typer.Exit(1)
+            raise fail(f"the install exited with {code}")
         console.print("Browser installed.")
         return
     settings = config.servers.get(target)
     if settings is None:
         known = ", ".join(config.servers) or "none defined"
-        console.print(f"[red]error:[/red] unknown server {target!r} (known: {escape(known)})")
-        raise typer.Exit(1)
+        raise fail(f"unknown server {target!r} (known: {known})")
     if settings.access != "medium":
-        console.print(
-            f'[red]error:[/red] installing on {target} needs `access = "medium"` '
-            f"(it is {settings.access})"
-        )
-        raise typer.Exit(1)
+        raise fail(f'installing on {target} needs `access = "medium"` (it is {settings.access})')
     command = shlex.join(argv)
     ctx = PolicyContext("medium", settings.workdir, tuple(settings.write_roots()), tuple(argv))
     decision = check_command(command, ctx)
     if not decision.allowed:  # e.g. no workdir: npx needs nothing else, so this is a bug guard
-        console.print(f"[red]error:[/red] refused by the access policy: {escape(decision.reason)}")
-        raise typer.Exit(1)
+        raise fail(f"refused by the access policy: {decision.reason}")
     console.print(f"Will run on {escape(target)} over ssh: [bold]{escape(command)}[/bold]")
     console.print("  (--with-deps needs root there: passwordless sudo or a root login)")
     if dry_run:
@@ -236,8 +222,7 @@ def profile_show(
     try:
         profile = snapshot(config, name)
     except ProfileError as exc:
-        console.print(f"[red]error:[/red] {escape(str(exc))}")
-        raise typer.Exit(1) from exc
+        raise fail(str(exc)) from exc
     default = repo_default(root / STATE_DIRNAME)
     console.print(
         f"profile [bold]{escape(name)}[/bold]" + (" (repo default)" if name == default else "")
@@ -273,8 +258,7 @@ def profile_use(
     try:
         get_profile(config, name)
     except ProfileError as exc:
-        console.print(f"[red]error:[/red] {escape(str(exc))}")
-        raise typer.Exit(1) from exc
+        raise fail(str(exc)) from exc
     set_repo_default(state_dir, name)
     console.print(f"Default workspace profile: {escape(name)}")
 

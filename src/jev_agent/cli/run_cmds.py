@@ -275,7 +275,7 @@ def approve(run_id: RunId, repo: RepoOption = Path(".")) -> None:
         except (NotFoundError, PipelineError) as exc:
             raise fail(str(exc)) from exc
         if not ctx.has_workers:
-            console.print(f"Approved. {NO_WORKERS_MESSAGE} Then run `jev resume {run_id}`.")
+            console.print(f"Approved. {escape(NO_WORKERS_MESSAGE)} Then run `jev resume {run_id}`.")
         print_outcome(record)
     exit_for(record)
 

@@ -17,9 +17,6 @@ KEY = "OPENROUTER_API_KEY"
 
 @pytest.fixture(autouse=True)
 def _isolate(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
-    monkeypatch.delenv(FAKE_WORKERS_ENV, raising=False)
-    monkeypatch.delenv(KEY, raising=False)
     monkeypatch.setattr(wiring, "which", lambda cmd: f"/fake/bin/{cmd}")
 
 

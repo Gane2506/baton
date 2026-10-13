@@ -616,6 +616,18 @@ JEV_LIVE_TESTS=1 OPENROUTER_API_KEY=... uv run pytest tests/live
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the project layout and how to add a worker or change
 a role prompt.
 
+## Contributing
+
+Contributions are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md) first: how to pick an issue,
+how review works, and the checks to run before you open a pull request:
+
+```bash
+uv run ruff format . && uv run ruff check . && uv run mypy && uv run pytest -q
+```
+
+Participation follows the [Code of Conduct](CODE_OF_CONDUCT.md). Report security problems
+privately as described in [SECURITY.md](SECURITY.md), not in a public issue.
+
 ## License
 
 Apache-2.0. See [LICENSE](LICENSE).

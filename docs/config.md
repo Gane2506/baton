@@ -72,13 +72,15 @@ A repository's `jev.toml` cannot contain `[trust]`.
 | Key | Default | Meaning |
 | --- | --- | --- |
 | `primary` | `"jev"` | Dispatcher asked first: `"jev"` or `"rules"`. |
-| `fallback` | `"rules"` | Dispatcher used when the primary fails. Only `"rules"` is used for now: whatever this says, the rules dispatcher backs up Jev. |
 
 With `primary = "jev"`, every decision goes to Jev first. If the call fails (key unset, network
 or HTTP error, an answer outside the allowed values, low confidence, oversized state), the rules
 dispatcher answers that decision instead, and `jev log` shows the reason after `FALLBACK:`. If
 the key variable is unset, `jev run`, `approve` and `resume` print one warning at the start and
 every decision uses rules. `jev doctor` reports the dispatcher and whether its key is set.
+
+The rules dispatcher is always the fallback. The old `fallback` key is deprecated: `fallback =
+"rules"` is still accepted and ignored, any other value is an error.
 
 ## `[dispatcher.jev]`
 
@@ -89,9 +91,9 @@ How to reach Jev (TypeSafe's System One API). The defaults call it through OpenR
 | `base_url` | `"https://openrouter.ai/api/v1"` | API base URL; requests go to `{base_url}/systemone`. |
 | `model` | `"~typesafe/jev-latest"` | Jev model slug. The `~` means "latest"; pin a version with e.g. `"typesafe/jev-1.13"`. |
 | `api_key_env` | `"OPENROUTER_API_KEY"` | Name of the environment variable holding the key. Must be a valid variable name. |
-| `timeout_s` | `30` | Per-request timeout in seconds (> 0). One retry is made on 429/5xx. |
+| `timeout_s` | `30` | Timeout in seconds (> 0) for the whole Jev call, the retry and its backoff included. One retry is made on 429/5xx or a connect error. |
 | `min_confidence` | `0.55` | Between 0 and 1. If Jev's confidence on any answer is below this, the whole decision falls back to rules. |
-| `instructions` | `{}` | Optional table replacing the instruction sent for a question. Keys are `"<point>.<question>"` (e.g. `"D4.effort"`) for one decision point or `"<question>"` (e.g. `model`) for all of them. |
+| `instructions` | `{}` | Optional table replacing the instruction sent for a question. Keys are `"<point>.<question>"` (e.g. `"D4.effort"`) for one decision point or `"<question>"` (e.g. `model`) for all of them. Unknown keys are an error. Questions: D1 `clear`, `worker`, `model`, `effort`; D2 `worker`, `model`, `effort`; D3 `verdict`; D4 `complexity`, `worker`, `model`, `effort`; D5 and D6 `action`; D7 `learn`, `worker`, `model`, `effort`. |
 
 To call TypeSafe directly instead of through OpenRouter:
 
@@ -290,7 +292,7 @@ lessons at the end of a run when learning is on ([learning.md](learning.md)), an
 | `models` | `[]` | Models allowed for this role. Empty means not configured yet. The entry `"free"` expands to cached free models (see [Free models](#free-models)). |
 | `selection` | `"dispatcher"` | `"dispatcher"` lets the dispatcher choose; `"fixed"` skips that choice. |
 | `prefer_free` | unset | Overrides `[models] prefer_free` for this role (`true` or `false`); unset follows it. Only has an effect when the role's `workers` include `api`. |
-| `efforts` | `["low", "medium", "high"]` | Effort levels the dispatcher may pick. |
+| `efforts` | `["low", "medium", "high"]` | Effort levels the dispatcher may pick; `[]` lets the worker decide. Each level must be accepted by at least one of the role's `workers` (`claude_code`: low, medium, high, xhigh, max; `codex`: those and ultra; `api`: low, medium, high), or loading fails. A worker given a level it does not accept ignores it and notes that in the attempt log. |
 | `prefer_different_vendor_than` | unset | Name of another role whose vendor this role should avoid. The vendor is the `vendor/` prefix of the model slug, else the CLI's maker (`claude_code`: anthropic, `codex`: openai). |
 | `mcp` | `[]` | MCP servers this role's agent may use, by name from `[tools.mcp]`. |
 | `skills` | `[]` | Skills this role's agent gets, by name from `[tools.skills]`. |

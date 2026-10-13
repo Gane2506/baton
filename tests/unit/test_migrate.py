@@ -12,12 +12,6 @@ from jev_agent.cli.app import app
 runner = CliRunner()
 
 
-@pytest.fixture(autouse=True)
-def _isolate_user_config(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
-    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "xdg-data"))
-
-
 def _git(repo: Path, *args: str) -> str:
     return subprocess.run(
         ["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@t", *args],

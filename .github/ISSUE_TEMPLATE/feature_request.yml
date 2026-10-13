@@ -1,0 +1,43 @@
+name: Feature request
+description: Suggest a change or a new feature.
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Describe the problem before the solution. For questions, use Discussions instead.
+        Search the open issues first; a comment on an existing one is better than a duplicate.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What are you trying to do, and what gets in the way today?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed change
+      description: What jev should do. Config keys, commands or output you have in mind are welcome.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives and workarounds
+      description: Other designs you considered, or what you do today instead.
+  - type: textarea
+    id: impact
+    attributes:
+      label: Compatibility and safety
+      description: Would this change existing config, CLI behaviour or the state database, or widen what an agent may do? Leave empty if unsure.
+  - type: dropdown
+    id: contribute
+    attributes:
+      label: Would you like to work on it?
+      options:
+        - "Yes, I would like to open a pull request"
+        - "Maybe, with some guidance"
+        - "No"
+    validations:
+      required: true

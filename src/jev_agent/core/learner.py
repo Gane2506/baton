@@ -36,7 +36,7 @@ from jev_agent.core.learning import (
     select_lessons,
 )
 from jev_agent.core.models import LESSON_ROLES, RunState, TaskState
-from jev_agent.core.store import RunRecord, Store
+from jev_agent.core.store import LearningCounts, RunRecord, Store
 from jev_agent.dispatch.requests import clip, d7_learn
 from jev_agent.roles import LearnerOutput
 from jev_agent.runlog import redact
@@ -63,8 +63,14 @@ class Applied:
     updated: list[str]
     retired: list[str]
 
+    def counts(self) -> LearningCounts:
+        """What is stored on the run (`runs.learning_counts_json`) and read by the KPIs."""
+        return LearningCounts(len(self.added), len(self.updated), len(self.retired))
+
     def describe(self) -> str:
-        return f"{len(self.added)} added, {len(self.updated)} updated, {len(self.retired)} retired"
+        """The human-readable outcome line; never parsed (the counts are stored as data)."""
+        c = self.counts()
+        return f"{c.added} added, {c.updated} updated, {c.retired} retired"
 
 
 async def learn(h: Harness, run: RunRecord) -> str:
@@ -137,6 +143,7 @@ async def _distill(h: Harness, run: RunRecord, db: LessonDB, profile: str) -> st
         result = output.result
         return f"skipped: the learner gave no valid output ({result.status}: {result.summary})"
     applied = apply_learner_output(db, profile, parsed, shown, run.id)
+    h.store.add_run_learning_counts(run.id, applied.counts())
     return f"learned into {profile}: {applied.describe()}"
 
 

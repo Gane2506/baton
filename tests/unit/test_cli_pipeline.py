@@ -36,14 +36,6 @@ NO_WORKERS_TOML = "".join(
 )
 
 
-@pytest.fixture(autouse=True)
-def _isolate(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
-    monkeypatch.delenv(FAKE_WORKERS_ENV, raising=False)
-    # No network in tests: without a key the Jev dispatcher falls back to rules locally.
-    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
-
-
 def _jev(repo: Path, *args: str) -> tuple[int, str]:
     result = runner.invoke(app, [*args, "--repo", str(repo)])
     # Rich wraps long lines to the terminal width (narrow in CI); compare unwrapped text.

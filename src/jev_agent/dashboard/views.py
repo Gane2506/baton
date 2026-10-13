@@ -549,7 +549,6 @@ def config_summary(repo: Repo) -> list[tuple[str, str]]:
     status = learning_status(repo.store, c)
     rows = [
         ("dispatcher.primary", c.dispatcher.primary),
-        ("dispatcher.fallback", c.dispatcher.fallback),
         ("dispatcher.jev.model", c.dispatcher.jev.model),
         ("dispatcher.jev.base_url", c.dispatcher.jev.base_url),
         ("budget.per_run_usd", f"{c.budget.per_run_usd:g}"),

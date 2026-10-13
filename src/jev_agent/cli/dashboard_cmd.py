@@ -17,9 +17,8 @@ import typer
 from rich.console import Console
 from rich.markup import escape
 
-from jev_agent.cli.repo import RepoOption, find_git_root
-from jev_agent.cli.wiring import fail
-from jev_agent.config import ConfigError, load_config
+from jev_agent.cli.repo import RepoOption
+from jev_agent.cli.wiring import cli_errors, fail, repo_config, repo_root
 from jev_agent.dashboard import INSTALL_HINT, missing_dependencies
 
 console = Console()
@@ -56,20 +55,15 @@ def dashboard(
     """Serve the web dashboard: board, runs, queue, learning, chats, spend and settings."""
     missing = missing_dependencies()
     if missing:
-        console.print(f"[red]error:[/red] missing {', '.join(missing)}. {escape(INSTALL_HINT)}")
-        raise typer.Exit(1)
+        raise fail(f"missing {', '.join(missing)}. {INSTALL_HINT}")
     import uvicorn
 
     from jev_agent.dashboard.app import create_app
     from jev_agent.dashboard.security import DashboardSettings, is_loopback
 
-    root = find_git_root(repo)
-    if root is None:
-        raise fail(f"{repo.resolve()} is not inside a git repository")
-    try:
-        load_config(root)
-    except ConfigError as exc:
-        raise fail(str(exc)) from exc
+    with cli_errors():
+        root = repo_root(repo)
+        repo_config(root)
     if token is not None and len(token) < 16:
         raise fail("--token must be at least 16 characters")
     loopback = is_loopback(host)

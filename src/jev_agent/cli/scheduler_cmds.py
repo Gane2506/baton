@@ -12,11 +12,16 @@ from rich.markup import escape
 
 from jev_agent.cli.repo import RepoOption
 from jev_agent.cli.run_cmds import print_warnings, start_run
-from jev_agent.cli.wiring import NO_WORKERS_MESSAGE, CliContext, cli_context, fail
+from jev_agent.cli.wiring import (
+    NO_WORKERS_MESSAGE,
+    CliContext,
+    cli_context,
+    fail,
+    repo_context,
+)
 from jev_agent.core.queue import queue_counts
 from jev_agent.core.scheduler import (
     Scheduler,
-    SchedulerLock,
     SchedulerLocked,
     SchedulerOptions,
     scheduler_lock,
@@ -46,10 +51,6 @@ async def start_item(ctx: CliContext, item: QueueItem) -> RunRecord:
         quality=item.quality,
         profile=item.profile,
     )
-
-
-def lock_for(ctx: CliContext) -> SchedulerLock:
-    return scheduler_lock(ctx.root)
 
 
 @scheduler_app.command("start")
@@ -83,7 +84,7 @@ def start(
     with cli_context(repo) as ctx:
         if not ctx.has_workers:
             raise fail(NO_WORKERS_MESSAGE)
-        lock = lock_for(ctx)
+        lock = scheduler_lock(ctx.root)
         try:
             lock.acquire()
         except SchedulerLocked as exc:
@@ -119,8 +120,8 @@ def start(
 @scheduler_app.command("status")
 def status(repo: RepoOption = Path(".")) -> None:
     """Show whether a scheduler is running, what it works on, and queue counts."""
-    with cli_context(repo) as ctx:
-        holder = lock_for(ctx).read()
+    with repo_context(repo, create=False) as ctx:
+        holder = scheduler_lock(ctx.root).read()
         if holder is None:
             console.print("scheduler: not running")
         else:

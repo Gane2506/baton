@@ -13,7 +13,7 @@ from rich.table import Table
 
 from jev_agent.cli.repo import RepoOption
 from jev_agent.cli.run_cmds import RunId
-from jev_agent.cli.wiring import cli_context, fail
+from jev_agent.cli.wiring import fail, repo_context
 from jev_agent.core.store import (
     AttemptRecord,
     DecisionRecord,
@@ -42,7 +42,7 @@ def status(
     repo: RepoOption = Path("."),
 ) -> None:
     """List runs, or show one run with its plan and tasks."""
-    with cli_context(repo) as ctx:
+    with repo_context(repo, create=False) as ctx:
         if run_id is None:
             _print_runs(ctx.store.list_runs())
             return
@@ -135,7 +135,7 @@ def quality_line(run: RunRecord, reports: list[QualityReportRecord]) -> str:
 
 def log(run_id: RunId, repo: RepoOption = Path(".")) -> None:
     """Show the run's timeline: every decision and every worker attempt."""
-    with cli_context(repo) as ctx:
+    with repo_context(repo, create=False) as ctx:
         try:
             run = ctx.store.get_run(run_id)
             decisions = ctx.store.list_decisions(run_id)

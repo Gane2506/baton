@@ -3,9 +3,7 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Iterator
-from contextlib import contextmanager
-from dataclasses import dataclass
+from contextlib import AbstractContextManager
 from pathlib import Path
 from typing import Annotated, Any
 
@@ -14,9 +12,8 @@ from rich.console import Console
 from rich.markup import escape
 from rich.table import Table
 
-from jev_agent.cli.repo import RepoOption, find_git_root
-from jev_agent.cli.wiring import STATE_DB_FILENAME, fail
-from jev_agent.config import STATE_DIRNAME, ConfigError, JevConfig, load_config
+from jev_agent.cli.repo import RepoOption
+from jev_agent.cli.wiring import RepoContext, fail, print_error, repo_context
 from jev_agent.core.benchmarks import (
     DEFAULT_LAST,
     KPI_BY_KEY,
@@ -35,30 +32,14 @@ from jev_agent.core.ship import (
     prs_to_sync,
     sync_pr,
 )
-from jev_agent.core.store import NotFoundError, ShippedPrRecord, Store
+from jev_agent.core.store import NotFoundError, ShippedPrRecord
 
 console = Console()
 
 
-@dataclass
-class ShipRepo:
-    root: Path
-    config: JevConfig
-    store: Store
-
-
-@contextmanager
-def ship_repo(repo: Path) -> Iterator[ShipRepo]:
+def ship_repo(repo: Path, *, create: bool = True) -> AbstractContextManager[RepoContext]:
     """Config and store only: shipping needs no workers, dispatcher or model list."""
-    root = find_git_root(repo)
-    if root is None:
-        raise fail(f"{repo.resolve()} is not inside a git repository")
-    try:
-        config = load_config(root)
-    except ConfigError as exc:
-        raise fail(str(exc)) from exc
-    with Store.open(root / STATE_DIRNAME / STATE_DB_FILENAME) as store:
-        yield ShipRepo(root, config, store)
+    return repo_context(repo, create=create)
 
 
 def print_plan(plan: ShipPlan) -> None:
@@ -124,7 +105,8 @@ def ship(
             record = execute_ship(plan, r.store, r.root, gh)
         except ShipError as exc:
             raise fail(str(exc)) from exc
-        console.print(f"[green]opened[/green] {describe_pr(record)}")
+        verb = "opened" if plan.existing_pr is None else "recorded existing"
+        console.print(f"[green]{verb}[/green] {escape(describe_pr(record))}")
         console.print(f"  read it back later with `jev ship sync {plan.run_id}`")
 
 
@@ -143,7 +125,7 @@ def describe_pr(pr: ShippedPrRecord) -> str:
 def sync(run_id: str | None, all_: bool, repo: Path) -> None:
     if (run_id is None) == (not all_):
         raise fail("give a run id or --all: `jev ship sync RUN_ID` / `jev ship sync --all`")
-    with ship_repo(repo) as r:
+    with ship_repo(repo, create=False) as r:
         try:
             prs = prs_to_sync(r.store, run_id)
         except (ShipError, NotFoundError) as exc:
@@ -161,7 +143,7 @@ def sync(run_id: str | None, all_: bool, repo: Path) -> None:
                 updated = sync_pr(r.store, gh, pr)
             except ShipError as exc:
                 failed += 1
-                console.print(f"[red]error:[/red] {escape(describe_pr(pr))}: {escape(str(exc))}")
+                print_error(f"{describe_pr(pr)}: {exc}")
                 continue
             console.print(f"{escape(describe_pr(updated))}: {pr_status(updated)}", highlight=False)
         if failed:
@@ -269,7 +251,7 @@ def kpi(
 ) -> None:
     """KPIs of the PRs opened by `jev ship`: one row per PR, medians, and regressions against
     the rolling median. Refresh GitHub data first with `jev ship sync --all`."""
-    with ship_repo(repo) as r:
+    with ship_repo(repo, create=False) as r:
         rows = load_pr_kpis(r.store, last)
     if as_json:
         print(json.dumps(kpi_report(rows, last), indent=2))

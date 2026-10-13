@@ -21,9 +21,7 @@ CONFIG = '[dispatcher]\nprimary = "rules"\n[approval]\nrequire_plan_approval = f
 
 @pytest.fixture(autouse=True)
 def _isolate(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
     monkeypatch.setenv(FAKE_WORKERS_ENV, "1")
-    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
     # Never run a real scanner: no quality tool is "installed".
     monkeypatch.setattr(tools, "which", lambda tool: None)
 

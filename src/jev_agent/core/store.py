@@ -13,13 +13,13 @@ import secrets
 import sqlite3
 from collections.abc import Collection, Iterator, Sequence
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from types import TracebackType
 from typing import Literal, get_args
 
-from jev_agent.core.migrations import SchemaVersionError, apply_migrations
+from jev_agent.core.migrations import SchemaVersionError, apply_migrations, configure_connection
 from jev_agent.core.models import (
     Decision,
     DecisionRequest,
@@ -62,6 +62,20 @@ class NotFoundError(StoreError, LookupError):
 
 
 @dataclass(frozen=True)
+class LearningCounts:
+    """Lesson changes made by a run's learning steps (`core.learner`), kept as data."""
+
+    added: int
+    updated: int
+    retired: int
+
+    def __add__(self, other: LearningCounts) -> LearningCounts:
+        return LearningCounts(
+            self.added + other.added, self.updated + other.updated, self.retired + other.retired
+        )
+
+
+@dataclass(frozen=True)
 class RunRecord:
     id: str
     idea: Idea
@@ -79,6 +93,8 @@ class RunRecord:
     learning_profile: str | None = None
     # What the end-of-run learning step did ("learned: ...", "skipped: ..."); None: not yet.
     learning_outcome: str | None = None
+    # Lessons the run's learning steps added, updated and retired; None: none applied.
+    learning_counts: LearningCounts | None = None
     # The quality gate level this run uses (docs/quality.md); "none" for older runs.
     quality_level: QualityLevel = "none"
     # `jev run --plan-only` (or a plan-only queue item): stop at the approval gate even when
@@ -143,6 +159,7 @@ class DecisionRecord:
 
 
 PrState = Literal["open", "closed", "merged"]
+PR_STATES: tuple[PrState, ...] = get_args(PrState)
 
 
 @dataclass(frozen=True)
@@ -238,9 +255,7 @@ class Store:
         conn = sqlite3.connect(path, isolation_level=None)
         try:
             conn.row_factory = sqlite3.Row
-            conn.execute("PRAGMA foreign_keys = ON")
-            conn.execute("PRAGMA journal_mode = WAL")
-            conn.execute("PRAGMA busy_timeout = 5000")
+            configure_connection(conn)
             apply_migrations(conn)
         except BaseException:
             conn.close()
@@ -364,6 +379,22 @@ class Store:
 
     def set_run_learning_outcome(self, run_id: str, outcome: str | None) -> None:
         self._update_run(run_id, "learning_outcome = ?", (outcome,))
+
+    def add_run_learning_counts(self, run_id: str, counts: LearningCounts) -> LearningCounts:
+        """Add a learning step's lesson changes to the run's totals; returns the new totals."""
+        with self._tx() as db:
+            row = db.execute(
+                "SELECT learning_counts_json FROM runs WHERE id = ?", (run_id,)
+            ).fetchone()
+            if row is None:
+                raise NotFoundError(f"run {run_id} not found")
+            old = _learning_counts(row["learning_counts_json"])
+            total = counts if old is None else old + counts
+            db.execute(
+                "UPDATE runs SET learning_counts_json = ? WHERE id = ?",
+                (json.dumps(asdict(total)), run_id),
+            )
+        return total
 
     def set_run_quality(self, run_id: str, level: QualityLevel) -> None:
         """Change the quality level the run uses from now on (`jev resume --quality`)."""
@@ -660,14 +691,16 @@ class Store:
         draft: bool,
         head_oid: str | None = None,
         pushed_commits: int | None = None,
+        state: PrState = "open",
     ) -> ShippedPrRecord:
-        """Record a pull request just opened for the run (state `open`)."""
+        """Record a pull request opened for the run (`state`: `open` unless an existing PR
+        was found in another state)."""
         with self._tx() as db:
             self._require_run(run_id)
             cur = db.execute(
                 "INSERT INTO shipped_prs (run_id, remote, repo, branch, base, number, url, title,"
-                " draft, head_oid, pushed_commits, created_at)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                " draft, head_oid, pushed_commits, created_at, state)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     run_id,
                     remote,
@@ -681,6 +714,7 @@ class Store:
                     head_oid,
                     pushed_commits,
                     _now(),
+                    state,
                 ),
             )
             assert cur.lastrowid is not None
@@ -1008,6 +1042,13 @@ def _shipped_pr(row: sqlite3.Row) -> ShippedPrRecord:
     )
 
 
+def _learning_counts(text: str | None) -> LearningCounts | None:
+    if text is None:
+        return None
+    data = json.loads(text)
+    return LearningCounts(int(data["added"]), int(data["updated"]), int(data["retired"]))
+
+
 def _run_record(row: sqlite3.Row) -> RunRecord:
     plan_json = row["plan_json"]
     validation_json = row["validation_json"]
@@ -1027,6 +1068,7 @@ def _run_record(row: sqlite3.Row) -> RunRecord:
         resume_state=None if row["resume_state"] is None else RunState(row["resume_state"]),
         learning_profile=row["learning_profile"],
         learning_outcome=row["learning_outcome"],
+        learning_counts=_learning_counts(row["learning_counts_json"]),
         quality_level=row["quality_level"] or "none",
         plan_only=bool(row["plan_only"]),
     )

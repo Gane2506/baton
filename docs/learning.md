@@ -126,7 +126,9 @@ is resumed, it learns again when it ends.
 - Upgrading: state.db schema version 9 and shared-database version 2 rebuild the `lessons`
   table so ids are never reused (ids, scores and text are kept). Ids deleted before the
   upgrade cannot be known, except repo-scope ids that recorded attempts still name; numbering
-  continues after the highest of those.
+  continues after the highest of those. Schema version 10 stores what each run's learning
+  steps changed as counts (`runs.learning_counts_json`: added, updated, retired), which the
+  KPIs read; older runs get them once from their outcome line.
 - Lesson text and tags are redacted before they are stored (the same redaction as run logs:
   known key formats and the values of secret-looking environment variables).
 - Lessons are sent to the workers you configured, as part of their prompts. So is the run card,
