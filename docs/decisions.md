@@ -23,6 +23,20 @@ per-run `flock` file like the scheduler's and over a hybrid of both.
   dashboard as the job message. The dashboard's in-memory per-run lock stays, and
   `resume_risk` reports a live lease first.
 
+## 2026-10-13: CodeRabbit configuration
+
+- `.coderabbit.yaml` uses the "balanced" posture (Jev: ARBITRATED 0.64, over a strict gate and a
+  light one):
+  - an assertive review that never requests changes by itself;
+  - pre-merge checks that warn, except two that fail: no secrets or personal data, and no
+    network or real CLIs in tests.
+- CI owns formatting, lint, types and tests. CodeRabbit runs ruff only as a cross-check.
+  pylint, flake8, markdownlint and languagetool are off, to avoid duplicate or noisy findings.
+- Path instructions encode the rules from CLAUDE.md and CONTRIBUTING.md for each package.
+  CodeRabbit also reads those files as code guidelines.
+- Fake credentials in provider formats are built at runtime, after GitHub secret scanning
+  flagged a fake Google key in `tests/unit/test_redact.py`.
+
 ## 2026-10-13: Medium-priority review fixes
 
 Tracking issue #59. Choices were decided with the `jev-decide` skill, as for batches A to E.

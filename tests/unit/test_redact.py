@@ -59,6 +59,8 @@ def test_log_writes_are_redacted(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 # ---- credential shapes beyond `sk-` keys (issue #27) ---------------------------------------
 
 GITHUB_PAT = "github_pat_11ABCDEFG0123456789_abcdefghijklmnopqrstuvwxyz"
+# Built at runtime so secret scanners don't flag the source as a leaked Google key.
+GOOGLE_KEY = "AI" + "zaSyA-abcdefghijklmnopqrstuvwxyz01234"
 JWT = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U"
 
 
@@ -73,10 +75,7 @@ JWT = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_X
         (f"pat {GITHUB_PAT}", GITHUB_PAT),
         ("slack xoxb-1234567890-abcdefghijkl", "xoxb-1234567890"),
         ("aws AKIAIOSFODNN7EXAMPLE key", "AKIAIOSFODNN7EXAMPLE"),
-        (
-            "google AIzaSyA-abcdefghijklmnopqrstuvwxyz01234",
-            "AIzaSyA-abcdefghijklmnopqrstuvwxyz01234",
-        ),
+        (f"google {GOOGLE_KEY}", GOOGLE_KEY),
         (f"jwt {JWT}", JWT),
         ("remote https://x-access-token:ghs_secretvalue@github.com/o/r.git", "ghs_secretvalue"),
         ("remote https://deploy:hunter2hunter2@git.example.com/r.git", "hunter2hunter2"),
