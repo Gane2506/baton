@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% from "macros.html" import csrf_input, icon with context %}
+{% block title %}Save settings{% endblock %}
+{% block content %}
+<div class="focus-page wide">
+<section class="panel">
+<h1>Save these changes to <code>jev.toml</code>?</h1>
+{% if stale %}
+<div class="flash error" role="alert">{{ icon("i-alert", "sm") }}<span><code>jev.toml</code> changed after the diff was shown, so nothing was written.
+This is the diff against the file as it is now; check it again.</span></div>
+{% endif %}
+  <p>{{ plan.summary() }}. The new file was checked like <code>jev</code> loads it (schema, your user config, trust);
+  everything else in the file, including comments, stays as it is.</p>
+  <pre class="diff">{% for kind, line in plan.diff_lines() %}<span class="d-{{ kind }}">{{ line }}</span>
+{% endfor %}</pre>
+  <div class="actions">
+    <form class="inline" method="post" action="/settings/apply">
+      {{ csrf_input() }}
+      <input type="hidden" name="base_hash" value="{{ plan.base_hash }}">
+      {% for name, value in plan.carried() %}<input type="hidden" name="{{ name }}" value="{{ value }}">{% endfor %}
+      <button class="primary" type="submit">Write jev.toml</button>
+    </form>
+    <a class="button" href="/settings">Cancel</a>
+  </div>
+</section>
+</div>
+{% endblock %}

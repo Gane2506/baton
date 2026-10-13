@@ -18,11 +18,13 @@ run.
 
 from __future__ import annotations
 
+import fcntl
 import json
 import os
 import re
 import secrets
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from importlib.resources import files
@@ -53,6 +55,7 @@ CHATS_DIRNAME = "chats"
 TRANSCRIPT_FILE = "transcript.jsonl"
 META_FILE = "meta.json"
 BACKEND_LOG_FILE = "backend.log"
+LOCK_FILE = "chat.lock"
 DEFAULT_BUDGET_USD = 1.00
 DEFAULT_TIMEOUT_S = 600
 README_HEAD_CHARS = 2000
@@ -673,6 +676,36 @@ def read_transcript(root: Path, chat_id: str) -> list[dict[str, Any]]:
         if isinstance(entry, dict):
             entries.append(entry)
     return entries
+
+
+class ChatInUse(ChatError):
+    """Another process (a terminal `jev chat` or a dashboard reply) has this chat open."""
+
+
+@contextmanager
+def hold_chat(root: Path, chat_id: str) -> Iterator[None]:
+    """Hold the saved chat's lock for the block: one process at a time loads, changes and
+    saves a chat, so a terminal and the dashboard never overwrite each other's `meta.json`.
+    An exclusive `flock` on `chat.lock`; the kernel drops it when the holder dies. Raises
+    `ChatInUse` at once when it is taken, and `ChatError` for an unknown chat."""
+    directory = chat_dir(root, chat_id)
+    if not (directory / META_FILE).is_file():
+        raise ChatError(f"no chat {chat_id!r}; `jev chat --list` shows saved chats")
+    fd = os.open(directory / LOCK_FILE, os.O_RDWR | os.O_CREAT, 0o644)
+    try:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise ChatInUse(
+                f"chat {chat_id} is open elsewhere (a terminal `jev chat` or the dashboard); "
+                "try again when that is done"
+            ) from None
+        try:
+            yield
+        finally:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+    finally:
+        os.close(fd)
 
 
 class ChatSession:

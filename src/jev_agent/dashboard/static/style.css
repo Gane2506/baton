@@ -600,3 +600,44 @@ details.panel[open] > summary { margin-bottom: var(--s3); }
   margin-bottom: var(--s2); font-size: var(--fs-12); color: var(--muted);
 }
 .theme-pick select { width: auto; height: 26px; padding: 2px 6px; font-size: var(--fs-12); }
+
+/* ---- settings editor ----------------------------------------------------- */
+
+.settings-nav { margin-bottom: var(--s4); }
+.settings-nav ul { list-style: none; margin: 0 0 var(--s2); padding: 0; display: flex; flex-wrap: wrap; gap: var(--s1) var(--s3); }
+.settings-nav a { color: var(--accent); text-decoration: none; font-size: var(--fs-13); }
+.settings-nav a:hover { text-decoration: underline; }
+.settings-nav-label {
+  color: var(--faint); font-size: var(--fs-11); font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.06em; margin: var(--s2) 0 var(--s1);
+}
+.settings-main { min-width: 0; }
+.settings-intro { margin: 0 0 var(--s4); }
+.setting { padding: var(--s3) 0; border-bottom: 1px solid var(--border); }
+.setting:last-child { border-bottom: none; }
+.setting-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--s1) var(--s3); }
+.setting-head label { font-weight: 600; }
+.setting-control { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s2) var(--s3); margin-top: var(--s2); }
+.setting-control input[type="text"], .setting-control select { width: min(32em, 100%); }
+.setting-control input[type="number"] { width: 9em; }
+.setting.has-error input, .setting.has-error select { border-color: var(--bad); }
+.error-text { color: var(--bad); }
+.warn-text { color: var(--warn); }
+.s-set { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 50%, transparent); background: var(--accent-soft); }
+.s-src { color: var(--muted); }
+.settings-save {
+  position: sticky; bottom: 0; z-index: 1;
+  background: var(--bg); padding: var(--s3) 0; margin-bottom: var(--s4);
+  border-top: 1px solid var(--border);
+}
+.focus-page.wide { max-width: 960px; }
+pre.diff { background: var(--code-bg); padding: var(--s2) var(--s3); border-radius: 6px; overflow-x: auto; white-space: pre; font-family: var(--mono); font-size: var(--fs-12); }
+pre.diff .d-add { color: var(--ok); }
+pre.diff .d-del { color: var(--bad); }
+pre.diff .d-hunk, pre.diff .d-file { color: var(--muted); }
+@media (min-width: 1180px) {
+  .settings-layout { display: grid; grid-template-columns: 180px minmax(0, 1fr); gap: var(--s5); align-items: start; }
+  .settings-nav { position: sticky; top: var(--s4); }
+  .settings-nav ul { display: block; }
+  .settings-nav li { padding: 3px 0; }
+}

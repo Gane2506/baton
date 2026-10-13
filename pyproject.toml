@@ -34,6 +34,7 @@ dashboard = [
     "markdown-it-py>=3.0",
     "python-multipart>=0.0.18",
     "starlette>=0.40",
+    "tomlkit>=0.13",
     "uvicorn>=0.30",
 ]
 

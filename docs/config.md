@@ -29,6 +29,12 @@ Unknown keys are errors (to catch typos). Errors name the file and the field, fo
 A repo file may not change the keys that decide where API keys go and what agents can run or
 reach unless your user config trusts that repository: see [`[trust]`](#trust-user-config-only).
 
+The dashboard's Settings page ([dashboard.md](dashboard.md)) can edit common keys of the repo's
+`jev.toml` (dispatcher, budgets, approval, review, quality level, ship, learning,
+`prefer_free`, and each role's `workers` and `models`): it shows a diff, checks the new file
+like `jev` loads it, keeps comments and layout, and never writes guarded keys, `[trust]` or
+your user config.
+
 Run `jev doctor` to check that config loads, which worker CLIs are on `PATH`, which API key
 environment variables are set, and that every `prompt_file` exists and parses.
 

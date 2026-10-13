@@ -58,6 +58,7 @@ SHOTS = [
     Shot("dashboard-learning.png", "/learning"),
     Shot("dashboard-spend.png", "/spend", height=1580),
     Shot("dashboard-kpis.png", "/kpis", height=1700),
+    Shot("dashboard-settings.png", "/settings", height=1400),
 ]
 QUALITY = "dashboard-quality.png"  # the run page's "Quality review" section only
 

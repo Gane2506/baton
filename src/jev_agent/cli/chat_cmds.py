@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import os
 import sys
+from contextlib import ExitStack
 from pathlib import Path
 from typing import Annotated
 
@@ -55,6 +56,7 @@ from jev_agent.core.chat import (
     check_learning_choice,
     choose_learning,
     effective_profile,
+    hold_chat,
     learning_options,
     list_chats,
     parse_input,
@@ -587,34 +589,39 @@ def chat(
                 get_profile(ctx.config, profile)
             except ProfileError as exc:
                 raise fail(str(exc)) from exc
-        try:
-            session = open_session(
-                ctx,
-                learning=learning,
-                no_learning=no_learning,
-                profile=profile,
-                worker=worker,
-                model=model,
-                resume=resume,
-                budget_usd=budget_usd,
+        with ExitStack() as held:  # the chat's lock, for as long as this terminal has it
+            try:
+                if resume is not None:  # held before loading: the saved state must not move
+                    held.enter_context(hold_chat(ctx.root, resume))
+                session = open_session(
+                    ctx,
+                    learning=learning,
+                    no_learning=no_learning,
+                    profile=profile,
+                    worker=worker,
+                    model=model,
+                    resume=resume,
+                    budget_usd=budget_usd,
+                )
+                if resume is None:
+                    held.enter_context(hold_chat(ctx.root, session.meta.chat_id))
+            except (ChatError, LearningError) as exc:
+                raise fail(str(exc)) from exc
+            meta = session.meta
+            verb = "resumed" if resume else "started"
+            console.print(
+                f"chat [bold]{meta.chat_id}[/bold] {verb}: {meta.backend} "
+                f"(model: {escape(meta.model or 'default')}), budget ${meta.budget_usd:.2f}"
             )
-        except (ChatError, LearningError) as exc:
-            raise fail(str(exc)) from exc
-        meta = session.meta
-        verb = "resumed" if resume else "started"
-        console.print(
-            f"chat [bold]{meta.chat_id}[/bold] {verb}: {meta.backend} "
-            f"(model: {escape(meta.model or 'default')}), budget ${meta.budget_usd:.2f}"
-        )
-        profile_name, lessons, _ = lessons_and_prompt(
-            ctx, meta.learning, [t.text for t in session.history]
-        )
-        console.print(
-            f"learning: {escape(describe_learning(meta.learning, profile_name, lessons))}"
-        )
-        if meta.profile:
-            console.print(f"workspace profile: {escape(meta.profile)}")
-        if resume and session.history:
-            console.print(f"{len(session.history) // 2} earlier exchange(s) restored.")
-        console.print("Describe your idea. /help lists the commands; /quit leaves.")
-        ChatLoop(ctx, session).run()
+            profile_name, lessons, _ = lessons_and_prompt(
+                ctx, meta.learning, [t.text for t in session.history]
+            )
+            console.print(
+                f"learning: {escape(describe_learning(meta.learning, profile_name, lessons))}"
+            )
+            if meta.profile:
+                console.print(f"workspace profile: {escape(meta.profile)}")
+            if resume and session.history:
+                console.print(f"{len(session.history) // 2} earlier exchange(s) restored.")
+            console.print("Describe your idea. /help lists the commands; /quit leaves.")
+            ChatLoop(ctx, session).run()

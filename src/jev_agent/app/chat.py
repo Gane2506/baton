@@ -30,6 +30,7 @@ from jev_agent.core.chat import (
     chat_lessons,
     check_learning_choice,
     effective_profile,
+    hold_chat,
     render_system_prompt,
 )
 from jev_agent.core.learning import Learning
@@ -98,7 +99,8 @@ def build_backend(
 
 
 def session_for(root: Path, repo: RepoLike, chat_id: str) -> ChatSession:
-    """The saved chat's session with its backend and prompt, as `jev chat --resume` builds it."""
+    """The saved chat's session with its backend and prompt, as `jev chat --resume` builds it.
+    Callers that change the chat hold `hold_chat` around it, as the terminal does."""
     meta = ChatSession.load_meta(root, chat_id)
     backend = build_backend(repo.config, root, meta.backend, meta.model)
     profile = effective_profile(meta.learning, repo.store, repo.learning, repo.config)
@@ -126,7 +128,7 @@ def create_chat(
 
 def turn(root: Path, chat_id: str, text: str) -> str:
     """One message to the model (runs in a `ChatRunner` job); returns a one-line outcome."""
-    with open_repo(root) as repo:
+    with hold_chat(root, chat_id), open_repo(root) as repo:
         session = session_for(root, repo, chat_id)
         reply = run_job_coroutine(session.say(text))
         spent = session.meta.spent_usd
@@ -137,7 +139,7 @@ def turn(root: Path, chat_id: str, text: str) -> str:
 
 def brief(root: Path, chat_id: str) -> str:
     """`/brief`: ask the model for the idea brief (runs in a `ChatRunner` job)."""
-    with open_repo(root) as repo:
+    with hold_chat(root, chat_id), open_repo(root) as repo:
         session = session_for(root, repo, chat_id)
         reply = run_job_coroutine(session.make_brief())
     if reply.ok:
@@ -164,7 +166,7 @@ def start_run_from_chat(root: Path, chat_id: str, *, plan_only: bool) -> str:
             quality=meta.quality,
             profile=meta.profile,
         )
-    with open_repo(root) as repo:
+    with hold_chat(root, chat_id), open_repo(root) as repo:
         session_for(root, repo, chat_id).add_run(run.id, "plan-only" if plan_only else "run")
     return run.id
 

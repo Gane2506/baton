@@ -13,7 +13,15 @@ from jev_agent.cli import chat_cmds
 from jev_agent.cli.app import app
 from jev_agent.cli.wiring import FAKE_WORKERS_ENV
 from jev_agent.config.schema import JevConfig
-from jev_agent.core.chat import BRIEF_CLOSE, BRIEF_OPEN, BRIEF_REQUEST, ChatError, Reply, Turn
+from jev_agent.core.chat import (
+    BRIEF_CLOSE,
+    BRIEF_OPEN,
+    BRIEF_REQUEST,
+    ChatError,
+    Reply,
+    Turn,
+    hold_chat,
+)
 from jev_agent.core.learning import Learning
 from jev_agent.core.store import Store
 
@@ -207,6 +215,11 @@ def test_resume_restores_state_and_list(repo: Path, backend: ScriptedBackend) ->
     assert message == "second" and history[0] == Turn("user", "first idea")
     meta = _meta(repo)
     assert meta["turns"] == 3 and meta["learning"]["off"] is True
+
+    with hold_chat(repo, chat_id):  # the dashboard is answering it
+        code, out = _chat(repo, "--resume", chat_id, input="third\n")
+    assert code == 1 and "is open elsewhere" in out
+    assert _meta(repo)["turns"] == 3
 
     code, out = _chat(repo, "--resume", "c-20200101-000000-abcd")
     assert code == 1 and "no chat" in out

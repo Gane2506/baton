@@ -9,6 +9,7 @@ GET) with a one-time message.
 
 from __future__ import annotations
 
+import math
 import threading
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
@@ -38,7 +39,7 @@ from jev_agent.app import chat
 from jev_agent.app.errors import JevError
 from jev_agent.cli.board_cmds import format_age
 from jev_agent.cli.status_cmds import format_time
-from jev_agent.config import ConfigError
+from jev_agent.config import CONFIG_FILENAME, ConfigError
 from jev_agent.config.schema import ShipMode
 from jev_agent.core.benchmarks import DEFAULT_LAST, format_value
 from jev_agent.core.chat import (
@@ -52,6 +53,7 @@ from jev_agent.core.learning import (
     LearningError,
     disable_learning,
     enable_learning,
+    learning_status,
     use_profile,
 )
 from jev_agent.core.lease import RunInUseError
@@ -60,7 +62,7 @@ from jev_agent.core.pipeline import PipelineError, cancel_run
 from jev_agent.core.queue import Move, QueueError, add_idea, move_item, remove_item
 from jev_agent.core.ship import Gh, ShipError, ShipPlan, prepare_ship
 from jev_agent.core.store import QUEUE_PRIORITIES, NotFoundError
-from jev_agent.dashboard import views
+from jev_agent.dashboard import settings_edit, views
 from jev_agent.dashboard.render import render_bar_chart, render_markdown, render_trend_chart
 from jev_agent.dashboard.runner import (
     ChatRunner,
@@ -347,16 +349,70 @@ class Dashboard:
             lambda repo: {"k": views.kpi_view(repo, last), "rk": views.product_kpis(repo)},
         )
 
+    # ---- settings: the page and its jev.toml editor (settings_edit) ------------------------
+
+    def _settings_context(
+        self, repo: views.Repo, plan: settings_edit.EditPlan | None = None
+    ) -> dict[str, Any]:
+        layers = settings_edit.read_layers(repo.root)
+        learning = learning_status(repo.store, repo.config)
+        return {
+            "sections": settings_edit.editor(layers, repo.config, learning, plan),
+            "plan": plan,
+            "reset_field": settings_edit.RESET_FIELD,
+            "summary": views.config_summary(repo),
+            "env_vars": views.env_vars(repo.config),
+            "checks": views.doctor_checks(repo.root),
+            "settings": self.settings,
+        }
+
     def settings_page(self, request: Request) -> Response:
-        return self.page(
+        return self.page(request, "settings.html", self._settings_context)
+
+    async def settings_preview(self, request: Request) -> Response:
+        """Step 1: check the edited fields and show the jev.toml diff (nothing is written)."""
+        return await self._settings_save(request, await checked_form(request), confirmed=False)
+
+    async def settings_apply(self, request: Request) -> Response:
+        """Step 2: rebuild the same candidate and write it, if jev.toml is unchanged since the
+        diff was shown; otherwise show the new diff."""
+        return await self._settings_save(request, await checked_form(request), confirmed=True)
+
+    async def _settings_save(self, request: Request, form: FormData, confirmed: bool) -> Response:
+        submission = settings_edit.Submission.from_pairs(form.multi_items())
+        shown_hash = _text(form, "base_hash") or ""
+        root = self.settings.root
+
+        def work() -> tuple[settings_edit.EditPlan, dict[str, Any] | None, bool]:
+            """(plan, the form to show again with its errors or None, whether it was written)"""
+            plan = settings_edit.plan_edit(settings_edit.read_layers(root), submission)
+            if not plan.ok:
+                with views.open_repo(root) as repo:
+                    return plan, self._settings_context(repo, plan), False
+            if not (confirmed and plan.has_changes and shown_hash == plan.base_hash):
+                return plan, None, False
+            path = root / CONFIG_FILENAME
+            return plan, None, settings_edit.write_config(path, plan.new_text, plan.base_hash)
+
+        try:
+            plan, failed_form, written = await run_in_threadpool(work)
+        except (ConfigError, OSError) as exc:
+            self.flash(request, "error", f"settings not saved: {exc}")
+            return self.back("/settings")
+        if failed_form is not None:
+            return self.render(request, "settings.html", 400, **failed_form)
+        if not plan.has_changes:
+            self.flash(request, "ok", f"nothing to save: {CONFIG_FILENAME} is unchanged")
+            return self.back("/settings")
+        if written:
+            self.flash(request, "ok", f"saved {CONFIG_FILENAME}: {plan.summary()}")
+            return self.back("/settings")
+        return self.render(
             request,
-            "settings.html",
-            lambda repo: {
-                "summary": views.config_summary(repo),
-                "env_vars": views.env_vars(repo.config),
-                "checks": views.doctor_checks(repo.root),
-                "settings": self.settings,
-            },
+            "confirm_settings.html",
+            plan=plan,
+            stale=confirmed,  # confirmed but not written: jev.toml changed after the diff
+            reset_field=settings_edit.RESET_FIELD,
         )
 
     # ---- actions: runs ---------------------------------------------------------------------
@@ -484,8 +540,8 @@ class Dashboard:
                     budget = DEFAULT_BUDGET_USD if not budget_text else float(budget_text)
                 except ValueError:
                     raise ValueError("the budget must be a number of USD") from None
-                if budget <= 0:
-                    raise ValueError("the budget must be greater than zero")
+                if not math.isfinite(budget) or budget <= 0:
+                    raise ValueError("the budget must be a finite number of USD above zero")
                 return chat.create_chat(
                     repo.root,
                     repo,
@@ -844,6 +900,8 @@ def create_app(
         Route("/spend", dash.spend_page),
         Route("/kpis", dash.kpis_page),
         Route("/settings", dash.settings_page),
+        Route("/settings/preview", dash.settings_preview, methods=["POST"]),
+        Route("/settings/apply", dash.settings_apply, methods=["POST"]),
         Mount("/static", app=StaticFiles(directory=STATIC_DIR), name="static"),
     ]
 
