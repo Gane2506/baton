@@ -122,6 +122,19 @@ async def test_payload_shape() -> None:
     assert body["questions"]["model"]["criteria"] == dict.fromkeys(MODELS)
 
 
+def test_worker_instructions_do_not_reference_unsent_state() -> None:
+    """Ensure worker instructions do not mention state absent from the request contract."""
+    dispatcher = JevDispatcher()
+    generic = dispatcher.instruction_for("D1", "worker")
+    point_specific = dispatcher.build_payload("D4", {}, {"worker": ["claude_code"]})[
+        "questions"
+    ]["worker"]["instructions"]
+
+    for instructions in (generic, point_specific):
+        assert "quota" not in instructions
+        assert "prior_attempts" not in instructions
+
+
 @pytest.mark.parametrize(
     ("point", "question", "allowed"),
     [
@@ -136,18 +149,29 @@ async def test_payload_shape() -> None:
 def test_every_decision_answer_has_a_description(
     point: str, question: str, allowed: list[str]
 ) -> None:
+    """Ensure every request-contract answer has a non-empty description."""
     body = JevDispatcher().build_payload(point, {}, {question: allowed})
     criteria = body["questions"][question]["criteria"]
     assert list(criteria) == allowed
     assert all(isinstance(description, str) and description for description in criteria.values())
 
 
-@pytest.mark.parametrize("confidence", [float("nan"), -0.01, 1.01])
+@pytest.mark.parametrize("confidence", [float("nan"), float("inf"), float("-inf"), -0.01, 1.01])
 def test_confidence_must_be_finite_and_in_range(confidence: float) -> None:
+    """Reject NaN, infinities, and values outside the inclusive confidence range."""
     body = _fixture("d4_openrouter_success.json")
     body["answers"]["worker"]["confidence"] = confidence
     with pytest.raises(DispatchError, match="invalid confidence"):
         parse_answers(body, _d4().questions)
+
+
+@pytest.mark.parametrize("confidence", [0.0, 1.0])
+def test_confidence_endpoints_are_accepted(confidence: float) -> None:
+    """Preserve both inclusive endpoints of the accepted confidence range."""
+    body = _fixture("d4_openrouter_success.json")
+    body["answers"]["worker"]["confidence"] = confidence
+    _, details = parse_answers(body, _d4().questions)
+    assert details["worker"]["confidence"] == confidence
 
 
 async def test_instruction_overrides_and_generic_fallback() -> None:
