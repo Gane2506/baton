@@ -126,9 +126,9 @@ def test_worker_instructions_do_not_reference_unsent_state() -> None:
     """Ensure worker instructions do not mention state absent from the request contract."""
     dispatcher = JevDispatcher()
     generic = dispatcher.instruction_for("D1", "worker")
-    point_specific = dispatcher.build_payload("D4", {}, {"worker": ["claude_code"]})[
-        "questions"
-    ]["worker"]["instructions"]
+    point_specific = dispatcher.build_payload("D4", {}, {"worker": ["claude_code"]})["questions"][
+        "worker"
+    ]["instructions"]
 
     for instructions in (generic, point_specific):
         assert "quota" not in instructions
@@ -165,8 +165,7 @@ def test_worker_instructions_do_not_reference_unsent_state() -> None:
                 "trivial": "A small, local change such as a rename, config tweak or one-line fix.",
                 "standard": "A typical feature or fix touching a few files.",
                 "hard": (
-                    "Cross-cutting or subtle work: many files, concurrency, security, "
-                    "migrations."
+                    "Cross-cutting or subtle work: many files, concurrency, security, migrations."
                 ),
             },
         ),
@@ -216,7 +215,9 @@ def test_every_decision_answer_has_a_description(
     assert criteria == expected
 
 
-@pytest.mark.parametrize("confidence", [float("nan"), float("inf"), float("-inf"), -0.01, 1.01])
+@pytest.mark.parametrize(
+    "confidence", [float("nan"), float("inf"), float("-inf"), -0.01, 1.01, 10**309]
+)
 def test_confidence_must_be_finite_and_in_range(confidence: float) -> None:
     """Reject NaN, infinities, and values outside the inclusive confidence range."""
     body = _fixture("d4_openrouter_success.json")

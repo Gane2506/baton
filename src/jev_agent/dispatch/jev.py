@@ -114,7 +114,8 @@ POINT_QUESTION_INSTRUCTIONS: dict[tuple[DecisionPoint, str], str] = {
         "a human. Escalate when rounds are nearly used up or issues need human judgement."
     ),
     ("D4", "worker"): (
-        "Which coding worker should implement this task? Choose a worker whose capabilities fit the task."
+        "Which coding worker should implement this task? "
+        "Choose a worker whose capabilities fit the task."
     ),
     ("D5", "action"): (
         "Given the attempt's test and review results, what next? Retry for flaky or small "
@@ -473,7 +474,10 @@ def parse_answers(
         confidence = answer.get("confidence")
         if not isinstance(confidence, int | float) or isinstance(confidence, bool):
             raise DispatchError(f"jev: answer for {name} has no confidence")
-        confidence_value = float(confidence)
+        try:
+            confidence_value = float(confidence)
+        except OverflowError:
+            raise DispatchError(f"jev: answer for {name} has invalid confidence") from None
         if not math.isfinite(confidence_value) or not 0.0 <= confidence_value <= 1.0:
             raise DispatchError(f"jev: answer for {name} has invalid confidence")
         probabilities = answer.get("probabilities")
