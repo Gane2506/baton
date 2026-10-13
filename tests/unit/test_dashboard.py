@@ -43,6 +43,7 @@ from jev_agent.dashboard.runner import (
     Executor,
     RunAction,
     RunLauncher,
+    execute_run,
     run_job_coroutine,
 )
 from jev_agent.dashboard.security import (
@@ -1098,3 +1099,78 @@ def test_resume_needs_force_while_another_process_holds_the_lease(
         text = client.get(f"/runs/{run_id}").text
         assert "may be running this run" in text and f"pid {os.getpid()} on " in text
         assert calls.calls == []
+
+
+@pytest.fixture
+def waiting_to_ship(fixture_repo: Path) -> tuple[Path, str]:
+    """A run both votes approved at D6, waiting for a person before it ships."""
+    (fixture_repo / "jev.toml").write_text(
+        '[dispatcher]\nprimary = "rules"\n[ship]\nenabled = true\nafter_approval = "ask"\n'
+    )
+    _jev(fixture_repo, "run", "add search")
+    with _store(fixture_repo) as store:
+        run_id = store.list_runs()[0].id
+    _jev(fixture_repo, "approve", run_id)
+    with _store(fixture_repo) as store:
+        assert store.get_run(run_id).state is RunState.AWAITING_SHIP
+    return fixture_repo, run_id
+
+
+def test_run_waiting_to_ship_offers_approve_modify_and_stop(
+    waiting_to_ship: tuple[Path, str],
+) -> None:
+    repo, run_id = waiting_to_ship
+    calls = Calls()
+    for client in _client(repo, calls):
+        page = client.get(f"/runs/{run_id}").text
+        assert "Ready to ship: your call" in page and "add search" in page
+        assert "D6 vote" in page and "action=ship" in page
+        for action in ("approve", "modify", "stop"):
+            assert f'action="/runs/{run_id}/{action}"' in page
+
+        _post(client, f"/runs/{run_id}/modify", {"notes": "  "})
+        assert "the notes are empty" in client.get(f"/runs/{run_id}").text
+        _post(client, f"/runs/{run_id}/modify", {"notes": "Add a docstring."})
+        _launcher(client).wait(run_id)
+        with _store(repo) as store:
+            run = store.get_run(run_id)
+            task = store.list_tasks(run_id)[-1]
+        assert run.state is RunState.EXECUTING
+        assert "Add a docstring." in task.card.description
+        assert calls.calls == [(repo, run_id, "resume")]
+
+        _post(client, f"/runs/{run_id}/stop")  # no longer waiting to ship
+        assert "only a run waiting to ship" in client.get(f"/runs/{run_id}").text
+
+
+def test_stop_and_approve_jobs_for_a_run_waiting_to_ship(
+    waiting_to_ship: tuple[Path, str],
+) -> None:
+    repo, run_id = waiting_to_ship
+    calls = Calls()
+    for client in _client(repo, calls):
+        _post(client, f"/runs/{run_id}/stop")
+        _launcher(client).wait(run_id)
+        _post(client, f"/runs/{run_id}/approve")
+        _launcher(client).wait(run_id)
+    assert calls.calls == [(repo, run_id, "stop"), (repo, run_id, "approve")]
+    # The real code path: stop ends the run DONE, not shipped.
+    assert "not shipped" in execute_run(repo, run_id, "stop")
+    with _store(repo) as store:
+        assert store.get_run(run_id).state is RunState.DONE
+
+
+def test_queue_form_ship_choice(client: TestClient, planned: tuple[Path, str]) -> None:
+    repo, _ = planned
+    assert "ask me first (--ask-before-ship)" in client.get("/queue").text
+    _post(client, "/queue/add", {"idea": "auto idea", "ship_mode": "merge"})
+    assert "needs shipping on" in client.get("/queue").text
+    (repo / "jev.toml").write_text('[dispatcher]\nprimary = "jev"\n[ship]\nenabled = true\n')
+    _post(client, "/queue/add", {"idea": "auto idea", "ship_mode": "merge"})
+    _post(client, "/queue/add", {"idea": "bad idea", "ship_mode": "later"})
+    page = client.get("/queue").text
+    assert "auto-ship" in page and "unknown ship mode" in page
+    with _store(repo) as store:
+        assert [(i.idea, i.ship_mode) for i in store.list_queue()] == [("auto idea", "merge")]
+    settings = client.get("/settings").text
+    assert "ship.after_approval" in settings and "ask" in settings

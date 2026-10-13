@@ -550,6 +550,35 @@ push or API call was made; the tests use a fake `gh` and a local bare repo.
   conversation comments plus reviews with a body. Reverts are detected heuristically (the body
   `Reverts owner/repo#N` or title `Revert "<title>"` that GitHub's revert button writes).
 
+### Shipping after the votes (issue #68)
+
+Checked on 2026-10-13 with `gh` 2.89.0 in the cloud environment, again by reading help only
+(`gh pr merge --help`, `gh pr view --help`, `gh help exit-codes`). No command was run against a
+repository.
+
+- **`gh pr merge [<number> | <url> | <branch>]`** has `--squash/-s`, `--merge/-m`,
+  `--rebase/-r`, `--match-head-commit SHA` ("Commit SHA that the pull request head must match
+  to allow merge"), `--delete-branch/-d`, `--auto`, `--disable-auto`, `--admin` and the
+  inherited `--repo/-R`. jev passes `--repo`, one method flag and `--match-head-commit` only.
+- **Merge queues.** The help says that on a branch that requires a merge queue, "If required
+  checks have not yet passed, auto-merge will be enabled. If required checks have passed, the
+  pull request will be added to the merge queue." jev merges only after the checks it sees are
+  green, so on such a branch the PR should be queued; jev then finds it not merged and stops for
+  a person instead of waiting. **UNVERIFIED** live: whether gh can still enable auto-merge when
+  a required check is missing from what `statusCheckRollup` reports.
+- **`gh pr view --json`** also lists `headRefOid` and `mergeable` (and `mergeStateStatus`,
+  `reviewDecision`). Value shapes **UNVERIFIED**: `mergeable` is taken to be `MERGEABLE`,
+  `CONFLICTING` or `UNKNOWN` (GitHub's GraphQL enum); only `CONFLICTING` stops a merge.
+- **Exit codes** (`gh help exit-codes`): 0 success, 1 any failure, 2 cancelled, 4 needs
+  authentication. What `gh pr merge` prints when not on a terminal is **UNVERIFIED**; jev does
+  not read it: after the command it reads the PR back and trusts only `state: MERGED`. The fake
+  `gh` in the tests answers `pr merge` with exit 0 and no output.
+
+Needs one live check on a scratch repository (with the maintainer's OK): a PR with green
+checks, one with a failing check, one without CI, and one on a branch with required reviews,
+to confirm the `gh pr view` value shapes and that `gh pr merge` refuses (exit 1) rather than
+enabling auto-merge.
+
 ---
 
 ## 9. Servers, SSH and browsers (issue #3)

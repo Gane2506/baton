@@ -34,6 +34,7 @@ from jev_agent.core.models import RunState
 from jev_agent.core.pipeline import STOPPED
 from jev_agent.core.queue import effective_status, queue_counts, run_states
 from jev_agent.core.scheduler import LockInfo, scheduler_lock, spent_today
+from jev_agent.core.ship import ShipPreview, after_approval, ship_preview
 from jev_agent.core.store import (
     AttemptRecord,
     NotFoundError,
@@ -178,6 +179,9 @@ class RunView:
     ship_enabled: bool = False
     can_ship: bool = False
     ship_note: str = ""  # why it cannot be shipped (yet), when ship is enabled
+    # AWAITING_SHIP: the PR it would open, the D6 votes and the diff, for approve/modify/stop.
+    ship_preview: ShipPreview | None = None
+    ship_vote: str = ""  # the D6 answers with Jev's confidence and Laya's margin
 
 
 def run_dir(repo: Repo, run_id: str) -> Path:
@@ -203,7 +207,7 @@ def log_files(base: Path) -> list[LogFile]:
 
 def can_resume(run: RunRecord) -> bool:
     """What `Pipeline.resume` accepts: an unfinished run, or NEEDS_HUMAN with a resume point."""
-    if run.state is RunState.AWAITING_APPROVAL:
+    if run.state in (RunState.AWAITING_APPROVAL, RunState.AWAITING_SHIP):
         return False
     if run.state is RunState.NEEDS_HUMAN:
         return run.resume_state is not None
@@ -225,7 +229,7 @@ def resume_risk(repo: Repo, run: RunRecord, now: datetime | None = None) -> str:
     `RESUME_GRACE_S` ago (an older one is from a process that died), and a live scheduler lock
     whose current queue item is this run's.
     """
-    if run.state in STOPPED or run.state is RunState.AWAITING_APPROVAL:
+    if run.state in STOPPED or run.state in (RunState.AWAITING_APPROVAL, RunState.AWAITING_SHIP):
         return ""
     now = now or datetime.now(UTC)
     lease = live_holder(repo.store, run.id, now)
@@ -338,11 +342,20 @@ def ship_state(repo: Repo, run: RunRecord, reports: list[QualityReportRecord]) -
         g.blocked for g in latest_per_gate([r.result for r in reports])
     ):
         note = "the quality gate blocked this run"
+    preview = None
+    vote = ""
+    if run.state is RunState.AWAITING_SHIP:
+        preview = ship_preview(repo.root, repo.store, run.id)
+        if preview.vote is not None:
+            d = preview.vote.decision
+            vote = f"{d.dispatcher}: {format_answers(d.answers, d.details)}"
     return {
         "shipped": shipped,
         "ship_enabled": settings.enabled,
         "can_ship": settings.enabled and not note,
         "ship_note": note,
+        "ship_preview": preview,
+        "ship_vote": vote,
     }
 
 
@@ -560,6 +573,7 @@ def config_summary(repo: Repo) -> list[tuple[str, str]]:
         ("budget.per_task_usd", f"{c.budget.per_task_usd:g}"),
         ("budget.max_task_attempts", str(c.budget.max_task_attempts)),
         ("approval.require_plan_approval", str(c.plan_approval_required).lower()),
+        ("ship.after_approval", after_approval(c, None) or "off ([ship] enabled = false)"),
         ("integration.test_command", c.integration.test_command or "-"),
         ("review.enabled", str(c.review.enabled).lower()),
         ("quality.level", c.quality.level),

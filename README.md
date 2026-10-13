@@ -101,7 +101,7 @@ terminal images; see [docs/dashboard.md](docs/dashboard.md#screenshots)).
     <td><b>Isolated, local, dashboard</b><br>Each task in its own worktree and branch; nothing is pushed unless you ship a run. <code>jev dashboard</code> binds 127.0.0.1. <a href="#safety-defaults">Safety</a> · <a href="#dashboard">Dashboard</a></td>
   </tr>
   <tr><td colspan="2"><img alt="Dashboard spend page: spend per day and the costliest runs" src="docs/images/dashboard-spend.png" width="760"></td></tr>
-  <tr><td colspan="2"><b>Ship PRs and track KPIs</b><br>Opt-in <code>jev ship RUN</code> pushes a finished run's branch and opens a draft GitHub PR with your <code>gh</code> login (never force-pushes, never merges). <code>jev kpi</code> and the KPIs page track cost, attempts, first-pass rate, fallbacks, time to merge and CI per PR, with trend charts and regression flags. <a href="#ship-prs-and-track-kpis">Ship and KPIs</a></td></tr>
+  <tr><td colspan="2"><b>Ship PRs and track KPIs</b><br>Opt-in <code>jev ship RUN</code> pushes a finished run's branch and opens a draft GitHub PR with your <code>gh</code> login (never force-pushes). With shipping on, a run both votes approve is merged once its checks pass, or waits for you to approve, modify or stop it. <code>jev kpi</code> and the KPIs page track cost, attempts, first-pass rate, fallbacks, time to merge and CI per PR, with trend charts and regression flags. <a href="#ship-prs-and-track-kpis">Ship and KPIs</a></td></tr>
   <tr>
     <td><img alt="Dashboard KPIs page: summary cards, regressions, shipped PRs and trend charts with rolling medians" src="docs/images/dashboard-kpis.png"></td>
     <td><img alt="jev kpi --last 10: one row per shipped PR, medians and regression flags" src="docs/images/cli-kpi.svg"></td>
@@ -124,6 +124,12 @@ flowchart LR
     E --> G[INTEGRATING]
     G -->|"D6: fix task"| E
     G -->|"D6: ship"| D([DONE])
+    G -->|"D6: ship, shipping on"| S[SHIPPING]
+    G -->|"D6: ship, ask first"| W{{AWAITING_SHIP}}
+    W -->|jev ship approve| S
+    W -->|jev ship modify| E
+    W -->|jev ship stop| D
+    S -->|"checks green, merged"| D
 ```
 
 Any state can also end in `NEEDS_HUMAN`, `FAILED`, `BUDGET_EXCEEDED` or `CANCELLED`.
@@ -335,7 +341,7 @@ continued: a broken custom prompt template; fix it, then `jev resume <run_id>`.
 
 | Exit code | Meaning |
 |---|---|
-| 0 | The run is `DONE` or `AWAITING_APPROVAL` (or approved without workers, waiting for `jev resume`) |
+| 0 | The run is `DONE`, `AWAITING_APPROVAL` or `AWAITING_SHIP` (or approved without workers, waiting for `jev resume`) |
 | 1 | The command failed: unknown run, bad flag value, no usable worker, not a git repository |
 | 2 | Usage error (unknown option, missing argument) |
 | 3 | The run stopped short of `DONE`: `NEEDS_HUMAN`, `FAILED`, `BUDGET_EXCEEDED` or `CANCELLED`; `jev status <run_id>` says why |
@@ -511,8 +517,10 @@ jev ship sync --all         # read state, reviews, CI and merges back from GitHu
 jev kpi --last 10           # per-PR KPIs, medians and regression flags (--json for scripts)
 ```
 
-Only DONE runs whose quality gate passed are shipped. jev never force-pushes, never merges and
-never enables auto-merge; branch protection still applies. The dashboard run page has a
+Only DONE runs whose quality gate passed are shipped. jev never force-pushes and never enables
+auto-merge; branch protection still applies. With shipping on, a run both votes approve at D6
+ships by itself: it is merged once its checks pass (`[ship] after_approval = "merge"`, the
+default under consensus), or waits for `jev ship approve | modify | stop RUN` ("ask"). The dashboard run page has a
 **Ship as PR** button and the **KPIs** page charts each KPI against its rolling median.
 Details: [docs/ship.md](docs/ship.md).
 
@@ -547,7 +555,8 @@ Details, including the allow/deny tables and a VPS browser setup: [docs/servers.
 ## Safety defaults
 
 - Coder tasks run in separate git worktrees under `.jev/worktrees/`, never on your branch.
-- jev never runs `git push`, except `jev ship` (opt-in, never `--force`, never merges).
+- jev never runs `git push`, except to ship a run (opt-in `[ship] enabled`, never `--force`;
+  it merges only a PR both votes approved, once its checks pass).
 - The planner, validator and reviewer get read-only access. The `api` worker has no file
   access at all.
 - Claude Code's coder may only use read and edit tools plus `git status` and `git diff` unless

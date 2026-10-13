@@ -26,6 +26,10 @@ class RunState(StrEnum):
     AWAITING_APPROVAL = "AWAITING_APPROVAL"
     EXECUTING = "EXECUTING"
     INTEGRATING = "INTEGRATING"
+    # D6 voted to ship; a person chooses approve, modify or stop (`[ship] after_approval`).
+    AWAITING_SHIP = "AWAITING_SHIP"
+    # Pushing the result, opening the PR, waiting for its checks and merging (docs/ship.md).
+    SHIPPING = "SHIPPING"
     DONE = "DONE"
     NEEDS_HUMAN = "NEEDS_HUMAN"
     FAILED = "FAILED"

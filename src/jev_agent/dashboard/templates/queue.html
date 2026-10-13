@@ -42,6 +42,13 @@
       <label>Workspace profile
         <input type="text" name="profile" placeholder="(optional)" maxlength="80">
       </label>
+      <label>After both votes approve
+        <select name="ship_mode">
+          <option value="">config setting</option>
+          <option value="merge">ship and merge (--auto-ship)</option>
+          <option value="ask">ask me first (--ask-before-ship)</option>
+        </select>
+      </label>
       <label class="check"><input type="checkbox" name="plan_only"> plan only</label>
     </div>
     <button class="primary" type="submit">Add to queue</button>

@@ -262,9 +262,10 @@ table > the defaults. The learner's workers and models are set in `[roles.learne
 ## `[ship]`
 
 `jev ship RUN` pushes a DONE run's result branch to a new branch on your remote and opens a
-GitHub pull request with your own `gh` login. See [ship.md](ship.md) and
-[security.md](security.md#shipping-prs). Off by default; jev never force-pushes and never
-merges.
+GitHub pull request with your own `gh` login. With shipping on, a D6 "ship" vote also ships the
+run by itself: `after_approval = "merge"` opens the PR ready, waits for its checks and merges it;
+`"ask"` waits for you to approve, modify or stop first. See [ship.md](ship.md) and
+[security.md](security.md#shipping-prs). Off by default; jev never force-pushes.
 
 | Key | Default | Meaning |
 | --- | --- | --- |
@@ -275,6 +276,12 @@ merges.
 | `draft` | `true` | Open the PR as a draft. |
 | `labels` | `[]` | Labels to add (`gh pr create --label`); they must already exist in the repo. |
 | `require_quality_pass` | `true` | Refuse a run whose latest quality gate (any task or the integration) blocked. |
+| `after_approval` | unset | What a run does when D6 votes "ship": `"merge"` ships and merges without asking, `"ask"` waits in `AWAITING_SHIP` for `jev ship approve RUN`, `jev ship modify RUN` or `jev ship stop RUN` (or the dashboard). Unset: `"merge"` when `[dispatcher] primary = "consensus"`, else `"ask"`. `jev run --auto-ship` / `--ask-before-ship` (and the queue's) override it per run. Needs `enabled = true`; otherwise D6 ends the run DONE as before. |
+| `merge_method` | `"squash"` | How the PR is merged: `"squash"`, `"merge"` or `"rebase"` (`gh pr merge --squash` etc.). |
+| `require_checks` | `true` | A PR that still reports no checks after `checks_grace_s` stops for you; `false` merges it without CI. |
+| `checks_grace_s` | `120` | Seconds (>= 0) to wait for a new PR's checks to appear. |
+| `checks_timeout_s` | `3600` | Seconds (> 0) to wait for the checks to finish before stopping for you. |
+| `checks_poll_s` | `30` | Seconds (> 0) between two looks at the PR's checks. |
 
 ## `[models]`
 

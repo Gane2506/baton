@@ -19,6 +19,7 @@ from pathlib import Path
 from types import TracebackType
 from typing import Literal, get_args
 
+from jev_agent.config.schema import ShipMode
 from jev_agent.core.migrations import SchemaVersionError, apply_migrations, configure_connection
 from jev_agent.core.models import (
     Decision,
@@ -101,6 +102,8 @@ class RunRecord:
     # `jev run --plan-only` (or a plan-only queue item): stop at the approval gate even when
     # `[approval] require_plan_approval` is off, also after `jev resume`.
     plan_only: bool = False
+    # `jev run --auto-ship` ("merge") or `--ask-before-ship` ("ask"); None: the config decides.
+    ship_mode: ShipMode | None = None
 
 
 @dataclass(frozen=True)
@@ -238,6 +241,7 @@ class QueueItem:
     created_at: datetime
     updated_at: datetime
     quality: QualityLevel | None = None  # `--quality LEVEL`; None: the config's level
+    ship_mode: ShipMode | None = None  # `--auto-ship` / `--ask-before-ship`; None: the config's
 
 
 def _now() -> str:
@@ -309,6 +313,7 @@ class Store:
         quality_level: QualityLevel = "none",
         *,
         plan_only: bool = False,
+        ship_mode: ShipMode | None = None,
     ) -> RunRecord:
         now = _now()
         for _ in range(5):  # retry on the (very unlikely) id collision within one second
@@ -317,8 +322,8 @@ class Store:
                 with self._tx() as db:
                     db.execute(
                         "INSERT INTO runs (id, idea_json, state, created_at, updated_at,"
-                        " learning_profile, quality_level, plan_only)"
-                        " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                        " learning_profile, quality_level, plan_only, ship_mode)"
+                        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                         (
                             run_id,
                             idea.model_dump_json(),
@@ -328,6 +333,7 @@ class Store:
                             learning_profile,
                             quality_level,
                             int(plan_only),
+                            ship_mode,
                         ),
                     )
             except sqlite3.IntegrityError:
@@ -892,6 +898,7 @@ class Store:
         no_learning: bool = False,
         profile: str | None = None,
         quality: QualityLevel | None = None,
+        ship_mode: ShipMode | None = None,
     ) -> QueueItem:
         """Append an idea to the queue (last within its priority)."""
         if priority not in QUEUE_PRIORITIES:
@@ -903,8 +910,8 @@ class Store:
             row = db.execute("SELECT COALESCE(MAX(position), -1) + 1 AS p FROM queue").fetchone()
             cur = db.execute(
                 "INSERT INTO queue (idea, priority, position, plan_only, learning_profile,"
-                " no_learning, profile, quality, created_at, updated_at)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                " no_learning, profile, quality, ship_mode, created_at, updated_at)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     idea,
                     priority,
@@ -914,6 +921,7 @@ class Store:
                     int(no_learning),
                     profile,
                     quality,
+                    ship_mode,
                     now,
                     now,
                 ),
@@ -1140,6 +1148,7 @@ def _run_record(row: sqlite3.Row) -> RunRecord:
         learning_counts=_learning_counts(row["learning_counts_json"]),
         quality_level=row["quality_level"] or "none",
         plan_only=bool(row["plan_only"]),
+        ship_mode=row["ship_mode"],
     )
 
 
@@ -1216,6 +1225,7 @@ def _queue_item(row: sqlite3.Row) -> QueueItem:
         profile=row["profile"],
         note=row["note"],
         quality=row["quality"],
+        ship_mode=row["ship_mode"],
         created_at=datetime.fromisoformat(row["created_at"]),
         updated_at=datetime.fromisoformat(row["updated_at"]),
     )

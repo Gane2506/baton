@@ -6,36 +6,51 @@ body, the exact commands) without changing anything; `execute_ship` runs it:
     git push <remote> jev/<run>/result:refs/heads/<branch_prefix><run_id>
     gh pr create --repo <owner/repo> --head <branch> --base <base> --title ... --body-file ...
 
-It never force-pushes, never touches the user's checkout (it pushes an existing local branch),
-never merges and never enables auto-merge. `gh` runs with the user's own login. `sync_pr`
-reads a PR's state back with `gh pr view --json` for the KPIs.
+It never force-pushes, never touches the user's checkout (it pushes an existing local branch)
+and never enables auto-merge. `gh` runs with the user's own login. `sync_pr` reads a PR's state
+back with `gh pr view --json` for the KPIs.
+
+After D6 votes "ship" (issue #68), the pipeline's SHIPPING step runs `ship_and_merge`: the same
+push and `gh pr create` (ready, not draft), then it polls the PR's checks and runs
+`gh pr merge --<method> --match-head-commit <voted commit>`, so only the commit the votes
+approved is ever merged. Anything unexpected raises `ShipError`, and the run stops for a person.
 """
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import re
 import shutil
 import subprocess
 import tempfile
-from collections.abc import Sequence
+import time
+from collections.abc import Awaitable, Callable, Collection, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
-from jev_agent.config.schema import JevConfig
+from jev_agent.config.schema import JevConfig, MergeMethod, ShipConfig, ShipMode
 from jev_agent.core.kpi import (
     PR_VIEW_FIELDS,
+    DiffStat,
     RunKpis,
+    ci_status,
     compute_run_kpis,
     diff_stat,
     github_kpis,
     is_revert_of,
     pr_state,
 )
-from jev_agent.core.models import RunState
-from jev_agent.core.store import NotFoundError, PrState, ShippedPrRecord, Store
+from jev_agent.core.models import RunState, TaskCard
+from jev_agent.core.store import (
+    DecisionRecord,
+    NotFoundError,
+    PrState,
+    ShippedPrRecord,
+    Store,
+)
 from jev_agent.core.workspace import (
     GIT_QUICK_TIMEOUT_S,
     GIT_SLOW_TIMEOUT_S,
@@ -440,11 +455,14 @@ def prepare_ship(
     gh: Gh | None = None,
     force_new: bool = False,
     dry_run: bool = False,
+    states: Collection[RunState] = (RunState.DONE,),
+    draft: bool | None = None,
 ) -> ShipPlan:
     """Check every precondition and build the plan. Raises `ShipError` with the reason.
 
     With `dry_run`, problems with `gh` (missing, logged out) become warnings, so the body and
-    commands can be previewed anywhere.
+    commands can be previewed anywhere. `states` are the run states that may ship (`jev ship`:
+    DONE; the pipeline: SHIPPING); `draft` overrides `[ship] draft`.
     """
     settings = config.ship
     if not settings.enabled:
@@ -456,8 +474,9 @@ def prepare_ship(
         run = store.get_run(run_id)
     except NotFoundError as exc:
         raise ShipError(str(exc)) from exc
-    if run.state is not RunState.DONE:
-        raise ShipError(f"run {run_id} is {run.state}; only a DONE run can be shipped")
+    if run.state not in states:
+        allowed = " or ".join(states)
+        raise ShipError(f"run {run_id} is {run.state}; only a {allowed} run can be shipped")
     source = result_branch(run_id)
     head = _git(root, "rev-parse", "--verify", "--quiet", f"refs/heads/{source}")
     if head.returncode != 0:
@@ -564,7 +583,7 @@ def prepare_ship(
         base=base,
         title=pr_title(run.idea.text),
         body=render_pr_body(store, run_id, kpis),
-        draft=settings.draft,
+        draft=settings.draft if draft is None else draft,
         labels=list(settings.labels),
         head_oid=head_oid,
         pushed_commits=pushed,
@@ -723,8 +742,11 @@ def find_revert(gh: Gh, pr: ShippedPrRecord) -> bool:
     )
 
 
-def sync_pr(store: Store, gh: Gh, pr: ShippedPrRecord) -> ShippedPrRecord:
-    """Read the PR from GitHub and store its state and KPIs."""
+def sync_pr(
+    store: Store, gh: Gh, pr: ShippedPrRecord, *, check_revert: bool = True
+) -> ShippedPrRecord:
+    """Read the PR from GitHub and store its state and KPIs. Without `check_revert` (a PR
+    merged moments ago) no revert is searched for and `reverted` stays unknown."""
     if pr.number is None:
         raise ShipError(f"PR on branch {pr.branch} has no number recorded; cannot sync it")
     view = gh.json(
@@ -733,7 +755,7 @@ def sync_pr(store: Store, gh: Gh, pr: ShippedPrRecord) -> ShippedPrRecord:
     if not isinstance(view, dict):
         raise ShipError(f"gh pr view {pr.number} did not return an object")
     k = github_kpis(view, pr.pushed_commits)
-    reverted = find_revert(gh, pr) if k.state == "merged" else None
+    reverted = find_revert(gh, pr) if k.state == "merged" and check_revert else None
     return store.update_shipped_pr(
         pr.id,
         state=k.state,
@@ -758,3 +780,244 @@ def prs_to_sync(store: Store, run_id: str | None) -> Sequence[ShippedPrRecord]:
         store.get_run(run_id)  # NotFoundError for an unknown run
         raise ShipError(f"run {run_id} has not been shipped")
     return prs
+
+
+# ---- shipping after the D6 vote (issue #68) ------------------------------------------------
+
+# What `ship_and_merge` reads of the PR while it waits for the checks.
+MERGE_VIEW_FIELDS = ("state", "isDraft", "headRefOid", "mergeable", "statusCheckRollup")
+CHANGES_TITLE = "Changes requested before shipping"
+
+
+def after_approval(config: JevConfig, run_mode: ShipMode | None) -> ShipMode | None:
+    """What a run does once D6 votes "ship". None: shipping is off and the run ends DONE, as
+    before. Else the run's own choice (`--auto-ship` / `--ask-before-ship`), else
+    `[ship] after_approval`, else "merge" under the consensus dispatcher (whose two votes are
+    the gate) and "ask" with any other dispatcher."""
+    if not config.ship.enabled:
+        return None
+    if run_mode is not None:
+        return run_mode
+    if config.ship.after_approval is not None:
+        return config.ship.after_approval
+    return "merge" if config.dispatcher.primary == "consensus" else "ask"
+
+
+@dataclass(frozen=True)
+class MergeCheck:
+    """What to do with an open PR after one look at it: wait, merge, or stop (and why)."""
+
+    action: Literal["wait", "merge", "merged", "stop"]
+    reason: str = ""
+
+
+def _failed_checks(rollup: object) -> list[str]:
+    names = []
+    for check in rollup if isinstance(rollup, list) else []:
+        if isinstance(check, dict) and ci_status([check]) == "failure":
+            names.append(str(check.get("name") or check.get("context") or "unnamed check"))
+    return names
+
+
+def merge_check(view: object, head_oid: str, waited_s: float, settings: ShipConfig) -> MergeCheck:
+    """Decide from one `gh pr view --json` answer (`MERGE_VIEW_FIELDS`) whether the PR can be
+    merged now. Only the voted commit `head_oid` is ever merged; anything that is not clearly
+    fine stops for a person. gh's value shapes are not verified live (docs/verification.md)."""
+    if not isinstance(view, dict):
+        return MergeCheck("stop", "gh pr view did not return an object")
+    state = pr_state(view.get("state"))
+    if state == "merged":
+        return MergeCheck("merged")
+    if state == "closed":
+        return MergeCheck("stop", "the PR was closed on GitHub")
+    head = view.get("headRefOid")
+    if not isinstance(head, str) or not head:
+        return MergeCheck("stop", "gh did not report the PR's head commit")
+    if head != head_oid:
+        return MergeCheck(
+            "stop",
+            f"the PR's head moved to {head[:12]} after the vote on {head_oid[:12]}; "
+            "jev only merges the commit the votes approved",
+        )
+    if view.get("isDraft") is True:
+        return MergeCheck("stop", "the PR is a draft")
+    if str(view.get("mergeable") or "").upper() == "CONFLICTING":
+        return MergeCheck("stop", "the PR conflicts with its base branch")
+    rollup = view.get("statusCheckRollup")
+    checks = ci_status(rollup)
+    if checks == "failure":
+        return MergeCheck("stop", f"checks failed: {', '.join(_failed_checks(rollup))}")
+    if checks == "pending":
+        if waited_s < settings.checks_timeout_s:
+            return MergeCheck("wait")
+        return MergeCheck("stop", f"checks did not finish within {settings.checks_timeout_s} s")
+    if checks == "none":
+        if waited_s < settings.checks_grace_s:
+            return MergeCheck("wait")
+        if settings.require_checks:
+            return MergeCheck(
+                "stop",
+                f"no checks reported after {settings.checks_grace_s} s; merge it yourself, or "
+                "set `[ship] require_checks = false` to merge PRs without CI",
+            )
+    return MergeCheck("merge")
+
+
+def merge_command(pr: ShippedPrRecord, method: MergeMethod) -> list[str]:
+    """`gh pr merge`, pinned to the commit that was pushed: GitHub refuses the merge if the
+    PR's head is anything else. Never `--admin` and never `--auto`."""
+    assert pr.number is not None and pr.head_oid is not None
+    return [
+        "gh",
+        "pr",
+        "merge",
+        str(pr.number),
+        "--repo",
+        pr.repo,
+        f"--{method}",
+        "--match-head-commit",
+        pr.head_oid,
+    ]
+
+
+def _open_for_merge(
+    root: Path, config: JevConfig, store: Store, run_id: str, gh: Gh
+) -> ShippedPrRecord:
+    """The run's PR for its current result commit: one an earlier try of the SHIPPING step
+    recorded, else push and open it now (ready for review)."""
+    head = _git(root, "rev-parse", "--verify", "--quiet", f"refs/heads/{result_branch(run_id)}")
+    if head.returncode != 0:
+        raise ShipError(f"run {run_id} has no result branch {result_branch(run_id)}")
+    head_oid = head.stdout.strip()
+    shipped = store.list_shipped_prs(run_id)
+    for pr in reversed(shipped):
+        if pr.head_oid == head_oid and pr.state != "closed":
+            return pr
+    plan = prepare_ship(
+        root,
+        config,
+        store,
+        run_id,
+        gh=gh,
+        force_new=bool(shipped),
+        states=(RunState.SHIPPING,),
+        draft=False,
+    )
+    return execute_ship(plan, store, root, gh)
+
+
+def _view_for_merge(gh: Gh, pr: ShippedPrRecord) -> Any:
+    assert pr.number is not None
+    return gh.json(
+        "pr", "view", str(pr.number), "--repo", pr.repo, "--json", ",".join(MERGE_VIEW_FIELDS)
+    )
+
+
+def _run_merge(gh: Gh, pr: ShippedPrRecord, method: MergeMethod) -> str:
+    """Run `gh pr merge`; what went wrong ("" when gh reported success)."""
+    try:
+        proc = gh.run(*merge_command(pr, method)[1:])
+    except GhTimeoutError as exc:
+        return str(exc)
+    return "" if proc.returncode == 0 else redact((proc.stderr or proc.stdout).strip())
+
+
+def _merged(gh: Gh, store: Store, pr: ShippedPrRecord, failure: str) -> ShippedPrRecord:
+    """Read the PR back after `gh pr merge`: GitHub's answer, not gh's exit code, says whether
+    it merged (gh's answer may be lost to a timeout; a merge queue may hold the PR)."""
+    try:
+        synced = sync_pr(store, gh, pr, check_revert=False)
+    except ShipError as exc:
+        raise ShipError(
+            f"cannot tell whether PR #{pr.number} merged ({failure or 'gh pr merge finished'}): "
+            f"{exc}"
+        ) from exc
+    if synced.state == "merged":
+        return synced
+    if failure:
+        raise ShipError(f"gh pr merge failed for PR #{pr.number}: {failure}")
+    raise ShipError(
+        f"gh pr merge finished but PR #{pr.number} is {synced.state}: a merge queue or a branch "
+        "rule may still hold it; check it on GitHub"
+    )
+
+
+async def ship_and_merge(
+    root: Path,
+    config: JevConfig,
+    store: Store,
+    run_id: str,
+    *,
+    gh: Gh | None = None,
+    sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+    clock: Callable[[], float] = time.monotonic,
+    on_wait: Callable[[], None] = lambda: None,
+) -> ShippedPrRecord:
+    """The SHIPPING step: open the PR (or find the one an earlier try opened), wait for its
+    checks and merge it. Returns the merged PR; raises `ShipError` for anything that needs a
+    person (failed or missing checks, a moved head, a closed PR, a refused merge). Safe to run
+    again after a failure or a crash: the push, the PR and the merge are all looked up first.
+    `on_wait` runs before every wait (the pipeline stops a cancelled run there).
+
+    The store is used on the calling thread only (SQLite connections are per thread), so the
+    steps that write it (push and open, reading the PR back) run inline; the polling and the
+    merge itself run in worker threads."""
+    gh = gh or Gh(root)
+    pr = _open_for_merge(root, config, store, run_id, gh)
+    if pr.state == "merged":
+        return pr
+    if pr.number is None or pr.head_oid is None:
+        raise ShipError(f"the PR on branch {pr.branch} has no number recorded; check it on GitHub")
+    started = clock()
+    while True:
+        view = await asyncio.to_thread(_view_for_merge, gh, pr)
+        check = merge_check(view, pr.head_oid, clock() - started, config.ship)
+        if check.action == "merged":
+            return sync_pr(store, gh, pr, check_revert=False)
+        if check.action == "stop":
+            raise ShipError(f"PR #{pr.number} not merged: {check.reason}")
+        if check.action == "merge":
+            break
+        on_wait()
+        await sleep(config.ship.checks_poll_s)
+    failure = await asyncio.to_thread(_run_merge, gh, pr, config.ship.merge_method)
+    return _merged(gh, store, pr, failure)
+
+
+def changes_task_card(cards: list[TaskCard], notes: str) -> TaskCard:
+    """A new task, after all of `cards`, carrying a person's notes from `jev ship modify`."""
+    next_no = 1 + max(int(card.id[1:]) for card in cards)
+    rounds = sum(1 for card in cards if card.title.startswith(CHANGES_TITLE))
+    return TaskCard(
+        id=f"T{next_no}",
+        title=f"{CHANGES_TITLE} (round {rounds + 1})",
+        description=(
+            "The work passed the votes, but a person reviewing it before it ships asks for "
+            "these changes. Make them, keeping what the other tasks built:\n\n"
+            + redact(notes.strip())
+        ),
+        depends_on=[card.id for card in cards],
+        acceptance_criteria=["the requested changes are made", "the existing tests still pass"],
+        test_command=None,
+    )
+
+
+@dataclass(frozen=True)
+class ShipPreview:
+    """What a person sees before choosing approve, modify or stop (AWAITING_SHIP)."""
+
+    title: str
+    branch: str
+    diff: DiffStat | None
+    vote: DecisionRecord | None  # the latest D6 decision, with Jev's and Laya's votes
+
+
+def ship_preview(root: Path, store: Store, run_id: str) -> ShipPreview:
+    run = store.get_run(run_id)
+    votes = [d for d in store.list_decisions(run_id) if d.request.point == "D6"]
+    return ShipPreview(
+        title=pr_title(run.idea.text),
+        branch=result_branch(run_id),
+        diff=diff_stat(root, start_ref(run_id), result_branch(run_id)),
+        vote=votes[-1] if votes else None,
+    )

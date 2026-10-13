@@ -317,9 +317,16 @@ _BRANCH_PREFIX = r"^[A-Za-z0-9][A-Za-z0-9._/-]*$"
 _REMOTE_NAME = r"^[A-Za-z0-9][A-Za-z0-9._-]*$"
 
 
+# What a run does once both votes approve at D6 (`[ship] after_approval`, issue #68).
+ShipMode = Literal["merge", "ask"]
+MergeMethod = Literal["squash", "merge", "rebase"]
+
+
 class ShipConfig(_Strict):
-    """`[ship]`: `jev ship RUN` pushes a DONE run's result branch and opens a GitHub pull
-    request with `gh` (docs/ship.md). Off by default; it never force-pushes and never merges."""
+    """`[ship]`: push a run's result branch and open a GitHub pull request with `gh`
+    (docs/ship.md). Off by default; it never force-pushes. With shipping on, a D6 "ship" vote
+    ships the run: `after_approval = "merge"` opens the PR ready, waits for its checks and
+    merges it; "ask" waits for a person to approve, modify or stop first."""
 
     enabled: bool = False
     remote: str = Field(default="origin", pattern=_REMOTE_NAME)
@@ -330,6 +337,14 @@ class ShipConfig(_Strict):
     draft: bool = True
     labels: list[str] = Field(default_factory=list)
     require_quality_pass: bool = True
+    # After both votes approve at D6; unset: "merge" under `primary = "consensus"`, else "ask".
+    after_approval: ShipMode | None = None
+    merge_method: MergeMethod = "squash"
+    # A PR with no checks after `checks_grace_s`: stop for a person (true) or merge (false).
+    require_checks: bool = True
+    checks_grace_s: int = Field(default=120, ge=0)
+    checks_timeout_s: int = Field(default=3600, gt=0)
+    checks_poll_s: int = Field(default=30, gt=0)
 
     @model_validator(mode="after")
     def _check(self) -> ShipConfig:

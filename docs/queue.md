@@ -20,7 +20,7 @@ only on your machine. There are no new config keys: scheduler settings are comma
 
 | Command | Does |
 | --- | --- |
-| `jev queue add "idea" [--priority high\|normal\|low] [--plan-only] [--learning NAME \| --no-learning] [--profile NAME] [--quality LEVEL]` | Append an idea. The flags are stored with it and used when its run starts. |
+| `jev queue add "idea" [--priority high\|normal\|low] [--plan-only] [--learning NAME \| --no-learning] [--profile NAME] [--quality LEVEL] [--auto-ship \| --ask-before-ship]` | Append an idea. The flags are stored with it and used when its run starts. |
 | `jev queue list [--all]` | The queue in the order the scheduler takes it: id, priority, status, run, idea, flags, note. Without `--all`, only `queued`, `running` and `waiting` items. |
 | `jev queue move ID --up\|--down\|--top` | Move a queued item one place, or to the front. |
 | `jev queue remove ID` | Delete an item (not while a live scheduler is running it). Its run, if any, is kept. |
@@ -39,7 +39,9 @@ profile's servers, browser, learning and quality. An item without one uses the r
 (`jev profile use`), like `jev run`. If the profile is gone by the time the scheduler picks
 the item, the item is marked `failed` with a note instead of running with other access.
 `--quality LEVEL` sets the run's quality gate level ([quality.md](quality.md)); without it the
-run gets `[quality] level` from the config at the time it starts.
+run gets `[quality] level` from the config at the time it starts. `--auto-ship` and
+`--ask-before-ship` choose what the run does once both votes approve it
+([ship.md](ship.md#shipping-after-the-votes)); they need `[ship] enabled = true`.
 
 **Statuses.**
 
@@ -47,7 +49,7 @@ run gets `[quality] level` from the config at the time it starts.
 | --- | --- |
 | `queued` | Waiting to be picked. |
 | `running` | The scheduler is running it, or its run is in progress. |
-| `waiting` | Its run stopped for a person: plan approval (`AWAITING_APPROVAL`) or `NEEDS_HUMAN`, or the scheduler was interrupted during it. The note says what to do. |
+| `waiting` | Its run stopped for a person: plan approval (`AWAITING_APPROVAL`), ship approval (`AWAITING_SHIP`) or `NEEDS_HUMAN`, or the scheduler was interrupted during it. The note says what to do. |
 | `done` | Its run reached `DONE`. |
 | `failed` | Its run ended `FAILED` or `BUDGET_EXCEEDED`, or the run could not start (the note says why). |
 | `cancelled` | Its run was cancelled with `jev cancel`. |
@@ -69,7 +71,7 @@ jev scheduler status
 | The run ends in | The item becomes | The scheduler |
 | --- | --- | --- |
 | `DONE` | `done` | moves on |
-| `AWAITING_APPROVAL`, `NEEDS_HUMAN` | `waiting` | moves on; you approve or fix later |
+| `AWAITING_APPROVAL`, `AWAITING_SHIP`, `NEEDS_HUMAN` | `waiting` | moves on; you approve or fix later |
 | `FAILED`, `BUDGET_EXCEEDED` | `failed` | moves on |
 | (an error before or during the run) | `failed`, with the error in the note | moves on |
 
@@ -146,7 +148,7 @@ jev board [--watch] [--interval SECONDS] [--all]
 | --- | --- |
 | Backlog | `queued` items, in queue order |
 | Planning | runs in `INTAKE`, `PLANNING`, `VALIDATING` |
-| Awaiting approval | runs in `AWAITING_APPROVAL` |
+| Awaiting approval | runs in `AWAITING_APPROVAL` or `AWAITING_SHIP` |
 | Running | runs in `EXECUTING`, `INTEGRATING` |
 | Done | runs in `DONE`, the 10 most recent (all with `--all`) |
 | Blocked | runs in `NEEDS_HUMAN`, `FAILED`, `BUDGET_EXCEEDED`, `CANCELLED` |

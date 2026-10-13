@@ -2,6 +2,49 @@
 
 Deviations from [PLAN.md](../PLAN.md) and choices it left open. Newest first.
 
+## 2026-10-13: Ship and merge after both votes, or ask first (#68)
+
+This reverses the "jev never merges" stance of `jev ship` (below, 2026-10-13: `jev ship`, KPIs
+and benchmarks). The maintainer decided on 2026-10-13 that when Jev and Laya both approve,
+merging goes ahead without asking him, and that a person can choose to be asked first.
+
+- **When.** Only with `[ship] enabled = true` (still off by default: it pushes with your `gh`
+  login). Then a D6 "ship" goes to `SHIPPING` or `AWAITING_SHIP` instead of `DONE`, per
+  `[ship] after_approval`; unset means "merge" under `consensus`, whose two votes are the gate,
+  and "ask" with `jev` or `rules`, where one dispatcher decides alone (as with plan approval).
+  `--auto-ship` / `--ask-before-ship` on `jev run` and `jev queue add` (and the dashboard queue
+  form) override it per run; they are stored on the run (migration 12, `ship_mode`).
+- **Two new run states** (jev-decide: AGREE, Jev 0.95, matrix 0.79 vs 0.37). `SHIPPING` is a
+  pipeline step like the others, so a crash or a stop resumes there; `AWAITING_SHIP` is a person
+  gate like `AWAITING_APPROVAL`. Rejected: shipping as a hook after `DONE` (DONE would no longer
+  mean finished, and "modify" would reopen a finished run), and reusing `NEEDS_HUMAN` with a
+  reason text for the "ask" wait (three choices hidden behind `resume`).
+- **No second vote after the checks** (jev-decide: ARBITRATED, Jev 0.96). The issue asked that
+  both votes "approve the final state". D6 already votes on the integrated result, and the merge
+  is pinned to that commit with `gh pr merge --match-head-commit`, so what merges is what was
+  voted on; the checks are then a yes/no gate, and a second vote on a green PR would cost two
+  more Jev calls without new information. A failed check, a moved head, a draft, a conflict, a
+  closed PR or a timeout stops for a person.
+- **A PR without checks** (jev-decide: ARBITRATED, low confidence 0.18; Jev's direct pick was a
+  setting, the matrix preferred always stopping). `[ship] require_checks = true` (default) stops
+  for a person once `checks_grace_s` passed with no checks; `false` merges without CI. Both
+  options agreed that the default must not merge without CI.
+- **"ask" pushes nothing before the person approves.** Integration rebuilds the result branch
+  from the start commit, so after a "modify" the new result is not a descendant of the old one;
+  a PR opened before it could only be updated by force-pushing, which jev never does.
+- **"modify"** adds a task "Changes requested before shipping (round N)" with the notes
+  (redacted) after all other tasks, then EXECUTING, integration and D6 again. It does not count
+  as a fix round, so it never uses up `max_fix_rounds`. **"stop"** ends the run `DONE` with "not
+  shipped"; `jev ship RUN` can still ship it by hand.
+- **Safe to repeat.** The SHIPPING step looks up a recorded PR for the current result commit,
+  a branch already pushed and a PR already open (issue #41's lookup), and after `gh pr merge`
+  it reads the PR back: only `state: MERGED` counts, whatever gh's exit code (a lost answer, a
+  merge queue). Never `--admin`, `--auto` or `--force`; the PR branch is not deleted.
+- **Threads.** The store is used only on the pipeline's thread (SQLite connections are per
+  thread); the push and `gh pr create` run inline, the polling and `gh pr merge` in threads.
+- `gh pr merge` and the extra `gh pr view` fields are not verified live yet
+  ([verification.md](verification.md) section 8); the tests use the fake `gh`.
+
 ## 2026-10-13: Consensus dispatcher, Jev then Laya (#66)
 
 `[dispatcher] primary = "consensus"` is the new default. Every decision needs two votes that

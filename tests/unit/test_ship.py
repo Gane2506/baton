@@ -21,8 +21,18 @@ from typer.testing import CliRunner
 from jev_agent.cli.app import app
 from jev_agent.cli.wiring import FAKE_WORKERS_ENV
 from jev_agent.config import JevConfig
-from jev_agent.core.models import RunState
-from jev_agent.core.ship import Gh, github_repo, pr_title
+from jev_agent.config.schema import ShipConfig
+from jev_agent.core.kpi import PR_VIEW_FIELDS
+from jev_agent.core.models import RunState, TaskCard
+from jev_agent.core.ship import (
+    MERGE_VIEW_FIELDS,
+    Gh,
+    after_approval,
+    changes_task_card,
+    github_repo,
+    merge_check,
+    pr_title,
+)
 from jev_agent.core.store import Store
 from jev_agent.quality.models import GateResult
 
@@ -111,7 +121,9 @@ def origin(tmp_path: Path) -> Path:
 
 @pytest.fixture
 def done_run(fixture_repo: Path, origin: Path, gh: FakeGh) -> tuple[Path, str]:
-    """A repo with a DONE run (fake workers) and a local bare `origin` holding main."""
+    """A repo with a DONE run (fake workers) and a local bare `origin` holding main. With
+    shipping on, the rules dispatcher's run waits to ship ("ask"); `jev ship stop` ends it
+    DONE, not shipped, which `jev ship RUN` can still ship by hand."""
     (fixture_repo / "jev.toml").write_text(SHIP_TOML)
     _git(fixture_repo, "remote", "add", "origin", str(origin))
     _git(fixture_repo, "push", "-q", "origin", "main")
@@ -120,7 +132,9 @@ def done_run(fixture_repo: Path, origin: Path, gh: FakeGh) -> tuple[Path, str]:
     with _store(fixture_repo) as store:
         run_id = store.list_runs()[0].id
     code, output = _jev(fixture_repo, "approve", run_id)
-    assert code == 0 and "DONE" in output, output
+    assert code == 0 and "AWAITING_SHIP" in output, output
+    code, output = _jev(fixture_repo, "ship", "stop", run_id)
+    assert code == 0 and "DONE" in output and "not shipped" in output, output
     return fixture_repo, run_id
 
 
@@ -670,3 +684,251 @@ def test_pr_lookup_reads_gh_pr_list() -> None:
     )
     assert parse_pr_list(text, "jev/r1") == ExistingPr(5, "https://x/pull/5", "closed")
     assert parse_pr_list(json.dumps([{"number": 4}]), "jev/r1") == ExistingPr(4, None, "open")
+
+
+# ---- shipping after the D6 vote (issue #68) ------------------------------------------------
+
+MERGE_KEY = "pr view 42 --repo acme/widgets --json " + ",".join(MERGE_VIEW_FIELDS)
+SYNC_KEY = "pr view 42 --repo acme/widgets --json " + ",".join(PR_VIEW_FIELDS)
+GREEN = [{"__typename": "CheckRun", "name": "test", "status": "COMPLETED", "conclusion": "SUCCESS"}]
+
+
+def _open_view(head: str, checks: list[dict[str, Any]] | None = None, **extra: Any) -> str:
+    """`gh pr view --json` for an open, ready PR at `head` (gh prints JSON on one line)."""
+    view = {
+        "state": "OPEN",
+        "isDraft": False,
+        "headRefOid": head,
+        "mergeable": "MERGEABLE",
+        "statusCheckRollup": GREEN if checks is None else checks,
+    }
+    return json.dumps(view | extra)
+
+
+def _ship_repo(fixture_repo: Path, origin: Path, toml: str = SHIP_TOML) -> Path:
+    (fixture_repo / "jev.toml").write_text(toml)
+    _git(fixture_repo, "remote", "add", "origin", str(origin))
+    _git(fixture_repo, "push", "-q", "origin", "main")
+    return fixture_repo
+
+
+@pytest.fixture
+def waiting_run(fixture_repo: Path, origin: Path, gh: FakeGh) -> tuple[Path, str, str]:
+    """A run both votes approved at D6, waiting for a person (rules dispatcher: "ask")."""
+    repo = _ship_repo(fixture_repo, origin)
+    code, output = _jev(repo, "run", "add search")
+    assert code == 0, output
+    with _store(repo) as store:
+        run_id = store.list_runs()[0].id
+    code, output = _jev(repo, "approve", run_id)
+    assert code == 0 and "AWAITING_SHIP" in output, output
+    assert "PR title: add search" in output and "D6 vote (rules): action=ship" in output
+    return repo, run_id, _git(repo, "rev-parse", f"jev/{run_id}/result")
+
+
+def _state(repo: Path, run_id: str) -> RunState:
+    with _store(repo) as store:
+        return store.get_run(run_id).state
+
+
+def test_after_approval_defaults_and_overrides() -> None:
+    def config(ship: dict[str, Any], primary: str = "consensus") -> JevConfig:
+        return JevConfig.model_validate({"dispatcher": {"primary": primary}, "ship": ship})
+
+    assert after_approval(config({}), "merge") is None  # shipping off: D6 ends DONE
+    assert after_approval(config({"enabled": True}), None) == "merge"
+    assert after_approval(config({"enabled": True}, "rules"), None) == "ask"
+    assert after_approval(config({"enabled": True}, "jev"), None) == "ask"
+    assert after_approval(config({"enabled": True, "after_approval": "ask"}), None) == "ask"
+    assert after_approval(config({"enabled": True, "after_approval": "ask"}), "merge") == "merge"
+    with pytest.raises(ValueError):
+        config({"after_approval": "yes"})
+    with pytest.raises(ValueError):
+        config({"merge_method": "fast-forward"})
+
+
+def test_merge_check_merges_only_the_voted_commit_with_green_checks() -> None:
+    settings = ShipConfig(checks_grace_s=60, checks_timeout_s=600)
+    sha = "a" * 40
+
+    def check(waited: float = 0, **view: Any) -> tuple[str, str]:
+        found = merge_check(json.loads(_open_view(sha)) | view, sha, waited, settings)
+        return found.action, found.reason
+
+    assert check() == ("merge", "")
+    assert check(state="MERGED")[0] == "merged"
+    assert check(state="CLOSED") == ("stop", "the PR was closed on GitHub")
+    action, reason = check(headRefOid="b" * 40)
+    assert action == "stop" and "head moved" in reason and "votes approved" in reason
+    assert check(headRefOid=None)[0] == "stop"
+    assert check(isDraft=True) == ("stop", "the PR is a draft")
+    assert check(mergeable="CONFLICTING")[0] == "stop"
+    failed = [*GREEN, {"context": "lint", "state": "FAILURE"}]
+    assert check(statusCheckRollup=failed) == ("stop", "checks failed: lint")
+    pending = [{"name": "test", "status": "IN_PROGRESS", "conclusion": None}]
+    assert check(statusCheckRollup=pending)[0] == "wait"
+    assert check(600, statusCheckRollup=pending)[0] == "stop"
+    assert check(statusCheckRollup=[])[0] == "wait"  # checks may not have appeared yet
+    action, reason = check(60, statusCheckRollup=[])
+    assert action == "stop" and "require_checks = false" in reason
+    no_ci = ShipConfig(require_checks=False, checks_grace_s=60)
+    assert merge_check(json.loads(_open_view(sha, [])), sha, 60, no_ci).action == "merge"
+    assert merge_check([], sha, 0, settings).action == "stop"
+
+
+def test_changes_task_card_carries_the_notes() -> None:
+    cards = [
+        TaskCard(id="T1", title="a", description="a"),
+        TaskCard(id="T3", title="b", description="b"),
+    ]
+    card = changes_task_card(cards, "  Rename foo to bar.\n")
+    assert card.id == "T4" and card.depends_on == ["T1", "T3"]
+    assert card.title == "Changes requested before shipping (round 1)"
+    assert card.description.endswith("Rename foo to bar.")
+    again = changes_task_card([*cards, card], "more")
+    assert again.title.endswith("(round 2)")
+
+
+def test_ask_waits_then_approve_ships_ready_pr_and_merges_it(
+    waiting_run: tuple[Path, str, str], origin: Path, gh: FakeGh
+) -> None:
+    repo, run_id, sha = waiting_run
+    assert gh.calls() == []  # nothing is pushed or opened before a person approves
+    assert f"jev/{run_id}" not in _remote_branches(origin)
+    code, output = _jev(repo, "resume", run_id)
+    assert code == 1 and "waits for a person" in output
+
+    gh.answer(MERGE_KEY, _open_view(sha))
+    gh.answer(SYNC_KEY, json.dumps(PR_VIEW))
+    code, output = _jev(repo, "ship", "approve", run_id)
+    assert code == 0 and "DONE" in output and f"merged PR #42: {PR_URL}" in output, output
+
+    assert _remote_branches(origin)[f"jev/{run_id}"] == sha
+    create = next(argv for argv in gh.calls() if argv[:2] == ["pr", "create"])
+    assert "--draft" not in create
+    merges = [argv for argv in gh.calls() if argv[:2] == ["pr", "merge"]]
+    assert merges == [
+        ["pr", "merge", "42", "--repo", "acme/widgets", "--squash", "--match-head-commit", sha]
+    ]
+    assert not any(a in ("--admin", "--auto", "--force") for argv in gh.calls() for a in argv)
+    with _store(repo) as store:
+        [pr] = store.list_shipped_prs(run_id)
+        assert pr.state == "merged" and not pr.draft and pr.head_oid == sha
+        assert pr.reverted is None  # no revert search right after merging
+        run = store.get_run(run_id)
+        assert run.state is RunState.DONE and run.ship_mode is None
+
+
+def test_auto_ship_stops_for_a_person_and_resume_finishes_without_reopening(
+    fixture_repo: Path, origin: Path, gh: FakeGh
+) -> None:
+    repo = _ship_repo(fixture_repo, origin, SHIP_TOML + 'merge_method = "rebase"\n')
+    code, output = _jev(repo, "run", "--auto-ship", "add search")
+    assert code == 0, output
+    with _store(repo) as store:
+        run = store.list_runs()[0]
+        assert run.ship_mode == "merge"
+    gh.answer(MERGE_KEY, _open_view("f" * 40))  # someone pushed to the PR branch
+    code, output = _jev(repo, "approve", run.id)
+    assert code == 3 and "NEEDS_HUMAN" in output and "head moved" in output, output
+    with _store(repo) as store:
+        assert store.get_run(run.id).resume_state is RunState.SHIPPING
+    assert "pr merge" not in gh.commands()
+
+    sha = _git(repo, "rev-parse", f"jev/{run.id}/result")
+    gh.answer(MERGE_KEY, _open_view(sha))
+    gh.answer(SYNC_KEY, json.dumps(PR_VIEW))
+    code, output = _jev(repo, "resume", run.id)
+    assert code == 0 and "merged PR #42" in output, output
+    assert gh.commands().count("pr create") == 1  # the PR from the first try is reused
+    merge = next(argv for argv in gh.calls() if argv[:2] == ["pr", "merge"])
+    assert "--rebase" in merge
+
+
+def test_failed_checks_and_refused_merge_stop_for_a_person(
+    waiting_run: tuple[Path, str, str], gh: FakeGh
+) -> None:
+    repo, run_id, sha = waiting_run
+    red = [{"name": "test", "status": "COMPLETED", "conclusion": "FAILURE"}]
+    gh.answer(MERGE_KEY, _open_view(sha, red))
+    code, output = _jev(repo, "ship", "approve", run_id)
+    assert code == 3 and "checks failed: test" in output, output
+    assert "pr merge" not in gh.commands()
+
+    gh.answer(MERGE_KEY, _open_view(sha))
+    gh.answer("pr merge", stderr="the base branch policy prohibits the merge", code=1)
+    gh.answer(SYNC_KEY, json.dumps(PR_VIEW | {"state": "OPEN", "mergedAt": None}))
+    code, output = _jev(repo, "resume", run_id)
+    assert code == 3 and "gh pr merge failed" in output and "policy" in output, output
+    assert _state(repo, run_id) is RunState.NEEDS_HUMAN
+
+
+def test_no_checks_stop_unless_require_checks_is_off(
+    waiting_run: tuple[Path, str, str], gh: FakeGh
+) -> None:
+    repo, run_id, sha = waiting_run
+    (repo / "jev.toml").write_text(SHIP_TOML + "checks_grace_s = 0\n")
+    gh.answer(MERGE_KEY, _open_view(sha, []))
+    code, output = _jev(repo, "ship", "approve", run_id)
+    assert code == 3 and "no checks reported" in output, output
+
+    (repo / "jev.toml").write_text(SHIP_TOML + "checks_grace_s = 0\nrequire_checks = false\n")
+    gh.answer(SYNC_KEY, json.dumps(PR_VIEW))
+    code, output = _jev(repo, "resume", run_id)
+    assert code == 0 and "merged PR #42" in output, output
+
+
+def test_pending_checks_are_polled_until_green(
+    waiting_run: tuple[Path, str, str], gh: FakeGh
+) -> None:
+    repo, run_id, sha = waiting_run
+    (repo / "jev.toml").write_text(SHIP_TOML + "checks_poll_s = 1\n")
+    pending = [{"name": "test", "status": "QUEUED", "conclusion": None}]
+    gh.answers(
+        MERGE_KEY,
+        {"stdout": _open_view(sha, pending)},
+        {"stdout": _open_view(sha)},
+    )
+    gh.answer(SYNC_KEY, json.dumps(PR_VIEW))
+    code, output = _jev(repo, "ship", "approve", run_id)
+    assert code == 0 and "merged PR #42" in output, output
+    views = [argv for argv in gh.calls() if " ".join(argv).startswith(MERGE_KEY)]
+    assert len(views) == 2
+
+
+def test_modify_adds_a_task_with_the_notes_and_votes_again(
+    waiting_run: tuple[Path, str, str], gh: FakeGh
+) -> None:
+    repo, run_id, _ = waiting_run
+    code, output = _jev(repo, "ship", "modify", run_id)
+    assert code == 1 and "--notes" in output
+    code, output = _jev(repo, "ship", "modify", run_id, "--notes", "Rename foo to bar.")
+    assert code == 0 and "AWAITING_SHIP" in output, output
+    with _store(repo) as store:
+        tasks = store.list_tasks(run_id)
+        assert tasks[-1].card.title == "Changes requested before shipping (round 1)"
+        assert "Rename foo to bar." in tasks[-1].card.description
+        assert tasks[-1].state.value == "DONE"
+        votes = [d for d in store.list_decisions(run_id) if d.request.point == "D6"]
+        assert len(votes) == 2  # the changed work was voted on again
+    assert gh.calls() == []
+
+    code, output = _jev(repo, "ship", "stop", run_id)
+    assert code == 0 and "not shipped" in output
+    code, output = _jev(repo, "ship", "stop", run_id)
+    assert code == 1 and "cannot stop" in output
+
+
+def test_ship_flags_need_shipping_on_and_exclude_each_other(fixture_repo: Path, gh: FakeGh) -> None:
+    code, output = _jev(fixture_repo, "run", "--auto-ship", "idea")
+    assert code == 1 and "needs shipping on" in output
+    (fixture_repo / "jev.toml").write_text(SHIP_TOML)
+    code, output = _jev(fixture_repo, "run", "--auto-ship", "--ask-before-ship", "idea")
+    assert code == 1 and "cannot be used together" in output
+    code, output = _jev(fixture_repo, "queue", "add", "--ask-before-ship", "queued idea")
+    assert code == 0, output
+    with _store(fixture_repo) as store:
+        [item] = store.list_queue()
+        assert item.ship_mode == "ask"
+    code, output = _jev(fixture_repo, "queue", "list")
+    assert "ask-before-ship" in output

@@ -9,6 +9,12 @@ matching that prefix gets the Nth answer (the last one repeats), counted in
 `$FAKE_GH_DIR/counts.json`; and an answer's optional "sleep" (seconds) delays it, to test
 timeouts. For `pr create` it copies the --body-file to `$FAKE_GH_DIR/body.md`, so tests can
 read the body after jev deleted its temporary file.
+
+Canned answers follow gh's documented behaviour (docs/verification.md section 8): `pr create`
+prints the PR URL; `pr view --json` and `pr list --json` print JSON with GitHub's GraphQL value
+shapes (`state` OPEN / CLOSED / MERGED, `headRefOid`, `statusCheckRollup` entries with
+`status`/`conclusion` or `state`); exit codes are 0 on success and 1 on any failure. The
+default answer (exit 0, no output) stands for `pr merge` succeeding when not on a terminal.
 """
 
 import json

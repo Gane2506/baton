@@ -902,3 +902,26 @@ def test_plan_approval_default_depends_on_the_dispatcher() -> None:
     for primary in ("jev", "rules"):
         config = JevConfig.model_validate({"dispatcher": {"primary": primary}})
         assert config.plan_approval_required is True
+
+
+async def test_consensus_ship_vote_ships_and_a_split_stops_for_a_human(make_env: Any) -> None:
+    """With shipping on, a D6 "ship" both votes agree on goes to SHIPPING by default (here it
+    stops: the repo has no remote); a split D6 stops before anything ships."""
+    config = JevConfig.model_validate({"ship": {"enabled": True}})
+    env: Env = make_env({"planner": FakeStep(parsed=ONE_TASK)}, config, _Consensus("none"))
+    run = await env.pipeline.start(_idea(env.repo))
+    assert run.state is RunState.NEEDS_HUMAN and run.resume_state is RunState.SHIPPING
+    assert run.reason is not None and "ship: this repo has no remote 'origin'" in run.reason
+
+    env = make_env({"planner": FakeStep(parsed=ONE_TASK)}, config, _Consensus("D6"))
+    run = await env.pipeline.start(_idea(env.repo))
+    assert run.state is RunState.NEEDS_HUMAN and run.resume_state is RunState.INTEGRATING
+
+    asking = JevConfig.model_validate({"ship": {"enabled": True, "after_approval": "ask"}})
+    env = make_env({"planner": FakeStep(parsed=ONE_TASK)}, asking, _Consensus("none"))
+    run = await env.pipeline.start(_idea(env.repo))
+    assert run.state is RunState.AWAITING_SHIP, run.reason
+    with pytest.raises(PipelineError, match="waits for a person"):
+        await env.pipeline.resume(run.id)
+    run = await env.pipeline.stop_ship(run.id)
+    assert run.state is RunState.DONE and run.reason is not None and "not shipped" in run.reason
