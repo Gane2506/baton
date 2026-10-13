@@ -1,6 +1,6 @@
 [project]
 name = "baton-agent-orchestrator"
-version = "0.2.0"
+version = "0.3.0"
 description = "Turn an idea into reviewed, tested code with a pipeline of AI agents dispatched by Jev."
 readme = "README.md"
 license = "Apache-2.0"
