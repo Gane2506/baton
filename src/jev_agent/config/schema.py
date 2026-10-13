@@ -17,7 +17,7 @@ from jev_agent.config.servers_schema import (
 from jev_agent.quality.levels import QualityLevel
 from jev_agent.runlog.redact import SECRET_PATTERNS
 
-DispatcherName = Literal["jev", "rules"]
+DispatcherName = Literal["consensus", "jev", "rules"]
 Selection = Literal["dispatcher", "fixed"]
 
 # The questions asked at each decision point, in request order (dispatch/requests.py builds
@@ -148,9 +148,59 @@ class JevSettings(_Strict):
         return cls(**values)
 
 
+# The Laya CDA decision matrix (issue #66): the criteria Laya scores every allowed answer on,
+# and their default weights. `[dispatcher.laya] weights` may change the weights, not the names.
+LAYA_CRITERIA: dict[str, str] = {
+    "correctness": "Correctness: will it solve the problem?",
+    "safety": "Safety: does it avoid harmful changes?",
+    "simplicity": "Simplicity: is it the least complex solution?",
+    "maintainability": "Maintainability: is it readable and sound long-term?",
+    "tool_fit": "Tool/resource fit: does it use the available tools and budget well?",
+    "user_preference": "User preference: does it align with the stated intent?",
+}
+DEFAULT_LAYA_WEIGHTS: dict[str, float] = {
+    "correctness": 0.30,
+    "safety": 0.20,
+    "simplicity": 0.15,
+    "maintainability": 0.15,
+    "tool_fit": 0.10,
+    "user_preference": 0.10,
+}
+
+
+class LayaSettings(_Strict):
+    """`[dispatcher.laya]`: Laya's vote in the consensus dispatcher (Jev scoring every allowed
+    answer on the Laya CDA matrix). Laya reaches Jev with the `[dispatcher.jev]` settings."""
+
+    weights: dict[str, float] = Field(default_factory=lambda: dict(DEFAULT_LAYA_WEIGHTS))
+    # The winner's weighted total (1-5 scale) must lead the runner-up by this much, also after
+    # every low-confidence score is moved one level against it.
+    min_margin: float = Field(default=0.2, ge=0, le=4)
+    # Extra rounds after a first round without agreement, before the run needs a human.
+    follow_up_rounds: int = Field(default=2, ge=0, le=5)
+
+    @field_validator("weights")
+    @classmethod
+    def _check_weights(cls, value: dict[str, float]) -> dict[str, float]:
+        unknown = sorted(set(value) - set(LAYA_CRITERIA))
+        missing = sorted(set(LAYA_CRITERIA) - set(value))
+        if unknown or missing:
+            raise ValueError(
+                f"weights must name exactly the criteria {', '.join(LAYA_CRITERIA)}"
+                + (f"; unknown: {', '.join(unknown)}" if unknown else "")
+                + (f"; missing: {', '.join(missing)}" if missing else "")
+            )
+        if any(w < 0 for w in value.values()):
+            raise ValueError("weights must not be negative")
+        if abs(sum(value.values()) - 1) > 1e-6:
+            raise ValueError(f"weights must add up to 1 (they add up to {sum(value.values()):g})")
+        return value
+
+
 class DispatcherConfig(_Strict):
-    primary: DispatcherName = "jev"
+    primary: DispatcherName = "consensus"
     jev: JevSettings = Field(default_factory=JevSettings)
+    laya: LayaSettings = Field(default_factory=LayaSettings)
 
     @model_validator(mode="before")
     @classmethod
