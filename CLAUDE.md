@@ -147,6 +147,8 @@ shapes unverified); the release workflow on the new action versions.
 ## 7. Open items / where we left off
 
 Open issues on Gane2506/baton:
+- **#59** tracking issue for the 2026-10-13 full code review: 48 findings filed as #11-#58,
+  priorities set by Jev (30 next, 10 medium, 8 low). Fix only what the maintainer approves.
 - **#10** (medium, needs decision): semantic cache for model calls (exact-match first;
   semantic match opt-in, never for the coder).
 - **#9** (low): dashboard Settings — left sidebar, typed editors (toggle, enum, number+unit,
