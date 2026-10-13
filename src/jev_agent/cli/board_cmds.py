@@ -45,6 +45,8 @@ COLUMN_FOR_STATE: dict[RunState, str] = {
     RunState.AWAITING_APPROVAL: "Awaiting approval",
     RunState.EXECUTING: "Running",
     RunState.INTEGRATING: "Running",
+    RunState.AWAITING_SHIP: "Awaiting approval",
+    RunState.SHIPPING: "Running",
     RunState.DONE: "Done",
     RunState.NEEDS_HUMAN: "Blocked",
     RunState.FAILED: "Blocked",

@@ -316,6 +316,12 @@ MIGRATIONS: list[str] = [
         heartbeat_at  TEXT NOT NULL
     );
     """,
+    # 12: what happens after both votes approve at D6 (issue #68): `jev run --auto-ship` or
+    # `--ask-before-ship` on the run and on a queue item; NULL: `[ship] after_approval`.
+    """
+    ALTER TABLE runs ADD COLUMN ship_mode TEXT CHECK (ship_mode IN ('merge', 'ask'));
+    ALTER TABLE queue ADD COLUMN ship_mode TEXT CHECK (ship_mode IN ('merge', 'ask'));
+    """,
 ]
 
 SCHEMA_VERSION = len(MIGRATIONS)

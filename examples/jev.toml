@@ -80,7 +80,9 @@
 
 # Open a GitHub pull request for a finished run (docs/ship.md): `jev ship RUN` pushes
 # jev/<run>/result to a new branch on `remote` and runs `gh pr create` with your gh login.
-# Off by default. It never force-pushes and never merges; branch protection still applies.
+# Off by default. It never force-pushes; branch protection still applies. When it is on, a D6
+# "ship" vote ships the run itself: "merge" opens the PR ready, waits for its checks and merges
+# it; "ask" waits for you (`jev ship approve|modify|stop RUN`) first.
 [ship]
 # enabled = false
 # remote = "origin"
@@ -89,6 +91,12 @@
 # draft = true                     # open PRs as drafts
 # labels = []                      # e.g. ["jev"]; the labels must exist in the repo
 # require_quality_pass = true      # refuse runs whose latest quality gate blocked
+# after_approval = "merge"         # or "ask"; unset: "merge" under consensus, else "ask"
+# merge_method = "squash"          # or "merge", "rebase"
+# require_checks = true            # a PR with no checks stops for you instead of merging
+# checks_grace_s = 120             # how long to wait for checks to appear
+# checks_timeout_s = 3600          # how long to wait for checks to finish
+# checks_poll_s = 30
 
 # Free OpenRouter models (docs/config.md "Free models"): no cost, but rate-limited (OpenRouter
 # documents 20 requests/minute and 50/day, or 1000/day once you bought 10 credits), and free

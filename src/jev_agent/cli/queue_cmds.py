@@ -12,7 +12,13 @@ from rich.markup import escape
 from rich.table import Table
 
 from jev_agent.cli.repo import RepoOption
-from jev_agent.cli.run_cmds import QualityOption, quality_level
+from jev_agent.cli.run_cmds import (
+    AskBeforeShipOption,
+    AutoShipOption,
+    QualityOption,
+    quality_level,
+    ship_mode_flag,
+)
 from jev_agent.cli.text import short
 from jev_agent.cli.wiring import fail, repo_context
 from jev_agent.config.servers_schema import NO_PROFILE
@@ -57,6 +63,8 @@ def item_flags(item: QueueItem) -> str:
         flags.append(f"profile={item.profile}")
     if item.quality:
         flags.append(f"quality={item.quality}")
+    if item.ship_mode:
+        flags.append("auto-ship" if item.ship_mode == "merge" else "ask-before-ship")
     return " ".join(flags)
 
 
@@ -81,11 +89,14 @@ def add(
         typer.Option("--profile", metavar="NAME", help="Workspace profile for the run."),
     ] = None,
     quality: QualityOption = None,
+    auto_ship: AutoShipOption = False,
+    ask_before_ship: AskBeforeShipOption = False,
     repo: RepoOption = Path("."),
 ) -> None:
     """Add an idea to the queue."""
     level = quality_level(quality)
     with repo_context(repo) as ctx:
+        mode = ship_mode_flag(ctx.config, auto_ship, ask_before_ship)
         if profile is not None and profile.strip() and profile != NO_PROFILE:
             try:
                 get_profile(ctx.config, profile)
@@ -102,6 +113,7 @@ def add(
                 no_learning=no_learning,
                 profile=profile,
                 quality=level,
+                ship_mode=mode,
             )
         except QueueError as exc:
             raise fail(str(exc)) from exc

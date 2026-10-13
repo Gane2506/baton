@@ -9,8 +9,9 @@ shows up as `done` without anyone touching the queue).
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Literal
+from typing import Literal, get_args
 
+from jev_agent.config.schema import ShipMode
 from jev_agent.core.learning import Learning, LearningError, check_profile_name
 from jev_agent.core.models import RunState
 from jev_agent.core.store import (
@@ -54,12 +55,12 @@ def priority_rank(priority: QueuePriority) -> int:
 def status_for_run(state: RunState) -> QueueStatus:
     """The queue status of an item whose run is in `state`.
 
-    A run waiting on a person (plan approval, NEEDS_HUMAN) is `waiting`; a run still in
+    A run waiting on a person (plan or ship approval, NEEDS_HUMAN) is `waiting`; a run still in
     progress, or interrupted and resumable, is `running`.
     """
     if state is RunState.DONE:
         return "done"
-    if state in (RunState.AWAITING_APPROVAL, RunState.NEEDS_HUMAN):
+    if state in (RunState.AWAITING_APPROVAL, RunState.AWAITING_SHIP, RunState.NEEDS_HUMAN):
         return "waiting"
     if state in (RunState.FAILED, RunState.BUDGET_EXCEEDED):
         return "failed"
@@ -137,11 +138,13 @@ def add_idea(
     no_learning: bool = False,
     profile: str | None = None,
     quality: str | None = None,
+    ship_mode: str | None = None,
 ) -> QueueItem:
     """Check the options and add an idea to the queue (`jev queue add`, the dashboard).
 
     Raises `QueueError` with a user-facing message for an empty idea, both learning options,
-    an unknown learning profile, an empty workspace profile, or an unknown priority or level.
+    an unknown learning profile, an empty workspace profile, or an unknown priority, level or
+    ship mode (`merge`: `--auto-ship`, `ask`: `--ask-before-ship`, None: the config's).
     """
     text = idea.strip()
     if not text:
@@ -167,6 +170,9 @@ def add_idea(
         level = None if quality is None else parse_level(quality)
     except ValueError as exc:
         raise QueueError(str(exc)) from exc
+    mode = next((m for m in get_args(ShipMode) if m == ship_mode), None)
+    if ship_mode is not None and mode is None:
+        raise QueueError(f"unknown ship mode {ship_mode!r} (use merge or ask)")
     return store.add_queue_item(
         text,
         rank,
@@ -175,6 +181,7 @@ def add_idea(
         no_learning=no_learning,
         profile=profile,
         quality=level,
+        ship_mode=mode,
     )
 
 
