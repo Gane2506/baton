@@ -62,6 +62,7 @@ from jev_agent.core.chat import (
     render_system_prompt,
 )
 from jev_agent.core.learning import Learning, LearningError, Lesson, learning_status
+from jev_agent.core.lease import RunInUseError
 from jev_agent.core.pipeline import PipelineError
 from jev_agent.core.store import NotFoundError
 from jev_agent.quality.levels import LEVELS, parse_level
@@ -283,7 +284,7 @@ class ChatLoop:
                     profile=meta.profile,
                 )
             )
-        except (LearningError, PipelineError, ValueError) as exc:
+        except (LearningError, PipelineError, RunInUseError, ValueError) as exc:
             console.print(f"[red]error:[/red] {escape(str(exc))}")
             return
         except KeyboardInterrupt:

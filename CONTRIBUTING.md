@@ -177,6 +177,7 @@ Module by module (every file under `src/jev_agent/`, except package `__init__.py
 | `core/learner.py` | The end-of-run learning step: scoring, D7, the learner role, applying its answer. |
 | `core/queue.py` | The idea queue: ordering, moves and the status of an item. |
 | `core/scheduler.py` | The scheduler: work through the queue one run at a time. |
+| `core/lease.py` | The run lease: at most one process drives a run at a time. |
 | `core/chat.py` | `jev chat` sessions: talk an idea through with a model, then launch a run from the brief. |
 | `core/ship.py` | `jev ship`: open a GitHub pull request for a finished run. |
 | `core/kpi.py` | KPIs of runs and of the pull requests `jev ship` opened. |

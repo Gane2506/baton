@@ -2,6 +2,27 @@
 
 Deviations from [PLAN.md](../PLAN.md) and choices it left open. Newest first.
 
+## 2026-10-13: Run lease (#61)
+
+Two processes (the dashboard and a terminal `jev resume`, say) could drive the same run at once.
+Jev picked the design: a lease row in the state DB with a heartbeat (ARBITRATED 0.28), over a
+per-run `flock` file like the scheduler's and over a hybrid of both.
+
+- **Table `run_leases`** (migration 11): run id, a random token per claim, pid, host,
+  `acquired_at`, `heartbeat_at`. Claim, renew and release are single `BEGIN IMMEDIATE`
+  transactions; renew and release only touch the row with their own token.
+- **Who holds it.** `Pipeline.start`, `approve`, `resume` and `advance` hold it for their whole
+  work (`core/lease.py`, `hold_run_lease`); `resume` takes it before it closes interrupted
+  attempts, so it never closes a live process's attempt. `cancel` only writes the store and
+  needs no lease.
+- **Staleness.** A holder on this host is live exactly while its pid is alive: a long blocking
+  step never loses the lease, and a killed process frees it at once. A holder on another host
+  (pid not checkable) is live while its heartbeat is under 60 s old; the holder renews every
+  15 s. A holder that finds its lease taken over is cancelled and raises `RunLeaseLostError`.
+- **Errors.** `RunInUseError` names the holder; the CLI prints it as an `error:` line, the
+  dashboard as the job message. The dashboard's in-memory per-run lock stays, and
+  `resume_risk` reports a live lease first.
+
 ## 2026-10-13: Medium-priority review fixes
 
 Tracking issue #59. Choices were decided with the `jev-decide` skill, as for batches A to E.
