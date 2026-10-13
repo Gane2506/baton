@@ -7,6 +7,8 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-13
+
 ### Added
 
 - **Consensus dispatcher: Jev votes, then Laya** ([#66](https://github.com/Gane2506/baton/issues/66)).
@@ -102,6 +104,12 @@ All notable changes to this project are documented here. The format is based on
 
 ### Fixed
 
+- **Jev option descriptions match the request contract; confidence is range-checked**
+  ([#35](https://github.com/Gane2506/baton/issues/35), thanks @KeuqS in
+  [#62](https://github.com/Gane2506/baton/pull/62)). Every allowed answer now reaches Jev with
+  its description, the instructions no longer mention state that is never sent, and a NaN,
+  infinite, negative, above-1 or overflowing confidence is rejected (the `jev` dispatcher then
+  falls back to rules).
 - **Two processes can no longer drive the same run** ([#61](https://github.com/Gane2506/baton/issues/61)).
   `jev run`, `approve`, `resume`, the scheduler and the dashboard hold a run lease in the state
   DB while they drive a run; a second one fails with "run ... is in use by another jev process,
@@ -279,5 +287,6 @@ First release, with the CLI named `jao`.
 - Times shown in UTC; a broken prompt template stops a run in a resumable `NEEDS_HUMAN`.
 - Tag-triggered release workflow.
 
-[Unreleased]: https://github.com/Gane2506/baton/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/Gane2506/baton/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/Gane2506/baton/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/Gane2506/baton/releases/tag/v0.2.0

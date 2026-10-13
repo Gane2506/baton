@@ -4,8 +4,8 @@ Context for Claude Code sessions working on this repo. Read this first, then the
 the repo docs are the source of truth; don't re-derive what's written there.
 
 State as of 2026-10-13: `main` = `a6dc73c`, CI green (Python 3.11–3.13), 932 tests passing,
-working tree clean, released **v0.2.0**; everything since (dashboard, quality gate, servers,
-ship/KPIs) is unreleased.
+working tree clean, released **v0.3.0** (consensus, planning gate, auto ship,
+Laya tuning, dashboard, quality gate, servers, ship/KPIs).
 
 ## 1. What this is
 

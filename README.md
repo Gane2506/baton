@@ -12,7 +12,7 @@
 
 <p>
   <a href="https://github.com/Gane2506/baton/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/Gane2506/baton/actions/workflows/ci.yml/badge.svg"></a>
-  <a href="https://github.com/Gane2506/baton/releases"><img alt="Version 0.2.0" src="https://img.shields.io/badge/version-0.2.0-orange?style=flat-square"></a>
+  <a href="https://github.com/Gane2506/baton/releases"><img alt="Version 0.3.0" src="https://img.shields.io/badge/version-0.3.0-orange?style=flat-square"></a>
   <a href="pyproject.toml"><img alt="Python 3.11 | 3.12 | 3.13" src="https://img.shields.io/badge/python-3.11%20%7C%203.12%20%7C%203.13-3776AB?style=flat-square&logo=python&logoColor=white"></a>
   <a href="LICENSE"><img alt="License: Apache-2.0" src="https://img.shields.io/badge/license-Apache--2.0-blue?style=flat-square"></a>
   <a href="https://github.com/astral-sh/ruff"><img alt="Ruff" src="https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json&style=flat-square"></a>
@@ -44,7 +44,7 @@
 
 </div>
 
-> **Status: Alpha (v0.2). Expect breaking changes.**
+> **Status: Alpha (v0.3). Expect breaking changes.**
 
 ## Why Baton
 
@@ -52,8 +52,10 @@ Coding agents are good at single tasks, but turning an idea into merged-quality 
 planning, checking the plan, handing out work, running tests and reviewing, by hand. Baton runs
 that pipeline on your git repository with the agents you already use (Claude Code, Codex CLI,
 OpenRouter models), while Jev, a decision model from TypeSafe, picks the agent, model and effort
-at every step. Every task runs on its own local branch, inside budgets you set, and nothing is
-pushed.
+at every step. By default every decision needs two confident votes, Jev first and then Laya (Jev
+scoring the options on a weighted decision matrix); when they disagree, the run stops for you
+instead of guessing. Every task runs on its own local branch, inside budgets you set, and
+nothing is pushed unless you turn shipping on.
 
 ## Features
 
@@ -67,7 +69,7 @@ terminal images; see [docs/dashboard.md](docs/dashboard.md#screenshots)).
     <td width="50%"><img alt="Dashboard run page: plan, tasks, decisions and attempts" src="docs/images/dashboard-run.png"></td>
     <td width="50%"><img alt="jev status RUN: plan summary, validation verdict, tasks with worker, model and spend" src="docs/images/cli-status-run.svg"></td>
   </tr>
-  <tr><td colspan="2"><b>Jev dispatching, rules fallback</b><br>Jev picks agent, model and effort at every decision point, with a confidence per answer; when it is unreachable or unsure, the deterministic rules dispatcher answers instead, and <code>jev log</code> says why. <a href="#how-it-works">The dispatcher</a></td></tr>
+  <tr><td colspan="2"><b>Two votes at every decision: Jev, then Laya</b><br>Jev picks agent, model and effort at every decision point, and Laya (Jev scoring each answer on a weighted decision matrix) must agree confidently; otherwise the question is asked again and then the run stops for a human. The validator challenges every plan choice, a voted reviewer checks each task, and <code>jev laya tune</code> suggests matrix weights from past outcomes. With <code>primary = "jev"</code>, Jev answers alone with the rules dispatcher as fallback, and <code>jev log</code> says why. <a href="#how-it-works">The dispatcher</a></td></tr>
   <tr><td colspan="2"><img alt="jev log RUN: decision timeline with Jev confidences and one rules fallback after a timeout" src="docs/images/cli-log.svg"></td></tr>
   <tr><td colspan="2"><b>Chat before you run</b><br><code>jev chat</code> asks which lessons to use, talks the idea through, writes a brief, then plans, runs or queues it. <a href="docs/chat.md">Chat</a></td></tr>
   <tr><td colspan="2"><img alt="jev chat session: learning choice, two exchanges, /brief and /plan" src="docs/images/cli-chat.svg" width="760"></td></tr>
