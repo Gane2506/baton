@@ -187,6 +187,15 @@ The connection to each server is reused for 60 s (`ControlMaster`, sockets in `.
 `SSH_AUTH_SOCK` is forwarded to the MCP process so ssh-agent keys work. You can run the server
 yourself for testing: `jev mcp servers --allow web` (stdio).
 
+## Pipeline tools: `jev mcp runs`
+
+A second minimal MCP server exposes the run pipeline to external agents:
+`run_list`, `run_status`, `quality_show` (read-only), plus `run_start` and
+`chat_send` behind `--allow-mutations`. `run_start` creates a run and stops —
+it never advances the pipeline or approves a gate; there is deliberately no
+`run_approve` tool (approval stays human). Every call is audit-logged
+(redacted) to `.jev/audit/mcp_runs.log`.
+
 ## Workspace profiles
 
 ```toml

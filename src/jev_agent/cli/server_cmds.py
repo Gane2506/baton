@@ -1,4 +1,4 @@
-"""`jev mcp servers`, `jev browser install` and `jev profile list|show|use` (docs/servers.md)."""
+"""`jev mcp servers|runs`, `jev browser install`, `jev profile list|show|use`."""
 
 from __future__ import annotations
 
@@ -16,9 +16,10 @@ from rich.table import Table
 
 from jev_agent import __version__
 from jev_agent.cli.repo import RepoOption
-from jev_agent.cli.wiring import cli_errors, fail, repo_config, repo_root
+from jev_agent.cli.wiring import cli_errors, fail, repo_config, repo_context, repo_root
 from jev_agent.config import STATE_DIRNAME, JevConfig
 from jev_agent.config.servers_schema import NO_PROFILE
+from jev_agent.mcp_runs import runs_mcp
 from jev_agent.servers.access import (
     READ_ONLY_ROLES,
     WRITE_ROLE,
@@ -107,6 +108,26 @@ def mcp_servers(
         config, root / STATE_DIRNAME, root, grants, run_id=run_id, role=role, runner=ssh_runner
     )
     servers_mcp(service, __version__).serve(sys.stdin, sys.stdout)
+
+
+# ---- jev mcp runs -------------------------------------------------------------------------
+
+
+@mcp_app.command("runs")
+def mcp_runs(
+    allow_mutations: Annotated[
+        bool,
+        typer.Option(
+            "--allow-mutations",
+            help="Also expose run_start and chat_send; without it the server is read-only.",
+        ),
+    ] = False,
+    repo: RepoOption = Path("."),
+) -> None:
+    """Serve the pipeline tools (run_list, run_status, run_start, quality_show, chat_send)
+    over stdio MCP. Every call is audit-logged (redacted)."""
+    with repo_context(repo, create=allow_mutations) as ctx:
+        runs_mcp(ctx, __version__, allow_mutations=allow_mutations).serve(sys.stdin, sys.stdout)
 
 
 # ---- jev browser install -----------------------------------------------------------------

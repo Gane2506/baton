@@ -18,6 +18,13 @@ All notable changes to this project are documented here. The format is based on
   fail-closed against `..` escapes and symlink breakouts. Ask-every-step runs wait at an
   explicit `AWAITING_*` gate per pipeline step. Run state DB schema v14 records the mode.
 
+- **`jev mcp runs`: pipeline tools for external agents.** A second minimal MCP server
+  (the same stdio JSON-RPC protocol as `jev mcp servers`, no SDK): `run_list`,
+  `run_status` and `quality_show` are read-only; `run_start` and `chat_send` need
+  `--allow-mutations`. `run_start` creates the run and records the `[autonomy]` mode
+  without advancing it or approving any gate; every call is audit-logged (redacted) to
+  `.jev/audit/mcp_runs.log`.
+
 - **Dashboard: Settings editor** ([#9](https://github.com/Gane2506/baton/issues/9)). Typed
   controls for the common `jev.toml` settings with a section list, validation exactly as `jev`
   loads the config, a diff before saving, reset to default, and atomic writes that keep

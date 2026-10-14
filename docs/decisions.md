@@ -2,6 +2,29 @@
 
 Deviations from [PLAN.md](../PLAN.md) and choices it left open. Newest first.
 
+## 2026-10-14: `jev mcp runs`: pipeline tools for external agents (workstream K)
+
+- **A second minimal MCP server, same wire protocol.** `src/jev_agent/mcp_runs.py`
+  reuses `servers/mcp.py`'s `Tool`/`McpServer` (stdio JSON-RPC, no SDK) for `run_list`,
+  `run_status`, `quality_show` (read-only) plus `run_start` and `chat_send` (mutating).
+  The mutating tools are hidden unless `jev mcp runs --allow-mutations` — the same
+  shape as `mcp servers` hiding its write tools without a medium grant — so the default
+  server is read-only.
+- **`run_start` creates but never advances.** Advancing would run worker agents
+  (unbounded time and spend inside a tool call); the `[autonomy]` mode is recorded on
+  the run and `jev resume` / `jev approve` move it forward, so the tool never approves
+  a gate (in `ask_every_step` mode it just creates the run). This differs deliberately
+  from `jev run`, which advances.
+- **`chat_send` returns the model's reply**, unlike `app/chat.py::turn`'s one-line
+  outcome, so the calling agent can continue the conversation (the chat is the driver
+  behind a manual-mode run).
+- **Audit.** Every tool call gets one redacted JSON line in `.jev/audit/mcp_runs.log`
+  via the existing `AuditLog` (same 0600/0700 permissions and credential redaction as
+  the servers log).
+- **`app/runs.py::create_run` now takes `RepoContext | AppContext`** (it only ever used
+  root/config/store/learning); the MCP server opens no workers or dispatcher, so it
+  starts fast and needs no model access for reads.
+
 ## 2026-10-14: Deterministic 0-100 ship score on the Laya scale
 
 - **No second scale.** The ship score reuses the six Laya criteria and the

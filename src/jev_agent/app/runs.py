@@ -7,7 +7,7 @@ prints or exits. Errors are `JevError` (context wiring) or domain exceptions
 
 from __future__ import annotations
 
-from jev_agent.app.context import AppContext
+from jev_agent.app.context import AppContext, RepoContext
 from jev_agent.config import STATE_DIRNAME
 from jev_agent.config.schema import ShipMode
 from jev_agent.core.learning import Learning, LearningError, check_profile_name, resolve_learning
@@ -22,12 +22,12 @@ from jev_agent.servers.profiles import (
 )
 
 
-def _learning(ctx: AppContext) -> Learning:
+def _learning(ctx: RepoContext | AppContext) -> Learning:
     assert ctx.learning is not None
     return ctx.learning
 
 
-def _autonomy_for_new_run(ctx: AppContext) -> tuple[str, bool, str | None]:
+def _autonomy_for_new_run(ctx: RepoContext | AppContext) -> tuple[str, bool, str | None]:
     """Map the `[autonomy]` config section onto the run's autonomy fields.
 
     Choosing `mode = "autonomous"` in config is the explicit opt-in (it is never
@@ -49,7 +49,7 @@ def _autonomy_for_new_run(ctx: AppContext) -> tuple[str, bool, str | None]:
 
 
 def create_run(
-    ctx: AppContext,
+    ctx: RepoContext | AppContext,
     idea: str,
     *,
     plan_only: bool = False,
