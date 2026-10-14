@@ -219,7 +219,7 @@ All notable changes to this project are documented here. The format is based on
   make even `jev status` send e.g. `GITHUB_TOKEN` to another host. Error messages now print
   config tables such as `[trust]` verbatim.
 - **Redaction covers common credential formats** (#27, security): GitHub, Slack, AWS and Google
-  tokens, private-key blocks, JWTs, `Authorization: token|Basic` values and `user:password@`
+  tokens, private-key blocks, JWTs, `Authorization` header values and `user:password@`
   in URLs, from one shared list that the quality gate's secret scan and the config check use
   too. Summaries are redacted before they are shortened, so no token prefix is left.
 - **Quality gate: tool errors block when the tool is required** (#18, #17, security). A check
