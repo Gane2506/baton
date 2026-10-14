@@ -1,23 +1,35 @@
+{# Chat transcript fragment. Rendered once inside chat.html's #chat-transcript and
+   re-fetched by live.js polling /chats/{id}/live. Keep this fragment
+   self-contained: it must not assume page chrome outside #chat-transcript.
+   New context vars (rail_chats, backends, suggestions, step_blocks,
+   approval_cards) are optional and guarded: the fragment renders fully
+   without them. #}
+{% from "macros.html" import csrf_input, icon, copy_button with context %}
+
 {% if meta %}
-<section class="panel tight">
-  <div class="status-line">
+<details class="meta-card" open>
+  <summary class="meta-summary">
     <span>{{ meta.backend }}{% if meta.model %} / <span class="mono">{{ meta.model }}</span>{% endif %}</span>
-    <span>learning {{ meta.learning.describe() }}</span>
-    <span>spent <strong>{{ meta.spent_usd | usd }}</strong> of {{ meta.budget_usd | usd }}</span>
-    {% if meta.quality %}<span>quality {{ meta.quality }}</span>{% endif %}
-    <span class="faint">created {{ meta.created_at | time }}</span>
+    <span class="faint">· spent <strong>{{ meta.spent_usd | usd }}</strong> of {{ meta.budget_usd | usd }}</span>
+  </summary>
+  <div class="meta-body">
+    <div class="status-line">
+      <span>learning {{ meta.learning.describe() }}</span>
+      {% if meta.quality %}<span>quality {{ meta.quality }}</span>{% endif %}
+      <span class="faint">created {{ meta.created_at | time }}</span>
+    </div>
+    {% if meta.runs %}
+    <p class="small">Runs: {% for r in meta.runs %}<a class="mono" href="/runs/{{ r.run_id }}">{{ r.run_id }}</a> ({{ r.kind }}){% if not loop.last %}, {% endif %}{% endfor %}</p>
+    {% endif %}
+    {% if meta.queue_items %}
+    <p class="small">Queued: {% for q in meta.queue_items %}#{{ q.id }} ({{ q.priority }}){% if not loop.last %}, {% endif %}{% endfor %}</p>
+    {% endif %}
   </div>
-  {% if meta.runs %}
-  <p class="small">Runs: {% for r in meta.runs %}<a class="mono" href="/runs/{{ r.run_id }}">{{ r.run_id }}</a> ({{ r.kind }}){% if not loop.last %}, {% endif %}{% endfor %}</p>
-  {% endif %}
-  {% if meta.queue_items %}
-  <p class="small">Queued: {% for q in meta.queue_items %}#{{ q.id }} ({{ q.priority }}){% if not loop.last %}, {% endif %}{% endfor %}</p>
-  {% endif %}
-</section>
+</details>
 {% endif %}
 
 {% if job and job.state == "running" %}
-<p class="muted small">waiting for the model... (started {{ job.started_at | time }})</p>
+<p class="muted small"><span class="pulse" aria-hidden="true"></span>waiting for the model… (started {{ job.started_at | time }})</p>
 {% elif job and job.state == "failed" %}
 <p class="flash error">{{ job.message }}</p>
 {% elif job and job.state == "finished" %}
@@ -25,20 +37,66 @@
 {% endif %}
 
 {% if meta and meta.brief %}
-<section class="panel">
-  <h2>Brief</h2>
+<details class="brief-card" open>
+  <summary><strong>Brief</strong><span class="faint"> — written from this chat</span></summary>
   <pre>{{ meta.brief }}</pre>
-</section>
+</details>
+{% endif %}
+
+{% if step_blocks is defined and step_blocks %}
+<div class="steps" aria-label="Agent activity">
+  {% for s in step_blocks %}
+  <details class="step-block"{% if s.open %} open{% endif %}>
+    <summary><span class="step-title">{{ s.title }}</span><span class="faint"> — {{ s.summary }}</span></summary>
+    <div class="step-detail">{{ s.detail_html | safe }}</div>
+  </details>
+  {% endfor %}
+</div>
+{% endif %}
+
+{% if approval_cards is defined and approval_cards %}
+<div class="approvals" aria-label="Pending approvals">
+  {% for c in approval_cards %}
+  <div class="approval-card" data-run-id="{{ c.run_id }}">
+    <div class="approval-head">
+      <span class="badge">{{ c.kind }}</span>
+      <a class="mono small" href="/runs/{{ c.run_id }}">{{ c.run_id }}</a>
+    </div>
+    <p class="approval-summary">{{ c.plan_summary }}</p>
+    <dl class="facts approval-facts">
+      {% if c.cost_estimate %}<dt>Est. cost</dt><dd>{{ c.cost_estimate }}</dd>{% endif %}
+      {% if c.diff_stat %}<dt>Diff</dt><dd>{{ c.diff_stat }}</dd>{% endif %}
+    </dl>
+    <div class="approval-actions">
+      <form class="inline" method="post" action="/runs/{{ c.run_id }}/approve">{{ csrf_input() }}<button type="submit" class="small primary">Approve</button></form>
+      <form class="inline approval-modify" method="post" action="/runs/{{ c.run_id }}/modify">{{ csrf_input() }}<input type="text" name="notes" placeholder="What should change?" aria-label="Requested changes" maxlength="500"><button type="submit" class="small">Request changes</button></form>
+      <form class="inline" method="post" action="/runs/{{ c.run_id }}/stop">{{ csrf_input() }}<button type="submit" class="small danger">Stop</button></form>
+    </div>
+  </div>
+  {% endfor %}
+</div>
 {% endif %}
 
 <h2 class="section">Transcript</h2>
-<section class="panel">
+<div class="turns">
 {% for e in entries %}
-  <div class="turn {{ e.kind if e.kind in ('user', 'assistant') else 'other' }}">
-    <div class="who">{{ e.kind }} / {{ e.at | time }}</div>
-    <div class="body">{{ e.text }}</div>
+  <div class="turn turn--{% if e.kind == 'user' %}user{% elif e.kind == 'assistant' %}assistant{% else %}other{% endif %}" data-turn-id="{{ e.id or loop.index }}">
+    <div class="turn-head">
+      <span class="turn-who">{{ "You" if e.kind == "user" else ("Baton" if e.kind == "assistant" else "System") }}</span>
+      <span class="turn-time faint small">{{ e.at | time }}</span>
+      <span class="turn-actions">
+        {{ copy_button(e.text, "Copy message") }}
+        {% if loop.last and e.kind == "assistant" %}
+        <form class="inline" method="post" action="/chats/{{ chat_id }}/retry">{{ csrf_input() }}<button type="submit" class="small" title="Regenerate this reply">{{ icon("i-resume", "sm") }}<span>Retry</span></button></form>
+        {% endif %}
+      </span>
+    </div>
+    {# Assistant turns arrive as rendered Markdown (Worker 3 sets body_html via
+       render_markdown); user turns stay plain escaped text, like ChatGPT. #}
+    {% set assistant_html = e.body_html if e.kind == "assistant" and e.body_html is defined and e.body_html else none %}
+    <div class="turn-body{% if assistant_html %} markdown{% endif %}">{% if assistant_html %}{{ assistant_html }}{% else %}{{ e.text }}{% endif %}</div>
   </div>
 {% else %}
 <div class="empty"><div class="title">The transcript is empty</div><p>Send the first message to begin.</p></div>
 {% endfor %}
-</section>
+</div>

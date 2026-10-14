@@ -1,5 +1,6 @@
 <!doctype html>
 <html lang="en">
+{% from "macros.html" import csrf_input with context %}
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -13,8 +14,9 @@
 <script src="/static/app.js" defer></script>
 <script src="/static/conn.js" defer></script>
 <script src="/static/preview.js" defer></script>
+{% block extra_head %}{% endblock %}
 </head>
-<body>
+<body class="{% block body_class %}{% endblock %}">
 <a class="skip" href="#main">Skip to content</a>
 
 {# One icon family (lucide, ISC) inlined as symbols. Stroke comes from .icon. #}
@@ -40,6 +42,7 @@
   <symbol id="i-up" viewBox="0 0 24 24"><path d="m5 12 7-7 7 7"/><path d="M12 19V5"/></symbol>
   <symbol id="i-down" viewBox="0 0 24 24"><path d="M12 5v14"/><path d="m19 12-7 7-7-7"/></symbol>
   <symbol id="i-right" viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"/></symbol>
+  <symbol id="i-left" viewBox="0 0 24 24"><path d="m15 18-6-6 6-6"/></symbol>
   <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></symbol>
   <symbol id="i-branch" viewBox="0 0 24 24"><path d="M15 6a9 9 0 0 0-9 9V3"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/></symbol>
   <symbol id="i-terminal" viewBox="0 0 24 24"><path d="M12 19h8"/><path d="m4 17 6-6-6-6"/></symbol>
@@ -64,7 +67,11 @@
       <a href="/"><img src="/static/favicon.svg" alt="" width="26" height="26"><span class="name">Baton</span></a>
       <span class="ver">v{{ version }}</span>
     </div>
-    <a class="sidebar-new" href="/chats"><svg class="icon" aria-hidden="true"><use href="#i-plus"></use></svg>New chat</a>
+    <form class="sidebar-new-form" method="post" action="/chats/new">
+      {{ csrf_input() }}
+      <input type="hidden" name="worker" value="api">
+      <button type="submit" class="sidebar-new"><svg class="icon" aria-hidden="true"><use href="#i-plus"></use></svg><span>New chat</span></button>
+    </form>
     <nav aria-label="Main">
       {% for group, hrefs in groups.items() %}
       <div class="nav-group">
@@ -104,7 +111,10 @@
     </div>
   </div>
 
-  {% include "_panes.html" %}
+  {# Mission-control side panes. base.html no longer mounts them on every page:
+     pages that need them (currently only run detail) opt in by overriding the
+     "panes" block with the panes partial. #}
+  {% block panes %}{% endblock %}
 </div>
 </body>
 </html>

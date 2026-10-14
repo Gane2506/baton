@@ -1,36 +1,95 @@
 {% extends "base.html" %}
 {% from "macros.html" import csrf_input, icon, copy_button with context %}
 {% block title %}Chat {{ chat_id }}{% endblock %}
-{% block content_inner_class %} content-inner--chat{% endblock %}
+{% block body_class %}chat-fullscreen{% endblock %}
+{% block extra_head %}<link rel="stylesheet" href="/static/chat.css">{% endblock %}
 {% block content %}
-<div class="chat-pane pane-chat" data-chat-pane="{{ chat_id }}">
-  <header class="chat-head panel">
-    <div class="chat-titles">
-      <div class="crumbs"><a href="/chats">Chats</a></div>
-      <h1>Chat <span class="mono">{{ chat_id }}</span>{{ copy_button(chat_id, "Copy chat id") }}</h1>
-      <p class="lede">Same session the CLI continues with <code>jev chat --resume {{ chat_id }}</code>.</p>
-    </div>
-    <div class="chat-actions actions">
-      <form class="inline" method="post" action="/chats/{{ chat_id }}/brief">{{ csrf_input() }}<button type="submit"{% if busy %} disabled{% endif %}>Write brief</button></form>
-      <form class="inline" method="post" action="/chats/{{ chat_id }}/start">{{ csrf_input() }}<input type="hidden" name="action" value="plan"><button type="submit"{% if busy %} disabled{% endif %}>{{ icon("i-run", "sm") }}Plan it</button></form>
-      <form class="inline" method="post" action="/chats/{{ chat_id }}/start">{{ csrf_input() }}<input type="hidden" name="action" value="run"><button class="primary" type="submit"{% if busy %} disabled{% endif %}>Run it</button></form>
-      <form class="inline" method="post" action="/chats/{{ chat_id }}/queue">{{ csrf_input() }}<button type="submit"{% if busy %} disabled{% endif %}>Queue it</button></form>
-    </div>
-  </header>
+<div id="chat-layout" data-chat-id="{{ chat_id }}">
+  {# Default worker for the one-click New chat form: first ready backend. #}
+  {% set _nw = namespace(worker=none) %}
+  {% if backends is defined and backends is mapping %}
+    {% for _name, _pair in backends.items() %}
+      {% if _nw.worker is none and _pair[0] %}{% set _nw.worker = _name %}{% endif %}
+    {% endfor %}
+  {% endif %}
 
-  <div class="chat-history" id="chat-live" data-live="/chats/{{ chat_id }}/live" data-live-every="{{ refresh_ms }}" aria-label="Chat transcript">
-  {% include "_chat_live.html" %}
+  <aside id="chat-rail" aria-label="Conversations">
+    <div class="rail-top">
+      <form class="rail-new-form" method="post" action="/chats/new">
+        {{ csrf_input() }}
+        <input type="hidden" name="worker" value="{{ _nw.worker or 'api' }}">
+        <button type="submit" class="button primary rail-new">{{ icon("i-plus", "sm") }}<span>New chat</span></button>
+      </form>
+      <button id="rail-toggle" type="button" class="icon-btn" aria-expanded="true" aria-controls="chat-rail" aria-label="Collapse conversation list">{{ icon("i-left", "sm") }}</button>
+    </div>
+    {% if rail_chats is defined and rail_chats %}
+    <nav class="rail-list" aria-label="Saved chats">
+      {% for cmeta, ctitle in rail_chats %}
+      <a href="/chats/{{ cmeta.chat_id }}" class="rail-item{% if cmeta.chat_id == chat_id %} rail-item--active{% endif %}"{% if cmeta.chat_id == chat_id %} aria-current="page"{% endif %}>
+        <span class="rail-item-title">{{ ctitle or "Untitled chat" }}</span>
+        <span class="rail-item-sub"><span class="mono">{{ cmeta.chat_id }}</span> · {{ cmeta.updated_at | time }}</span>
+      </a>
+      {% endfor %}
+    </nav>
+    {% else %}
+    <p class="rail-empty muted small">No saved chats yet.</p>
+    {% endif %}
+  </aside>
+
+  <div id="chat-main">
+    <header id="chat-header">
+      <button id="sidebar-toggle" type="button" class="icon-btn" aria-expanded="false" aria-controls="app-shell" aria-label="Expand sidebar">{{ icon("i-right", "sm") }}</button>
+      <h1 class="chat-title">
+        {% if chat_title is defined and chat_title %}{{ chat_title }}{% else %}Chat <span class="mono">{{ chat_id }}</span>{% endif %}
+        {{ copy_button(chat_id, "Copy chat id") }}
+      </h1>
+      <a id="exit-fullscreen" class="button ghost small" href="/chats">{{ icon("i-x", "sm") }}<span>Chats</span></a>
+    </header>
+
+    <div id="chat-transcript" data-live="/chats/{{ chat_id }}/live" data-live-every="{{ refresh_ms }}" aria-label="Chat transcript" role="log" aria-live="polite">
+      {% include "_chat_live.html" %}
+    </div>
+
+    {% if suggestions is defined and suggestions and not entries %}
+    <div id="suggestion-chips" role="group" aria-label="Suggested prompts">
+      {% for s in suggestions %}
+      <button type="button" class="chip" data-chip-text="{{ s }}">{{ s }}</button>
+      {% endfor %}
+    </div>
+    {% endif %}
+
+    <div id="action-bar" role="group" aria-label="Turn this chat into work">
+      <form class="inline" method="post" action="/chats/{{ chat_id }}/brief">{{ csrf_input() }}<button type="submit" class="small"{% if busy %} disabled{% endif %}>Write brief</button></form>
+      <form class="inline" method="post" action="/chats/{{ chat_id }}/start">{{ csrf_input() }}<input type="hidden" name="action" value="plan"><button type="submit" class="small"{% if busy %} disabled{% endif %}>{{ icon("i-log", "sm") }}Plan it</button></form>
+      <form class="inline" method="post" action="/chats/{{ chat_id }}/start">{{ csrf_input() }}<input type="hidden" name="action" value="run"><button type="submit" class="small primary"{% if busy %} disabled{% endif %}>{{ icon("i-run", "sm") }}Run it</button></form>
+      <form class="inline" method="post" action="/chats/{{ chat_id }}/queue">{{ csrf_input() }}<button type="submit" class="small"{% if busy %} disabled{% endif %}>Queue it</button></form>
+    </div>
+
+    <form id="chat-composer" method="post" action="/chats/{{ chat_id }}/send">
+      {{ csrf_input() }}
+      <div class="composer-row">
+        {% if backends is defined and backends %}
+        <select id="composer-backend" name="worker" aria-label="Chat backend">
+          {% if backends is mapping %}
+            {% for name, pair in backends.items() %}
+          <option value="{{ name }}"{% if not pair[0] %} disabled{% endif %}{% if meta and meta.backend == name %} selected{% endif %}>{{ name }} · {{ pair[1] }}</option>
+            {% endfor %}
+          {% else %}
+            {% for name, note, ok in backends %}
+          <option value="{{ name }}"{% if not ok %} disabled{% endif %}{% if meta and meta.backend == name %} selected{% endif %}>{{ name }} · {{ note }}</option>
+            {% endfor %}
+          {% endif %}
+        </select>
+        {% endif %}
+        <label class="sr-only" for="composer-text">Message</label>
+        <textarea id="composer-text" name="text" rows="2" required placeholder="Message Baton…" aria-label="Message Baton"></textarea>
+        <button id="composer-stop" type="button"{% if not busy %} hidden{% endif %}>{{ icon("i-stop", "sm") }}<span>Stop</span></button>
+        <button id="composer-send" class="primary" type="submit"{% if busy %} disabled{% endif %}>{{ icon("i-up", "sm") }}<span>Send</span></button>
+      </div>
+      {% if busy %}<p class="muted small composer-status"><span class="pulse" aria-hidden="true"></span>waiting for the model…</p>{% endif %}
+    </form>
   </div>
 
-  <form class="chat-input panel" method="post" action="/chats/{{ chat_id }}/send">
-    {{ csrf_input() }}
-    <label class="muted" for="text">Message</label>
-    <div class="chat-input-row">
-      <textarea id="text" name="text" rows="2" required placeholder="Talk the idea through; then Write brief, then Plan it or Run it"></textarea>
-      <button class="primary" type="submit"{% if busy %} disabled{% endif %}>Send</button>
-    </div>
-    {% if busy %}<p class="muted small">waiting for the model...</p>{% endif %}
-    <p class="hint">Plan it and Run it work from the chat's brief (write one first); Queue it adds the brief to the idea queue.</p>
-  </form>
+  {% include "_workpanel.html" %}
 </div>
 {% endblock %}

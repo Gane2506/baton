@@ -1,0 +1,777 @@
+/* ============================================================================
+   Baton web UI — fullscreen chat view (/chats/{id})
+
+   Scoped entirely under body.chat-fullscreen so no rule here can leak onto
+   other pages. ChatGPT/Claude-inspired control plane: conversation rail,
+   centered transcript, compact action bar + composer, tabbed work-product
+   panel. Palette, type scale and spacing come from style.css variables only.
+
+   No-JS contract: every control is a real form/button; collapsed states only
+   change via JS-added classes, so without JS everything stays visible.
+   ========================================================================== */
+
+[hidden] { display: none !important; }
+
+.sr-only {
+  position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0;
+  overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+}
+
+@keyframes chat-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+
+.pulse {
+  display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+  background: var(--accent); margin-right: var(--s2);
+  animation: chat-pulse 1.6s ease-in-out infinite;
+}
+
+/* ---- fullscreen shell ------------------------------------------------------
+   The chat page renders no side panes, so the app grid drops its third track
+   and the app sidebar becomes a 56px icon rail (body.nav-open restores it). */
+
+@media (min-width: 1081px) {
+  .chat-fullscreen .shell.app-shell {
+    grid-template-columns: 56px minmax(0, 1fr);
+    min-height: 100dvh;
+  }
+  .chat-fullscreen.nav-open .shell.app-shell {
+    grid-template-columns: var(--sidebar-w, 236px) minmax(0, 1fr);
+  }
+
+  .chat-fullscreen .sidebar {
+    width: 56px;
+    overflow-x: hidden;
+  }
+  /* Icon rail: keep every label in the accessibility tree, hide it visually. */
+  .chat-fullscreen .sidebar .brand .name,
+  .chat-fullscreen .sidebar .brand .ver,
+  .chat-fullscreen .sidebar .nav-label,
+  .chat-fullscreen .sidebar .sidebar-foot .conn-label,
+  .chat-fullscreen .sidebar .sidebar-foot .theme-pick,
+  .chat-fullscreen .sidebar .sidebar-foot > div:last-child {
+    display: none;
+  }
+  .chat-fullscreen .sidebar .sidebar-new,
+  .chat-fullscreen .sidebar nav a {
+    font-size: 0;
+    justify-content: center;
+    padding-left: 0;
+    padding-right: 0;
+  }
+  .chat-fullscreen .sidebar .sidebar-new .icon,
+  .chat-fullscreen .sidebar nav a .icon {
+    margin: 0;
+  }
+  .chat-fullscreen .sidebar .conn-status {
+    justify-content: center;
+  }
+  /* Expanded again: restore labels. */
+  .chat-fullscreen.nav-open .sidebar {
+    width: var(--sidebar-w, 236px);
+  }
+  .chat-fullscreen.nav-open .sidebar .brand .name,
+  .chat-fullscreen.nav-open .sidebar .brand .ver,
+  .chat-fullscreen.nav-open .sidebar .nav-label,
+  .chat-fullscreen.nav-open .sidebar .sidebar-foot .conn-label,
+  .chat-fullscreen.nav-open .sidebar .sidebar-foot .theme-pick,
+  .chat-fullscreen.nav-open .sidebar .sidebar-foot > div:last-child {
+    display: revert;
+  }
+  .chat-fullscreen.nav-open .sidebar .sidebar-new,
+  .chat-fullscreen.nav-open .sidebar nav a {
+    font-size: revert;
+    justify-content: flex-start;
+  }
+}
+
+/* The chat owns the whole content column: no max-width, no page padding. */
+.chat-fullscreen .content-inner {
+  max-width: none;
+  height: 100dvh;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+.chat-fullscreen .content-inner main {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ---- three-pane layout: rail | chat | work panel -------------------------- */
+
+#chat-layout {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  align-items: stretch;
+}
+
+/* ---- conversation rail ---------------------------------------------------- */
+
+#chat-rail {
+  flex: 0 0 auto;
+  width: 280px;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  border-right: 1px solid var(--border);
+  transition: width 160ms ease;
+  overflow: hidden;
+}
+
+.rail-top {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  padding: var(--s3);
+  border-bottom: 1px solid var(--border);
+}
+
+.rail-new-form {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin: 0;
+}
+
+.rail-new-form .rail-new {
+  width: 100%;
+}
+
+#rail-toggle .icon {
+  transition: transform 160ms ease;
+}
+
+.rail-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--s2);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.rail-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: var(--s2) var(--s3);
+  border-radius: 8px;
+  color: var(--fg);
+  text-decoration: none;
+  border: 1px solid transparent;
+  min-width: 0;
+}
+
+.rail-item:hover {
+  background: var(--hover);
+}
+
+.rail-item--active {
+  background: var(--accent-soft);
+  border-color: color-mix(in srgb, var(--accent) 35%, transparent);
+}
+
+.rail-item-title {
+  font-size: var(--fs-13);
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.rail-item-sub {
+  font-size: var(--fs-11);
+  color: var(--faint);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.rail-empty {
+  padding: var(--s4) var(--s3);
+}
+
+/* Rail collapsed: slim strip, toggle stays reachable. */
+#chat-layout.rail-collapsed #chat-rail {
+  width: 56px;
+}
+#chat-layout.rail-collapsed .rail-top {
+  flex-direction: column;
+  padding: var(--s3) var(--s2);
+}
+#chat-layout.rail-collapsed .rail-new-form {
+  flex: 0 0 auto;
+}
+#chat-layout.rail-collapsed .rail-new {
+  width: 34px;
+  height: 34px;
+  padding: 0;
+}
+#chat-layout.rail-collapsed .rail-new span,
+#chat-layout.rail-collapsed .rail-list,
+#chat-layout.rail-collapsed .rail-empty {
+  display: none;
+}
+#chat-layout.rail-collapsed #rail-toggle .icon {
+  transform: rotate(180deg);
+}
+
+/* ---- center column -------------------------------------------------------- */
+
+#chat-main {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+}
+
+#chat-header {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: var(--s3);
+  padding: var(--s2) var(--s4);
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.chat-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin: 0;
+  font-size: var(--fs-16);
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+}
+
+#chat-transcript {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--s4) var(--s5);
+}
+
+/* Readable measure for the conversation, centered like the reference UIs. */
+#chat-transcript > * {
+  max-width: 880px;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+/* ---- suggestion chips ------------------------------------------------------ */
+
+#suggestion-chips {
+  flex: 0 0 auto;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s2);
+  justify-content: center;
+  padding: 0 var(--s5) var(--s3);
+  max-width: 880px;
+  margin: 0 auto;
+  width: 100%;
+}
+
+.chip {
+  height: auto;
+  min-height: 30px;
+  padding: var(--s2) var(--s4);
+  border-radius: 999px;
+  font-weight: 400;
+  color: var(--muted);
+  background: var(--surface);
+}
+
+.chip:hover {
+  color: var(--fg);
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+/* ---- action bar: brief → plan → run → queue -------------------------------- */
+
+#action-bar {
+  flex: 0 0 auto;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: var(--s2);
+  padding: 0 var(--s5) var(--s2);
+}
+
+/* ---- composer ---------------------------------------------------------------- */
+
+#chat-composer {
+  flex: 0 0 auto;
+  margin: 0 auto var(--s4);
+  width: min(880px, calc(100% - var(--s5) * 2));
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: 16px;
+  padding: var(--s3);
+}
+
+#chat-composer:focus-within {
+  border-color: var(--accent);
+}
+
+.composer-row {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--s2);
+}
+
+#composer-backend {
+  flex: 0 1 auto;
+  width: auto;
+  max-width: 200px;
+  height: 32px;
+  font-size: var(--fs-12);
+  border-color: transparent;
+  background: transparent;
+  color: var(--muted);
+  padding-left: 0;
+}
+
+#composer-backend:hover {
+  color: var(--fg);
+}
+
+#composer-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  min-height: 44px;
+  max-height: 200px;
+  resize: none;
+  padding: var(--s2);
+  font-size: var(--fs-14);
+}
+
+#composer-text:focus {
+  outline: none;
+}
+
+#composer-send,
+#composer-stop {
+  flex: 0 0 auto;
+  border-radius: 999px;
+  height: 34px;
+  padding: 0 var(--s4);
+}
+
+.composer-status {
+  margin: var(--s2) 0 0;
+  display: flex;
+  align-items: center;
+}
+
+/* ---- transcript turns -------------------------------------------------------- */
+
+.turns {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s4);
+}
+
+.turn {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s1);
+  min-width: 0;
+}
+
+.turn-head {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  font-size: var(--fs-11);
+}
+
+.turn-who {
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+}
+
+.turn-actions {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s1);
+}
+
+.turn-body {
+  font-size: var(--fs-14);
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
+.turn--user {
+  align-items: flex-end;
+}
+
+.turn--user .turn-head {
+  flex-direction: row-reverse;
+}
+
+.turn--user .turn-actions {
+  margin-left: 0;
+  margin-right: auto;
+}
+
+.turn--user .turn-body {
+  /* Plain-text user turns keep their newlines; Markdown manages its own. */
+  white-space: pre-wrap;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  border-top-right-radius: 4px;
+  padding: var(--s3) var(--s4);
+  max-width: 85%;
+}
+
+.turn--assistant .turn-body {
+  max-width: 100%;
+}
+
+/* ---- meta / brief cards (collapsible, open by default) ----------------------- */
+
+.meta-card,
+.brief-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  margin-bottom: var(--s4);
+}
+
+.meta-card > summary,
+.brief-card > summary {
+  cursor: pointer;
+  padding: var(--s3) var(--s4);
+  font-size: var(--fs-13);
+  display: flex;
+  align-items: baseline;
+  gap: var(--s2);
+  flex-wrap: wrap;
+  list-style: none;
+}
+
+.meta-card > summary::-webkit-details-marker,
+.brief-card > summary::-webkit-details-marker {
+  display: none;
+}
+
+.meta-body {
+  padding: 0 var(--s4) var(--s3);
+  border-top: 1px solid var(--border);
+  padding-top: var(--s3);
+}
+
+.brief-card pre {
+  margin: 0;
+  padding: var(--s3) var(--s4) var(--s4);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: var(--fs-13);
+}
+
+/* ---- agent step blocks ------------------------------------------------------- */
+
+.steps {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+  margin-bottom: var(--s4);
+}
+
+.step-block {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.step-block > summary {
+  cursor: pointer;
+  padding: var(--s2) var(--s3);
+  font-size: var(--fs-13);
+  display: flex;
+  align-items: baseline;
+  gap: var(--s2);
+  flex-wrap: wrap;
+}
+
+.step-title {
+  font-weight: 600;
+}
+
+.step-detail {
+  border-top: 1px solid var(--border);
+  padding: var(--s3);
+  font-size: var(--fs-13);
+}
+
+/* ---- approval cards ------------------------------------------------------------ */
+
+.approvals {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s3);
+  margin-bottom: var(--s4);
+}
+
+.approval-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--warn);
+  border-radius: 10px;
+  padding: var(--s4) var(--s5);
+}
+
+.approval-head {
+  display: flex;
+  align-items: center;
+  gap: var(--s3);
+  margin-bottom: var(--s2);
+}
+
+.approval-summary {
+  margin: 0 0 var(--s3);
+  font-size: var(--fs-14);
+  line-height: 1.5;
+}
+
+.approval-facts {
+  margin-bottom: var(--s3);
+}
+
+.approval-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--s2);
+}
+
+.approval-modify {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s2);
+  flex: 1 1 220px;
+}
+
+.approval-modify input {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 30px;
+}
+
+/* ---- work-product panel -------------------------------------------------------- */
+
+#work-panel {
+  flex: 0 0 auto;
+  width: 400px;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  border-left: 1px solid var(--border);
+  transition: width 160ms ease;
+  overflow: hidden;
+}
+
+.work-head {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: var(--s1);
+  padding: var(--s2) var(--s3);
+  border-bottom: 1px solid var(--border);
+}
+
+#work-tabs {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  gap: 2px;
+  overflow-x: auto;
+}
+
+#work-tabs [data-work-tab] {
+  flex: 0 0 auto;
+  height: 30px;
+  padding: 0 var(--s3);
+  border: 0;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: var(--fs-13);
+  font-weight: 500;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+#work-tabs [data-work-tab]:hover {
+  color: var(--fg);
+  background: transparent;
+}
+
+#work-tabs [data-work-tab][aria-selected="true"] {
+  color: var(--fg);
+  border-bottom-color: var(--accent);
+}
+
+.work-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: transparent;
+  flex: 0 0 auto;
+}
+
+/* Lit by JS while the tab's stream is active. */
+.work-dot.on {
+  background: var(--accent);
+  animation: chat-pulse 1.6s ease-in-out infinite;
+}
+
+#work-panel-toggle .icon {
+  transition: transform 160ms ease;
+}
+
+#work-bodies {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--s3);
+}
+
+#work-bodies [data-work-body] {
+  min-width: 0;
+}
+
+/* Panel collapsed: strip with just the toggle. */
+#chat-layout.work-collapsed #work-panel {
+  width: 52px;
+}
+#chat-layout.work-collapsed #work-tabs,
+#chat-layout.work-collapsed #work-bodies {
+  display: none;
+}
+#chat-layout.work-collapsed .work-head {
+  flex-direction: column;
+  padding: var(--s3) var(--s2);
+}
+#chat-layout.work-collapsed #work-panel-toggle .icon {
+  transform: rotate(180deg);
+}
+
+/* ---- narrow screens: rail becomes an overlay drawer ---------------------------- */
+
+@media (max-width: 1080px) {
+  #chat-layout {
+    flex-direction: column;
+    overflow-y: auto;
+  }
+
+  #chat-rail {
+    position: fixed;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    z-index: 80;
+    width: min(320px, 85vw);
+    transform: translateX(-102%);
+    transition: transform 180ms ease;
+    box-shadow: none;
+  }
+
+  #chat-layout.rail-open #chat-rail {
+    transform: none;
+    box-shadow: 8px 0 32px rgba(0, 0, 0, 0.35);
+  }
+
+  /* The collapsed-strip variant makes no sense as a drawer; ignore it. */
+  #chat-layout.rail-collapsed #chat-rail {
+    width: min(320px, 85vw);
+  }
+  #chat-layout.rail-collapsed .rail-top {
+    flex-direction: row;
+  }
+  #chat-layout.rail-collapsed .rail-new-form {
+    flex: 1 1 auto;
+  }
+  #chat-layout.rail-collapsed .rail-new {
+    width: 100%;
+    height: 30px;
+  }
+  #chat-layout.rail-collapsed .rail-new span,
+  #chat-layout.rail-collapsed .rail-list,
+  #chat-layout.rail-collapsed .rail-empty {
+    display: revert;
+  }
+
+  #chat-main {
+    min-height: 70dvh;
+  }
+
+  #chat-transcript {
+    overflow-y: visible;
+    padding: var(--s3) var(--s4);
+  }
+
+  #work-panel {
+    width: auto;
+    border-left: 0;
+    border-top: 1px solid var(--border);
+    max-height: 48dvh;
+  }
+
+  #chat-layout.work-collapsed #work-panel {
+    width: auto;
+    max-height: none;
+  }
+  #chat-layout.work-collapsed .work-head {
+    flex-direction: row;
+  }
+
+  #chat-composer {
+    width: calc(100% - var(--s4) * 2);
+    margin-bottom: var(--s3);
+  }
+}
+
+/* ---- reduced motion -------------------------------------------------------------- */
+
+@media (prefers-reduced-motion: reduce) {
+  .pulse,
+  .work-dot.on {
+    animation: none;
+  }
+  #chat-rail,
+  #work-panel,
+  #rail-toggle .icon,
+  #work-panel-toggle .icon {
+    transition: none;
+  }
+}

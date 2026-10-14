@@ -661,6 +661,8 @@ svg.trend .pt.bad { fill: var(--bad); stroke: var(--surface); stroke-width: 1.5;
   font-size: var(--fs-13); font-weight: 500; text-decoration: none;
 }
 .sidebar-new:hover { border-color: var(--accent); color: var(--accent); }
+.sidebar-new-form { margin: 0 var(--s2); }
+.sidebar-new-form .sidebar-new { width: 100%; margin: 0; }
 
 .card-actions { margin-top: 8px; }
 
