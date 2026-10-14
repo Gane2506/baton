@@ -1,0 +1,52 @@
+{# Mission-control side panes: live preview (top) and terminal/agents (bottom).
+   Both start as empty states. Workstreams E/F mount live content with:
+     window.JevShell.mountPane("preview", "/fragments/preview", 3000)
+     window.JevShell.mountPane("terminal", "/fragments/terminal", 2000)
+   which polls the URL (same contract as live.js data-live regions) and swaps
+   [data-pane-live] in, hiding [data-pane-empty]. Unmount restores the empty state.
+   Panes collapse via their header toggles; the column and the split resize by drag
+   (see static/app.js). Everything works without JS: panes stay visible, collapsed
+   state and drag simply do nothing. #}
+<aside class="side-panes" id="side-panes" aria-label="Live panes">
+  <div class="panes-resize" data-resize="panes" role="separator" aria-orientation="vertical"
+       aria-label="Resize live panes" aria-valuemin="240" aria-valuemax="720" aria-valuenow="360" tabindex="0"></div>
+
+  <section class="pane pane-preview" data-pane="preview" aria-labelledby="pane-preview-title">
+    <div class="pane-head">
+      <h2 id="pane-preview-title"><svg class="icon" aria-hidden="true"><use href="#i-external"></use></svg>Preview</h2>
+      <button type="button" class="icon-btn pane-toggle" data-pane-toggle
+              aria-expanded="true" aria-controls="pane-preview-body" aria-label="Collapse preview pane">
+        <svg class="icon" aria-hidden="true"><use href="#i-up"></use></svg>
+      </button>
+    </div>
+    <div class="pane-body" id="pane-preview-body">
+      <div class="pane-empty" data-pane-empty>
+        <svg class="icon" aria-hidden="true"><use href="#i-external"></use></svg>
+        <div class="title">No live preview</div>
+        <p>The running app's browser preview will appear here when a run provides one.</p>
+      </div>
+      <div class="pane-live" data-pane-live hidden></div>
+    </div>
+  </section>
+
+  <div class="panes-split" data-resize="split" role="separator" aria-orientation="horizontal"
+       aria-label="Resize preview and terminal panes" aria-valuemin="15" aria-valuemax="85" aria-valuenow="55" tabindex="0"></div>
+
+  <section class="pane pane-terminal" data-pane="terminal" aria-labelledby="pane-terminal-title">
+    <div class="pane-head">
+      <h2 id="pane-terminal-title"><svg class="icon" aria-hidden="true"><use href="#i-terminal"></use></svg>Terminal</h2>
+      <button type="button" class="icon-btn pane-toggle" data-pane-toggle
+              aria-expanded="true" aria-controls="pane-terminal-body" aria-label="Collapse terminal pane">
+        <svg class="icon" aria-hidden="true"><use href="#i-up"></use></svg>
+      </button>
+    </div>
+    <div class="pane-body" id="pane-terminal-body">
+      <div class="pane-empty" data-pane-empty>
+        <svg class="icon" aria-hidden="true"><use href="#i-terminal"></use></svg>
+        <div class="title">No terminal activity</div>
+        <p>Agent terminal output will stream here when a run provides it.</p>
+      </div>
+      <div class="pane-live" data-pane-live hidden></div>
+    </div>
+  </section>
+</aside>

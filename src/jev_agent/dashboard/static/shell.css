@@ -1,0 +1,338 @@
+/* ============================================================================
+   Baton web UI — mission-control shell layout (structure only).
+
+   This file owns the app grid: sidebar | center | live panes, the chat pane,
+   and the resize/collapse mechanics. It never sets the palette: every color
+   comes from style.css variables, with system-color fallbacks so the layout
+   stays readable if a variable is missing. D2 (themes) owns the variables.
+   ========================================================================== */
+
+/* ---- app grid: sidebar | center | panes ---------------------------------- */
+
+.shell.app-shell {
+  grid-template-columns: var(--sidebar-w, 236px) minmax(0, 1fr) var(--panes-w, 360px);
+}
+
+/* ---- right column: live panes -------------------------------------------- */
+
+.side-panes {
+  position: sticky;
+  top: 0;
+  align-self: start;
+  height: 100dvh;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface, Canvas);
+  border-left: 1px solid var(--border, ButtonBorder);
+}
+
+.pane {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+}
+
+.pane-preview {
+  flex: 1 1 55%;
+  border-bottom: 1px solid var(--border, ButtonBorder);
+}
+
+.pane-terminal {
+  flex: 1 1 45%;
+}
+
+.pane[data-collapsed="true"] {
+  flex: 0 0 auto;
+}
+
+.pane[data-collapsed="true"] .pane-body {
+  display: none;
+}
+
+.pane-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s2, 8px);
+  padding: var(--s2, 8px) var(--s2, 8px) var(--s2, 8px) var(--s3, 12px);
+  flex: 0 0 auto;
+}
+
+.pane-head h2 {
+  margin: 0;
+  font-size: var(--fs-13, 13px);
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: var(--s2, 8px);
+  color: var(--muted, GrayText);
+}
+
+.pane-toggle .icon {
+  transition: transform 120ms ease;
+}
+
+.pane[data-collapsed="true"] .pane-toggle .icon {
+  transform: rotate(180deg);
+}
+
+.pane-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  position: relative;
+}
+
+.pane-empty {
+  padding: var(--s6, 24px) var(--s4, 16px);
+  text-align: center;
+  color: var(--faint, GrayText);
+  font-size: var(--fs-13, 13px);
+}
+
+.pane-empty .icon {
+  width: 28px;
+  height: 28px;
+  margin-bottom: var(--s2, 8px);
+  color: var(--faint, GrayText);
+}
+
+.pane-empty .title {
+  color: var(--fg, CanvasText);
+  font-weight: 600;
+  margin-bottom: var(--s1, 4px);
+}
+
+.pane-empty p {
+  margin: 0;
+  line-height: 1.5;
+}
+
+.pane-live {
+  min-height: 100%;
+}
+
+/* ---- drag handles ---------------------------------------------------------- */
+
+.panes-resize,
+.panes-split {
+  flex: 0 0 auto;
+  touch-action: none;
+}
+
+.panes-resize {
+  position: absolute;
+  left: -5px;
+  top: 0;
+  bottom: 0;
+  width: 10px;
+  cursor: col-resize;
+  z-index: 2;
+}
+
+.panes-split {
+  height: 10px;
+  margin: -5px 0;
+  cursor: row-resize;
+  position: relative;
+  z-index: 2;
+}
+
+.panes-resize:hover,
+.panes-split:hover,
+.panes-resize:focus-visible,
+.panes-split:focus-visible {
+  background: var(--hover, ButtonFace);
+}
+
+.panes-resize:focus-visible,
+.panes-split:focus-visible {
+  outline: 2px solid var(--accent, Highlight);
+  outline-offset: -2px;
+}
+
+/* ---- connection status (sidebar slot) -------------------------------------- */
+
+.conn-status {
+  display: flex;
+  align-items: center;
+  gap: var(--s2, 8px);
+  font-size: var(--fs-12, 12px);
+  color: var(--muted, GrayText);
+  margin-bottom: var(--s2, 8px);
+}
+
+.conn-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--ok, CanvasText);
+  flex: 0 0 auto;
+}
+
+.conn-status[data-conn="stale"] .conn-dot {
+  background: var(--warn, GrayText);
+}
+
+.conn-status[data-conn="offline"] .conn-dot {
+  background: var(--bad, GrayText);
+}
+
+/* ---- chat pane --------------------------------------------------------------- */
+
+.content-inner--chat {
+  max-width: none;
+  height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  padding-bottom: var(--s4, 16px);
+}
+
+.chat-pane {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+  gap: var(--s3, 12px);
+}
+
+.chat-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--s3, 12px);
+  flex: 0 0 auto;
+  margin: 0;
+}
+
+.chat-head .crumbs {
+  margin-bottom: var(--s1, 4px);
+}
+
+.chat-head h1 {
+  margin: 0 0 var(--s1, 4px);
+}
+
+.chat-head .lede {
+  margin: 0;
+}
+
+.chat-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s2, 8px);
+  align-items: center;
+}
+
+.chat-history {
+  flex: 1 1 auto;
+  min-height: 220px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s3, 12px);
+  padding: var(--s4, 16px);
+  background: var(--surface, Canvas);
+  border: 1px solid var(--border, ButtonBorder);
+  border-radius: 10px;
+}
+
+/* Conversational turns: the fragment marks user/assistant turns; the rest of
+   the fragment (meta, brief, transcript heading) flows as plain blocks. */
+.chat-history .turn {
+  max-width: 78ch;
+  padding: var(--s2, 8px) var(--s3, 12px);
+  border-radius: 10px;
+  background: var(--surface-2, ButtonFace);
+  overflow-wrap: anywhere;
+}
+
+.chat-history .turn.user {
+  align-self: flex-end;
+  background: var(--accent-soft, ButtonFace);
+}
+
+.chat-history .turn.assistant {
+  align-self: flex-start;
+}
+
+.chat-history .turn.other {
+  align-self: stretch;
+}
+
+.chat-history .turn .who {
+  font-size: var(--fs-11, 11px);
+  color: var(--faint, GrayText);
+  margin-bottom: var(--s1, 4px);
+}
+
+.chat-history .turn .body {
+  white-space: pre-wrap;
+  line-height: 1.55;
+}
+
+.chat-input {
+  flex: 0 0 auto;
+  margin: 0;
+}
+
+.chat-input-row {
+  display: flex;
+  gap: var(--s2, 8px);
+  align-items: flex-end;
+  margin-top: var(--s1, 4px);
+}
+
+.chat-input-row textarea {
+  flex: 1 1 auto;
+  min-width: 0;
+  resize: vertical;
+}
+
+.chat-input .hint {
+  margin-bottom: 0;
+}
+
+/* ---- narrow screens: everything stacks --------------------------------------- */
+
+@media (max-width: 1080px) {
+  .shell.app-shell {
+    grid-template-columns: 1fr;
+  }
+
+  .side-panes {
+    position: static;
+    height: auto;
+    border-left: 0;
+    border-top: 1px solid var(--border, ButtonBorder);
+  }
+
+  .pane-preview,
+  .pane-terminal {
+    flex: 0 0 auto;
+  }
+
+  .pane[data-collapsed="true"] .pane-body {
+    display: none;
+  }
+
+  .pane-body {
+    max-height: 52vh;
+  }
+
+  .panes-resize,
+  .panes-split {
+    display: none;
+  }
+
+  .content-inner--chat {
+    height: auto;
+  }
+
+  .chat-history {
+    max-height: 62vh;
+  }
+}

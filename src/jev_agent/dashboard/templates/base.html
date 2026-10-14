@@ -8,7 +8,9 @@
 <title>Baton · {% block title %}Board{% endblock %}</title>
 <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="/static/style.css">
+<link rel="stylesheet" href="/static/shell.css">
 <script src="/static/live.js" defer></script>
+<script src="/static/app.js" defer></script>
 </head>
 <body>
 <a class="skip" href="#main">Skip to content</a>
@@ -53,7 +55,7 @@
 {% set icons = {"/": "i-board", "/queue": "i-queue", "/agents": "i-models", "/chats": "i-chats", "/learning": "i-learning", "/tools": "i-terminal", "/connections": "i-profiles", "/spend": "i-spend", "/kpis": "i-kpis", "/settings": "i-settings"} %}
 {% set groups = {"Overview": ["/"], "Work": ["/queue"], "Agents": ["/agents", "/chats", "/learning"], "Integrations": ["/tools", "/connections"], "Insight": ["/spend", "/kpis"], "System": ["/settings"]} %}
 
-<div class="shell">
+<div class="shell app-shell" id="app-shell">
   <aside class="sidebar">
     <div class="brand">
       <a href="/"><img src="/static/favicon.svg" alt="" width="26" height="26"><span class="name">Baton</span></a>
@@ -71,6 +73,9 @@
       {% endfor %}
     </nav>
     <div class="sidebar-foot">
+      <div class="conn-status" id="conn-status" role="status" data-conn="live">
+        <span class="conn-dot" aria-hidden="true"></span><span class="conn-label">Live</span>
+      </div>
       <label class="theme-pick" for="theme">Theme
         <select id="theme">
           <option value="auto">Auto (OS)</option>
@@ -83,7 +88,7 @@
   </aside>
 
   <div class="content">
-    <div class="content-inner" id="main" tabindex="-1">
+    <div class="content-inner{% block content_inner_class %}{% endblock %}" id="main" tabindex="-1">
       {% for kind, text in flashes %}
       <div class="flash {{ kind }}" role="status">
         <svg class="icon" aria-hidden="true"><use href="#{{ 'i-alert' if kind == 'error' else 'i-ok' }}"></use></svg>
@@ -95,6 +100,8 @@
       </main>
     </div>
   </div>
+
+  {% include "_panes.html" %}
 </div>
 </body>
 </html>

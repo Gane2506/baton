@@ -538,7 +538,7 @@ def test_untrusted_repo_cannot_escalate_autonomy_tier(repo: Path, user_cfg: Path
         repo / "jev.toml",
         '[autonomy]\naccess_tier = "unrestricted"\nunrestricted_acknowledged = true\n',
     )
-    with pytest.raises(ConfigError, match="autonomy.access_tier"):
+    with pytest.raises(ConfigError, match=r"autonomy\.access_tier"):
         load_config(repo, user_cfg)
 
 

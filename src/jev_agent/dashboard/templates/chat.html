@@ -1,38 +1,36 @@
 {% extends "base.html" %}
 {% from "macros.html" import csrf_input, icon, copy_button with context %}
 {% block title %}Chat {{ chat_id }}{% endblock %}
+{% block content_inner_class %} content-inner--chat{% endblock %}
 {% block content %}
-<div class="crumbs"><a href="/chats">Chats</a></div>
-<div class="page-head">
-  <div class="titles">
-    <h1>Chat <span class="mono">{{ chat_id }}</span>{{ copy_button(chat_id, "Copy chat id") }}</h1>
-    <p class="lede">Same session the CLI continues with <code>jev chat --resume {{ chat_id }}</code>.</p>
-  </div>
-</div>
-
-<section class="panel">
-  <div class="panel-head">
-    <h2>Say something</h2>
-    <div class="actions">
+<div class="chat-pane pane-chat" data-chat-pane="{{ chat_id }}">
+  <header class="chat-head panel">
+    <div class="chat-titles">
+      <div class="crumbs"><a href="/chats">Chats</a></div>
+      <h1>Chat <span class="mono">{{ chat_id }}</span>{{ copy_button(chat_id, "Copy chat id") }}</h1>
+      <p class="lede">Same session the CLI continues with <code>jev chat --resume {{ chat_id }}</code>.</p>
+    </div>
+    <div class="chat-actions actions">
       <form class="inline" method="post" action="/chats/{{ chat_id }}/brief">{{ csrf_input() }}<button type="submit"{% if busy %} disabled{% endif %}>Write brief</button></form>
       <form class="inline" method="post" action="/chats/{{ chat_id }}/start">{{ csrf_input() }}<input type="hidden" name="action" value="plan"><button type="submit"{% if busy %} disabled{% endif %}>{{ icon("i-run", "sm") }}Plan it</button></form>
       <form class="inline" method="post" action="/chats/{{ chat_id }}/start">{{ csrf_input() }}<input type="hidden" name="action" value="run"><button class="primary" type="submit"{% if busy %} disabled{% endif %}>Run it</button></form>
       <form class="inline" method="post" action="/chats/{{ chat_id }}/queue">{{ csrf_input() }}<button type="submit"{% if busy %} disabled{% endif %}>Queue it</button></form>
     </div>
+  </header>
+
+  <div class="chat-history" id="chat-live" data-live="/chats/{{ chat_id }}/live" data-live-every="{{ refresh_ms }}" aria-label="Chat transcript">
+  {% include "_chat_live.html" %}
   </div>
-  <form method="post" action="/chats/{{ chat_id }}/send">
+
+  <form class="chat-input panel" method="post" action="/chats/{{ chat_id }}/send">
     {{ csrf_input() }}
     <label class="muted" for="text">Message</label>
-    <textarea id="text" name="text" rows="3" required placeholder="Talk the idea through; then Write brief, then Plan it or Run it"></textarea>
-    <div class="actions">
+    <div class="chat-input-row">
+      <textarea id="text" name="text" rows="2" required placeholder="Talk the idea through; then Write brief, then Plan it or Run it"></textarea>
       <button class="primary" type="submit"{% if busy %} disabled{% endif %}>Send</button>
-      {% if busy %}<span class="muted small">waiting for the model...</span>{% endif %}
     </div>
+    {% if busy %}<p class="muted small">waiting for the model...</p>{% endif %}
+    <p class="hint">Plan it and Run it work from the chat's brief (write one first); Queue it adds the brief to the idea queue.</p>
   </form>
-  <p class="hint">Plan it and Run it work from the chat's brief (write one first); Queue it adds the brief to the idea queue.</p>
-</section>
-
-<div id="chat-live" data-live="/chats/{{ chat_id }}/live" data-live-every="{{ refresh_ms }}">
-{% include "_chat_live.html" %}
 </div>
 {% endblock %}

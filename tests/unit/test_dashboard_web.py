@@ -239,4 +239,5 @@ def test_theme_control_and_stylesheet(client: TestClient) -> None:
     assert 'id="theme"' in page.text and "Auto (OS)" in page.text
     assert client.get("/static/theme.js").status_code == 200
     css = client.get("/static/style.css").text
-    assert ':root[data-theme="dark"]' in css and "prefers-color-scheme: dark" in css
+    assert ':root[data-theme="oled"]' in css and ':root[data-theme="solarized"]' in css
+    assert ':root[data-theme="high-contrast"]' in css and "prefers-color-scheme: light" in css

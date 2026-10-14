@@ -112,9 +112,10 @@ Resume button). A Ship job cannot be cancelled mid-step; shutdown waits for it.
   only, never values), and the `jev doctor` checks (local checks only).
 
 Pages follow your OS light/dark setting and work on narrow screens. Nothing is loaded from
-other origins: no CDN, no web fonts, no analytics. The only script is a small vendored
-`static/live.js` for the live regions and confirmation prompts; without JavaScript every page
-still works (reload to refresh).
+other origins: no CDN, no web fonts, no analytics. The scripts are small and vendored:
+`static/live.js` (live regions and confirmation prompts), `static/app.js` (the shell's
+collapsible panes and resize handles), and `static/theme.js` (theme profiles); without
+JavaScript every page still works (reload to refresh).
 
 | Run | Queue |
 | --- | --- |

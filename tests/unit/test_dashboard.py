@@ -177,7 +177,7 @@ def test_security_headers_and_static(client: TestClient) -> None:
     assert '<script src="/static/live.js"' in response.text
     assert "http://" not in response.text.split("<main>")[0]  # no external assets
     assert client.get("/static/live.js").status_code == 200
-    assert "prefers-color-scheme: dark" in client.get("/static/style.css").text
+    assert "prefers-color-scheme: light" in client.get("/static/style.css").text
     assert '<link rel="icon" href="/static/favicon.svg"' in response.text
     assert '<img src="/static/favicon.svg"' in response.text
     favicon = client.get("/static/favicon.svg")
