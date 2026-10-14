@@ -6,8 +6,11 @@ Sources, merged per role:
   its `browser = true` gives the coder the browser.
 
 Levels: a server's configured `access`, lowered by the profile's `access_overrides`, and
-capped at `basic` for every role except the coder (read-only roles: planner, validator,
-reviewer, code_reviewer, learner, chat). Nothing here can raise a level.
+capped at `unrestricted` for the coder and `basic` for every other role (read-only roles:
+planner, validator, reviewer, code_reviewer, learner, chat). Nothing here can raise a level.
+`unrestricted` additionally needs `unrestricted_acknowledged = true` in `[servers.<name>]`;
+config validation refuses it otherwise, so it is never granted by default, by typo or by
+omission. Its activation is written to the audit log by the service layer.
 
 `tools_for_run` adds the result to the role's configured tools as two synthesized MCP servers:
 `jev_servers` (`python -m jev_agent mcp servers ...`, which enforces the policy and writes the
@@ -42,8 +45,8 @@ SSH_ENV = ("SSH_AUTH_SOCK",)
 
 
 def role_cap(role: str) -> AccessLevel:
-    """The highest level a role may get: medium for the coder, basic for everyone else."""
-    return "medium" if role == WRITE_ROLE else "basic"
+    """The highest level a role may get: unrestricted for the coder, basic for everyone else."""
+    return "unrestricted" if role == WRITE_ROLE else "basic"
 
 
 def server_grants(
@@ -88,7 +91,7 @@ def parse_allow(value: str) -> dict[str, AccessLevel | None]:
         if level == "full":
             raise ValueError(FULL_ACCESS_MESSAGE)
         if level and level not in ACCESS_LEVELS:
-            raise ValueError(f"--allow {item!r}: level must be basic or medium")
+            raise ValueError(f"--allow {item!r}: level must be basic, medium or unrestricted")
         out[name] = next((lvl for lvl in ACCESS_LEVELS if lvl == level), None)
     return out
 

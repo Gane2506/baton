@@ -18,6 +18,13 @@ Each step reads the run from the store, does one unit of work and persists the n
 Every command that drives a run holds the run's lease (`core/lease.py`, issue #61) while it
 works, so two processes (a terminal and the dashboard, say) never drive the same run at once:
 the second one gets `RunInUseError`. `cancel` only writes the store and needs no lease.
+
+Autonomy modes (`core/models.py::AutonomyMode`, Phase 2 workstream C1) change how the
+pipeline moves between steps: AUTONOMOUS (explicit opt-in on the run) skips the
+AWAITING_APPROVAL gate; ASK_EVERY_STEP waits in an explicit AWAITING_* gate
+(`STEP_GATES`) before each step; MANUAL only creates the run in `start` and waits for
+an explicit instruction; MEDIUM records a scoped folder and otherwise runs the
+standard flow (enforcing the folder boundary is workstream C2's job).
 """
 
 from __future__ import annotations
@@ -26,6 +33,7 @@ import asyncio
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from jev_agent.config.defaults import STATE_DIRNAME
 from jev_agent.config.schema import JevConfig, ShipMode
@@ -43,6 +51,8 @@ from jev_agent.core.learner import LEARN_STATES, learn
 from jev_agent.core.learning import Learning
 from jev_agent.core.lease import hold_run_lease
 from jev_agent.core.models import (
+    AutonomyConfig,
+    AutonomyMode,
     Idea,
     Plan,
     Role,
@@ -86,6 +96,48 @@ STOPPED = frozenset(
 # the dashboard (issue #14): the store checks it in the same statement as the update.
 KEEP_CANCELLED = frozenset({RunState.CANCELLED})
 
+# ASK_EVERY_STEP autonomy mode: before each pipeline step runs, the run waits in the
+# gate state for a person to approve it (`Pipeline.approve`, like AWAITING_APPROVAL).
+# The plan gate keeps its historical state; the ship gate stays AWAITING_SHIP when the
+# run asks first (`[ship] after_approval = "ask"`).
+STEP_GATES: dict[RunState, RunState] = {
+    RunState.PLANNING: RunState.AWAITING_PLANNING,
+    RunState.VALIDATING: RunState.AWAITING_VALIDATING,
+    RunState.EXECUTING: RunState.AWAITING_APPROVAL,
+    RunState.INTEGRATING: RunState.AWAITING_INTEGRATING,
+    RunState.SHIPPING: RunState.AWAITING_SHIPPING,
+}
+# Every state where a run waits for `jev approve` (the plan gate and the per-step gates).
+APPROVAL_GATES = frozenset(STEP_GATES.values())
+
+
+def run_autonomy_mode(run: RunRecord) -> AutonomyMode:
+    """The run's autonomy mode. Migration 14 adds the column; rows written before it
+    (and the store until the coordinator's change lands) read as STANDARD, the
+    historical approve-once flow, so existing runs never change behavior."""
+    raw = vars(run).get("autonomy_mode", AutonomyMode.STANDARD)
+    return raw if isinstance(raw, AutonomyMode) else AutonomyMode(raw)
+
+
+def step_gate_target(mode: AutonomyMode, step: RunState) -> RunState:
+    """The state the pipeline moves to in order to run `step`: the step itself, or its
+    approval gate in ASK_EVERY_STEP mode."""
+    if mode is AutonomyMode.ASK_EVERY_STEP:
+        return STEP_GATES[step]
+    return step
+
+
+def execution_gate_target(mode: AutonomyMode, approval_required: bool) -> RunState:
+    """The state `_validate` moves to once D3 approves the plan: the approval gate, or
+    straight to EXECUTING when no gate applies. AUTONOMOUS skips the gate; otherwise
+    `plan_only` or `[approval] require_plan_approval` puts the run behind it, and
+    ASK_EVERY_STEP always does."""
+    if mode is AutonomyMode.AUTONOMOUS:
+        return RunState.EXECUTING
+    if mode is AutonomyMode.ASK_EVERY_STEP or approval_required:
+        return RunState.AWAITING_APPROVAL
+    return RunState.EXECUTING
+
 
 class PipelineError(Exception):
     """A command does not apply to the run in its current state. The message is user-facing."""
@@ -124,6 +176,9 @@ class Pipeline:
         quality: QualityLevel | None = None,
         profile: str | None = None,
         ship_mode: ShipMode | None = None,
+        autonomy_mode: AutonomyMode = AutonomyMode.STANDARD,
+        autonomous_opt_in: bool = False,
+        medium_folder: str | None = None,
     ) -> RunRecord:
         """Create a run for `idea` and advance it as far as it goes.
 
@@ -131,23 +186,70 @@ class Pipeline:
         resumed run keeps using it; None means no learning. `quality` is the run's quality gate
         level (None: `[quality] level`), also recorded on the run, like `plan_only` and
         `ship_mode` (`--auto-ship` / `--ask-before-ship`; None: `[ship] after_approval`).
+
+        `autonomy_mode` is the run's autonomy mode (`core/models.py::AutonomyMode`), also
+        recorded on the run: AUTONOMOUS needs `autonomous_opt_in` (explicit opt-in, never the
+        default) and skips the AWAITING_APPROVAL gate; MEDIUM needs `medium_folder`, the
+        folder the run is scoped to. MANUAL only creates the run: it waits in INTAKE for an
+        explicit instruction (`advance`/`resume`, or the chat driver) and is never advanced
+        here.
         """
+        autonomy = AutonomyConfig(
+            mode=AutonomyMode(autonomy_mode),
+            autonomous_opt_in=autonomous_opt_in,
+            medium_folder=medium_folder,
+        )
         level = self.h.config.quality.level if quality is None else quality
         # Workspace profile (docs/servers.md): copied to .jev/runs/<id>/profile.json, so a
         # resumed run reaches the same servers. ProfileError (a ValueError) if unknown.
         copy = None if profile is None else snapshot(self.h.config, profile)
-        run = self.store.create_run(
-            idea, learning_profile, level, plan_only=plan_only, ship_mode=ship_mode
+        run = self._create_run(
+            idea, learning_profile, level, autonomy, plan_only=plan_only, ship_mode=ship_mode
         )
         write_run_profile(self.h.state_dir, run.id, copy)
+        if autonomy.mode is AutonomyMode.MANUAL:
+            return run
         async with hold_run_lease(self.store, run.id):
             return await self._advance(run.id)
 
+    def _create_run(
+        self,
+        idea: Idea,
+        learning_profile: str | None,
+        level: QualityLevel,
+        autonomy: AutonomyConfig,
+        *,
+        plan_only: bool,
+        ship_mode: ShipMode | None,
+    ) -> RunRecord:
+        """Create the run with its autonomy config recorded on it. The autonomy columns
+        land with migration 14 (see the C1 report); until the store accepts them, only
+        the default config is passed, so existing behavior never changes."""
+        if autonomy.is_default():
+            return self.store.create_run(
+                idea, learning_profile, level, plan_only=plan_only, ship_mode=ship_mode
+            )
+        extra: dict[str, Any] = {
+            "autonomy_mode": autonomy.mode,
+            "autonomous_opt_in": autonomy.autonomous_opt_in,
+            "medium_folder": autonomy.medium_folder,
+        }
+        try:
+            return self.store.create_run(
+                idea, learning_profile, level, plan_only=plan_only, ship_mode=ship_mode, **extra
+            )
+        except TypeError as exc:
+            raise PipelineError(
+                "this autonomy mode needs the run store's autonomy columns (migration 14); "
+                f"the store rejected the new arguments: {exc}"
+            ) from exc
+
     async def approve(self, run_id: str, execute: bool = True) -> RunRecord:
-        """Pass the human gate the run waits at: the plan (then execute it) or shipping (then
-        ship and merge it). With `execute` False only the gate is passed."""
+        """Pass the human gate the run waits at: the plan (then execute it), a pipeline
+        step in ASK_EVERY_STEP mode (then run it), or shipping (then ship and merge it).
+        With `execute` False only the gate is passed."""
         async with hold_run_lease(self.store, run_id):
-            gates = {RunState.AWAITING_APPROVAL: RunState.EXECUTING}
+            gates = {gate: step for step, gate in STEP_GATES.items()}
             gates[RunState.AWAITING_SHIP] = RunState.SHIPPING
             self._require_state(run_id, set(gates), "approve")
             nxt = gates[self.store.get_run(run_id).state]
@@ -197,7 +299,7 @@ class Pipeline:
 
     async def _resume(self, run_id: str) -> RunRecord:
         run = self.store.get_run(run_id)
-        if run.state is RunState.AWAITING_APPROVAL:
+        if run.state in APPROVAL_GATES:
             raise PipelineError(f"run {run_id} is awaiting approval; use `jev approve {run_id}`")
         if run.state is RunState.AWAITING_SHIP:
             raise PipelineError(
@@ -270,7 +372,7 @@ class Pipeline:
         decision = await self.h.decide(run.id, None, d1_intake(run.idea, options))
         if decision.answers["clear"] == "ask_human":
             raise Halt(RunState.NEEDS_HUMAN, "D1: the idea is not clear enough to plan")
-        self._move(run.id, RunState.PLANNING)
+        self._move(run.id, step_gate_target(run_autonomy_mode(run), RunState.PLANNING))
 
     async def _plan(self, run: RunRecord) -> None:
         h, max_rounds = self.h, self.h.config.budget.max_plan_rounds
@@ -306,7 +408,7 @@ class Pipeline:
             raise Halt(RunState.FAILED, f"plan rejected: {exc}") from exc
         self.store.set_run_plan(run.id, plan, run.plan_round + 1)
         self.store.set_run_validation(run.id, None)
-        self._move(run.id, RunState.VALIDATING)
+        self._move(run.id, step_gate_target(run_autonomy_mode(run), RunState.VALIDATING))
 
     async def _validate(self, run: RunRecord) -> None:
         h, plan = self.h, run.plan
@@ -350,11 +452,11 @@ class Pipeline:
         if verdict == "revise":
             if run.plan_round >= max_rounds:
                 raise Halt(RunState.NEEDS_HUMAN, f"plan not approved after {max_rounds} rounds")
-            self._move(run.id, RunState.PLANNING)
+            self._move(run.id, step_gate_target(run_autonomy_mode(run), RunState.PLANNING))
             return
         self.store.upsert_tasks(run.id, plan)
         gate = run.plan_only or h.config.plan_approval_required
-        self._move(run.id, RunState.AWAITING_APPROVAL if gate else RunState.EXECUTING)
+        self._move(run.id, execution_gate_target(run_autonomy_mode(run), gate))
 
     async def _execute(self, run: RunRecord) -> None:
         try:
@@ -365,13 +467,14 @@ class Pipeline:
         runner = TaskRunner(self.h, self.settings.test_timeout_s)
         for card in self._task_order(run.id):
             await runner.run(run.id, card.id)
-        self._move(run.id, RunState.INTEGRATING)
+        self._move(run.id, step_gate_target(run_autonomy_mode(run), RunState.INTEGRATING))
 
     async def _integrate(self, run: RunRecord) -> None:
         """Merge task branches into `jev/<run_id>/result`, run the tests there, then D6."""
         h, order = self.h, self._task_order(run.id)
         if any(t.state is not TaskState.DONE for t in self.store.list_tasks(run.id)):
-            self._move(run.id, RunState.EXECUTING)  # a fix task was added just before a crash
+            # A fix task was added just before a crash.
+            self._move(run.id, step_gate_target(run_autonomy_mode(run), RunState.EXECUTING))
             return
         rounds, max_rounds = fix_rounds(order), self.settings.max_fix_rounds
         try:
@@ -403,7 +506,7 @@ class Pipeline:
             await self._after_ship_vote(run, result.branch)
         elif action == "fix_task" and outcome.fixable and rounds < max_rounds:
             self._add_fix_task(run, outcome)
-            self._move(run.id, RunState.EXECUTING)
+            self._move(run.id, step_gate_target(run_autonomy_mode(run), RunState.EXECUTING))
         else:
             raise Halt(RunState.NEEDS_HUMAN, _integration_stop_reason(outcome, rounds, max_rounds))
 
@@ -411,7 +514,11 @@ class Pipeline:
         """D6 voted "ship": ship and merge, wait for a person, or (shipping off) end DONE."""
         mode = after_approval(self.h.config, run.ship_mode)
         if mode == "merge":
-            self._move(run.id, RunState.SHIPPING, f"result on branch {branch}")
+            self._move(
+                run.id,
+                step_gate_target(run_autonomy_mode(run), RunState.SHIPPING),
+                f"result on branch {branch}",
+            )
         elif mode == "ask":
             reason = (
                 f"result on branch {branch}; ship it with `jev ship approve {run.id}`, ask for "

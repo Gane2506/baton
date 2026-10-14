@@ -11,7 +11,7 @@ from jev_agent.app.context import AppContext
 from jev_agent.config import STATE_DIRNAME
 from jev_agent.config.schema import ShipMode
 from jev_agent.core.learning import Learning, LearningError, check_profile_name, resolve_learning
-from jev_agent.core.models import Idea
+from jev_agent.core.models import AutonomyMode, Idea
 from jev_agent.core.store import RunRecord
 from jev_agent.quality.levels import QualityLevel, parse_level
 from jev_agent.servers.profiles import (
@@ -25,6 +25,27 @@ from jev_agent.servers.profiles import (
 def _learning(ctx: AppContext) -> Learning:
     assert ctx.learning is not None
     return ctx.learning
+
+
+def _autonomy_for_new_run(ctx: AppContext) -> tuple[str, bool, str | None]:
+    """Map the `[autonomy]` config section onto the run's autonomy fields.
+
+    Choosing `mode = "autonomous"` in config is the explicit opt-in (it is never
+    the default); `medium` needs `project_folder` set. Raises ValueError with a
+    plain-language message when the combination is incomplete.
+    """
+    auto = ctx.config.autonomy
+    mode = AutonomyMode(auto.mode)
+    if mode is AutonomyMode.MEDIUM and not auto.project_folder:
+        raise ValueError(
+            'autonomy mode "medium" needs project_folder set: pick the folder '
+            "the run is scoped to (Settings > Autonomy, or [autonomy] project_folder)"
+        )
+    return (
+        mode.value,
+        mode is AutonomyMode.AUTONOMOUS,
+        str(auto.project_folder) if auto.project_folder else None,
+    )
 
 
 def create_run(
@@ -59,12 +80,16 @@ def create_run(
         ctx.store, _learning(ctx), ctx.config, learning, no_learning
     )
     copy = None if workspace is None else snapshot(ctx.config, workspace)
+    autonomy_mode, autonomous_opt_in, medium_folder = _autonomy_for_new_run(ctx)
     run = ctx.store.create_run(
         Idea(text=idea, repo_path=ctx.root),
         learning_profile,
         level,
         plan_only=plan_only,
         ship_mode=ship_mode,
+        autonomy_mode=autonomy_mode,
+        autonomous_opt_in=autonomous_opt_in,
+        medium_folder=medium_folder,
     )
     write_run_profile(ctx.root / STATE_DIRNAME, run.id, copy)
     return run

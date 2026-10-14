@@ -54,6 +54,7 @@ TOP_SECTIONS: tuple[tuple[str, str], ...] = (
     ("integration", "Integration"),
     ("workspace", "Workspace"),
     ("approval", "Approval"),
+    ("autonomy", "Autonomy"),
     ("review", "Review"),
     ("browser", "Browser"),
     ("trust", "Trust (user config only)"),

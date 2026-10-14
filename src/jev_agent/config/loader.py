@@ -52,6 +52,8 @@ GUARDED_KEYS: tuple[str, ...] = (
     "roles.*.mcp",
     "roles.*.skills",
     "roles.*.plugins",
+    "autonomy.access_tier",
+    "autonomy.unrestricted_acknowledged",
 )
 
 

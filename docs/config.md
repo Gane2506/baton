@@ -234,6 +234,22 @@ approve goes straight to execution, and a plan they cannot agree on stops the ru
 `NEEDS_HUMAN`. Set `require_plan_approval = true` to also stop for yourself after every
 validated plan. `--plan-only` always stops at the plan, whatever the setting.
 
+## `[autonomy]`
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `mode` | `"standard"` | How much jev acts on its own. `"standard"`: you approve the plan once, then it builds alone (today's behavior). `"medium"`: like `"standard"` but scoped to `project_folder`. `"ask_every_step"`: it asks before every step. `"autonomous"`: it never stops for approval. `"manual"`: it only acts when you tell it to. |
+| `access_tier` | `"basic"` | What agents may touch. `"basic"` is the safest: work inside the repo, read-only outside it. `"medium"` additionally allows writes inside `project_folder`. `"unrestricted"` removes the limits (agents run any command with your privileges) and needs `unrestricted_acknowledged = true`; never pick it casually. |
+| `project_folder` | unset | The folder the `"medium"` access tier may change. Unset means the repository root. |
+| `unrestricted_acknowledged` | `false` | Explicit acknowledgment that you understand what `"unrestricted"` allows. The config is rejected while the tier is `"unrestricted"` and this is unticked; lower the tier before unticking it. |
+
+`mode` is one of the eleven beginner settings: the dashboard's Settings › The basics shows it as
+a plain-language picker ("How much should jev ask you?"). The access tier lives under Advanced
+because it is safety-sensitive; the dashboard shows a warning and requires the acknowledgment
+box before `"unrestricted"` can be saved, and the config itself is rejected without it.
+
+Three "medium"s, not one: `[autonomy].mode = "medium"` is the folder-scoped run mode; `[servers.<name>].access = "medium"` is the limited-writes server tier; the historical default behavior is named `"standard"`.
+
 ## `[review]`
 
 | Key | Default | Meaning |
@@ -453,9 +469,11 @@ allow/deny tables and VPS notes: [servers.md](servers.md).
 | `user` | unset | Login user (`ssh -l`); unset: `~/.ssh/config` or your local user. |
 | `port` | unset | SSH port; unset: `~/.ssh/config` or 22. |
 | `identity_file` | unset | Path to a private key file (never the key itself); adds `-i FILE -o IdentitiesOnly=yes`. Unset: ssh-agent / `~/.ssh/config`. |
-| `access` | `"basic"` | `"basic"` (read-only allowlist) or `"medium"` (also writes inside `allowed_paths`, package installs, service restarts). `"full"` is rejected: not available yet (issue #3). |
+| `access` | `"basic"` | `"basic"` (read-only allowlist), `"medium"` (also writes inside `allowed_paths`, package installs, service restarts) or `"unrestricted"` (no policy checks at all: anything the server account may do). `"unrestricted"` needs `unrestricted_acknowledged = true` and its activation is written to the audit log (issue #3). `"full"` is rejected. |
+| `unrestricted_acknowledged` | `false` | Explicit acknowledgment that `access = "unrestricted"` is intended. The tier is never granted without this flag; inert for the other levels. |
 | `workdir` | unset | Absolute path commands run in; relative paths are resolved against it. |
 | `allowed_paths` | `[workdir]` | Absolute paths `medium` writes may touch. `/`, top-level system folders and anything under `.ssh` are refused. |
+| `project_folder` | unset | Scopes `medium` access to one project folder: the agent may read, write and run commands only inside it, and a symlink pointing out counts as a boundary violation. Unset: the medium scope is `allowed_paths`. |
 | `description` | `""` | Shown to agents by `list_servers` and in `jev profile show`. |
 
 No passwords: jev runs `ssh` with `BatchMode=yes` and `StrictHostKeyChecking=yes`, so the key

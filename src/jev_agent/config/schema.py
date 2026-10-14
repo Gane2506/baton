@@ -346,6 +346,65 @@ class ApprovalConfig(_Strict):
     )
 
 
+# How independently a run may act before it stops for a human (Phase 2, workstream C).
+# Values match core.models.AutonomyMode (workstream C1); the config-to-run bridge maps
+# them onto a run.
+AutonomyMode = Literal["standard", "autonomous", "ask_every_step", "manual", "medium"]
+# What agents are allowed to touch (Phase 2, workstream C).
+AccessTier = Literal["basic", "medium", "unrestricted"]
+
+
+class AutonomyConfig(_Strict):
+    """`[autonomy]`: how much jev asks you, and what its agents may touch."""
+
+    mode: AutonomyMode = Field(
+        default="standard",
+        description=(
+            'How much jev acts on its own. "standard": you approve the plan once, then '
+            'it builds alone (today\'s behavior). "medium": like "standard" but scoped '
+            'to project_folder. "ask_every_step": it asks before every step. '
+            '"autonomous": it never stops for approval. "manual": it only acts when '
+            "you tell it to."
+        ),
+    )
+    access_tier: AccessTier = Field(
+        default="basic",
+        description=(
+            'What agents may touch. "basic" (safest): work inside the repo, read-only '
+            'outside it. "medium": also writes inside project_folder. "unrestricted": '
+            "anything, with your privileges. Needs the acknowledgment below; never pick "
+            "it casually."
+        ),
+    )
+    project_folder: Path | None = Field(
+        default=None,
+        description="The folder the medium access tier may change. Unset: the repository root.",
+    )
+    unrestricted_acknowledged: bool = Field(
+        default=False,
+        description=(
+            'Tick this only if you understand that "unrestricted" lets agents run any '
+            "command with your privileges. The config is rejected while the tier is "
+            '"unrestricted" and this is unticked; lower the tier before unticking it.'
+        ),
+    )
+
+    @field_validator("project_folder", mode="before")
+    @classmethod
+    def _empty_folder_is_unset(cls, value: object) -> object:
+        # The dashboard posts "" for an empty text box; that means "unset", not ".".
+        return None if value == "" else value
+
+    @model_validator(mode="after")
+    def _check_unrestricted_acknowledged(self) -> AutonomyConfig:
+        if self.access_tier == "unrestricted" and not self.unrestricted_acknowledged:
+            raise ValueError(
+                'access_tier = "unrestricted" needs unrestricted_acknowledged = true: '
+                "tick the acknowledgment in Settings > Advanced first"
+            )
+        return self
+
+
 # Learning profile names: letters, digits, `-` and `_`, starting with a letter or digit.
 PROFILE_NAME_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9_-]{0,39}$"
 
@@ -951,7 +1010,7 @@ class TrustConfig(_Strict):
     )
 
 
-# The ~10 settings the dashboard shows first: plain-language, everyday knobs a beginner
+# The eleven settings the dashboard shows first: plain-language, everyday knobs a beginner
 # can understand and safely change. Every other field stays available under the "Advanced"
 # toggle. Dotted paths into `JevConfig`; the settings page renders these in its beginner view.
 BEGINNER_FIELDS: tuple[str, ...] = (
@@ -965,6 +1024,7 @@ BEGINNER_FIELDS: tuple[str, ...] = (
     "learning.enabled",
     "ship.enabled",
     "models.prefer_free",
+    "autonomy.mode",
 )
 
 
@@ -977,6 +1037,10 @@ class JevConfig(_Strict):
     )
     approval: ApprovalConfig = Field(
         default_factory=ApprovalConfig, description="Whether a human gates the plan."
+    )
+    autonomy: AutonomyConfig = Field(
+        default_factory=AutonomyConfig,
+        description="How much jev asks you, and what its agents may touch.",
     )
     integration: IntegrationConfig = Field(
         default_factory=IntegrationConfig,

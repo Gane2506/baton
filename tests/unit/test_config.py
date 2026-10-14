@@ -15,7 +15,7 @@ from jev_agent.config import (
     default_user_config_path,
     load_config,
 )
-from jev_agent.config.schema import JevSettings
+from jev_agent.config.schema import BEGINNER_FIELDS, AutonomyConfig, JevSettings
 
 
 def _write(path: Path, text: str) -> Path:
@@ -492,3 +492,107 @@ def test_review_default_depends_on_the_dispatcher() -> None:
                 {"dispatcher": {"primary": primary}, "review": {"enabled": explicit}}
             )
             assert config.review_enabled is explicit
+
+
+# ---- [autonomy]: modes and access tiers (Phase 2, workstream C) ------------------------------
+
+
+def test_autonomy_defaults_match_today_behavior() -> None:
+    cfg = JevConfig()
+    assert cfg.autonomy.mode == "standard"  # approve the plan once, then work alone
+    assert cfg.autonomy.access_tier == "basic"
+    assert cfg.autonomy.project_folder is None
+    assert cfg.autonomy.unrestricted_acknowledged is False
+
+
+def test_autonomy_mode_is_a_beginner_field() -> None:
+    assert "autonomy.mode" in BEGINNER_FIELDS
+    assert len(BEGINNER_FIELDS) == 11  # the beginner view stays small
+
+
+def test_autonomy_fields_all_have_descriptions() -> None:
+    for name, field in AutonomyConfig.model_fields.items():
+        assert field.description, f"autonomy.{name} needs a description"
+
+
+def test_unrestricted_tier_needs_the_acknowledgment(repo: Path, user_cfg: Path) -> None:
+    _write(repo / "jev.toml", '[autonomy]\naccess_tier = "unrestricted"\n')
+    with pytest.raises(ConfigError, match="unrestricted_acknowledged"):
+        load_config(repo, user_cfg)
+
+
+def test_unrestricted_tier_with_acknowledgment_loads(repo: Path, user_cfg: Path) -> None:
+    # The tier keys are guarded: a repo jev.toml may set them only in a trusted repo.
+    _write(user_cfg, f'[trust]\nrepos = ["{repo}"]\n')
+    _write(
+        repo / "jev.toml",
+        '[autonomy]\naccess_tier = "unrestricted"\nunrestricted_acknowledged = true\n',
+    )
+    assert load_config(repo, user_cfg).autonomy.access_tier == "unrestricted"
+
+
+def test_untrusted_repo_cannot_escalate_autonomy_tier(repo: Path, user_cfg: Path) -> None:
+    # No [trust]: an untrusted repo must not be able to grant itself the
+    # unrestricted tier, even with the acknowledgment flag set.
+    _write(
+        repo / "jev.toml",
+        '[autonomy]\naccess_tier = "unrestricted"\nunrestricted_acknowledged = true\n',
+    )
+    with pytest.raises(ConfigError, match="autonomy.access_tier"):
+        load_config(repo, user_cfg)
+
+
+def test_empty_project_folder_means_unset(repo: Path, user_cfg: Path) -> None:
+    _write(repo / "jev.toml", '[autonomy]\nproject_folder = ""\n')
+    assert load_config(repo, user_cfg).autonomy.project_folder is None
+
+
+@pytest.mark.parametrize("field", ["mode", "access_tier"])
+def test_autonomy_enums_reject_unknown_values(repo: Path, user_cfg: Path, field: str) -> None:
+    _write(repo / "jev.toml", f'[autonomy]\n{field} = "yolo"\n')
+    with pytest.raises(ConfigError, match=rf"autonomy\.{field}"):
+        load_config(repo, user_cfg)
+
+
+def _render_field_input(dotted: str, kind: str, text: str, choices: tuple[str, ...] = ()) -> str:
+    from types import SimpleNamespace
+
+    from jinja2 import Environment, FileSystemLoader
+
+    env = Environment(loader=FileSystemLoader(PROJECT_ROOT / "src/jev_agent/dashboard/templates"))
+    tpl = env.from_string(
+        '{% from "settings.html" import field_input %}{{ field_input(f, "fid") }}'
+    )
+    f = SimpleNamespace(
+        path=dotted,
+        key=dotted.split(".")[-1],
+        kind=kind,
+        choices=choices,
+        text=text,
+        help="help",
+    )
+    return tpl.render(f=f)
+
+
+def test_settings_mode_picker_is_plain_language() -> None:
+    html = _render_field_input("autonomy.mode", "enum", "standard")
+    assert html.count('type="radio"') == 5
+    for value in ("standard", "medium", "ask_every_step", "autonomous", "manual"):
+        assert f'value="{value}"' in html
+    assert 'value="standard" checked' in html
+    assert "How much should jev ask you?" in html
+    assert "Medium — project folder" in html
+
+
+def test_settings_tier_warns_and_acknowledgment_is_a_checkbox() -> None:
+    choices = ("basic", "medium", "unrestricted")
+    html = _render_field_input("autonomy.access_tier", "enum", "basic", choices)
+    assert "Warning:" in html and "never a casual default" in html
+    assert "hidden" in html.split("data-tier-warning")[1][:30]
+    html = _render_field_input("autonomy.access_tier", "enum", "unrestricted", choices)
+    assert "hidden" not in html.split("data-tier-warning")[1][:30]
+    html = _render_field_input("autonomy.unrestricted_acknowledged", "bool", "false")
+    assert 'type="checkbox"' in html and 'value="true"' in html
+    assert "checked" not in html
+    html = _render_field_input("autonomy.unrestricted_acknowledged", "bool", "true")
+    assert "checked" in html

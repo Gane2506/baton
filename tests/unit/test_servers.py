@@ -162,11 +162,14 @@ def test_full_access_is_rejected(fixture_repo: Path, tmp_path: Path) -> None:
     with pytest.raises(ConfigError, match=r"servers\.x\.access") as info:
         load_config(fixture_repo, tmp_path / "xdg" / "jev" / "config.toml")
     assert FULL_ACCESS_MESSAGE in str(info.value)
-    assert FULL_ACCESS_MESSAGE == 'access = "full" is not available yet; see issue #3'
+    assert FULL_ACCESS_MESSAGE == (
+        'access = "full" is not an access level; for unrestricted access use '
+        'access = "unrestricted" with unrestricted_acknowledged = true (see issue #3)'
+    )
     bad_override = SERVERS_TOML.replace(
         'access_overrides = { db = "basic" }', 'access_overrides = { db = "full" }'
     )
-    with pytest.raises(ValueError, match="not available yet"):
+    with pytest.raises(ValueError, match="not an access level"):
         _config(bad_override)
 
 
@@ -1018,9 +1021,9 @@ def test_browser_for() -> None:
 def test_allowed_grants_and_parse_allow() -> None:
     config = _config()
     assert parse_allow("web, db:basic") == {"web": None, "db": "basic"}
-    with pytest.raises(ValueError, match="not available yet"):
+    with pytest.raises(ValueError, match="not an access level"):
         parse_allow("web:full")
-    with pytest.raises(ValueError, match="basic or medium"):
+    with pytest.raises(ValueError, match="basic, medium or unrestricted"):
         parse_allow("web:root")
     assert allowed_grants(config, "coder", {"web": None}) == {"web": "medium"}
     assert allowed_grants(config, "planner", {"web": "medium"}) == {"web": "basic"}

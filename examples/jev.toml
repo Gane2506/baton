@@ -54,6 +54,18 @@
 [approval]
 # require_plan_approval = true     # human gate after plan validation; unset: off under "consensus"
 
+# How much jev asks you, and what its agents may touch. The mode picker is in Settings >
+# The basics; the access tier lives under Advanced (it is safety-sensitive).
+[autonomy]
+# mode = "standard"                # "standard": approve the plan once, then jev works alone |
+#                                  # (today's behavior) | "ask_every_step": ask before every step |
+#                                  # "autonomous": never stop for approval | "manual": only act when
+#                                  # told to | "medium": like "standard", scoped to project_folder
+# access_tier = "basic"            # "basic" (safest) | "medium" (writes inside project_folder) |
+#                                # "unrestricted" (anything: needs unrestricted_acknowledged = true)
+# project_folder = ""              # folder the medium tier may change; unset: the repo root
+# unrestricted_acknowledged = false # tick only if you accept what "unrestricted" means
+
 [review]
 # enabled = true                   # reviewer on each task's diff; unset: on under "consensus"
 

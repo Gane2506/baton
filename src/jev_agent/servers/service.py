@@ -30,6 +30,7 @@ from jev_agent.servers.policy import (
     check_write_path,
     sensitive,
     within,
+    within_boundary,
 )
 from jev_agent.servers.ssh import SshResult, SshRunner, SshTransport, clip, control_dir, run_process
 
@@ -67,11 +68,22 @@ class ServerService:
         self.role = role
         self.runner = runner
         self.audit = AuditLog(audit_path(state_dir))
+        for granted_name, granted_level in self.grants.items():
+            if granted_level == "unrestricted":
+                server = config.servers[granted_name]
+                self._log(
+                    granted_name,
+                    "unrestricted",
+                    "unrestricted_access_granted",
+                    f"host={server.host} user={server.user}",
+                    True,
+                    "explicit unrestricted_acknowledged=true in config",
+                )
 
     # ---- helpers ---------------------------------------------------------------------------
 
     def has_medium(self) -> bool:
-        return "medium" in self.grants.values()
+        return "medium" in self.grants.values() or "unrestricted" in self.grants.values()
 
     def context(self, name: str) -> PolicyContext:
         server = self.config.servers[name]
@@ -80,6 +92,7 @@ class ServerService:
             workdir=server.workdir,
             write_roots=tuple(server.write_roots()),
             browser_install=tuple(install_argv()),
+            project_boundary=server.project_folder,
         )
 
     def transport(self, name: str) -> SshTransport:
@@ -175,7 +188,13 @@ class ServerService:
                     "access": level,
                     "description": server.description,
                     "workdir": server.workdir,
-                    "writable_paths": server.write_roots() if level == "medium" else [],
+                    "writable_paths": (
+                        [server.project_folder]
+                        if level == "medium" and server.project_folder
+                        else server.write_roots()
+                        if level == "medium"
+                        else []
+                    ),
                 }
             )
         return ToolResult(json.dumps(rows, indent=2))
@@ -208,6 +227,13 @@ class ServerService:
             return ToolResult(f"cannot read {decision.path}: {error}" + _audit_note(problem), True)
         if problem := sensitive(real):
             return self._denied(name, "read_file", real, Decision.deny(problem))
+        if not within_boundary(real, ctx):
+            return self._denied(
+                name,
+                "read_file",
+                real,
+                Decision.deny(f"{real} is outside the project folder"),
+            )
         cap = MAX_READ_BYTES if not max_bytes else max(1, min(int(max_bytes), MAX_READ_BYTES))
         if (failed := self._started(name, "read_file", real)) is not None:
             return failed

@@ -3,7 +3,39 @@
 {% block title %}{{ page_title }}{% endblock %}
 
 {% macro field_input(f, field_id) %}
-  {% if f.path == "quality.score_threshold" %}
+  {% if f.path == "autonomy.mode" %}
+  <fieldset class="mode-picker">
+    <legend class="hint">How much should jev ask you?</legend>
+    {% for value, title, blurb in [
+      ("standard", "Standard — the classic flow: plan, you approve once, then it builds", "The classic flow: you approve the plan once; jev then builds and tests on its own. This is how jev behaves today."),
+      ("medium", "Medium — project folder", "Like Standard, but jev stays inside your project folder."),
+      ("ask_every_step", "Ask every step", "jev stops and asks you before it takes each step."),
+      ("autonomous", "Fully autonomous", "jev runs start to finish without asking you anything."),
+      ("manual", "Manual", "jev only acts when you explicitly tell it to.")
+    ] %}
+    <label class="check">
+      <input type="radio" name="value" value="{{ value }}"{% if f.text == value %} checked{% endif %}>
+      <span><strong>{{ title }}</strong><br><span class="hint">{{ blurb }}</span></span>
+    </label>
+    {% endfor %}
+  </fieldset>
+  {% elif f.path == "autonomy.access_tier" %}
+  <select id="{{ field_id }}" name="value" data-tier-select>
+    <option value="unset">default (unset)</option>
+    {% for c in f.choices %}<option value="{{ c }}"{% if f.text == c %} selected{% endif %}>{{ c }}</option>{% endfor %}
+  </select>
+  <p class="hint tier-warning" data-tier-warning{% if f.text != "unrestricted" %} hidden{% endif %}>
+    <strong>Warning:</strong> "unrestricted" lets agents run any command with your privileges.
+    It is never a casual default: tick the acknowledgment below <em>and</em> press its Save
+    before saving this tier.
+  </p>
+  {% elif f.path == "autonomy.unrestricted_acknowledged" %}
+  <label class="check" for="{{ field_id }}">
+    <input id="{{ field_id }}" type="checkbox" name="value" value="true"{% if f.text == "true" %} checked{% endif %} data-ack-checkbox data-ack-saved="{{ 'true' if f.text == 'true' else 'false' }}">
+    <span>I understand that <strong>unrestricted</strong> lets agents run any command with my privileges.</span>
+  </label>
+  <p class="hint">Tick, then press Save: the tier needs the <em>saved</em> acknowledgment. Lower the tier before unticking.</p>
+  {% elif f.path == "quality.score_threshold" %}
   <div class="slider-row">
     <input id="{{ field_id }}" type="range" min="0" max="100" step="1" name="value"
            value="{{ f.text or '85' }}" data-slider-output="{{ field_id }}-out"
@@ -49,7 +81,7 @@
     <input type="hidden" name="path" value="{{ f.path }}">
     <input type="hidden" name="kind" value="{{ f.kind }}">
     <input type="hidden" name="target" value="{{ target }}">
-    <label for="{{ field_id }}"><span class="mono">{{ f.key }}</span>{% if f.help %}<span class="hint">{{ f.help }}</span>{% endif %}</label>
+    <label for="{{ field_id }}">{% if f.path == "autonomy.mode" %}<span>How much jev asks you</span>{% else %}<span class="mono">{{ f.key }}</span>{% if f.help %}<span class="hint">{{ f.help }}</span>{% endif %}{% endif %}</label>
     <div class="field-control">{{ field_input(f, field_id) }}</div>
     <div class="field-actions">
       {% if f.source %}{{ badge(f.source, "note") }}{% endif %}
@@ -200,6 +232,14 @@
 {% endmacro %}
 
 {% block content %}
+<style>
+.mode-picker { border: 0; padding: 0; margin: 0; display: grid; gap: 8px; }
+.mode-picker legend { margin-bottom: 2px; }
+.mode-picker .check { align-items: flex-start; }
+.tier-warning { border: 1px solid color-mix(in srgb, var(--warn) 55%, transparent);
+  background: color-mix(in srgb, var(--warn) 10%, transparent);
+  border-radius: 8px; padding: 8px 10px; margin: 8px 0 0; }
+</style>
 <div class="page-head">
   <div class="titles">
     <h1>{{ page_title }}</h1>
@@ -215,7 +255,7 @@
 {% if page == "settings" %}
 <h2 class="section" id="s-basics">The basics</h2>
 <section class="panel" aria-label="Beginner settings">
-  <p class="hint">The ten settings most people change, in plain language. Everything else is
+  <p class="hint">The eleven settings most people change, in plain language. Everything else is
   under <strong>Advanced</strong> below — nothing is hidden from it.</p>
   {% for s in sections %}
   {% for f in s.fields %}
@@ -264,4 +304,33 @@
 
 
 
+<script>
+(function () {
+  // "unrestricted" needs the saved acknowledgment: nudge here, enforce server-side
+  // (the config validator rejects it without the ack, so a bypassed check still fails).
+  document.querySelectorAll("form.field-row").forEach(function (form) {
+    var pathInput = form.querySelector('input[name="path"]');
+    if (!pathInput || pathInput.value !== "autonomy.access_tier") return;
+    var select = form.querySelector("[data-tier-select]");
+    var warning = form.querySelector("[data-tier-warning]");
+    function ackSaved() {
+      var ack = document.querySelector("[data-ack-checkbox]");
+      return !!ack && ack.getAttribute("data-ack-saved") === "true";
+    }
+    function syncWarning() {
+      if (warning && select) warning.hidden = select.value !== "unrestricted";
+    }
+    if (select) select.addEventListener("change", syncWarning);
+    form.addEventListener("submit", function (event) {
+      if (select && select.value === "unrestricted" && !ackSaved()) {
+        event.preventDefault();
+        syncWarning();
+        var ack = document.querySelector("[data-ack-checkbox]");
+        if (ack) ack.scrollIntoView({ block: "center", behavior: "smooth" });
+      }
+    });
+    syncWarning();
+  });
+})();
+</script>
 {% endblock %}

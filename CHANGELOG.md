@@ -9,6 +9,15 @@ All notable changes to this project are documented here. The format is based on
 
 ### Added
 
+- **Autonomy modes and access tiers.** New `[autonomy]` settings: `mode` (`standard` — the
+  historical approve-once flow, `autonomous`, `ask_every_step`, `manual`, `medium`) with a
+  plain-language picker in the dashboard's beginner settings, plus `access_tier`
+  (`basic`/`medium`/`unrestricted`) in Advanced. `unrestricted` is an explicit opt-in
+  tier (needs `unrestricted_acknowledged = true`, coder role only, audit-logged on grant);
+  `medium` servers can set `project_folder` to scope agents to one folder, enforced
+  fail-closed against `..` escapes and symlink breakouts. Ask-every-step runs wait at an
+  explicit `AWAITING_*` gate per pipeline step. Run state DB schema v14 records the mode.
+
 - **Dashboard: Settings editor** ([#9](https://github.com/Gane2506/baton/issues/9)). Typed
   controls for the common `jev.toml` settings with a section list, validation exactly as `jev`
   loads the config, a diff before saving, reset to default, and atomic writes that keep

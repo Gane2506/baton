@@ -104,6 +104,13 @@ class RunRecord:
     plan_only: bool = False
     # `jev run --auto-ship` ("merge") or `--ask-before-ship` ("ask"); None: the config decides.
     ship_mode: ShipMode | None = None
+    # Phase 2 workstream C: the run's autonomy mode (see core/models.py::AutonomyMode);
+    # "standard" is the historical approve-once flow.
+    autonomy_mode: str = "standard"
+    # Explicit opt-in for the autonomous mode; never default-on.
+    autonomous_opt_in: bool = False
+    # Folder the medium mode is scoped to; None: no folder scoping.
+    medium_folder: str | None = None
 
 
 @dataclass(frozen=True)
@@ -314,6 +321,9 @@ class Store:
         *,
         plan_only: bool = False,
         ship_mode: ShipMode | None = None,
+        autonomy_mode: str = "standard",
+        autonomous_opt_in: bool = False,
+        medium_folder: str | None = None,
     ) -> RunRecord:
         now = _now()
         for _ in range(5):  # retry on the (very unlikely) id collision within one second
@@ -322,8 +332,9 @@ class Store:
                 with self._tx() as db:
                     db.execute(
                         "INSERT INTO runs (id, idea_json, state, created_at, updated_at,"
-                        " learning_profile, quality_level, plan_only, ship_mode)"
-                        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        " learning_profile, quality_level, plan_only, ship_mode,"
+                        " autonomy_mode, autonomous_opt_in, medium_folder)"
+                        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                         (
                             run_id,
                             idea.model_dump_json(),
@@ -334,6 +345,9 @@ class Store:
                             quality_level,
                             int(plan_only),
                             ship_mode,
+                            autonomy_mode,
+                            int(autonomous_opt_in),
+                            medium_folder,
                         ),
                     )
             except sqlite3.IntegrityError:
@@ -1149,6 +1163,9 @@ def _run_record(row: sqlite3.Row) -> RunRecord:
         quality_level=row["quality_level"] or "none",
         plan_only=bool(row["plan_only"]),
         ship_mode=row["ship_mode"],
+        autonomy_mode=row["autonomy_mode"] or "standard",
+        autonomous_opt_in=bool(row["autonomous_opt_in"]),
+        medium_folder=row["medium_folder"],
     )
 
 

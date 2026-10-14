@@ -41,10 +41,26 @@ Before the first run:
 3. Use a dedicated, least-privileged account on the server. jev's policy is a second line of
    defence, not a replacement for Unix permissions.
 
-`access = "full"` (unrestricted) is not available: config validation rejects it with
-`access = "full" is not available yet; see issue #3`.
+`access = "unrestricted"` is an explicit opt-in tier (see "Access levels" below): it also
+needs `unrestricted_acknowledged = true` on the same server, its activation is written to
+the audit log, and only the coder role can receive it. `access = "full"` is still rejected
+outright (it was never a real level; see issue #3).
 
 ## Access levels
+
+**unrestricted** (explicit opt-in only): no policy checks at all — any command passes
+through as written, any path is allowed. The tier is never granted by default, by typo,
+or by omission: the server config needs `access = "unrestricted"` *and*
+`unrestricted_acknowledged = true`, and only the coder role can hold it (every other role
+stays capped at `basic`). Granting it writes a prominent `unrestricted_access_granted`
+line to the audit log. Use it when you want full autonomy on a machine you control; the
+safe default stays `basic`.
+
+**project_folder** (medium tier): set `project_folder` on a `medium` server to scope the
+agent to one folder — reads, writes and command operands must stay inside it, and a
+symlink pointing out of it counts as a boundary violation. An unset or out-of-boundary
+workdir fails closed. Unset: the medium scope is `allowed_paths` (default: the workdir).
+
 
 Every command is checked before anything reaches `ssh` (`src/jev_agent/servers/policy.py`).
 

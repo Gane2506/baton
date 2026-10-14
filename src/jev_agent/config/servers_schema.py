@@ -4,13 +4,16 @@ Kept apart from `schema.py` so the feature reads as one block; `schema.py` impor
 adds `[servers.*]`, `[browser]` and `[profiles.*]` to `JevConfig`.
 
 - `[servers.<name>]`: a machine reached with the system `ssh` (host or `~/.ssh/config` alias),
-  an access level (`basic` read-only, `medium` limited writes) and the paths writes may touch.
+  an access level (`basic` read-only, `medium` limited writes, `unrestricted` anything — the
+  last only with an explicit acknowledgment) and the paths writes may touch.
   Credentials never go here: keys come from ssh-agent or `identity_file` (a path only).
 - `[browser]`: the Playwright MCP server for roles with `browser = true`.
 - `[profiles.<name>]`: bundles of servers (with lower-only access overrides), browser, learning
   profile and quality level, picked per run with `--profile`.
 
-`access = "full"` (unrestricted) is deliberately not accepted yet (issue #3).
+`access = "unrestricted"` is opt-in only: it also needs `unrestricted_acknowledged = true`
+on the same server, and its activation is written to the audit log (issue #3).
+`access = "full"` is still rejected outright.
 """
 
 from __future__ import annotations
@@ -23,9 +26,12 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from jev_agent.quality.levels import QualityLevel
 
-AccessLevel = Literal["basic", "medium"]
-ACCESS_LEVELS: tuple[AccessLevel, ...] = ("basic", "medium")  # lowest first
-FULL_ACCESS_MESSAGE = 'access = "full" is not available yet; see issue #3'
+AccessLevel = Literal["basic", "medium", "unrestricted"]
+ACCESS_LEVELS: tuple[AccessLevel, ...] = ("basic", "medium", "unrestricted")  # lowest first
+FULL_ACCESS_MESSAGE = (
+    'access = "full" is not an access level; for unrestricted access use '
+    'access = "unrestricted" with unrestricted_acknowledged = true (see issue #3)'
+)
 
 SERVER_NAME_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9_-]{0,39}$"
 WORKSPACE_PROFILE_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9_-]{0,39}$"
@@ -78,7 +84,16 @@ class ServerConfig(_Strict):
     access: AccessLevel = Field(
         default="basic",
         description=(
-            'What agents may do: "basic" (read-only commands) or "medium" (limited writes).'
+            'What agents may do: "basic" (read-only commands), "medium" (limited writes) '
+            'or "unrestricted" (anything; needs unrestricted_acknowledged = true).'
+        ),
+    )
+    unrestricted_acknowledged: bool = Field(
+        default=False,
+        description=(
+            'Explicit acknowledgment that `access = "unrestricted"` is intended. The '
+            "unrestricted tier is never granted without this flag set to true; it is "
+            "inert for the other access levels."
         ),
     )
     workdir: str | None = Field(
@@ -87,6 +102,15 @@ class ServerConfig(_Strict):
     allowed_paths: list[str] = Field(
         default_factory=list,
         description="Where medium-level writes may go; unset means [workdir].",
+    )
+    project_folder: str | None = Field(
+        default=None,
+        description=(
+            "Folder that scopes medium access to one project: with this set, the agent "
+            "may read, write and run commands only inside this folder on the server, "
+            "and a symlink pointing out of it counts as a boundary violation. Unset: "
+            "the medium scope is allowed_paths (default [workdir])."
+        ),
     )
     description: str = Field(
         default="", description="A note to yourself about what this server is."
@@ -112,6 +136,12 @@ class ServerConfig(_Strict):
                 )
             if not text.strip() or text.startswith("-"):
                 raise ValueError(f"identity_file: {text!r} is not a file path")
+        if self.access == "unrestricted" and not self.unrestricted_acknowledged:
+            raise ValueError(
+                'access = "unrestricted" needs unrestricted_acknowledged = true on the '
+                "same server: it lets agents run anything with the server account's "
+                "rights, so it is never granted by default, by typo or by omission"
+            )
         if self.workdir is not None:
             self.workdir = normalize_remote_path(self.workdir)
         paths = [normalize_remote_path(p) for p in self.allowed_paths]
@@ -124,6 +154,16 @@ class ServerConfig(_Strict):
             if "/.ssh" in value + "/":
                 raise ValueError(f"allowed_paths: {value!r}: ~/.ssh is never writable")
         self.allowed_paths = paths
+        if self.project_folder is not None:
+            folder = normalize_remote_path(self.project_folder)
+            if folder in _SYSTEM_DIRS:
+                raise ValueError(
+                    f"project_folder: {folder!r} is too broad; name the project folder "
+                    "agents are scoped to (for example /srv/app/proj)"
+                )
+            if "/.ssh" in folder + "/":
+                raise ValueError(f"project_folder: {folder!r}: ~/.ssh is never a project folder")
+            self.project_folder = folder
         return self
 
     def write_roots(self) -> list[str]:

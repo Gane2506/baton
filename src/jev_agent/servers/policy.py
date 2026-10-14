@@ -28,6 +28,18 @@ Every command an agent sends is checked here before anything reaches `ssh`:
    config run code); recursive `cp` only copies from inside the write roots. Medium still
    means code execution as the server account: package installs run the packages' own code
    and a `pip install -r` file's own options are not checked.
+5. **unrestricted**: explicit opt-in only (`unrestricted_acknowledged = true` in the server
+   config, so it is never granted by default, by typo or by omission). No policy checks at
+   all: any command is passed through as written (`writes=True`), any path is allowed. The
+   controls are the acknowledgment plus the prominent audit-log line the service layer
+   writes when the tier is granted.
+
+A medium server may also set `project_folder` (`PolicyContext.project_boundary`): the agent
+may then read, write and run commands only inside that folder, nothing outside it. The
+boundary is enforced lexically here — `..` escapes and absolute paths outside are refused,
+and an unset or out-of-boundary workdir fails closed — and the file tools re-check the
+server-resolved path against it (`within_boundary`), so a symlink pointing out of the
+folder counts as a boundary violation.
 
 `check_command`, `check_read_path` and `check_write_path` return a `Decision`; nothing here
 runs anything.
@@ -62,6 +74,14 @@ class PolicyContext:
     write_roots: tuple[str, ...] = ()
     # The exact `npx -y playwright@V install --with-deps chromium` argv allowed in medium.
     browser_install: tuple[str, ...] = ()
+    # Folder-scoping for medium (from `servers.<name>.project_folder`): reads, writes and
+    # command operands must stay inside it; it replaces `write_roots` as the write scope.
+    # None: no boundary (the default).
+    project_boundary: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.project_boundary is not None:
+            object.__setattr__(self, "project_boundary", _normalize_boundary(self.project_boundary))
 
 
 @dataclass(frozen=True)
@@ -111,6 +131,48 @@ def within(value: str, roots: Sequence[str], *, strictly: bool = False) -> bool:
         if value.startswith(root.rstrip("/") + "/"):
             return True
     return False
+
+
+def _normalize_boundary(value: str) -> str:
+    """`value` as a normalized absolute POSIX path; ValueError when it is not one."""
+    if not value.startswith("/") or "\n" in value or "\x00" in value:
+        raise ValueError(f"project boundary {value!r} must be an absolute path")
+    return posixpath.normpath(value) if value != "/" else "/"
+
+
+def _boundary(ctx: PolicyContext) -> str | None:
+    """The project-folder boundary constraining this server (medium only), if any."""
+    if ctx.access != "medium" or not ctx.project_boundary:
+        return None
+    return ctx.project_boundary
+
+
+def _check_boundary_ctx(ctx: PolicyContext, boundary: str) -> None:
+    """Fail closed when the workdir is unset or outside the boundary: relative paths and
+    operand-less commands would otherwise run outside the folder."""
+    if ctx.workdir is None or not within(ctx.workdir, (boundary,)):
+        raise _Denied(f"the project folder is {boundary}: set the server's workdir inside it")
+
+
+def _require_within_boundary(value: str, ctx: PolicyContext, boundary: str) -> str:
+    """`value` resolved against the workdir; _Denied when unresolvable or outside."""
+    full = resolve(value, ctx.workdir)
+    if full is None:
+        raise _Denied(f"{value}: use an absolute path (or one relative to the workdir)")
+    if not within(full, (boundary,)):
+        raise _Denied(f"{full} is outside the project folder ({boundary})")
+    return full
+
+
+def within_boundary(value: str, ctx: PolicyContext) -> bool:
+    """A server-resolved absolute path is inside the project boundary.
+
+    For the caller to re-check a path after resolving symlinks on the server
+    (`realpath -m`): a symlink pointing out of the folder is a boundary violation.
+    True when no boundary applies (unset, or the access is not medium).
+    """
+    boundary = _boundary(ctx)
+    return boundary is None or within(value, (boundary,))
 
 
 def sensitive(value: str) -> str | None:
@@ -379,12 +441,19 @@ def _grep(args: list[str], ctx: PolicyContext) -> list[str] | None:
         return None
     pattern_given = bool(flags & {"-e", "-f", "--regexp", "--file"})
     paths = operands if pattern_given else operands[1:]
-    roots = tuple(r for r in (ctx.workdir, *ctx.write_roots) if r)
+    roots: tuple[str, ...]
+    if (boundary := _boundary(ctx)) is not None:
+        _check_boundary_ctx(ctx, boundary)
+        roots = (boundary,)
+        scope = "the project folder"
+    else:
+        roots = tuple(r for r in (ctx.workdir, *ctx.write_roots) if r)
+        scope = "the workdir/allowed_paths"
     for target in paths or ["."]:
         full = resolve(target, ctx.workdir)
         if full is None or not within(full, roots):
             where = ", ".join(roots) or "no workdir set"
-            raise _Denied(f"grep: recursive grep only inside the workdir/allowed_paths ({where})")
+            raise _Denied(f"grep: recursive grep only inside {scope} ({where})")
     return [*GREP_EXCLUDES, *args]
 
 
@@ -536,6 +605,19 @@ def _need_roots(ctx: PolicyContext) -> None:
 
 
 def _writable(value: str, ctx: PolicyContext, *, strictly: bool = False) -> str:
+    if (boundary := _boundary(ctx)) is not None:
+        # A project folder is set: it replaces the write roots as the write scope.
+        _check_boundary_ctx(ctx, boundary)
+        full = resolve(value, ctx.workdir)
+        if full is None:
+            raise _Denied(f"{value}: use an absolute path (or one relative to the workdir)")
+        if problem := sensitive(full):
+            raise _Denied(problem)
+        if _in_git_dir(full):
+            raise _Denied(f"{full}: nothing is written under .git (hooks and config run code)")
+        if not within(full, (boundary,), strictly=strictly):
+            raise _Denied(f"{full} is outside the project folder ({boundary})")
+        return full
     _need_roots(ctx)
     full = resolve(value, ctx.workdir)
     if full is None:
@@ -576,17 +658,24 @@ def _cp(args: list[str], ctx: PolicyContext) -> None:
     if len(operands) < 2:
         raise _Denied("cp: SOURCE... DEST")
     _sensitive_args(operands[:-1])
+    boundary = _boundary(ctx)
+    if boundary is not None:
+        _check_boundary_ctx(ctx, boundary)
     for source in operands[:-1]:
         full = resolve(source, ctx.workdir)
         if full is not None and _in_git_dir(full):
             raise _Denied(f"{full}: nothing is copied from or into .git")
-        if _flag_set(args) & {"-r", "-R", "-a", "--recursive"} and (
-            full is None or not within(full, ctx.write_roots, strictly=True)
-        ):
-            raise _Denied(
-                f"cp: recursive cp only from inside allowed_paths ({', '.join(ctx.write_roots)})"
-                f"; {source} may hold credential files"
+        if _flag_set(args) & {"-r", "-R", "-a", "--recursive"}:
+            roots = (boundary,) if boundary is not None else ctx.write_roots
+            scope = (
+                f"the project folder ({boundary})"
+                if boundary is not None
+                else f"allowed_paths ({', '.join(ctx.write_roots)})"
             )
+            if full is None or not within(full, roots, strictly=True):
+                raise _Denied(
+                    f"cp: recursive cp only from inside {scope}; {source} may hold credential files"
+                )
     _writable(operands[-1], ctx)
 
 
@@ -666,6 +755,8 @@ def _pip_install(args: list[str], ctx: PolicyContext) -> None:
                 _writable(target, ctx)
             else:
                 _sensitive_args([target])
+                if (boundary := _boundary(ctx)) is not None:
+                    _require_within_boundary(target, ctx, boundary)
             i, packages = i + 2, packages + 1
             continue
         if not arg.startswith("-"):
@@ -733,6 +824,8 @@ def _compose(args: list[str], ctx: PolicyContext) -> None:
         if i + 1 >= len(args):
             raise _Denied(f"docker compose: {args[i]} needs a value")
         _sensitive_args([args[i + 1]])
+        if args[i] in {"-f", "--file"} and (boundary := _boundary(ctx)) is not None:
+            _require_within_boundary(args[i + 1], ctx, boundary)
         i += 2
     rest = args[i:]
     if not rest:
@@ -805,8 +898,18 @@ def _writes(argv: Sequence[str]) -> bool:
 
 
 def check_command(text: str, ctx: PolicyContext) -> Decision:
-    """Whether `text` may run on a server with `ctx`, and the exact command to send."""
+    """Whether `text` may run on a server with `ctx`, and the exact command to send.
+
+    `unrestricted` (explicit opt-in in config) skips every check: the command is passed
+    through as written. A medium server with a project boundary additionally requires the
+    workdir inside the folder and every operand of every pipeline segment inside it.
+    """
+    if ctx.access == "unrestricted":
+        return Decision(True, "unrestricted access: no policy checks", text.strip(), writes=True)
     try:
+        boundary = _boundary(ctx)
+        if boundary is not None:
+            _check_boundary_ctx(ctx, boundary)
         segments = [_split(s) for s in split_pipeline(text.strip())]
         for argv in segments:
             inner = argv
@@ -839,6 +942,15 @@ def check_command(text: str, ctx: PolicyContext) -> Decision:
             if (replaced := filt(list(pipe[1:]), ctx)) is not None:
                 pipe = [pipe[0], *replaced]
             parts.append(shlex.join(pipe))
+        if boundary is not None:
+            # Every operand must stay inside the project folder: this covers the read
+            # commands (whose operands are paths) as well as the write commands (already
+            # checked by their checkers through `_writable`). `..` escapes and absolute
+            # paths outside are refused; unresolvable paths fail closed.
+            swept = [first, pipe] if len(segments) == 2 else [first]
+            for argv in swept:
+                for operand in _operands(argv[1:]):
+                    _require_within_boundary(operand, ctx, boundary)
     except _Denied as exc:
         return Decision.deny(str(exc))
     writes = _writes(first)
@@ -859,17 +971,45 @@ def _strip_sudo(argv: list[str], ctx: PolicyContext) -> list[str]:
 
 
 def check_read_path(value: str, ctx: PolicyContext) -> Decision:
-    """Reading a file (any level): anywhere except credential files."""
-    full = resolve(value, ctx.workdir)
-    if full is None:
-        return Decision.deny(f"{value}: use an absolute path (or one relative to the workdir)")
-    if problem := sensitive(full):
-        return Decision.deny(problem)
+    """Reading a file (any level): anywhere except credential files.
+
+    `unrestricted` skips every check. A medium server with a project boundary only allows
+    reads inside the folder; the caller re-checks the server-resolved path with
+    `within_boundary`, so a symlink pointing out is a boundary violation.
+    """
+    if ctx.access == "unrestricted":
+        full = resolve(value, ctx.workdir)
+        if full is None:
+            return Decision.deny(f"{value}: use an absolute path (or one relative to the workdir)")
+        return Decision(True, "unrestricted access: no policy checks", path=full)
+    try:
+        full = resolve(value, ctx.workdir)
+        if full is None:
+            raise _Denied(f"{value}: use an absolute path (or one relative to the workdir)")
+        if problem := sensitive(full):
+            raise _Denied(problem)
+        if (boundary := _boundary(ctx)) is not None:
+            _check_boundary_ctx(ctx, boundary)
+            if not within(full, (boundary,)):
+                raise _Denied(f"{full} is outside the project folder ({boundary})")
+    except _Denied as exc:
+        return Decision.deny(str(exc))
     return Decision(True, "allowed", path=full)
 
 
 def check_write_path(value: str, ctx: PolicyContext) -> Decision:
-    """Writing or uploading a file: medium only, inside the write roots, never credentials."""
+    """Writing or uploading a file: medium only, inside the write roots, never credentials.
+
+    `unrestricted` skips every check. A medium server with a project boundary only allows
+    writes inside the folder (the boundary replaces the write roots as the write scope);
+    the caller re-checks the server-resolved path with `within_boundary`, so a symlink
+    pointing out is a boundary violation.
+    """
+    if ctx.access == "unrestricted":
+        full = resolve(value, ctx.workdir)
+        if full is None:
+            return Decision.deny(f"{value}: use an absolute path (or one relative to the workdir)")
+        return Decision(True, "unrestricted access: no policy checks", path=full, writes=True)
     if ctx.access != "medium":
         return Decision.deny("writing files needs medium access")
     if any("authorized_keys" in p for p in (value,)):

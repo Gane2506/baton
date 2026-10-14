@@ -24,6 +24,12 @@ class RunState(StrEnum):
     PLANNING = "PLANNING"
     VALIDATING = "VALIDATING"
     AWAITING_APPROVAL = "AWAITING_APPROVAL"
+    # ASK_EVERY_STEP autonomy mode: one explicit gate per pipeline step, approved with
+    # `jev approve` like AWAITING_APPROVAL (AWAITING_SHIP stays the ship gate).
+    AWAITING_PLANNING = "AWAITING_PLANNING"  # INTAKE done; approve before PLANNING
+    AWAITING_VALIDATING = "AWAITING_VALIDATING"  # plan drafted; approve before VALIDATING
+    AWAITING_INTEGRATING = "AWAITING_INTEGRATING"  # tasks executed; approve before INTEGRATING
+    AWAITING_SHIPPING = "AWAITING_SHIPPING"  # D6 voted ship; approve before SHIPPING
     EXECUTING = "EXECUTING"
     INTEGRATING = "INTEGRATING"
     # D6 voted to ship; a person chooses approve, modify or stop (`[ship] after_approval`).
@@ -52,6 +58,58 @@ class TaskState(StrEnum):
     DONE = "DONE"
     FAILED = "FAILED"
     NEEDS_HUMAN = "NEEDS_HUMAN"
+
+
+class AutonomyMode(StrEnum):
+    """How much of the pipeline runs without a person (Phase 2, workstream C1).
+
+    Recorded on the run; `core/pipeline.py` dispatches on it. STANDARD is the
+    historical approve-once flow, so runs written before the mode existed keep it.
+    """
+
+    # The historical default: one human gate on the plan (AWAITING_APPROVAL), plus the
+    # ship gate (AWAITING_SHIP) when `[ship] after_approval` asks for it.
+    STANDARD = "standard"
+    # Explicit opt-in only (`AutonomyConfig.autonomous_opt_in`): no plan-approval gate;
+    # the Jev+Laya >= 85 decision gate stays the quality backstop.
+    AUTONOMOUS = "autonomous"
+    # A person approves each pipeline step: the run waits in an explicit AWAITING_* gate
+    # state before PLANNING, VALIDATING, EXECUTING, INTEGRATING and SHIPPING.
+    ASK_EVERY_STEP = "ask_every_step"
+    # Chat-driven: `Pipeline.start` only creates the run; it waits in INTAKE for an
+    # explicit instruction (`advance`/`resume`, or the chat driver).
+    MANUAL = "manual"
+    # Folder-scoped standard flow; enforcing the folder boundary is workstream C2's job.
+    MEDIUM = "medium"
+
+
+class AutonomyConfig(BaseModel):
+    """A run's autonomy configuration (Phase 2, workstream C1).
+
+    Validated at the boundary (`Pipeline.start`): AUTONOMOUS needs an explicit opt-in
+    (never the default), MEDIUM needs the scoped folder.
+    """
+
+    mode: AutonomyMode = AutonomyMode.STANDARD
+    autonomous_opt_in: bool = False
+    medium_folder: str | None = None
+
+    @model_validator(mode="after")
+    def _check_opt_ins(self) -> AutonomyConfig:
+        if self.mode is AutonomyMode.AUTONOMOUS and not self.autonomous_opt_in:
+            raise ValueError("AUTONOMOUS mode needs an explicit opt-in (autonomous_opt_in=True)")
+        if self.mode is AutonomyMode.MEDIUM and not (self.medium_folder or "").strip():
+            raise ValueError("MEDIUM mode needs the scoped folder (medium_folder)")
+        return self
+
+    def is_default(self) -> bool:
+        """The historical configuration: the store's column defaults already record it,
+        so `create_run` needs no new arguments."""
+        return (
+            self.mode is AutonomyMode.STANDARD
+            and not self.autonomous_opt_in
+            and self.medium_folder is None
+        )
 
 
 class Idea(BaseModel):

@@ -147,7 +147,13 @@ def browser_install(
     if settings.access != "medium":
         raise fail(f'installing on {target} needs `access = "medium"` (it is {settings.access})')
     command = shlex.join(argv)
-    ctx = PolicyContext("medium", settings.workdir, tuple(settings.write_roots()), tuple(argv))
+    ctx = PolicyContext(
+        "medium",
+        settings.workdir,
+        tuple(settings.write_roots()),
+        tuple(argv),
+        project_boundary=settings.project_folder,
+    )
     decision = check_command(command, ctx)
     if not decision.allowed:  # e.g. no workdir: npx needs nothing else, so this is a bug guard
         raise fail(f"refused by the access policy: {decision.reason}")

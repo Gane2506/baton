@@ -331,6 +331,14 @@ MIGRATIONS: list[str] = [
     """,
     # 13: tuned Laya weights on a learning profile (issue #69).
     PROFILE_LAYA_WEIGHTS,
+    # 14: autonomy mode for Phase 2 workstream C: how much of the pipeline runs
+    # without a person, recorded per run. Defaults preserve historical behavior.
+    """
+    ALTER TABLE runs ADD COLUMN autonomy_mode TEXT DEFAULT 'standard'
+        CHECK (autonomy_mode IN ('standard', 'autonomous', 'ask_every_step', 'manual', 'medium'));
+    ALTER TABLE runs ADD COLUMN autonomous_opt_in INTEGER DEFAULT 0;
+    ALTER TABLE runs ADD COLUMN medium_folder TEXT;
+    """,
 ]
 
 SCHEMA_VERSION = len(MIGRATIONS)
