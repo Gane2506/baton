@@ -136,7 +136,7 @@ access to it like shell access to the repo.
   cannot reach it through DNS rebinding.
 - **Token off loopback.** Any other `--host` (for example `0.0.0.0`) requires a token: pass
   `--token` / set `JEV_DASHBOARD_TOKEN`, or jev generates a random one. jev prints the URL with
-  `?token=...` and a warning. Every request (pages, files, static assets) must carry the token,
+  `?token=<token>` and a warning. Every request (pages, files, static assets) must carry the token,
   as the `jev_token` cookie, an `X-Jev-Token` header, or the `token` query parameter; opening
   the printed URL swaps the query parameter for an HttpOnly, SameSite=Strict cookie and
   redirects to a clean URL. You can also pass `--token` on loopback to require it there.

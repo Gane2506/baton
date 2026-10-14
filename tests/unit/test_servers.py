@@ -174,7 +174,7 @@ def test_full_access_is_rejected(fixture_repo: Path, tmp_path: Path) -> None:
     ("toml", "match"),
     [
         ('[servers.x]\nhost = "-oProxyCommand=evil"\n', "not a host"),
-        ('[servers.x]\nhost = "h"\npassword = "hunter22"\n', "secrets are not allowed"),
+        ('[servers.x]\nhost = "h"\npassword = 0\n', "secrets are not allowed"),
         (
             '[servers.x]\nhost = "h"\nidentity_file = "-----BEGIN OPENSSH PRIVATE KEY-----"\n',
             "never the key",
