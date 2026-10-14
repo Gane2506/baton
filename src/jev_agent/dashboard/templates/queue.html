@@ -71,6 +71,44 @@
   </form>
 </section>
 
+<section class="panel">
+  <h2>Recurring</h2>
+  <p class="lede">Tasks the scheduler runs on a schedule (<code>jev queue add --repeat</code>).</p>
+  {% if q.recurring %}
+  <div class="table-wrap"><table>
+    <thead><tr><th>brief</th><th>schedule</th><th>next run</th><th>status</th><th>actions</th></tr></thead>
+    <tbody>
+    {% for r in q.recurring %}
+      <tr>
+        <td class="wrap">{{ r.task.brief }}</td>
+        <td class="small">{{ r.schedule_plain }}</td>
+        <td class="mono">{{ r.next_due_local.strftime("%Y-%m-%d %H:%M %Z") }}</td>
+        <td>{% if r.task.enabled %}{{ badge("enabled", live=true) }}{% else %}{{ badge("paused", "pending") }}{% endif %}</td>
+        <td>
+          <div class="actions">
+          {% if r.task.enabled %}
+            <form class="inline" method="post" action="/queue/recurring/{{ r.task.id }}/pause">
+              {{ csrf_input() }}<button class="small" type="submit">Pause</button>
+            </form>
+          {% else %}
+            <form class="inline" method="post" action="/queue/recurring/{{ r.task.id }}/resume">
+              {{ csrf_input() }}<button class="small" type="submit">Resume</button>
+            </form>
+          {% endif %}
+            <form class="inline" method="post" action="/queue/recurring/{{ r.task.id }}/remove" data-confirm="Remove recurring task {{ r.task.id }}? Its queue items and runs are kept.">
+              {{ csrf_input() }}<button class="small danger" type="submit">Remove</button>
+            </form>
+          </div>
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table></div>
+  {% else %}
+  <p class="muted">No recurring tasks. Create one: <code>jev queue add "idea" --repeat daily@09:30</code>.</p>
+  {% endif %}
+</section>
+
 <div class="panel-head">
   <h2 class="section">Items</h2>
   <p class="small muted">

@@ -1359,6 +1359,33 @@ class Dashboard:
 
         return await self.act(request, "/queue", remove)
 
+    async def queue_recurring_pause(self, request: Request) -> Response:
+        task_id = _int(request.path_params["id"])
+
+        def pause(repo: views.Repo, form: FormData) -> str:
+            repo.store.set_recurring_enabled(task_id, False)
+            return f"paused recurring task {task_id}"
+
+        return await self.act(request, "/queue", pause)
+
+    async def queue_recurring_resume(self, request: Request) -> Response:
+        task_id = _int(request.path_params["id"])
+
+        def resume(repo: views.Repo, form: FormData) -> str:
+            repo.store.set_recurring_enabled(task_id, True)
+            return f"resumed recurring task {task_id}"
+
+        return await self.act(request, "/queue", resume)
+
+    async def queue_recurring_remove(self, request: Request) -> Response:
+        task_id = _int(request.path_params["id"])
+
+        def remove(repo: views.Repo, form: FormData) -> str:
+            repo.store.remove_recurring_task(task_id)
+            return f"removed recurring task {task_id}"
+
+        return await self.act(request, "/queue", remove)
+
     # ---- actions: learning -----------------------------------------------------------------
 
     async def learning_action(self, request: Request) -> Response:
@@ -1502,6 +1529,9 @@ def create_app(
         Route("/queue/add", dash.queue_add, methods=["POST"]),
         Route("/queue/{item_id}/move", dash.queue_move, methods=["POST"]),
         Route("/queue/{item_id}/remove", dash.queue_remove, methods=["POST"]),
+        Route("/queue/recurring/{id}/pause", dash.queue_recurring_pause, methods=["POST"]),
+        Route("/queue/recurring/{id}/resume", dash.queue_recurring_resume, methods=["POST"]),
+        Route("/queue/recurring/{id}/remove", dash.queue_recurring_remove, methods=["POST"]),
         Route("/learning", dash.learning_page),
         Route("/learning/{action}", dash.learning_action, methods=["POST"]),
         Route("/chats", dash.chats_page),

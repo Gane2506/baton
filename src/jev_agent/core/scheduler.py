@@ -22,12 +22,16 @@ from collections.abc import Callable, Coroutine
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any, cast
+from zoneinfo import ZoneInfo
 
 from jev_agent.config.defaults import STATE_DIRNAME
+from jev_agent.config.schema import ShipMode
 from jev_agent.core.lease import pid_alive as _pid_alive
-from jev_agent.core.queue import status_for_run
+from jev_agent.core.queue import effective_status, run_states, status_for_run
+from jev_agent.core.recurrence import next_due, parse_schedule
 from jev_agent.core.store import NotFoundError, QueueItem, QueueStatus, RunRecord, Store
+from jev_agent.quality.levels import QualityLevel
 
 __all__ = [
     "LOCK_FILENAME",
@@ -40,6 +44,9 @@ __all__ = [
     "scheduler_lock",
     "spent_today",
 ]
+
+if TYPE_CHECKING:
+    from jev_agent.core.store import RecurringTask
 
 LOCK_FILENAME = "scheduler.lock"
 
@@ -253,6 +260,7 @@ class Scheduler:
         try:
             self.recover()
             while True:
+                self._pump_recurring()
                 if self.options.max_runs is not None and summary.runs >= self.options.max_runs:
                     summary.stopped_because = f"reached --max-runs {self.options.max_runs}"
                     break
@@ -282,6 +290,72 @@ class Scheduler:
         except KeyboardInterrupt:
             summary.stopped_because = "interrupted"
         return summary
+
+    def _pump_recurring(self) -> int:
+        """Enqueue every enabled recurring task whose `next_due_at` has passed.
+
+        A task whose previous occurrence is still queued/running/waiting keeps its
+        `next_due_at` untouched and fires on a later tick (no pile-up, no catch-up).
+        A task that fails to schedule (e.g. a broken stored schedule) is logged and
+        skipped. Returns the number of queue items enqueued.
+        """
+        now = self.now()
+        enqueued = 0
+        for task in self.store.list_recurring_tasks(enabled_only=True):
+            if task.next_due_at > now:
+                continue
+            try:
+                if self._enqueue_recurring(task, now):
+                    enqueued += 1
+            except Exception as exc:  # one bad task must not stop the pump
+                self.log(f"recurring task {task.id}: could not schedule: {exc}")
+        return enqueued
+
+    def _enqueue_recurring(self, task: RecurringTask, now: datetime) -> bool:
+        """Enqueue one due recurring task; True when a queue item was created."""
+        if task.active_item_id is not None and self._previous_still_active(task):
+            return False
+        item = self.store.add_queue_item(
+            task.brief,
+            task.priority,
+            plan_only=task.plan_only,
+            learning_profile=task.learning_profile,
+            no_learning=task.no_learning,
+            profile=task.profile,
+            quality=cast(QualityLevel | None, task.quality),
+            ship_mode=cast(ShipMode | None, task.ship_mode),
+        )
+        due = next_due(parse_schedule(task.schedule_source), now, ZoneInfo(task.timezone))
+        self.store.update_recurring_after_enqueue(
+            task.id, next_due_at=due, last_run_at=now, active_item_id=item.id
+        )
+        self.log(
+            f"recurring task {task.id}: enqueued queue item {item.id} "
+            f"(next due {due.isoformat()})"
+        )
+        return True
+
+    def _previous_still_active(self, task: RecurringTask) -> bool:
+        """True when the task's previous occurrence still holds its slot (no re-enqueue).
+
+        A missing or terminal previous occurrence is cleared so the task can fire.
+        """
+        assert task.active_item_id is not None
+        try:
+            item = self.store.get_queue_item(task.active_item_id)
+        except NotFoundError:
+            self.store.clear_recurring_active(task.id)
+            return False
+        states = run_states(self.store, [item])
+        status = effective_status(item, states.get(item.run_id) if item.run_id else None)
+        if status in ("queued", "running", "waiting"):
+            self.log(
+                f"recurring task {task.id} ({task.brief!r}): previous occurrence "
+                f"still {status}; skipping"
+            )
+            return True
+        self.store.clear_recurring_active(task.id)
+        return False
 
     def recover(self) -> None:
         """Settle the `running` items of a scheduler that died (killed, crashed, machine off).

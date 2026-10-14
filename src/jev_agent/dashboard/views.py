@@ -18,6 +18,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from jev_agent.app.chat import chat_title
 from jev_agent.app.context import FAKE_WORKERS_ENV, STATE_DB_FILENAME
@@ -38,6 +39,7 @@ from jev_agent.core.migrations import SchemaVersionError
 from jev_agent.core.models import RunState, TaskState
 from jev_agent.core.pipeline import STOPPED
 from jev_agent.core.queue import effective_status, queue_counts, run_states
+from jev_agent.core.recurrence import describe, local_timezone_name, parse_schedule
 from jev_agent.core.scheduler import LockInfo, scheduler_lock, spent_today
 from jev_agent.core.ship import ShipPreview, after_approval, ship_preview
 from jev_agent.core.store import (
@@ -46,6 +48,7 @@ from jev_agent.core.store import (
     QualityReportRecord,
     QueueItem,
     QueueStatus,
+    RecurringTask,
     RunRecord,
     ShippedPrRecord,
     Store,
@@ -404,6 +407,14 @@ class QueueRow:
     movable: bool
 
 
+@dataclass(frozen=True)
+class RecurringRow:
+    task: RecurringTask
+    schedule_plain: str  # describe(parse_schedule(task.schedule_source)), in plain words
+    next_due_local: datetime  # next_due_at in the viewer's local timezone
+    last_run_local: datetime | None  # last_run_at in the viewer's local timezone, if any
+
+
 @dataclass
 class QueueView:
     rows: list[QueueRow]
@@ -412,6 +423,24 @@ class QueueView:
     spent_today: float
     profiles: list[Profile]
     hidden: int  # finished items not shown without show_all
+    recurring: list[RecurringRow]  # recurring tasks, next-due first
+
+
+def recurring_rows(repo: Repo) -> list[RecurringRow]:
+    """The recurring tasks (`jev queue add --repeat`), next-due first, with each schedule in
+    plain words and each run time in the viewer's local timezone."""
+    local = ZoneInfo(local_timezone_name())
+    return [
+        RecurringRow(
+            task=task,
+            schedule_plain=describe(parse_schedule(task.schedule_source)),
+            next_due_local=task.next_due_at.astimezone(local),
+            last_run_local=(
+                task.last_run_at.astimezone(local) if task.last_run_at is not None else None
+            ),
+        )
+        for task in sorted(repo.store.list_recurring_tasks(), key=lambda t: t.next_due_at)
+    ]
 
 
 def queue_view(repo: Repo, show_all: bool = False) -> QueueView:
@@ -435,6 +464,7 @@ def queue_view(repo: Repo, show_all: bool = False) -> QueueView:
         spent_today=spent_today(repo.store, datetime.now(UTC)),
         profiles=repo.learning.profiles(),
         hidden=len(rows) - len(shown),
+        recurring=recurring_rows(repo),
     )
 
 

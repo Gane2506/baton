@@ -339,6 +339,31 @@ MIGRATIONS: list[str] = [
     ALTER TABLE runs ADD COLUMN autonomous_opt_in INTEGER DEFAULT 0;
     ALTER TABLE runs ADD COLUMN medium_folder TEXT;
     """,
+    # 15: recurring tasks: `brief` re-enqueued on the cron `schedule` in `timezone`. The
+    # original schedule text lives in `schedule_source` (`schedule` is the normalized
+    # cron from `core.recurrence`); `active_item_id` is the in-flight queue item, NULL
+    # when the task is idle between runs.
+    """
+    CREATE TABLE recurring_tasks (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        brief TEXT NOT NULL,
+        schedule TEXT NOT NULL,
+        schedule_source TEXT NOT NULL,
+        timezone TEXT NOT NULL,
+        next_due_at TEXT NOT NULL,
+        last_run_at TEXT,
+        enabled INTEGER NOT NULL DEFAULT 1,
+        active_item_id INTEGER,
+        priority TEXT NOT NULL DEFAULT 'normal',
+        plan_only INTEGER NOT NULL DEFAULT 0,
+        learning_profile TEXT,
+        no_learning INTEGER NOT NULL DEFAULT 0,
+        profile TEXT,
+        quality TEXT,
+        ship_mode TEXT,
+        created_at TEXT NOT NULL
+    );
+    """,
 ]
 
 SCHEMA_VERSION = len(MIGRATIONS)

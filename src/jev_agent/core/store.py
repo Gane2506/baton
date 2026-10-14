@@ -33,6 +33,7 @@ from jev_agent.core.models import (
     ValidationResult,
     WorkerResult,
 )
+from jev_agent.core.recurrence import Schedule
 from jev_agent.quality.levels import QualityLevel, parse_level
 from jev_agent.quality.models import GateResult
 
@@ -44,6 +45,7 @@ __all__ = [
     "QueueItem",
     "QueuePriority",
     "QueueStatus",
+    "RecurringTask",
     "RunLease",
     "RunRecord",
     "SchemaVersionError",
@@ -249,6 +251,34 @@ class QueueItem:
     updated_at: datetime
     quality: QualityLevel | None = None  # `--quality LEVEL`; None: the config's level
     ship_mode: ShipMode | None = None  # `--auto-ship` / `--ask-before-ship`; None: the config's
+
+
+@dataclass(frozen=True)
+class RecurringTask:
+    """A task that re-enqueues `brief` on a cron `schedule` (see `core.recurrence`).
+
+    `schedule` is the normalized cron expression, `schedule_source` the original text;
+    `next_due_at` is the next fire time; `active_item_id` is the queue item it last
+    enqueued, NULL when idle between runs.
+    """
+
+    id: int
+    brief: str
+    schedule: str
+    schedule_source: str
+    timezone: str
+    next_due_at: datetime
+    last_run_at: datetime | None
+    enabled: bool
+    active_item_id: int | None
+    priority: QueuePriority
+    plan_only: bool
+    learning_profile: str | None
+    no_learning: bool
+    profile: str | None
+    quality: str | None
+    ship_mode: str | None
+    created_at: datetime
 
 
 def _now() -> str:
@@ -1063,6 +1093,112 @@ class Store:
             if cur.rowcount == 0:
                 raise NotFoundError(f"queue item {item_id} not found")
 
+    # ---- recurring tasks (cron-driven queue items, `core.recurrence`) --------------------
+
+    def add_recurring_task(
+        self,
+        brief: str,
+        schedule: Schedule,
+        timezone: str,
+        next_due_at: datetime,
+        *,
+        priority: QueuePriority = "normal",
+        plan_only: bool = False,
+        learning_profile: str | None = None,
+        no_learning: bool = False,
+        profile: str | None = None,
+        quality: str | None = None,
+        ship_mode: str | None = None,
+    ) -> RecurringTask:
+        """Register a recurring task: `brief` runs on `schedule` in `timezone`, first due at
+        `next_due_at`. The normalized cron goes in `schedule`, the original text in
+        `schedule_source`."""
+        if priority not in QUEUE_PRIORITIES:
+            raise StoreError(f"unknown priority {priority!r}")
+        with self._tx() as db:
+            cur = db.execute(
+                "INSERT INTO recurring_tasks (brief, schedule, schedule_source, timezone,"
+                " next_due_at, priority, plan_only, learning_profile, no_learning, profile,"
+                " quality, ship_mode, created_at)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    brief,
+                    schedule.cron,
+                    schedule.source,
+                    timezone,
+                    _iso(next_due_at),
+                    priority,
+                    int(plan_only),
+                    learning_profile,
+                    int(no_learning),
+                    profile,
+                    quality,
+                    ship_mode,
+                    _now(),
+                ),
+            )
+            assert cur.lastrowid is not None
+            task_id = cur.lastrowid
+        return self.get_recurring_task(task_id)
+
+    def get_recurring_task(self, task_id: int) -> RecurringTask:
+        row = self._conn.execute(
+            "SELECT * FROM recurring_tasks WHERE id = ?", (task_id,)
+        ).fetchone()
+        if row is None:
+            raise NotFoundError(f"recurring task {task_id} not found")
+        return _recurring_task(row)
+
+    def list_recurring_tasks(self, enabled_only: bool = False) -> list[RecurringTask]:
+        """All recurring tasks (only enabled ones with `enabled_only`), oldest first."""
+        sql = "SELECT * FROM recurring_tasks"
+        if enabled_only:
+            sql += " WHERE enabled = 1"
+        sql += " ORDER BY id"
+        return [_recurring_task(row) for row in self._conn.execute(sql)]
+
+    def set_recurring_enabled(self, task_id: int, enabled: bool) -> RecurringTask:
+        """Enable or disable a recurring task (disabled tasks are skipped by the scheduler)."""
+        with self._tx() as db:
+            cur = db.execute(
+                "UPDATE recurring_tasks SET enabled = ? WHERE id = ?", (int(enabled), task_id)
+            )
+            if cur.rowcount == 0:
+                raise NotFoundError(f"recurring task {task_id} not found")
+        return self.get_recurring_task(task_id)
+
+    def update_recurring_after_enqueue(
+        self, task_id: int, *, next_due_at: datetime, last_run_at: datetime, active_item_id: int
+    ) -> RecurringTask:
+        """Record that the task fired at `last_run_at`: it is next due at `next_due_at` and
+        `active_item_id` is the queue item it enqueued."""
+        with self._tx() as db:
+            cur = db.execute(
+                "UPDATE recurring_tasks SET next_due_at = ?, last_run_at = ?,"
+                " active_item_id = ? WHERE id = ?",
+                (_iso(next_due_at), _iso(last_run_at), active_item_id, task_id),
+            )
+            if cur.rowcount == 0:
+                raise NotFoundError(f"recurring task {task_id} not found")
+        return self.get_recurring_task(task_id)
+
+    def clear_recurring_active(self, task_id: int) -> RecurringTask:
+        """Clear the task's in-flight queue item (its run finished); the schedule stays."""
+        with self._tx() as db:
+            cur = db.execute(
+                "UPDATE recurring_tasks SET active_item_id = NULL WHERE id = ?", (task_id,)
+            )
+            if cur.rowcount == 0:
+                raise NotFoundError(f"recurring task {task_id} not found")
+        return self.get_recurring_task(task_id)
+
+    def remove_recurring_task(self, task_id: int) -> None:
+        """Delete a recurring task. Raises NotFoundError when it does not exist."""
+        with self._tx() as db:
+            cur = db.execute("DELETE FROM recurring_tasks WHERE id = ?", (task_id,))
+            if cur.rowcount == 0:
+                raise NotFoundError(f"recurring task {task_id} not found")
+
     # ---- helpers -------------------------------------------------------------------------
 
     def _require_run(self, run_id: str) -> None:
@@ -1087,6 +1223,12 @@ def _iso(value: datetime | None) -> str | None:
     if value.tzinfo is None:
         value = value.replace(tzinfo=UTC)
     return value.astimezone(UTC).isoformat(timespec="microseconds")
+
+
+def _aware_time(value: str) -> datetime:
+    """ISO-8601 to a tz-aware datetime; a naive stored value is treated as UTC."""
+    parsed = datetime.fromisoformat(value)
+    return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=UTC)
 
 
 def _shipped_pr(row: sqlite3.Row) -> ShippedPrRecord:
@@ -1245,4 +1387,26 @@ def _queue_item(row: sqlite3.Row) -> QueueItem:
         ship_mode=row["ship_mode"],
         created_at=datetime.fromisoformat(row["created_at"]),
         updated_at=datetime.fromisoformat(row["updated_at"]),
+    )
+
+
+def _recurring_task(row: sqlite3.Row) -> RecurringTask:
+    return RecurringTask(
+        id=row["id"],
+        brief=row["brief"],
+        schedule=row["schedule"],
+        schedule_source=row["schedule_source"],
+        timezone=row["timezone"],
+        next_due_at=_aware_time(row["next_due_at"]),
+        last_run_at=None if row["last_run_at"] is None else _aware_time(row["last_run_at"]),
+        enabled=bool(row["enabled"]),
+        active_item_id=row["active_item_id"],
+        priority=row["priority"],
+        plan_only=bool(row["plan_only"]),
+        learning_profile=row["learning_profile"],
+        no_learning=bool(row["no_learning"]),
+        profile=row["profile"],
+        quality=row["quality"],
+        ship_mode=row["ship_mode"],
+        created_at=_aware_time(row["created_at"]),
     )
