@@ -5,10 +5,21 @@ See docs/verification.md section 1. The request is `POST {base_url}/systemone` w
 (`https://api.typesafe.ai/v1`) accept the same shape. Every question is sent as a `choice`
 whose `criteria` keys are exactly the allowed answers.
 
-This module never falls back by itself: any problem (network, HTTP error, bad or
+`JevDispatcher` never falls back by itself: any problem (network, HTTP error, bad or
 low-confidence answer, oversized state) raises `DispatchError`, and the harness's guard falls
 back to the rules dispatcher (the consensus dispatcher, `dispatch/consensus.py`, stops the run
-for a human instead). The API key is read from the environment on each call and never
+for a human instead).
+
+`MultiProviderJevDispatcher` removes the single-provider dependency: every request tries
+the native TypeSafe API first and, only when that provider fails (unreachable, timed out,
+rate-limited, auth or key problems), sends the same payload to Jev through OpenRouter.
+Request problems that would fail on both providers (oversized state, a rejected payload)
+raise at once. `Decision.details["provider"]` records which provider answered (`"native"`
+or `"openrouter"`), so the run log shows who served each decision. After both providers
+fail, the harness's guard still applies: rules for the `jev` dispatcher, a human stop for
+consensus.
+
+The API key is read from the environment on each call and never
 appears in messages or `Decision.details`. Settings come from `[dispatcher.jev]`
 (`jev_agent.config.schema.JevSettings`).
 """
@@ -17,6 +28,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import math
 import os
 import time
@@ -38,9 +50,25 @@ from jev_agent.dispatch.requests import (
     model_fits,
 )
 
-__all__ = ["NATIVE_BASE_URL", "OPENROUTER_BASE_URL", "JevDispatcher", "JevSettings"]
+__all__ = [
+    "NATIVE_BASE_URL",
+    "NATIVE_PROVIDER",
+    "OPENROUTER_BASE_URL",
+    "OPENROUTER_PROVIDER",
+    "JevDispatcher",
+    "JevSettings",
+    "MultiProviderJevDispatcher",
+]
 
 NATIVE_BASE_URL = NATIVE_JEV_BASE_URL
+NATIVE_PROVIDER = "native"
+OPENROUTER_PROVIDER = "openrouter"
+
+# Key under which `post` reports which provider answered, so `decide` (and the consensus
+# dispatcher, which calls `post` directly) can record it in `Decision.details["provider"]`.
+# It travels on a copy of the response body, never on shared state, so concurrent runs
+# sharing one dispatcher cannot mix it up.
+PROVIDER_KEY = "jev_provider"
 
 # Input price for Jev 1.13 on both OpenRouter and TypeSafe; output tokens are free. Used only
 # when the response carries no `usage.cost` (native TypeSafe never does).
@@ -57,6 +85,8 @@ MAX_BACKOFF_S = 10.0
 _MAX_ERROR_CHARS = 300
 
 Sleep = Callable[[float], Awaitable[None]]
+
+log = logging.getLogger(__name__)
 
 
 # One line per decision point, sent in `state.decision_point` so Jev knows where it is.
@@ -307,6 +337,7 @@ class JevDispatcher:
             )
 
         body = await self.post(self.build_payload(req.point, req.state, asked))
+        provider = body.get(PROVIDER_KEY)
         answers, details = parse_answers(body, asked)
         usage = body.get("usage") if isinstance(body.get("usage"), dict) else None
 
@@ -319,6 +350,14 @@ class JevDispatcher:
             raise DispatchError(f"jev: low confidence on {', '.join(low)}")
 
         model = body.get("model")
+        decision_details: dict[str, Any] = {
+            "direct": sorted(direct),
+            "answers": details,
+            "usage": usage,
+        }
+        if isinstance(provider, str):
+            # Set by MultiProviderJevDispatcher.post: which provider answered.
+            decision_details["provider"] = provider
         return Decision(
             point=req.point,
             answers={**direct, **answers},
@@ -326,7 +365,7 @@ class JevDispatcher:
             model=model if isinstance(model, str) else self.settings.model,
             cost_usd=cost_from_usage(usage),
             latency_ms=int((time.monotonic() - started) * 1000),
-            details={"direct": sorted(direct), "answers": details, "usage": usage},
+            details=decision_details,
         )
 
     def build_payload(
@@ -461,6 +500,72 @@ class JevDispatcher:
                 continue
             raise DispatchError(http_error_message(resp, self.settings.api_key_env, key))
         raise AssertionError("unreachable")  # pragma: no cover
+
+
+class MultiProviderJevDispatcher(JevDispatcher):
+    """Jev with no single-provider dependency: native TypeSafe first, then via OpenRouter.
+
+    Every `post` tries the native TypeSafe API first. Only when that provider fails to
+    serve the request (unreachable, timed out, rate-limited, auth or key problems) is the
+    same payload sent to Jev through OpenRouter. Failures that would hit both providers
+    identically (oversized state, a rejected payload) raise at once instead.
+
+    This is a `JevDispatcher`, so the consensus dispatcher uses it unchanged for both the
+    Jev and the Laya vote. `Decision.details["provider"]` records who answered, and every
+    switch is warning-logged.
+    """
+
+    def __init__(
+        self,
+        native: JevSettings | None = None,
+        openrouter: JevSettings | None = None,
+        *,
+        client: httpx.AsyncClient | None = None,
+        sleep: Sleep = asyncio.sleep,
+    ) -> None:
+        native_settings = native or JevSettings.for_native()
+        # `settings` is the native one, so `build_payload` and the confidence gate behave
+        # exactly as a native `JevDispatcher`; the OpenRouter leg rebuilds only the model.
+        super().__init__(settings=native_settings, client=client, sleep=sleep)
+        self._native = JevDispatcher(native_settings, client=client, sleep=sleep)
+        self._openrouter = JevDispatcher(openrouter or JevSettings(), client=client, sleep=sleep)
+
+    async def post(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Send one System One request, native first, then OpenRouter on provider failure."""
+        try:
+            return _tagged(await self._native.post(payload), NATIVE_PROVIDER)
+        except DispatchError as exc:
+            if not _provider_failed(exc):
+                raise
+            log.warning("jev: native TypeSafe failed (%s); trying Jev via OpenRouter", exc)
+        openrouter_payload = {**payload, "model": self._openrouter.settings.model}
+        return _tagged(await self._openrouter.post(openrouter_payload), OPENROUTER_PROVIDER)
+
+
+def _tagged(body: dict[str, Any], provider: str) -> dict[str, Any]:
+    """A copy of the response body marked with the provider that answered it."""
+    marked = dict(body)
+    marked[PROVIDER_KEY] = provider
+    return marked
+
+
+def _provider_failed(exc: DispatchError) -> bool:
+    """Whether the native provider failed in a way the OpenRouter leg might survive."""
+    return str(exc).startswith(_FAILOVER_PREFIXES)
+
+
+# `DispatchError` messages built in this module that mean "this provider cannot serve this
+# request right now". Everything else (oversized state, a 422 rejection, another 4xx)
+# would fail on the other provider too, so it propagates without a retry there.
+_FAILOVER_PREFIXES = (
+    "jev: API key env var",
+    "jev: request timed out",
+    "jev: network error",
+    "jev: unavailable after retry",
+    "jev: auth failed",
+    "jev: response is not JSON",
+    "jev: response is not a JSON object",
+)
 
 
 def check_size(payload: dict[str, Any]) -> None:

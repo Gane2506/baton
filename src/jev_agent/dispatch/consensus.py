@@ -26,7 +26,7 @@ from typing import Any
 from jev_agent.config.schema import LAYA_CRITERIA, LayaSettings
 from jev_agent.core.models import Decision, DecisionRequest
 from jev_agent.dispatch.base import DispatchError
-from jev_agent.dispatch.jev import JevDispatcher, cost_from_usage, parse_answers
+from jev_agent.dispatch.jev import PROVIDER_KEY, JevDispatcher, cost_from_usage, parse_answers
 
 __all__ = ["LEVELS", "ConsensusDispatcher", "NoConsensus", "Score", "Verdict", "evaluate"]
 
@@ -131,7 +131,9 @@ class ConsensusDispatcher:
     `Decision.details` holds `direct`, Jev's final `answers` (as `JevDispatcher` stores them),
     Laya's final vote per question (`laya`, with the final 1-5 `scores` per answer and
     criterion, which `jev laya tune` learns from), the `weights` used, the reasons of every
-    unsettled round (`rounds`) and the summed `usage`.
+    unsettled round (`rounds`), the summed `usage`, and `provider`: which Jev provider
+    served the decision (`"native"`, `"openrouter"`, or `"mixed"` when both served calls).
+    Pass a `MultiProviderJevDispatcher` as `jev` so neither vote depends on one provider.
     """
 
     name = "consensus"
@@ -171,6 +173,7 @@ class ConsensusDispatcher:
         scores: dict[str, dict[Cell, Score]] = {q: {} for q in asked}
         verdicts: dict[str, Verdict] = {}
         usage = _Usage()
+        providers: set[str] = set()  # every Jev provider that served a call below
         model: str | None = None
         unsettled = list(asked)
         for round_no in range(1, self.laya.follow_up_rounds + 2):
@@ -185,6 +188,7 @@ class ConsensusDispatcher:
                 for question in payload["questions"].values():
                     question["instructions"] = f"{question['instructions']} {FOLLOW_UP_NOTE}"
             body = await self.jev.post(payload)
+            _note_provider(body, providers)
             usage.add(body)
             model = body.get("model") if isinstance(body.get("model"), str) else model
             jev_votes.update(parse_answers(body, questions)[1])
@@ -196,6 +200,7 @@ class ConsensusDispatcher:
             }
             laya_payload = _laya_payload(payload, cells)
             body = await self.jev.post(laya_payload)
+            _note_provider(body, providers)
             usage.add(body)
             for q, new in _parse_scores(body, laya_payload["questions"], cells).items():
                 for cell, score in new.items():
@@ -229,6 +234,9 @@ class ConsensusDispatcher:
         }
         details["weights"] = dict(self.laya.weights)
         details["usage"] = usage.as_dict()
+        if providers:
+            # Usually one provider served every call; "mixed" when the votes split.
+            details["provider"] = next(iter(providers)) if len(providers) == 1 else "mixed"
         return Decision(
             point=req.point,
             answers={**direct, **{q: v.jev_choice for q, v in verdicts.items()}},
@@ -315,6 +323,14 @@ def _no_consensus_message(verdicts: dict[str, Verdict], rounds: int) -> str:
         f"{q}: {'; '.join(v.reasons)}" for q, v in verdicts.items() if not v.settled
     )
     return f"Jev and Laya did not agree after {rounds} round(s): {unsettled}"
+
+
+def _note_provider(body: dict[str, Any], providers: set[str]) -> None:
+    """Record which Jev provider answered one `post` call (`MultiProviderJevDispatcher`
+    marks the body; a plain `JevDispatcher` marks nothing)."""
+    provider = body.get(PROVIDER_KEY)
+    if isinstance(provider, str):
+        providers.add(provider)
 
 
 class _Usage:

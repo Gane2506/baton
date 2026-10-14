@@ -33,14 +33,14 @@ import httpx
 from jev_agent.app.errors import JevError
 from jev_agent.cli.repo import LEGACY_MESSAGE, find_git_root, legacy_layout
 from jev_agent.config import STATE_DIRNAME, ConfigError, JevConfig, load_config
-from jev_agent.config.schema import role_can_use_free, role_uses_free
+from jev_agent.config.schema import JevSettings, role_can_use_free, role_uses_free
 from jev_agent.core.learning import Learning
 from jev_agent.core.models import Role
 from jev_agent.core.pipeline import Pipeline, PipelineSettings, build_pipeline
 from jev_agent.core.store import SchemaVersionError, Store
 from jev_agent.dispatch.base import Dispatcher
 from jev_agent.dispatch.consensus import ConsensusDispatcher
-from jev_agent.dispatch.jev import JevDispatcher
+from jev_agent.dispatch.jev import MultiProviderJevDispatcher
 from jev_agent.dispatch.requests import API_WORKER, DEFAULT_MODEL, model_fits, role_options
 from jev_agent.dispatch.rules import RulesDispatcher
 from jev_agent.workers.api import ApiWorker
@@ -91,24 +91,47 @@ def pipeline_settings(config: JevConfig) -> PipelineSettings:
 def build_dispatcher(config: JevConfig) -> tuple[Dispatcher, list[str]]:
     """The primary dispatcher from `[dispatcher]`, plus warnings to show at run start.
 
-    Jev is built even when its key env var is unset: each decision then falls back to rules
-    (`jev`), or stops the run for a human (`consensus`).
+    Jev is a `MultiProviderJevDispatcher`: the native TypeSafe API first, then Jev
+    through OpenRouter. Built even when a key env var is unset: each decision then
+    falls back to rules (`jev`), or stops the run for a human (`consensus`).
     """
     primary = config.dispatcher.primary
     if primary == "rules":
         return RulesDispatcher(), []
-    settings = config.dispatcher.jev
-    jev = JevDispatcher(settings)
+    # The user's knobs (timeout, confidence, instructions) apply to both legs; the
+    # provider endpoints and key env vars keep their `for_native()`/OpenRouter defaults.
+    s = config.dispatcher.jev
+    native = JevSettings.for_native(
+        timeout_s=s.timeout_s, min_confidence=s.min_confidence, instructions=s.instructions
+    )
+    openrouter = JevSettings(
+        timeout_s=s.timeout_s, min_confidence=s.min_confidence, instructions=s.instructions
+    )
+    jev = MultiProviderJevDispatcher(native=native, openrouter=openrouter)
     warnings: list[str] = []
-    if not os.environ.get(settings.api_key_env, "").strip():
+    native_key = bool(os.environ.get(native.api_key_env, "").strip())
+    openrouter_key = bool(os.environ.get(openrouter.api_key_env, "").strip())
+    if not native_key and not openrouter_key:
         outcome = (
             "the run will stop for a human at its first decision"
             if primary == "consensus"
             else "every decision will use the rules dispatcher"
         )
         warnings.append(
-            f"{settings.api_key_env} is not set, so Jev cannot be reached; {outcome}. Set it, "
-            'or set `[dispatcher] primary = "rules"` to silence this warning.'
+            f"{native.api_key_env} and {openrouter.api_key_env} are not set, so Jev cannot "
+            f"be reached; {outcome}. Jev tries the native TypeSafe API "
+            f"({native.api_key_env}) first, then Jev through OpenRouter; set either key, or "
+            'set `[dispatcher] primary = "rules"` to silence this warning.'
+        )
+    elif not native_key:
+        warnings.append(
+            f"{native.api_key_env} is not set, so every Jev decision goes through OpenRouter "
+            f"({openrouter.api_key_env}) without the native TypeSafe leg."
+        )
+    elif not openrouter_key:
+        warnings.append(
+            f"{openrouter.api_key_env} is not set, so there is no failover if the native "
+            f"TypeSafe leg ({native.api_key_env}) cannot serve a decision."
         )
     if primary == "consensus":
         return ConsensusDispatcher(jev, config.dispatcher.laya), warnings
