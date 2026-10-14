@@ -1,0 +1,86 @@
+{% extends "base.html" %}
+{% from "macros.html" import badge, csrf_input, icon with context %}
+{% from "settings.html" import render_sections, render_entities with context %}
+{% block title %}Connections{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div class="titles">
+    <h1>Connections</h1>
+    <p class="lede">Which servers agents can reach, how decisions are routed, and which keys
+    are set. Reachability is the <strong>last known check</strong> — this page never opens
+    an SSH connection by itself.</p>
+  </div>
+</div>
+
+<section class="panel" aria-label="Server reachability">
+  <h2>Servers <span class="muted">·</span> <span id="conn-summary" data-conn="{{ agg_state }}">{{ agg_label }}</span></h2>
+  {% if servers %}
+  <div class="table-wrap"><table id="conn-panel">
+    <thead><tr><th>server</th><th>host</th><th>access</th><th>status</th><th>last check</th></tr></thead>
+    <tbody>
+    {% for s in servers %}
+      <tr data-conn-row="{{ s.name }}">
+        <td class="mono">{{ s.name }}</td>
+        <td class="mono">{{ s.user ~ "@" if s.user }}{{ s.host }}</td>
+        <td>{{ badge(s.access, "note" if s.access == "basic" else ("warn" if s.access == "medium" else "fail")) }}</td>
+        <td class="c-state">{{ badge("Reachable", "ok") if s.state == "reachable" else (badge("Unreachable", "fail") if s.state == "unreachable" else badge("Not checked yet", "note")) }}</td>
+        <td class="c-checked small">{{ s.last_check | time if s.last_check else "-" }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table></div>
+  <form method="post" action="/connections/refresh">
+    {{ csrf_input() }}
+    <button class="button" type="submit">Check now</button>
+    <span class="hint">Opens one SSH connection per server (<code>ssh HOST true</code>, like
+    <code>jev doctor --connect</code>) and records the result in the audit log.</span>
+  </form>
+  {% else %}
+  <div class="empty"><div class="title">No servers configured</div><p>Add
+  <code>[servers.&lt;name&gt;]</code> to <code>jev.toml</code> to let agents reach machines
+  over SSH.</p></div>
+  {% endif %}
+</section>
+
+<section class="panel" aria-label="Dispatcher route">
+  <h2>Decision route <span class="muted">·</span> {{ badge(route.primary, "info") }}</h2>
+  <ol>
+  {% for leg in route.legs %}
+    <li><strong>{{ leg.title }}</strong>
+      {% for k in leg.keys %}{{ badge(k.name ~ ": " ~ ("set" if k.is_set else "not set"), "ok" if k.is_set else "warn") }}{% endfor %}
+      <br><span class="hint">{{ leg.note }}</span></li>
+  {% endfor %}
+  </ol>
+  <p>Final step: {{ route.final }}</p>
+  {% if route.warning %}
+  <div class="flash" role="note">{{ icon("i-alert", "sm") }}<span>{{ route.warning }}</span></div>
+  {% endif %}
+</section>
+
+<section class="panel" aria-label="Key health">
+  <h2>Keys <span class="muted">·</span> names only, never values</h2>
+  <div class="table-wrap"><table>
+    <thead><tr><th>variable</th><th>used for</th><th>status</th></tr></thead>
+    <tbody>
+    {% for v in env_vars %}
+      <tr><td class="mono">{{ v.name }}</td><td class="small">{{ v.used_for }}</td>
+      <td>{{ badge("Set", "ok") if v.is_set else badge("Not set", "warn") }}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table></div>
+</section>
+
+<p class="hint">Server configuration itself is edited below, in place.</p>
+
+<h2 class="section">Configuration</h2>
+<nav class="panel tight" aria-label="Settings sections">
+  <div class="actions">
+  {% for s in sections %}<a class="button small" href="#s-{{ s.path | replace('.', '-') }}">{{ s.title }}</a>{% endfor %}
+  {% for e in entities %}<a class="button small" href="#s-{{ e.path | replace('.', '-') }}">{{ e.title }}</a>{% endfor %}
+  </div>
+</nav>
+
+{{ render_sections(sections) }}
+
+{{ render_entities(entities) }}
+{% endblock %}

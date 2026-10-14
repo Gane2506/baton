@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% block title %}Fleet{% endblock %}
+{% block content %}
+{#
+  Feed hook (workstream D/E contract): this page's live table can be mounted in the
+  fullscreen shell's terminal/agents pane with
+
+      window.JevShell.mountPane("terminal", "/fleet/live", 3000)
+
+  `mountPane(name, url, ms)` (static/app.js) polls `url` every `ms` (at least 1000) with
+  the same contract as live.js `[data-live]` regions, swaps the returned fragment into
+  the pane's `[data-pane-live]` element, and hides the pane's `[data-pane-empty]` state.
+  `JevShell.unmountPane("terminal")` restores the empty state. The fragment carries no
+  JavaScript and re-renders server-side on every poll, so it is safe to mount anywhere.
+  The pane itself is not wired here — that is the shell's decision (workstream D/E).
+#}
+<div class="page-head">
+  <div class="titles">
+    <h1>Fleet</h1>
+    <p class="lede">Every agent currently working, across all runs and servers; updates every few seconds.</p>
+  </div>
+</div>
+
+<div id="fleet" data-live="/fleet/live" data-live-every="{{ refresh_ms }}">
+{% include "_fleet.html" %}
+</div>
+{% endblock %}

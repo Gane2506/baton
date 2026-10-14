@@ -180,6 +180,10 @@
   background: var(--bad, GrayText);
 }
 
+.conn-status[data-conn="degraded"] .conn-dot {
+  background: var(--warn, GrayText);
+}
+
 /* ---- chat pane --------------------------------------------------------------- */
 
 .content-inner--chat {

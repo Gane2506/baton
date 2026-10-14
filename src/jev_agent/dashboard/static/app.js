@@ -298,11 +298,18 @@
 
   var conn = document.getElementById("conn-status");
 
+  // Server reachability, owned by conn.js: null until its first poll lands.
+  function connAggregate() {
+    var api = window.JevConn;
+    return api && typeof api.aggregate === "function" ? api.aggregate() : null;
+  }
+
   function refreshConn() {
     if (!conn) {
       return;
     }
     var label = conn.querySelector(".conn-label");
+    var agg = connAggregate();
     var state = "live";
     var text = "Live";
     if (!window.navigator.onLine) {
@@ -311,6 +318,9 @@
     } else if (document.querySelector("[data-live][data-stale], [data-pane][data-stale]")) {
       state = "stale";
       text = "Reconnecting…";
+    } else if (agg) {
+      state = agg.state;
+      text = agg.label;
     }
     conn.setAttribute("data-conn", state);
     if (label && label.textContent !== text) {
@@ -327,6 +337,7 @@
   }
   window.addEventListener("online", refreshConn);
   window.addEventListener("offline", refreshConn);
+  window.addEventListener("jev-conn", refreshConn); // conn.js: fresh poll results
   refreshConn();
 
   /* ---- chat: keep the transcript pinned to the bottom --------------------------- */

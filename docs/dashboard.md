@@ -114,7 +114,8 @@ Resume button). A Ship job cannot be cancelled mid-step; shutdown waits for it.
 Pages follow your OS light/dark setting and work on narrow screens. Nothing is loaded from
 other origins: no CDN, no web fonts, no analytics. The scripts are small and vendored:
 `static/live.js` (live regions and confirmation prompts), `static/app.js` (the shell's
-collapsible panes and resize handles), and `static/theme.js` (theme profiles); without
+collapsible panes and resize handles), `static/theme.js` (theme profiles), and
+`static/conn.js` (the sidebar connection-status slot); without
 JavaScript every page still works (reload to refresh).
 
 | Run | Queue |

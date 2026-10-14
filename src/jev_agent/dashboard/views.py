@@ -54,6 +54,8 @@ from jev_agent.core.store import (
 from jev_agent.core.workspace import result_branch
 from jev_agent.dashboard.render import BarChart, bar_chart, render_markdown
 from jev_agent.quality.report import latest_per_gate
+from jev_agent.servers.access import server_grants
+from jev_agent.servers.profiles import ProfileError, read_run_profile
 
 RUN_ID = re.compile(r"^\d{8}-\d{6}-[0-9a-f]{4}$")
 MAX_LOG_FILES = 500
@@ -711,3 +713,76 @@ def config_summary(repo: Repo) -> list[tuple[str, str]]:
 def doctor_checks(root: Path) -> list[Check]:
     """`jev doctor` without `--connect`: local checks only."""
     return run_checks(root)
+
+
+# ---- fleet ---------------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class FleetAgent:
+    """One agent currently working: an attempt with no result on a run that has not stopped."""
+
+    run_id: str
+    run_idea: str
+    run_state: RunState
+    task_id: str | None
+    task_title: str | None
+    task_state: TaskState | None
+    role: str  # the agent kind (planner, coder, ...); never a credential
+    worker: str
+    model: str | None
+    started_at: datetime
+    stale: bool  # older than its worker's timeout plus RESUME_GRACE_S: likely a dead process
+    # (server name, access tier) this role is granted in the run; never hosts or key values.
+    grants: list[tuple[str, str]]
+
+
+def fleet(repo: Repo, now: datetime | None = None) -> list[FleetAgent]:
+    """Every active agent across all runs and servers, newest first.
+
+    An attempt with no result means its worker is still running it — unless the run has
+    stopped (then the attempt is a leftover of a dead pipeline and is skipped), or the
+    attempt outlived its worker's timeout plus `RESUME_GRACE_S` (the harness kills the
+    worker at the timeout and then records the result, so it is flagged `stale` instead of
+    hidden — the same rule `resume_risk` uses).
+
+    The attempt records no server; the "server" column is the role's server grants in the
+    run (`servers/access.py::server_grants`): an agent can only act on the servers its role
+    was granted, each at its tier. When the run's workspace profile is unreadable, the
+    role's configured servers are used (ProfileError falls back rather than failing the
+    whole page). Nothing secret is exposed: server names and tier names only.
+    """
+    now = now or datetime.now(UTC)
+    agents: list[FleetAgent] = []
+    for run in repo.store.list_runs():
+        if run.state in STOPPED:
+            continue
+        tasks = {t.id: t for t in repo.store.list_tasks(run.id)}
+        try:
+            profile = read_run_profile(repo.state_dir, run.id)
+        except ProfileError:
+            profile = None
+        for attempt in repo.store.list_attempts(run.id):
+            if attempt.result is not None:
+                continue
+            task = tasks.get(attempt.task_id) if attempt.task_id else None
+            settings = getattr(repo.config.workers, attempt.worker, None)
+            timeout = getattr(settings, "timeout_s", 0) or DEFAULT_TIMEOUT_S
+            age = (now - attempt.started_at).total_seconds()
+            agents.append(
+                FleetAgent(
+                    run_id=run.id,
+                    run_idea=run.idea.text,
+                    run_state=run.state,
+                    task_id=attempt.task_id,
+                    task_title=task.card.title if task is not None else None,
+                    task_state=task.state if task is not None else None,
+                    role=attempt.role,
+                    worker=attempt.worker,
+                    model=attempt.model,
+                    started_at=attempt.started_at,
+                    stale=age > timeout + RESUME_GRACE_S,
+                    grants=sorted(server_grants(repo.config, attempt.role, profile).items()),
+                )
+            )
+    return sorted(agents, key=lambda a: a.started_at, reverse=True)

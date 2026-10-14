@@ -1,0 +1,32 @@
+{# The fleet table alone: polled by live.js on /fleet and mountable in the shell's
+   terminal/agents pane via JevShell.mountPane("terminal", "/fleet/live", ms). Server
+   names and tiers only — never hosts, keys or values. #}
+{% if agents %}
+<div class="table-wrap">
+<table>
+  <thead>
+    <tr><th>Agent</th><th>Run</th><th>Doing now</th><th>Running</th><th>Servers</th></tr>
+  </thead>
+  <tbody>
+  {% for a in agents %}
+    <tr>
+      <td><span class="badge s-running live">{{ a.role }}</span>
+        <div class="muted">{{ a.worker }}{% if a.model %} · {{ a.model }}{% endif %}</div></td>
+      <td class="mono"><a href="/runs/{{ a.run_id }}">{{ a.run_id }}</a>
+        <div class="muted">{{ a.run_idea | truncate(60) }}</div></td>
+      <td><span class="badge s-{{ a.run_state }}">{{ a.run_state }}</span>
+        <div class="muted">{% if a.task_title %}{{ a.task_title }} ({{ a.task_state }}){% else %}run-level work{% endif %}</div></td>
+      <td>{{ a.started_at | age }}{% if a.stale %} <span class="badge s-waiting">stale?</span>{% endif %}</td>
+      <td>{% for name, tier in a.grants %}<span class="badge">{{ name }} · {{ tier }}</span>{% endfor %}{% if not a.grants %}<span class="muted">—</span>{% endif %}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% else %}
+<div class="empty">
+  <svg class="icon" aria-hidden="true"><use href="#i-fleet"></use></svg>
+  <div class="title">No agents running</div>
+  <p>Agents appear here while they work on a run's tasks.</p>
+</div>
+{% endif %}
