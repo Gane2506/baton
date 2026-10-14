@@ -2,6 +2,23 @@
 
 Deviations from [PLAN.md](../PLAN.md) and choices it left open. Newest first.
 
+## 2026-10-14: Cost-aware dispatch without touching the fallback chain
+
+- **Cost changes order, never availability.** With `[dispatcher.cost]
+  prefer_cheaper_leg` (default on), the cheaper reachable leg goes first; both
+  legs are still tried on provider failure, 422-style errors still raise at
+  once, and the harness guard's rules fallback is intact. Collapsing to the
+  cheaper provider would violate the no-single-dependency decision, so cost is
+  strictly an ordering preference inside the quality floor.
+- **Prices are config, not code.** Per-leg USD/1M-token prices live in
+  `[dispatcher.cost]`; every cost-influenced ordering is info-logged and
+  recorded in `Decision.details["routing_reason"]`.
+- **Estimates are ranges with a stated basis, never a single number.**
+  Per-phase p25-p75 bands from the repo's ended runs (executing scaled by
+  remaining tasks), already-spent on top; thin history falls back to model
+  pricing x expected tokens with an explicit half-to-double band. `jev approve`
+  refuses when the high end reaches the budget cap unless `--force`.
+
 ## 2026-10-14: `jev mcp runs`: pipeline tools for external agents (workstream K)
 
 - **A second minimal MCP server, same wire protocol.** `src/jev_agent/mcp_runs.py`
