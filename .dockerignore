@@ -1,0 +1,19 @@
+# Build context for the dashboard image: only pyproject.toml, README.md,
+# LICENSE and src/ are COPYd, so exclude everything else.
+.git
+.jev/
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+docs/
+examples/
+tests/
+install.sh
+install.ps1
+docker-compose.yml
+.agents/

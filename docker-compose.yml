@@ -1,0 +1,28 @@
+# Minimal example: jev dashboard for one repo, with persistent state.
+#
+#   JEV_DASHBOARD_TOKEN="$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')" \
+#     docker compose up --build -d
+#   docker logs jev-dashboard        # the URL (and the generated token, if unset)
+#
+# If your repo already has a .jev/ directory, drop the `jev-state` volume so the
+# bind-mounted state is used instead of an empty volume shadowing it.
+
+services:
+  jev:
+    build: .
+    image: jev-dashboard:latest
+    container_name: jev-dashboard
+    # Published on loopback only: the dashboard speaks plain HTTP. For remote
+    # access use `ssh -L 8765:127.0.0.1:8765 <host>` or a TLS reverse proxy.
+    ports:
+      - "127.0.0.1:8765:8765"
+    environment:
+      JEV_PORT: "8765"
+      # JEV_DASHBOARD_TOKEN: "replace-me-with-a-long-random-token"
+    volumes:
+      - ./my-project:/data # the git repo jev serves (run `jev init` in it first)
+      - jev-state:/data/.jev # persistent state: runs, queue, learning
+    restart: unless-stopped
+
+volumes:
+  jev-state:
