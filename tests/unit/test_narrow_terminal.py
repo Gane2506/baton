@@ -48,7 +48,7 @@ def test_run_outcome_and_hints_survive(fixture_repo: Path, monkeypatch: pytest.M
         run_id = store.list_runs()[0].id
     assert f"run {run_id}: AWAITING_APPROVAL" in output
     assert f"`jev approve {run_id}`" in output
-    assert "OPENROUTER_API_KEY is not set" in output
+    assert "TYPESAFE_API_KEY and OPENROUTER_API_KEY are not set" in output
 
     code, output = _jev(fixture_repo, "resume", run_id)
     assert code == 1 and "approve" in output

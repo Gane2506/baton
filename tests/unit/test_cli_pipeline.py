@@ -64,7 +64,7 @@ def test_fake_workers_full_flow(fixture_repo: Path, monkeypatch: pytest.MonkeyPa
     code, output = _jev(fixture_repo, "run", "add search")
     assert code == 0, output
     assert "AWAITING_APPROVAL" in output
-    assert output.count("OPENROUTER_API_KEY is not set") == 1
+    assert output.count("TYPESAFE_API_KEY and OPENROUTER_API_KEY are not set") == 1
     run_id = _run_id(fixture_repo)
 
     code, output = _jev(fixture_repo, "status")
@@ -228,7 +228,8 @@ def test_build_dispatcher_from_config(monkeypatch: pytest.MonkeyPatch) -> None:
 
     monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-v1-secret-value")
     jev, warnings = build_dispatcher(config)
-    assert isinstance(jev, JevDispatcher) and warnings == []
+    assert isinstance(jev, JevDispatcher)
+    assert len(warnings) == 1 and "without the native TypeSafe leg" in warnings[0]
 
 
 def test_build_registry_registers_api_worker_from_config(monkeypatch: pytest.MonkeyPatch) -> None:

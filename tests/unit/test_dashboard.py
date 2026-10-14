@@ -1080,7 +1080,7 @@ def test_job_message_includes_run_start_warnings(
     assert job is not None and job.state == "finished", job and job.message
     assert job.message.startswith("run ")
     assert "; warning: " in job.message
-    assert "is not set, so Jev cannot be reached" in job.message
+    assert "are not set, so Jev cannot be reached" in job.message
 
 
 def test_resume_needs_force_while_another_process_holds_the_lease(
