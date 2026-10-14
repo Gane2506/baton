@@ -85,8 +85,11 @@ STATIC_DIR = Path(__file__).parent / "static"
 NAV = (
     ("/", "Board"),
     ("/queue", "Queue"),
-    ("/learning", "Learning"),
+    ("/agents", "Agents"),
     ("/chats", "Chats"),
+    ("/learning", "Learning"),
+    ("/tools", "Tools"),
+    ("/connections", "Connections"),
     ("/spend", "Spend"),
     ("/kpis", "KPIs"),
     ("/settings", "Settings"),
@@ -349,11 +352,27 @@ class Dashboard:
         )
 
     def settings_page(self, request: Request) -> Response:
+        return self._settings_page(request, "settings")
+
+    def agents_page(self, request: Request) -> Response:
+        return self._settings_page(request, "agents")
+
+    def tools_page(self, request: Request) -> Response:
+        return self._settings_page(request, "tools")
+
+    def connections_page(self, request: Request) -> Response:
+        return self._settings_page(request, "connections")
+
+    def _settings_page(self, request: Request, page: str) -> Response:
         def build(repo: views.Repo) -> dict[str, Any]:
             repo_raw, user_raw, user_file = settings.read_layers(repo.root)
+            title, lede, secs, ents = settings.page_view(repo.config, repo_raw, user_raw, page)
             return {
-                "sections": settings.sections(repo.config, repo_raw, user_raw),
-                "entities": settings.entity_sections(repo.config, repo_raw, user_raw),
+                "page": page,
+                "page_title": title,
+                "page_lede": lede,
+                "sections": secs,
+                "entities": ents,
                 "user_only": settings.USER_ONLY,
                 "user_file": user_file,
                 "summary": views.config_summary(repo),
@@ -380,7 +399,7 @@ class Dashboard:
             self.flash(request, "error", "no setting given")
             return self.back("/settings")
         values = {key: value for key, value in form.items() if isinstance(value, str)}
-        to = "/settings#s-" + path.replace(".", "-")
+        to = "/" + settings.page_of(path) + "#" + settings.anchor_of(path)
 
         def job() -> tuple[str | None, str]:
             root = self.settings.root
@@ -426,7 +445,7 @@ class Dashboard:
         action = _text(form, "action") or ""
         target = _text(form, "target") or "repo"
         name = _text(form, "name") or ""
-        to = "/settings#s-" + section.replace(".", "-")
+        to = "/" + settings.page_of(section) + "#" + settings.anchor_of(section)
         if not section or not name:
             self.flash(request, "error", "a table and a name are required")
             return self.back("/settings")
@@ -955,6 +974,9 @@ def create_app(
         Route("/chats/{chat_id}/queue", dash.chat_queue, methods=["POST"]),
         Route("/spend", dash.spend_page),
         Route("/kpis", dash.kpis_page),
+        Route("/agents", dash.agents_page),
+        Route("/tools", dash.tools_page),
+        Route("/connections", dash.connections_page),
         Route("/settings", dash.settings_page),
         Route("/settings/set", dash.settings_set, methods=["POST"]),
         Route("/settings/unset", dash.settings_unset, methods=["POST"]),

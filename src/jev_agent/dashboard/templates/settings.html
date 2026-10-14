@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 {% from "macros.html" import badge, icon, csrf_input with context %}
-{% block title %}Settings{% endblock %}
+{% block title %}{{ page_title }}{% endblock %}
 
 {% macro field_input(f, field_id) %}
   {% if f.kind == "bool" %}
@@ -39,11 +39,13 @@
 {% block content %}
 <div class="page-head">
   <div class="titles">
-    <h1>Settings</h1>
-    <p class="lede">Everything in <code>jev.toml</code> and your user config, editable here. A
-    change saves to the repo's <code>jev.toml</code> unless the row says otherwise; keys that
+    <h1>{{ page_title }}</h1>
+    <p class="lede">{{ page_lede }}</p>
+    <p class="hint">Everything here comes from <code>jev.toml</code> and your user config,
+    editable in place. A change saves to the repo unless the row says otherwise; keys that
     decide where API keys go, which commands run and which tools agents get need the repo
-    trusted (see Trust) or a save to the user config (<span class="mono">{{ user_file }}</span>).</p>
+    trusted (see Connections) or a save to the user config
+    (<span class="mono">{{ user_file }}</span>).</p>
   </div>
 </div>
 
@@ -161,6 +163,7 @@
 </section>
 {% endfor %}
 
+{% if page == "settings" %}
 <h2 class="section" id="s-readonly">Read-only</h2>
 <section class="panel">
   <h2>Effective config</h2>
@@ -201,4 +204,5 @@
     <dt>Refresh</dt><dd>{{ settings.refresh_s }}s for live regions</dd>
   </dl>
 </section>
+{% endif %}
 {% endblock %}

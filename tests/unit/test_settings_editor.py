@@ -46,23 +46,27 @@ def _repo_text(repo: Path) -> str:
     return file.read_text() if file.exists() else ""
 
 
-def test_page_lists_every_section_and_control(client: TestClient) -> None:
-    page = client.get("/settings")
-    assert page.status_code == 200
-    for needle in (
-        "workers.claude_code",
-        "workers.codex",
-        "workers.api",
-        "roles.coder",
-        "dispatcher.jev",
-        "Tools: MCP servers",
-        "Tools: skills",
-        "Servers (SSH)",
-        "Trust (user config only)",
-    ):
-        assert needle in page.text
-    assert 'value="workers.claude_code.command"' in page.text  # a hidden path field
-    assert "Add to Tools: MCP servers" in page.text
+def test_pages_split_agents_tools_connections_from_settings(client: TestClient) -> None:
+    agents = client.get("/agents")
+    assert agents.status_code == 200
+    assert "Worker: Claude Code" in agents.text and "roles.coder" in agents.text
+    assert "Dispatcher: Jev" in agents.text
+    assert 'value="workers.claude_code.command"' in agents.text  # a hidden path field
+
+    tools = client.get("/tools")
+    assert "Tools: MCP servers" in tools.text and "Tools: plugins" in tools.text
+    assert "Add to Tools: MCP servers" in tools.text
+
+    connections = client.get("/connections")
+    assert "Servers (SSH)" in connections.text
+    assert "Trust (user config only)" in connections.text
+    assert "Workspace profiles" in connections.text
+
+    settings = client.get("/settings")
+    assert "Budget and limits" in settings.text and "Effective config" in settings.text
+    assert "Worker: Claude Code" not in settings.text
+    assert "Tools: MCP servers" not in settings.text
+    assert "Environment variables" in settings.text  # the read-only panels stay here
 
 
 def test_save_and_reset_a_field(client: TestClient, fixture_repo: Path) -> None:
@@ -157,7 +161,7 @@ def test_entity_add_edit_remove_in_the_user_config(client: TestClient, fixture_r
     config = load_config(fixture_repo)
     assert config.tools.mcp["github"].command == "npx"
     assert config.tools.mcp["github"].args == ["-y", "@modelcontextprotocol/server-github"]
-    page = client.get("/settings")
+    page = client.get("/tools")
     assert "github" in page.text and "env_from" in page.text
 
     bad_name = _post(

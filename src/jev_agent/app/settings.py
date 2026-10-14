@@ -72,6 +72,109 @@ ENTITY_SECTIONS: tuple[tuple[str, str], ...] = (
     ("profiles", "Workspace profiles"),
 )
 
+# The dashboard pages the editor is split across, grouped by what you are doing rather than by
+# which table a key lives in: agents do the work, tools are what they get, connections are what
+# they reach, settings is how the project behaves (plus the read-only health panels).
+AGENT_SECTIONS: tuple[str, ...] = (
+    "dispatcher",
+    "dispatcher.jev",
+    "workers.claude_code",
+    "workers.codex",
+    "workers.api",
+    "roles.planner",
+    "roles.validator",
+    "roles.coder",
+    "roles.reviewer",
+    "roles.code_reviewer",
+    "roles.learner",
+)
+CONNECTION_SECTIONS: tuple[str, ...] = ("browser", "trust")
+TOOL_ENTITIES: tuple[str, ...] = ("tools.mcp", "tools.skills", "tools.plugins")
+CONNECTION_ENTITIES: tuple[str, ...] = ("servers", "profiles")
+
+PAGES: dict[str, tuple[str, str, tuple[str, ...], tuple[str, ...]]] = {
+    "agents": (
+        "Agents",
+        "Who does the work: Claude Code, Codex and the API worker, the roles they serve, and "
+        "Jev, who dispatches.",
+        AGENT_SECTIONS,
+        (),
+    ),
+    "tools": (
+        "Tools",
+        "What agents get: MCP servers, skills and plugins. Roles pick them by name on the "
+        "Agents page (mcp = [...], skills = [...], plugins = [...]).",
+        (),
+        TOOL_ENTITIES,
+    ),
+    "connections": (
+        "Connections",
+        "What jev reaches: SSH servers, workspace profiles, the browser, and which repos you "
+        "trust to change them. API key names are set on the worker rows (Agents); whether a key "
+        "is set is listed under Settings.",
+        CONNECTION_SECTIONS,
+        CONNECTION_ENTITIES,
+    ),
+    "settings": (
+        "Settings",
+        "How the project behaves: budget, quality, learning, ship and the rest, plus the "
+        "effective config, environment and doctor readouts.",
+        (),
+        (),
+    ),
+}
+
+
+def page_section_paths(page: str) -> tuple[frozenset[str], frozenset[str]]:
+    """(section paths, entity paths) shown on `page`; Settings takes whatever is unassigned."""
+    claimed_sections: set[str] = set()
+    claimed_entities: set[str] = set()
+    for name, (_, _, secs, ents) in PAGES.items():
+        if name != "settings":
+            claimed_sections.update(secs)
+            claimed_entities.update(ents)
+    _, _, secs, ents = PAGES[page]
+    if page == "settings":
+        secs = tuple(path for path, _ in TOP_SECTIONS if path not in claimed_sections)
+        ents = tuple(path for path, _ in ENTITY_SECTIONS if path not in claimed_entities)
+    return frozenset(secs), frozenset(ents)
+
+
+def page_view(
+    config: JevConfig, repo_raw: dict[str, Any], user_raw: dict[str, Any], page: str
+) -> tuple[str, str, list[Section], list[EntitySection]]:
+    """(title, lede, the sections, the entity tables) for one of the pages."""
+    title, lede, _, _ = PAGES[page]
+    section_paths, entity_paths = page_section_paths(page)
+    shown_sections = [s for s in sections(config, repo_raw, user_raw) if s.path in section_paths]
+    shown_entities = [
+        e for e in entity_sections(config, repo_raw, user_raw) if e.path in entity_paths
+    ]
+    return title, lede, shown_sections, shown_entities
+
+
+def page_of(dotted: str) -> str:
+    """The page a dotted config path is edited on (for redirects after a save)."""
+    for prefix in AGENT_SECTIONS:
+        if dotted == prefix or dotted.startswith(prefix + "."):
+            return "agents"
+    for prefix in TOOL_ENTITIES:
+        if dotted == prefix or dotted.startswith(prefix + "."):
+            return "tools"
+    for prefix in CONNECTION_SECTIONS + CONNECTION_ENTITIES:
+        if dotted == prefix or dotted.startswith(prefix + "."):
+            return "connections"
+    return "settings"
+
+
+def anchor_of(dotted: str) -> str:
+    """The id of the section that holds a dotted path (the editor's per-section anchors)."""
+    for path, _ in TOP_SECTIONS + ENTITY_SECTIONS:
+        if dotted == path or dotted.startswith(path + "."):
+            return "s-" + path.replace(".", "-")
+    return ""
+
+
 # A form value that means "remove the key from this layer" (falls back to the default).
 UNSET = object()
 
