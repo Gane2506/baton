@@ -1,0 +1,47 @@
+{#
+  The Preview pane's live fragment, polled by
+      window.JevShell.mountPane("preview", "/preview/live", 3000)
+  (see templates/_panes.html and static/app.js). It carries no JavaScript of its
+  own: static/preview.js (loaded by base.html) binds the takeover controls via
+  delegation, and mountPane pauses polling while focus is inside the pane, so
+  typing into the takeover field is never wiped by a refresh.
+
+  Security: typed takeover input is never echoed back -- the fragment never
+  renders queued input, and the text field is type="password". The CSRF token
+  travels as a data attribute for preview.js's fetch POSTs (checked_form on the
+  server); same-origin fetch keeps it out of URLs.
+#}
+<div class="preview" data-preview data-csrf="{{ csrf }}"{% if preview %} data-session="{{ preview.session_id }}"{% endif %}>
+{% if not preview %}
+  <div class="pane-empty">
+    <div class="title">No live preview</div>
+    <p>The agent's browser view will appear here when a run provides one.</p>
+  </div>
+{% else %}
+  <div class="preview-bar">
+    <span class="badge {{ 's-warn' if preview.driver == 'user' else 's-ok' }}">{{ 'You are driving' if preview.driver == 'user' else 'Agent driving' }}</span>
+    <span class="preview-meta">{{ preview.label }}{% if preview.page_url %} · {{ preview.page_url }}{% endif %}{% if preview.frame_age_s is not none %} · updated {{ preview.frame_age_s }}s ago{% endif %}</span>
+  </div>
+  {% if preview.has_frame %}
+  <img class="preview-frame" src="/preview/frame" alt="What the agent's browser sees"{% if preview.driver == 'user' %} data-preview-clickable title="Click to click there"{% endif %}>
+  {% else %}
+  <div class="pane-empty">
+    <div class="title">Waiting for the first frame</div>
+    <p>The agent's browser session started; its first screenshot is on the way.</p>
+  </div>
+  {% endif %}
+  <div class="preview-controls">
+    {% if preview.driver == 'agent' %}
+      <button type="button" class="primary" data-preview-action="takeover">Take over</button>
+      <span class="preview-hint">Take control to type into the page (e.g. a password the agent is stuck on).</span>
+    {% else %}
+      <input type="password" class="preview-type" data-preview-type placeholder="Type into the page&hellip;"
+             autocomplete="off" autocapitalize="off" spellcheck="false" aria-label="Type into the agent's browser">
+      <button type="button" class="primary" data-preview-action="send">Send</button>
+      <button type="button" data-preview-action="handback">Hand back</button>
+      <span class="preview-hint">Enter sends &middot; Esc/Tab are forwarded &middot; or click the screenshot.</span>
+    {% endif %}
+  </div>
+  <div class="preview-error" data-preview-error hidden></div>
+{% endif %}
+</div>

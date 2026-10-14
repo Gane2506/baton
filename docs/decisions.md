@@ -2,6 +2,22 @@
 
 Deviations from [PLAN.md](../PLAN.md) and choices it left open. Newest first.
 
+## 2026-10-14: Preview browser ships as polling v1, agent seam left for later
+
+- **Polling, not realtime, for the agent browser preview.** The pane polls
+  `/preview/live` every 3 s and the agent pushes frames; true realtime
+  (websocket/SSE) would need a new dependency and a new live contract beside the
+  purpose-built `JevShell.mountPane`/live.js pattern. Worst-case staleness is one
+  pane poll plus one agent push — acceptable for watching an agent work.
+- **The agent-side seam is an API, not a wiring.** The browser is driven by the
+  pinned Playwright MCP server inside the agent CLI process, which this repo does
+  not drive from Python — so the dashboard exposes `POST /preview/agent/*`
+  (register/frame/poll) and documents the contract in `dashboard/preview.py`
+  instead of pretending to hook a loop it cannot reach. Wiring the agent side
+  waits for a workstream that owns browser driving.
+- **Screenshots only, never DOM** in the feed; takeover input is never echoed or
+  audit-logged; one driver at a time (`agent`/`user`), enforced with 409s.
+
 ## 2026-10-13: Settings editor and a shared chat lock (#9)
 
 - **A curated settings editor for the repo `jev.toml`** (jev-decide, AGREE). Only fields
