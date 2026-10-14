@@ -12,8 +12,10 @@ from rich.markup import escape
 from rich.table import Table
 
 from jev_agent.cli.repo import RepoOption
-from jev_agent.cli.run_cmds import RunId
+from jev_agent.cli.run_cmds import RunId, estimate_verdict_for
 from jev_agent.cli.wiring import fail, repo_context
+from jev_agent.config.schema import JevConfig
+from jev_agent.core.budget import ESTIMATE_STATES, estimate_run_cost, format_estimate
 from jev_agent.core.store import (
     AttemptRecord,
     DecisionRecord,
@@ -47,7 +49,7 @@ def status(
             _print_runs(ctx.store.list_runs())
             return
         try:
-            _print_run(ctx.store, ctx.store.get_run(run_id))
+            _print_run(ctx.store, ctx.store.get_run(run_id), ctx.config)
         except NotFoundError as exc:
             raise fail(str(exc)) from exc
 
@@ -68,8 +70,14 @@ def _print_runs(runs: list[RunRecord]) -> None:
     console.print(table)
 
 
-def _print_run(store: Store, run: RunRecord) -> None:
+def _print_run(store: Store, run: RunRecord, config: JevConfig) -> None:
     console.print(f"[bold]run {run.id}[/bold]  {run.state}  spent {_usd(run.spend_usd)}")
+    if run.state in ESTIMATE_STATES:
+        estimate = estimate_run_cost(store, run, config.dispatcher.cost)
+        console.print(f"estimated total: {format_estimate(estimate)}")
+        verdict = estimate_verdict_for(store, config, run)
+        if verdict is not None and verdict.message is not None:
+            console.print(f"[yellow]budget: {escape(verdict.message)}[/yellow]")
     if run.reason:
         console.print(f"reason: {escape(run.reason)}")
     console.print(f"learning: {escape(learning_line(run))}")

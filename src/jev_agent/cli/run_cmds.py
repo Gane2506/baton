@@ -18,6 +18,13 @@ from jev_agent.cli.server_cmds import pick_profile_for_run
 from jev_agent.cli.wiring import cli_context, fail
 from jev_agent.config import STATE_DIRNAME
 from jev_agent.config.schema import JevConfig, ShipMode
+from jev_agent.core.budget import (
+    ESTIMATE_STATES,
+    Budget,
+    EstimateVerdict,
+    estimate_run_cost,
+    format_estimate,
+)
 from jev_agent.core.learning import LearningError
 from jev_agent.core.lease import RunInUseError
 from jev_agent.core.models import RunState
@@ -147,7 +154,32 @@ def print_ship_preview(preview: ShipPreview) -> None:
         console.print(f"  D6 vote ({vote.dispatcher}): {escape(line)}")
 
 
-def print_outcome(run: RunRecord, store: Store | None = None) -> None:
+def estimate_verdict_for(store: Store, config: JevConfig, run: RunRecord) -> EstimateVerdict | None:
+    """The budget verdict on the run's cost estimate; None outside the approval gates."""
+    if run.state not in ESTIMATE_STATES:
+        return None
+    estimate = estimate_run_cost(store, run, config.dispatcher.cost)
+    return Budget.from_config(config.budget).estimate_verdict(
+        estimate,
+        warn_fraction=config.dispatcher.cost.warn_fraction,
+        refuse_fraction=config.dispatcher.cost.refuse_fraction,
+    )
+
+
+def print_estimate(store: Store, config: JevConfig, run: RunRecord) -> None:
+    """The pre-approval cost estimate: a range with its basis, plus any budget warning."""
+    if run.state not in ESTIMATE_STATES:
+        return
+    estimate = estimate_run_cost(store, run, config.dispatcher.cost)
+    console.print(f"  estimated total cost: {format_estimate(estimate)}")
+    verdict = estimate_verdict_for(store, config, run)
+    if verdict is not None and verdict.message is not None:
+        console.print(f"  [yellow]budget: {escape(verdict.message)}[/yellow]")
+
+
+def print_outcome(
+    run: RunRecord, store: Store | None = None, config: JevConfig | None = None
+) -> None:
     """The run's state and what to do next. With `store`, a run waiting to ship also shows
     the PR it would open, Jev's and Laya's D6 votes and the diff summary."""
     style = _STYLE.get(run.state, "red")
@@ -169,6 +201,8 @@ def print_outcome(run: RunRecord, store: Store | None = None) -> None:
     if workspace is not None:
         console.print(f"  workspace profile: {escape(workspace.name)}")
     console.print(f"  spent ${run.spend_usd:.2f}; timeline: `jev log {run.id}`")
+    if store is not None and config is not None:
+        print_estimate(store, config, run)
 
 
 def run(
@@ -211,11 +245,21 @@ def run(
             )
         except (LearningError, ProfileError, RunInUseError) as exc:
             raise fail(str(exc)) from exc
-        print_outcome(record, ctx.store)
+        print_outcome(record, ctx.store, ctx.config)
     exit_for(record)
 
 
-def approve(run_id: RunId, repo: RepoOption = Path(".")) -> None:
+def approve(
+    run_id: RunId,
+    force: Annotated[
+        bool,
+        typer.Option(
+            "--force",
+            help="Approve even if the cost estimate exceeds the run budget.",
+        ),
+    ] = False,
+    repo: RepoOption = Path("."),
+) -> None:
     """Approve a validated plan and execute it, or a run waiting to ship (as
     `jev ship approve`): ship and merge it.
 
@@ -224,12 +268,26 @@ def approve(run_id: RunId, repo: RepoOption = Path(".")) -> None:
         if ctx.has_workers:
             print_warnings(ctx)
         try:
+            pending = ctx.store.get_run(run_id)
+        except NotFoundError as exc:
+            raise fail(str(exc)) from exc
+        # The estimate is advisory about future spend: when the cap is already hit,
+        # the hard budget check owns the outcome (BUDGET_EXCEEDED), not the estimate.
+        if pending.state is RunState.AWAITING_APPROVAL and not Budget.from_config(
+            ctx.config.budget
+        ).run_exhausted(pending.spend_usd):
+            verdict = estimate_verdict_for(ctx.store, ctx.config, pending)
+            if verdict is not None and verdict.level == "refuse" and not force:
+                raise fail(f"not approving: {verdict.message} (pass --force to approve anyway)")
+            if verdict is not None and verdict.level == "warn" and verdict.message:
+                console.print(f"[yellow]warning: {escape(verdict.message)}[/yellow]")
+        try:
             record = asyncio.run(approve_run(ctx, run_id))
         except (NotFoundError, PipelineError, RunInUseError) as exc:
             raise fail(str(exc)) from exc
         if not ctx.has_workers:
             console.print(f"Approved. {escape(NO_WORKERS_MESSAGE)} Then run `jev resume {run_id}`.")
-        print_outcome(record, ctx.store)
+        print_outcome(record, ctx.store, ctx.config)
     exit_for(record)
 
 
@@ -265,7 +323,7 @@ def resume(
             )
         except (NotFoundError, PipelineError, LearningError, ProfileError, RunInUseError) as exc:
             raise fail(str(exc)) from exc
-        print_outcome(record, ctx.store)
+        print_outcome(record, ctx.store, ctx.config)
     exit_for(record)
 
 

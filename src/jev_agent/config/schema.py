@@ -235,6 +235,96 @@ class LayaSettings(_Strict):
         return value
 
 
+class CostSettings(_Strict):
+    """`[dispatcher.cost]`: cost-aware leg ordering and pre-run cost estimates.
+
+    Model prices live here, not in code: providers reprice, and both the leg
+    ordering and the pricing-fallback estimate must use the user's numbers.
+    """
+
+    prefer_cheaper_leg: bool = Field(
+        default=True,
+        description=(
+            "Try the cheaper Jev leg first (native TypeSafe vs OpenRouter) when both are "
+            "reachable. The other leg still serves on failure, and the rules dispatcher "
+            "still backs up both: this changes the order, never the availability."
+        ),
+    )
+    native_price_per_million: float = Field(
+        default=0.042,
+        ge=0,
+        description=(
+            "USD per 1M input tokens for one Jev decision call on the native TypeSafe "
+            "leg (output tokens are free)."
+        ),
+    )
+    openrouter_price_per_million: float = Field(
+        default=0.042,
+        ge=0,
+        description="USD per 1M input tokens for one Jev decision call through OpenRouter.",
+    )
+    min_history_runs: int = Field(
+        default=3,
+        ge=1,
+        description=(
+            "Ended runs needed before the pre-run estimate trusts history; below this "
+            "it falls back to model pricing times expected tokens."
+        ),
+    )
+    history_runs: int = Field(
+        default=20,
+        ge=1,
+        description="How many of the newest ended runs feed the pre-run estimate.",
+    )
+    tokens_per_decision: int = Field(
+        default=8000,
+        gt=0,
+        description="Expected input tokens of one Jev decision call (pricing fallback).",
+    )
+    tokens_per_task: int = Field(
+        default=100_000,
+        gt=0,
+        description="Expected input tokens of one task's worker calls (pricing fallback).",
+    )
+    worker_price_per_million: float = Field(
+        default=3.0,
+        ge=0,
+        description=(
+            "USD per 1M input tokens for worker calls (pricing fallback). Only a guess: "
+            "set it to your own blended rate once you have run history."
+        ),
+    )
+    warn_fraction: float = Field(
+        default=0.8,
+        gt=0,
+        description=(
+            "The estimate warns when its high end reaches this fraction of `[budget] per_run_usd`."
+        ),
+    )
+    refuse_fraction: float = Field(
+        default=1.0,
+        gt=0,
+        description=(
+            "The estimate refuses approval when its high end reaches this fraction of "
+            "`[budget] per_run_usd` (advisory: `--force` still approves)."
+        ),
+    )
+
+    @model_validator(mode="after")
+    def _check_fractions(self) -> CostSettings:
+        if self.warn_fraction > self.refuse_fraction:
+            raise ValueError(
+                f"warn_fraction ({self.warn_fraction:g}) must not exceed "
+                f"refuse_fraction ({self.refuse_fraction:g})"
+            )
+        if self.history_runs < self.min_history_runs:
+            raise ValueError(
+                f"history_runs ({self.history_runs}) must not be below "
+                f"min_history_runs ({self.min_history_runs})"
+            )
+        return self
+
+
 class DispatcherConfig(_Strict):
     primary: DispatcherName = Field(
         default="consensus",
@@ -247,6 +337,10 @@ class DispatcherConfig(_Strict):
     )
     laya: LayaSettings = Field(
         default_factory=LayaSettings, description="Laya's vote in the consensus dispatcher."
+    )
+    cost: CostSettings = Field(
+        default_factory=CostSettings,
+        description="Cost-aware leg ordering and pre-run cost estimates.",
     )
 
     @model_validator(mode="before")

@@ -107,7 +107,11 @@ def build_dispatcher(config: JevConfig) -> tuple[Dispatcher, list[str]]:
     openrouter = JevSettings(
         timeout_s=s.timeout_s, min_confidence=s.min_confidence, instructions=s.instructions
     )
-    jev = MultiProviderJevDispatcher(native=native, openrouter=openrouter)
+    # `[dispatcher.cost]` makes the leg order cost-aware (cheaper keyed leg first)
+    # and prices the decision spend; the fallback chain itself never changes.
+    jev = MultiProviderJevDispatcher(
+        native=native, openrouter=openrouter, cost=config.dispatcher.cost
+    )
     warnings: list[str] = []
     native_key = bool(os.environ.get(native.api_key_env, "").strip())
     openrouter_key = bool(os.environ.get(openrouter.api_key_env, "").strip())

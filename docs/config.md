@@ -386,6 +386,40 @@ The API worker runs the planner, validator and reviewer roles (it cannot edit fi
 the coder). It is used when `enabled = true` and the `api_key_env` variable is set, and only
 for roles it has a model for; see [Worker readiness](#worker-readiness).
 
+## `[dispatcher.cost]`
+
+Cost-aware routing and pre-run cost estimates. Routing: when `prefer_cheaper_leg` is on
+(the default), the cheaper Jev leg (native TypeSafe vs OpenRouter, by the prices below)
+goes first when both are reachable. Cost never removes a leg -- the other still serves
+on failure and the rules dispatcher still backs up both -- and never lowers the
+confidence gate. Every cost-influenced ordering is logged and recorded in the
+decision's `routing_reason`. Estimates: `jev run` shows an estimated total-cost range
+before the plan approval gate, from the newest ended runs' per-phase spend (25th to
+75th percentile) once at least `min_history_runs` runs exist, else model pricing times
+expected tokens with an explicit wide band. `jev approve` refuses (unless `--force`)
+when the estimate's high end reaches `refuse_fraction` of `[budget] per_run_usd`, and
+warns from `warn_fraction` up.
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `prefer_cheaper_leg` | `true` | Try the cheaper leg first when both are reachable. |
+| `native_price_per_million` | `0.042` | USD per 1M input tokens for one Jev decision call on the native TypeSafe leg (output tokens are free). |
+| `openrouter_price_per_million` | `0.042` | USD per 1M input tokens for one Jev call through OpenRouter. |
+| `min_history_runs` | `3` | Ended runs needed before the estimate trusts history; below this it uses pricing. |
+| `history_runs` | `20` | How many of the newest ended runs feed the estimate. |
+| `tokens_per_decision` | `8000` | Expected input tokens of one Jev decision call (pricing fallback). |
+| `tokens_per_task` | `100000` | Expected input tokens of one task's worker calls (pricing fallback). |
+| `worker_price_per_million` | `3.0` | USD per 1M input tokens for worker calls (pricing fallback); a guess until history exists. |
+| `warn_fraction` | `0.8` | The estimate warns when its high end reaches this fraction of `[budget] per_run_usd`. |
+| `refuse_fraction` | `1.0` | The estimate refuses approval when its high end reaches this fraction of `[budget] per_run_usd` (`--force` still approves). |
+
+```toml
+[dispatcher.cost]
+prefer_cheaper_leg = true
+openrouter_price_per_million = 0.06
+warn_fraction = 0.7
+```
+
 ### Worker readiness
 
 Runs and `jev doctor` use one rule to decide which enabled workers can run (in fake-worker mode,
