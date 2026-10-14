@@ -600,7 +600,16 @@ def product_kpis(repo: Repo) -> RepoKpis:
 
 def chat_transcript(repo: Repo, chat_id: str) -> tuple[ChatMeta | None, list[dict[str, Any]]]:
     metas = {meta.chat_id: meta for meta in list_chats(repo.root)}
-    return metas.get(chat_id), read_transcript(repo.root, chat_id)
+    entries = read_transcript(repo.root, chat_id)
+    for entry in entries:
+        # Assistant messages render as Markdown (code blocks, bold, lists); user input stays
+        # plain text, like ChatGPT. The template falls back to escaped `text` when
+        # `body_html` is unset.
+        if entry.get("kind") == "assistant":
+            text = entry.get("text")
+            if isinstance(text, str):
+                entry["body_html"] = render_markdown(text)
+    return metas.get(chat_id), entries
 
 
 # ---- spend -------------------------------------------------------------------------------

@@ -50,7 +50,7 @@ def _new_chat(client: TestClient) -> str:
     return response.headers["location"].rsplit("/", 1)[1]
 
 
-def test_shell_frame_has_sidebar_conn_and_panes(client: TestClient) -> None:
+def test_shell_frame_has_sidebar_conn_and_no_global_panes(client: TestClient) -> None:
     page = client.get("/")
     assert page.status_code == 200
     html = page.text
@@ -59,21 +59,14 @@ def test_shell_frame_has_sidebar_conn_and_panes(client: TestClient) -> None:
     assert 'class="sidebar"' in html and "<nav" in html
     assert 'id="conn-status"' in html and "Live" in html
     assert 'id="theme"' in html and "Auto (OS)" in html
-    # Right: preview + terminal panes with empty states and collapse toggles.
-    assert 'data-pane="preview"' in html and 'data-pane="terminal"' in html
-    assert "No live preview" in html and "No terminal activity" in html
-    assert "data-pane-empty" in html and "data-pane-live" in html
-    toggles = re.findall(r"<button[^>]*data-pane-toggle[^>]*>", html)
-    assert len(toggles) == 2
-    assert all('aria-expanded="true"' in t and "aria-controls=" in t for t in toggles)
-    # Resize handles for the column and the split.
-    assert 'data-resize="panes"' in html and 'data-resize="split"' in html
+    # Panes are no longer global: only run detail opts in via the panes block.
+    assert 'data-pane="preview"' not in html and 'data-pane="terminal"' not in html
     # Shell assets load alongside the existing ones.
     assert 'href="/static/shell.css"' in html and 'src="/static/app.js"' in html
     assert 'src="/static/live.js"' in html and 'src="/static/theme.js"' in html
 
 
-def test_existing_pages_render_inside_shell(client: TestClient) -> None:
+def test_existing_pages_render_inside_shell_without_panes(client: TestClient) -> None:
     for path in (
         "/",
         "/queue",
@@ -89,22 +82,36 @@ def test_existing_pages_render_inside_shell(client: TestClient) -> None:
         page = client.get(path)
         assert page.status_code == 200, path
         assert 'id="app-shell"' in page.text, path
-        assert 'data-pane="preview"' in page.text, path
+        assert 'data-pane="preview"' not in page.text, path
 
 
-def test_chat_page_is_a_conversational_pane(client: TestClient) -> None:
+def test_chat_page_is_fullscreen_conversational_control_plane(client: TestClient) -> None:
     chat_id = _new_chat(client)
     page = client.get(f"/chats/{chat_id}")
     assert page.status_code == 200
     html = page.text
-    # Center: history fed by the existing live.js polling pattern, input docked.
-    assert 'class="chat-pane pane-chat"' in html
+    # Fullscreen layout contract: rail, main column, work panel.
+    for dom_id in (
+        "chat-layout",
+        "chat-rail",
+        "rail-toggle",
+        "chat-main",
+        "chat-transcript",
+        "action-bar",
+        "chat-composer",
+        "composer-text",
+        "composer-send",
+        "work-panel",
+        "work-tabs",
+        "sidebar-toggle",
+    ):
+        assert f'id="{dom_id}"' in html, dom_id
+    assert "chat-fullscreen" in html
+    # Transcript still fed by the existing live.js polling pattern.
     assert f'data-live="/chats/{chat_id}/live"' in html
-    assert 'class="chat-history"' in html
-    # No-JS fallback: a plain POST form with a labelled textarea and send button.
-    assert f'<form class="chat-input panel" method="post" action="/chats/{chat_id}/send">' in html
-    assert '<textarea id="text" name="text"' in html
-    # The chat actions survived the move into the pane header.
+    # No-JS fallback: plain POST forms for send and the four actions.
+    assert f'action="/chats/{chat_id}/send"' in html
+    assert '<textarea id="composer-text" name="text"' in html
     for action in ("brief", "start", "queue"):
         assert f'action="/chats/{chat_id}/{action}"' in html
     # The polling fragment still renders the transcript.

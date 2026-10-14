@@ -57,6 +57,12 @@
         "aria-label",
         (collapsed ? "Expand " : "Collapse ") + pane.getAttribute("data-pane") + " pane"
       );
+      // Flip the chevron so sighted users get a direction cue too: up while
+      // expanded (collapse upward), down while collapsed (expand downward).
+      var iconUse = toggle.querySelector("use");
+      if (iconUse) {
+        iconUse.setAttribute("href", collapsed ? "#i-down" : "#i-up");
+      }
     }
     store.set("jev-shell-collapsed-" + pane.getAttribute("data-pane"), collapsed ? "1" : "0");
   }

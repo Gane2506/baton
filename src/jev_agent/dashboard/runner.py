@@ -293,6 +293,21 @@ class ChatRunner:
             job.finished_at = datetime.now(UTC)
             lock.release()
 
+    def stop(self, chat_id: str) -> bool:
+        """Cancel this chat's running turn (the Stop button); False when no turn is running.
+
+        Only the cancellation is issued: the turn's thread notices it the next time it
+        reaches an awaitable, and `_work` marks the job failed with `STOPPED_MESSAGE` — the
+        `shutdown` pattern, but for one chat instead of every job.
+        """
+        with self._guard:
+            thread = self._threads.get(chat_id)
+            cancel = self._cancels.get(chat_id)
+        if thread is None or cancel is None or not thread.is_alive():
+            return False
+        cancel.cancel()
+        return True
+
     def shutdown(self, timeout: float = 30.0) -> list[str]:
         """Cancel every running turn and wait for its thread (see `RunLauncher.shutdown`)."""
         with self._guard:

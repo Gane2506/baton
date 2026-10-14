@@ -13,6 +13,7 @@ import json
 import math
 import os
 import shutil
+import subprocess
 import threading
 from collections.abc import AsyncIterator, Callable, Collection
 from contextlib import asynccontextmanager
@@ -22,6 +23,7 @@ from pathlib import Path
 from typing import Any, cast
 
 from jinja2 import Environment, PackageLoader
+from markupsafe import Markup, escape
 from starlette.applications import Starlette
 from starlette.concurrency import run_in_threadpool
 from starlette.datastructures import FormData
@@ -43,7 +45,8 @@ from jev_agent import __version__
 from jev_agent.app import chat, settings
 from jev_agent.app.errors import JevError
 from jev_agent.cli.board_cmds import format_age
-from jev_agent.cli.status_cmds import format_time
+from jev_agent.cli.quality_cmds import review_text
+from jev_agent.cli.status_cmds import format_answers, format_time
 from jev_agent.config import STATE_DIRNAME, ConfigError
 from jev_agent.config.schema import BEGINNER_FIELDS, JevConfig, JevSettings, ShipMode
 from jev_agent.config.servers_schema import ServerConfig
@@ -54,7 +57,9 @@ from jev_agent.core.chat import (
     BackendName,
     ChatError,
     ChatLearning,
+    ChatMeta,
 )
+from jev_agent.core.kpi import DiffStat, diff_stat
 from jev_agent.core.learning import (
     LearningError,
     disable_learning,
@@ -62,11 +67,24 @@ from jev_agent.core.learning import (
     use_profile,
 )
 from jev_agent.core.lease import RunInUseError
-from jev_agent.core.models import RunState
-from jev_agent.core.pipeline import PipelineError, cancel_run
+from jev_agent.core.models import RunState, TaskState
+from jev_agent.core.pipeline import STOPPED, PipelineError, cancel_run
 from jev_agent.core.queue import Move, QueueError, add_idea, move_item, remove_item
 from jev_agent.core.ship import Gh, ShipError, ShipPlan, prepare_ship
-from jev_agent.core.store import QUEUE_PRIORITIES, NotFoundError
+from jev_agent.core.store import (
+    QUEUE_PRIORITIES,
+    AttemptRecord,
+    DecisionRecord,
+    NotFoundError,
+    ShippedPrRecord,
+    TaskRecord,
+)
+from jev_agent.core.workspace import (
+    GIT_QUICK_TIMEOUT_S,
+    result_branch,
+    run_git,
+    start_ref,
+)
 from jev_agent.dashboard import views
 from jev_agent.dashboard.preview import (
     PreviewBridge,
@@ -630,6 +648,13 @@ class Dashboard:
                 "entries": entries,
                 "job": self.chat_runner.job(chat_id),
                 "busy": self.chat_runner.busy(chat_id),
+                # the redesigned chat page: the conversation rail, pending approvals, the
+                # empty-state suggestions, the run step timeline, and the composer picker.
+                "rail_chats": views.chats(repo, "")[:30],
+                "approval_cards": _approval_cards(repo, meta) if meta is not None else [],
+                "suggestions": list(_CHAT_SUGGESTIONS) if not entries else [],
+                "step_blocks": _step_blocks(repo, meta) if meta is not None else [],
+                "backends": chat.backend_readiness(repo.config),
             }
 
         return build
@@ -1262,6 +1287,154 @@ class Dashboard:
         self.flash(request, "ok", f"queued item {item_id} from the chat's brief")
         return self.back("/queue")
 
+    async def chat_stop(self, request: Request) -> Response:
+        """Stop the running turn: cancel the model call, like the lifespan shutdown does."""
+        await checked_form(request)  # CSRF, like every other POST; the id comes from the path
+        chat_id: str = request.path_params["chat_id"]
+        to = f"/chats/{chat_id}"
+        if self.chat_runner.stop(chat_id):
+            self.flash(request, "ok", f"stopping the reply in chat {chat_id}")
+        else:
+            self.flash(request, "error", f"chat {chat_id} is not waiting for a reply")
+        return self.back(to)
+
+    async def chat_retry(self, request: Request) -> Response:
+        """Ask the model again about the chat's last user message (the `chat_send` path)."""
+        chat_id: str = request.path_params["chat_id"]
+        await checked_form(request)
+        to = f"/chats/{chat_id}"
+
+        def last_user_text() -> str | None:
+            with views.open_repo(self.settings.root) as repo:
+                _, entries = views.chat_transcript(repo, chat_id)
+                for entry in reversed(entries):
+                    if entry.get("kind") == "user":
+                        text = entry.get("text")
+                        if isinstance(text, str) and text.strip():
+                            return text
+            return None
+
+        try:
+            text = await run_in_threadpool(last_user_text)
+        except (ChatError, ConfigError, JevError) as exc:
+            self.flash(request, "error", str(exc))
+            return self.back(to)
+        if text is None:
+            self.flash(request, "error", "nothing to retry yet: no user message in this chat")
+            return self.back(to)
+
+        def work() -> str:
+            return chat.turn(self.settings.root, chat_id, text)
+
+        if not self.chat_runner.start(chat_id, work):
+            self.flash(request, "error", f"chat {chat_id} is already waiting for a reply")
+            return self.back(to)
+        self.flash(request, "ok", "retrying the last message; the reply appears here in a moment")
+        return self.back(to)
+
+    def chat_work(self, request: Request) -> Response:
+        """The chat page's Work pane poll target: the newest run's tab availability as JSON.
+
+        Cheap by design (at most three store queries: the run, its quality reports, its
+        attempts); the per-tab content loads separately through `chat_work_tab`.
+        """
+        chat_id: str = request.path_params["chat_id"]
+        try:
+            with views.open_repo(self.settings.root) as repo:
+                payload = self._work_payload(repo, chat_id, self._preview_bridge(request))
+        except (NotFoundError, ChatError) as exc:
+            return JSONResponse({"run_id": None, "error": str(exc)}, status_code=404)
+        except (ConfigError, JevError) as exc:
+            return JSONResponse({"run_id": None, "error": str(exc)}, status_code=500)
+        return JSONResponse(payload)
+
+    def _work_payload(
+        self, repo: views.Repo, chat_id: str, bridge: PreviewBridge
+    ) -> dict[str, Any]:
+        meta, _ = views.chat_transcript(repo, chat_id)
+        if meta is None:
+            raise NotFoundError(f"no chat {chat_id}")
+        tabs = {name: {"available": False, "active": False} for name in _WORK_TABS}
+        run_id = meta.runs[-1].get("run_id") if meta.runs else None
+        if not run_id:
+            return {"run_id": None, "tabs": tabs}
+        try:
+            run = repo.store.get_run(run_id)
+        except NotFoundError:
+            return {"run_id": None, "tabs": tabs}
+        reports = repo.store.list_quality_reports(run_id)
+        attempts = repo.store.list_attempts(run_id)
+        busy = run.state not in STOPPED and self.launcher.busy(run_id)
+        session = bridge.session_for_run(run_id)
+        has_preview = session is not None and bool(session.page_url)
+        tabs["plan"] = {
+            "available": run.plan is not None,
+            "active": busy and run.state in _PLAN_ACTIVE_STATES,
+        }
+        tabs["diff"] = {
+            "available": run.state
+            in (
+                RunState.INTEGRATING,
+                RunState.SHIPPING,
+                RunState.AWAITING_SHIP,
+                RunState.DONE,
+            ),
+            "active": busy
+            and run.state in (RunState.EXECUTING, RunState.INTEGRATING, RunState.SHIPPING),
+        }
+        tabs["tests"] = {
+            "available": bool(reports),
+            "active": busy
+            and not reports
+            and run.state in (RunState.EXECUTING, RunState.INTEGRATING),
+        }
+        tabs["preview"] = {"available": has_preview, "active": has_preview}
+        tabs["terminal"] = {
+            "available": busy or _newest_attempt_log(repo, run_id, attempts) is not None,
+            "active": busy,
+        }
+        return {"run_id": run_id, "tabs": tabs}
+
+    def chat_work_tab(self, request: Request) -> Response:
+        """One Work pane tab as an HTML fragment (`_work_tab.html`); 404 for unknown tabs."""
+        chat_id: str = request.path_params["chat_id"]
+        tab: str = request.path_params["tab"]
+        if tab not in _WORK_TABS:
+            raise HTTPException(404, f"no work tab {tab!r}")
+        bridge = self._preview_bridge(request)
+
+        def build(repo: views.Repo) -> dict[str, Any]:
+            meta, _ = views.chat_transcript(repo, chat_id)
+            if meta is None:
+                raise NotFoundError(f"no chat {chat_id}")
+            run_id = meta.runs[-1].get("run_id") if meta.runs else None
+            if not run_id:
+                raise NotFoundError(f"chat {chat_id} has no runs yet")
+            return self._work_tab_context(repo, run_id, tab, bridge)
+
+        return self.page(request, "_work_tab.html", build)
+
+    def _work_tab_context(
+        self, repo: views.Repo, run_id: str, tab: str, bridge: PreviewBridge
+    ) -> dict[str, Any]:
+        context: dict[str, Any] = {"tab": tab, "run_id": run_id}
+        if tab == "plan":
+            context["run"] = repo.store.get_run(run_id)
+        elif tab == "diff":
+            context["diff"] = _run_diff(repo.root, run_id)
+        elif tab == "tests":
+            run = repo.store.get_run(run_id)
+            reports = repo.store.list_quality_reports(run_id)
+            context["review_html"] = (
+                render_markdown(review_text(repo.root, run, reports)) if reports else None
+            )
+        elif tab == "preview":
+            context["preview"] = self._preview_view(bridge.session_for_run(run_id))
+        elif tab == "terminal":  # tab is one of _WORK_TABS here
+            log = _newest_attempt_log(repo, run_id, repo.store.list_attempts(run_id))
+            context["terminal_log"] = _tail_lines(log) if log is not None else None
+        return context
+
     async def runs_new(self, request: Request) -> Response:
         """`jev run` from the web: create the run, advance it in the background."""
         form = await checked_form(request)
@@ -1472,6 +1645,201 @@ def _int(value: str) -> int:
         raise HTTPException(404, "no such item") from None
 
 
+# ---- chat work pane ----------------------------------------------------------------------
+
+_WORK_TABS: tuple[str, ...] = ("plan", "diff", "tests", "preview", "terminal")
+
+# Run states whose stream produces the plan tab while the dashboard drives the run.
+_PLAN_ACTIVE_STATES = frozenset(
+    {
+        RunState.INTAKE,
+        RunState.PLANNING,
+        RunState.VALIDATING,
+        RunState.AWAITING_PLANNING,
+        RunState.AWAITING_VALIDATING,
+    }
+)
+
+_DIFF_CAP_BYTES = 200 * 1024  # the work pane's diff tab never renders more than this
+_TERMINAL_TAIL_LINES = 200
+_TERMINAL_TAIL_BYTES = 256 * 1024  # only the tail of a worker log is read
+
+
+def _newest_attempt_log(
+    repo: views.Repo, run_id: str, attempts: list[AttemptRecord]
+) -> Path | None:
+    """The newest attempt's log file strictly under the run's directory, or None. Worker logs
+    may point anywhere, so paths outside the run dir are never served."""
+    base = views.run_dir(repo, run_id).resolve()
+    for attempt in sorted(attempts, key=lambda a: a.started_at, reverse=True):
+        if attempt.log_path is None:
+            continue
+        try:
+            path = attempt.log_path.resolve()
+            path.relative_to(base)
+        except (OSError, ValueError):
+            continue
+        if path.is_file():
+            return path
+    return None
+
+
+def _tail_lines(path: Path, lines: int = _TERMINAL_TAIL_LINES) -> str:
+    """The last `lines` lines of `path` (at most the last 256KB), decoded lossily."""
+    size = path.stat().st_size
+    with path.open("rb") as handle:
+        handle.seek(max(0, size - _TERMINAL_TAIL_BYTES))
+        data = handle.read()
+    return b"\n".join(data.splitlines()[-lines:]).decode("utf-8", errors="replace")
+
+
+def _run_diff(root: Path, run_id: str) -> str | None:
+    """`git diff` of the run's result branch against its start ref, capped at 200KB; None
+    when there is no diff yet or git cannot tell (the tab shows its empty state)."""
+    try:
+        proc = run_git(
+            [
+                "diff",
+                "--no-color",
+                "--no-ext-diff",
+                f"{start_ref(run_id)}..{result_branch(run_id)}",
+            ],
+            root,
+            GIT_QUICK_TIMEOUT_S,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if proc.returncode != 0 or not proc.stdout.strip():
+        return None
+    return proc.stdout[:_DIFF_CAP_BYTES]
+
+
+# ---- chat context: approvals and step timeline ---------------------------------------------
+
+_STEP_BLOCK_RUNS = 10  # newest runs considered, so one chat page stays cheap
+_STEP_BLOCK_ENTRIES = 20
+
+# Shown when the transcript is empty; the composer offers them as starting points.
+_CHAT_SUGGESTIONS: tuple[str, ...] = (
+    "Add pagination to the users API",
+    "Fix the flaky date-parsing test",
+    "Explain what run 20261014-3f1a changed",
+    "Review the open pull requests",
+)
+
+
+def _safe_diff_stat(root: Path, base: str, head: str) -> DiffStat | None:
+    """`git diff --shortstat base..head` as numbers; None when git cannot tell."""
+    try:
+        return diff_stat(root, base, head)
+    except OSError:
+        return None
+
+
+def _format_diff_stat(stat: DiffStat | None) -> str:
+    if stat is None:
+        return "-"
+    return f"{stat.files} files, +{stat.additions}/-{stat.deletions}"
+
+
+def _approval_cards(repo: views.Repo, meta: ChatMeta) -> list[dict[str, Any]]:
+    """The chat's runs waiting on a person (plan or ship approval), for the approval rail."""
+    cards: list[dict[str, Any]] = []
+    for ref in meta.runs:
+        run_id = ref.get("run_id")
+        if not run_id:
+            continue
+        try:
+            run = repo.store.get_run(run_id)
+        except NotFoundError:
+            continue
+        if run.state not in (RunState.AWAITING_APPROVAL, RunState.AWAITING_SHIP):
+            continue
+        cards.append(
+            {
+                "run_id": run_id,
+                "kind": ref.get("kind", ""),
+                "plan_summary": run.plan.summary[:300] if run.plan else "",
+                "cost_estimate": f"${run.spend_usd:.2f}" if run.spend_usd > 0 else "unknown",
+                "diff_stat": _format_diff_stat(
+                    _safe_diff_stat(repo.root, start_ref(run_id), result_branch(run_id))
+                ),
+            }
+        )
+    return cards
+
+
+def _decision_verdict(record: DecisionRecord) -> str:
+    """The decision's outcome in a few words (the step timeline's title tail)."""
+    answers = record.decision.answers
+    point = record.decision.point
+    if point == "D3":
+        return answers.get("verdict", "")
+    if point in ("D5", "D6"):
+        return answers.get("action", "")
+    return ", ".join(f"{name}={value}" for name, value in answers.items())[:120]
+
+
+def _decision_block(record: DecisionRecord) -> dict[str, Any]:
+    """One D1-D8 decision card as a collapsed step entry."""
+    decision = record.decision
+    worker = decision.answers.get("worker", decision.dispatcher)
+    who = f"{worker}/{decision.model}" if decision.model else worker
+    scope = record.task_id or "run"
+    verdict = _decision_verdict(record)
+    lines = [format_answers(decision.answers, decision.details)]
+    if record.fallback_reason:
+        lines.append(f"rules fallback: {record.fallback_reason}")
+    if decision.cost_usd is not None:
+        lines.append(f"cost {_usd(decision.cost_usd)}")
+    return {
+        "title": f"{scope} · {who}" + (f" — {verdict}" if verdict else ""),
+        "summary": f"{decision.point} decided by {decision.dispatcher}",
+        "detail_html": Markup("<br>").join(escape(line) for line in lines),
+    }
+
+
+def _task_block(task: TaskRecord) -> dict[str, Any]:
+    """A finished task as a step entry (a run milestone)."""
+    return {
+        "title": f"{task.id} · {task.card.title} — done",
+        "summary": f"{task.attempts} attempt(s), {_usd(task.spend_usd)}",
+        "detail_html": Markup(escape(task.note)) if task.note else Markup(""),
+    }
+
+
+def _shipped_block(pr: ShippedPrRecord) -> dict[str, Any]:
+    """A shipped PR as a step entry (a run milestone)."""
+    return {
+        "title": f"shipped: {pr.title or pr.url or pr.branch}",
+        "summary": f"{pr.repo} · {pr.base} ← {pr.branch}",
+        "detail_html": Markup(""),
+    }
+
+
+def _step_blocks(repo: views.Repo, meta: ChatMeta) -> list[dict[str, Any]]:
+    """Collapsed step entries for the chat's runs: the D1-D8 decision cards plus run
+    milestones (finished tasks, shipped PRs). Newest last, capped at 20 entries."""
+    dated: list[tuple[datetime, dict[str, Any]]] = []
+    for ref in meta.runs[-_STEP_BLOCK_RUNS:]:
+        run_id = ref.get("run_id")
+        if not run_id:
+            continue
+        try:
+            run = repo.store.get_run(run_id)
+        except NotFoundError:
+            continue
+        for record in repo.store.list_decisions(run_id):
+            dated.append((record.created_at, _decision_block(record)))
+        for task in repo.store.list_tasks(run_id):
+            if task.state is TaskState.DONE:
+                dated.append((run.updated_at, _task_block(task)))
+        for pr in repo.store.list_shipped_prs(run_id):
+            dated.append((pr.created_at, _shipped_block(pr)))
+    dated.sort(key=lambda item: item[0])
+    return [block for _, block in dated[-_STEP_BLOCK_ENTRIES:]]
+
+
 def _learning_create(repo: views.Repo, form: FormData) -> str:
     name = _text(form, "name") or ""
     profile = repo.learning.create(name, shared=form.get("shared") == "on")
@@ -1543,6 +1911,10 @@ def create_app(
         Route("/chats/{chat_id}/start", dash.chat_start, methods=["POST"]),
         Route("/chats/{chat_id}/queue", dash.chat_queue, methods=["POST"]),
         Route("/chats/{chat_id}/delete", dash.chat_delete, methods=["POST"]),
+        Route("/chats/{chat_id}/stop", dash.chat_stop, methods=["POST"]),
+        Route("/chats/{chat_id}/retry", dash.chat_retry, methods=["POST"]),
+        Route("/chats/{chat_id}/work", dash.chat_work),
+        Route("/chats/{chat_id}/work/{tab}", dash.chat_work_tab),
         Route("/spend", dash.spend_page),
         Route("/kpis", dash.kpis_page),
         Route("/agents", dash.agents_page),

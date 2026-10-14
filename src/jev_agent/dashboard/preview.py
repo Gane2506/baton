@@ -220,6 +220,13 @@ class PreviewBridge:
             except NoPreviewSession:
                 return None
 
+    def session_for_run(self, run_id: str) -> PreviewSession | None:
+        """The newest live session driving `run_id`'s browser, if any (the chat Work pane's
+        preview tab)."""
+        with self._lock:
+            fresh = [s for s in self._sessions.values() if s.fresh and s.run_id == run_id]
+            return max(fresh, key=lambda s: s.last_seen) if fresh else None
+
     def heartbeat(self, session_id: str) -> None:
         with self._lock:
             self._get_unlocked(session_id).last_seen = time.monotonic()

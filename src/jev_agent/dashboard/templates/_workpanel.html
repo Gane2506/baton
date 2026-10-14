@@ -1,7 +1,8 @@
 {# Work-product panel for fullscreen chat: tab shell only (Plan / Diff / Tests /
    Preview / Terminal). Live content is mounted by another worker; without JS
    every body shows its empty state stacked. #}
-<aside id="work-panel" aria-label="Work product" data-work-panel>
+<aside id="work-panel" aria-label="Work product" data-work-panel hidden>
+  {# hidden until chat.js sees activity: tabs appear only when they have content. #}
   <div class="work-head">
     <div id="work-tabs" role="tablist" aria-label="Work product tabs">
       <button type="button" data-work-tab="plan" role="tab" aria-selected="true" aria-controls="work-body-plan"><span class="tab-label">Plan</span><span class="work-dot" aria-hidden="true"></span></button>

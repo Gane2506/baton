@@ -1,0 +1,40 @@
+{#
+  One Work pane tab of the redesigned chat page, fetched per tab click from
+  GET /chats/<chat_id>/work/<tab> (plan, diff, tests, preview, terminal).
+  A fragment only: no <html> wrapper, no JavaScript of its own.
+#}
+{% if tab == "plan" %}
+  {% if run.plan %}
+  <dl class="facts">
+    <dt>Plan (round {{ run.plan_round }})</dt><dd>{{ run.plan.summary }}</dd>
+    {% if run.plan.tasks %}<dt>Tasks</dt><dd><ol>
+      {% for t in run.plan.tasks %}<li><strong>{{ t.id }}</strong> {{ t.title }}</li>{% endfor %}
+    </ol></dd>{% endif %}
+    {% if run.plan.risks %}<dt>Risks</dt><dd><ul>
+      {% for r in run.plan.risks %}<li>{{ r }}</li>{% endfor %}
+    </ul></dd>{% endif %}
+  </dl>
+  {% else %}
+  <div class="empty"><div class="title">No plan yet</div><p>The plan appears here once the dispatcher writes it.</p></div>
+  {% endif %}
+{% elif tab == "diff" %}
+  {% if diff %}
+  <pre class="diff">{{ diff }}</pre>
+  {% else %}
+  <div class="empty"><div class="title">No diff yet</div><p>The result branch's diff appears here once the run integrates.</p></div>
+  {% endif %}
+{% elif tab == "tests" %}
+  {% if review_html %}
+  <section class="card markdown">{{ review_html }}</section>
+  {% else %}
+  <div class="empty"><div class="title">No quality report yet</div><p>The gate's findings appear here once it runs.</p></div>
+  {% endif %}
+{% elif tab == "preview" %}
+  {% include "_preview_live.html" %}
+{% else %}
+  {% if terminal_log %}
+  <pre class="terminal">{{ terminal_log }}</pre>
+  {% else %}
+  <div class="empty"><div class="title">No terminal output yet</div><p>Worker output appears here while the run executes.</p></div>
+  {% endif %}
+{% endif %}

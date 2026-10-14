@@ -2,7 +2,9 @@
 {% from "macros.html" import csrf_input, icon, copy_button with context %}
 {% block title %}Chat {{ chat_id }}{% endblock %}
 {% block body_class %}chat-fullscreen{% endblock %}
-{% block extra_head %}<link rel="stylesheet" href="/static/chat.css">{% endblock %}
+{% block extra_head %}<link rel="stylesheet" href="/static/chat.css">
+<script src="/static/chat.js" defer></script>
+<script src="/static/composer.js" defer></script>{% endblock %}
 {% block content %}
 <div id="chat-layout" data-chat-id="{{ chat_id }}">
   {# Default worker for the one-click New chat form: first ready backend. #}
@@ -72,11 +74,11 @@
         <select id="composer-backend" name="worker" aria-label="Chat backend">
           {% if backends is mapping %}
             {% for name, pair in backends.items() %}
-          <option value="{{ name }}"{% if not pair[0] %} disabled{% endif %}{% if meta and meta.backend == name %} selected{% endif %}>{{ name }} · {{ pair[1] }}</option>
+          <option value="{{ name }}"{% if not pair[0] %} disabled{% endif %}{% if meta and meta.backend == name %} selected{% endif %} title="{{ pair[1] }}">{{ "OpenRouter API" if name == "api" else "Claude Code" }}</option>
             {% endfor %}
           {% else %}
             {% for name, note, ok in backends %}
-          <option value="{{ name }}"{% if not ok %} disabled{% endif %}{% if meta and meta.backend == name %} selected{% endif %}>{{ name }} · {{ note }}</option>
+          <option value="{{ name }}"{% if not ok %} disabled{% endif %}{% if meta and meta.backend == name %} selected{% endif %} title="{{ note }}">{{ "OpenRouter API" if name == "api" else "Claude Code" }}</option>
             {% endfor %}
           {% endif %}
         </select>
