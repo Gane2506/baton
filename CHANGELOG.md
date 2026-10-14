@@ -5,7 +5,7 @@ All notable changes to this project are documented here. The format is based on
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Design detail for every entry is in
 [docs/decisions.md](docs/decisions.md).
 
-## [Unreleased]
+## [0.4.0] - 2026-10-14
 
 ### Added
 
@@ -42,6 +42,8 @@ All notable changes to this project are documented here. The format is based on
 
 ### Fixed
 
+- **Laya confidence range.** `_parse_scores` now rejects Laya confidence values outside
+  [0, 1] with a `DispatchError` instead of silently accepting them ([#79](https://github.com/Gane2506/baton/issues/79)).
 - A chat open in a terminal (`jev chat`) and a dashboard reply to the same chat could overwrite
   each other's `meta.json` (spend, turns, brief, runs). One process has a chat at a time now
   (`chat.lock`). The dashboard's new-chat form also rejects `inf` and `nan` budgets.

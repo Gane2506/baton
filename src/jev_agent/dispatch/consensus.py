@@ -298,6 +298,8 @@ def _parse_scores(
             if not _is_number(score) or not _is_number(confidence):
                 raise DispatchError(f"laya: no score for {q}={cell[0]} on {cell[1]}")
             assert isinstance(score, int | float) and isinstance(confidence, int | float)
+            if not 0.0 <= confidence <= 1.0:  # above 1 would never count as uncertain
+                raise DispatchError(f"laya: invalid confidence for {q}={cell[0]} on {cell[1]}")
             value = min(max(float(score), 0.0), HIGHEST - LOWEST) + LOWEST
             parsed.setdefault(q, {})[cell] = Score(value, float(confidence))
     return parsed
