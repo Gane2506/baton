@@ -118,4 +118,43 @@
       copied(button);
     }
   });
+
+  /* ---- settings page: beginner / advanced and the quality slider ---------------- */
+
+  // The Advanced toggle reveals the full settings page; the choice survives navigation.
+  var advancedToggle = document.querySelector("[data-advanced-toggle]");
+  var advancedBox = document.getElementById("advanced-settings");
+  function applyAdvanced() {
+    if (!advancedToggle || !advancedBox) {
+      return;
+    }
+    var show = advancedToggle.checked;
+    advancedBox.hidden = !show;
+    try {
+      window.localStorage.setItem("jev-settings-advanced", show ? "1" : "0");
+    } catch (error) {
+      /* private mode: the toggle still works for this page */
+    }
+  }
+  if (advancedToggle && advancedBox) {
+    var saved = null;
+    try {
+      saved = window.localStorage.getItem("jev-settings-advanced");
+    } catch (error) {
+      /* ignore */
+    }
+    advancedToggle.checked = saved === "1";
+    advancedToggle.addEventListener("change", applyAdvanced);
+    applyAdvanced();
+  }
+
+  // Sliders keep their numeric readout in sync as they move.
+  document.querySelectorAll('input[type="range"][data-slider-output]').forEach(function (el) {
+    var out = document.getElementById(el.getAttribute("data-slider-output"));
+    el.addEventListener("input", function () {
+      if (out) {
+        out.textContent = el.value;
+      }
+    });
+  });
 })();

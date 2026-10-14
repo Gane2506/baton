@@ -3,7 +3,14 @@
 {% block title %}{{ page_title }}{% endblock %}
 
 {% macro field_input(f, field_id) %}
-  {% if f.kind == "bool" %}
+  {% if f.path == "quality.score_threshold" %}
+  <div class="slider-row">
+    <input id="{{ field_id }}" type="range" min="0" max="100" step="1" name="value"
+           value="{{ f.text or '85' }}" data-slider-output="{{ field_id }}-out"
+           aria-label="{{ f.key }}, {{ f.help }}">
+    <output id="{{ field_id }}-out" for="{{ field_id }}">{{ f.text or "85" }}</output>
+  </div>
+  {% elif f.kind == "bool" %}
   <select id="{{ field_id }}" name="value">
     <option value="true"{% if f.text == "true" %} selected{% endif %}>true</option>
     <option value="false"{% if f.text != "true" %} selected{% endif %}>false</option>
@@ -36,36 +43,12 @@
   {% endif %}
 {% endmacro %}
 
-{% block content %}
-<div class="page-head">
-  <div class="titles">
-    <h1>{{ page_title }}</h1>
-    <p class="lede">{{ page_lede }}</p>
-    <p class="hint">Everything here comes from <code>jev.toml</code> and your user config,
-    editable in place. A change saves to the repo unless the row says otherwise; keys that
-    decide where API keys go, which commands run and which tools agents get need the repo
-    trusted (see Connections) or a save to the user config
-    (<span class="mono">{{ user_file }}</span>).</p>
-  </div>
-</div>
-
-<nav class="panel tight" aria-label="Settings sections">
-  <div class="actions">
-  {% for s in sections %}<a class="button small" href="#s-{{ s.path | replace('.', '-') }}">{{ s.title }}</a>{% endfor %}
-  {% for e in entities %}<a class="button small" href="#s-{{ e.path | replace('.', '-') }}">{{ e.title }}</a>{% endfor %}
-  </div>
-</nav>
-
-{% for s in sections %}
-<h2 class="section" id="s-{{ s.path | replace('.', '-') }}">{{ s.title }}</h2>
-<section class="panel">
-  {% for f in s.fields %}
-  {% set field_id = "v-" ~ (f.path | replace('.', '-')) %}
+{% macro section_field_row(f, field_id, target) %}
   <form class="field-row" method="post" action="/settings/set">
     {{ csrf_input() }}
     <input type="hidden" name="path" value="{{ f.path }}">
     <input type="hidden" name="kind" value="{{ f.kind }}">
-    <input type="hidden" name="target" value="{{ 'user' if s.path in user_only else 'repo' }}">
+    <input type="hidden" name="target" value="{{ target }}">
     <label for="{{ field_id }}"><span class="mono">{{ f.key }}</span>{% if f.help %}<span class="hint">{{ f.help }}</span>{% endif %}</label>
     <div class="field-control">{{ field_input(f, field_id) }}</div>
     <div class="field-actions">
@@ -74,11 +57,21 @@
       {% if f.source %}<button class="small" type="submit" formaction="/settings/unset" formnovalidate>Reset</button>{% endif %}
     </div>
   </form>
+{% endmacro %}
+
+{% macro render_sections(sections) %}
+{% for s in sections %}
+<h2 class="section" id="s-{{ s.path | replace('.', '-') }}">{{ s.title }}</h2>
+<section class="panel">
+  {% for f in s.fields %}
+  {{ section_field_row(f, "v-" ~ (f.path | replace('.', '-')), 'user' if s.path in user_only else 'repo') }}
   {% endfor %}
   {% if s.note %}<p class="hint">{{ s.note }}</p>{% endif %}
 </section>
 {% endfor %}
+{% endmacro %}
 
+{% macro render_entities(entities) %}
 {% for e in entities %}
 <h2 class="section" id="s-{{ e.path | replace('.', '-') }}">{{ e.title }}</h2>
 <section class="panel">
@@ -162,8 +155,8 @@
   </details>
 </section>
 {% endfor %}
-
-{% if page == "settings" %}
+{% endmacro %}
+{% macro render_readonly() %}
 <h2 class="section" id="s-readonly">Read-only</h2>
 <section class="panel">
   <h2>Effective config</h2>
@@ -204,5 +197,71 @@
     <dt>Refresh</dt><dd>{{ settings.refresh_s }}s for live regions</dd>
   </dl>
 </section>
+{% endmacro %}
+
+{% block content %}
+<div class="page-head">
+  <div class="titles">
+    <h1>{{ page_title }}</h1>
+    <p class="lede">{{ page_lede }}</p>
+    <p class="hint">Everything here comes from <code>jev.toml</code> and your user config,
+    editable in place. A change saves to the repo unless the row says otherwise; keys that
+    decide where API keys go, which commands run and which tools agents get need the repo
+    trusted (see Connections) or a save to the user config
+    (<span class="mono">{{ user_file }}</span>).</p>
+  </div>
+</div>
+
+{% if page == "settings" %}
+<h2 class="section" id="s-basics">The basics</h2>
+<section class="panel" aria-label="Beginner settings">
+  <p class="hint">The ten settings most people change, in plain language. Everything else is
+  under <strong>Advanced</strong> below — nothing is hidden from it.</p>
+  {% for s in sections %}
+  {% for f in s.fields %}
+  {% if f.path in beginner_fields %}
+  {{ section_field_row(f, "b-" ~ (f.path | replace('.', '-')), 'user' if s.path in user_only else 'repo') }}
+  {% endif %}
+  {% endfor %}
+  {% endfor %}
+</section>
+
+<section class="panel tight advanced-toggle">
+  <label class="check" for="advanced-toggle">
+    <input type="checkbox" id="advanced-toggle" data-advanced-toggle>
+    <span><strong>Advanced</strong></span>
+    <span class="hint">show every setting</span>
+  </label>
+</section>
+
+<div id="advanced-settings" hidden>
+<nav class="panel tight" aria-label="Settings sections">
+  <div class="actions">
+  {% for s in sections %}<a class="button small" href="#s-{{ s.path | replace('.', '-') }}">{{ s.title }}</a>{% endfor %}
+  {% for e in entities %}<a class="button small" href="#s-{{ e.path | replace('.', '-') }}">{{ e.title }}</a>{% endfor %}
+  </div>
+</nav>
+
+{{ render_sections(sections) }}
+
+{{ render_entities(entities) }}
+
+{{ render_readonly() }}
+</div>
+{% else %}
+<nav class="panel tight" aria-label="Settings sections">
+  <div class="actions">
+  {% for s in sections %}<a class="button small" href="#s-{{ s.path | replace('.', '-') }}">{{ s.title }}</a>{% endfor %}
+  {% for e in entities %}<a class="button small" href="#s-{{ e.path | replace('.', '-') }}">{{ e.title }}</a>{% endfor %}
+  </div>
+</nav>
+
+{{ render_sections(sections) }}
+
+{{ render_entities(entities) }}
 {% endif %}
+
+
+
+
 {% endblock %}

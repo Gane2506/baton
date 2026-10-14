@@ -33,7 +33,10 @@ The dashboard's Settings page ([dashboard.md](dashboard.md)) can edit common key
 `jev.toml` (dispatcher, budgets, approval, review, quality level, ship, learning,
 `prefer_free`, and each role's `workers` and `models`): it shows a diff, checks the new file
 like `jev` loads it, keeps comments and layout, and never writes guarded keys, `[trust]` or
-your user config.
+your user config. The page opens on a **beginner view** — the ten settings most people change
+(decision maker, spending caps, quality level and its score slider, plan approval, review,
+learning, shipping and free models) — with an **Advanced** toggle revealing every other
+setting. Each row carries a one-line plain-language explanation.
 
 Run `jev doctor` to check that config loads, which worker CLIs are on `PATH`, which API key
 environment variables are set, and that every `prompt_file` exists and parses.
@@ -261,6 +264,7 @@ review, and blocks work that fails. Off by default.
 | `min_coverage` | unset | Minimum line coverage in percent (0-100) on the result branch. Unset: 60 at `medium`, 80 at `production` and `scalable`. Only blocks from `production`. |
 | `required_tools` | `[]` | Tool names (e.g. `["ruff", "gitleaks"]`) that must be installed: a missing one fails its check, which blocks. Other missing tools only skip their check. `jev quality checks` lists the tool names. |
 | `timeout_s` | `600` | Timeout in seconds (> 0) for each tool command. |
+| `score_threshold` | `85` | Minimum review score (0-100) for the gate to pass; work scored below it blocks. The dashboard's Settings page shows it as a slider. |
 
 Precedence for the level: the run's `--quality` flag > the queue item's `--quality` > this key.
 The level a run used is stored with it. The AI review uses `[roles.code_reviewer]`.

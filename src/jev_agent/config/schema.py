@@ -106,13 +106,37 @@ class JevSettings(_Strict):
     Defaults call Jev through OpenRouter; `for_native()` gives the native TypeSafe values.
     """
 
-    base_url: str = Field(default=OPENROUTER_BASE_URL, min_length=1)
-    model: str = Field(default="~typesafe/jev-latest", min_length=1)
-    api_key_env: str = Field(default="OPENROUTER_API_KEY", pattern=_ENV_NAME)
-    timeout_s: float = Field(default=30.0, gt=0)
-    min_confidence: float = Field(default=0.55, ge=0, le=1)
+    base_url: str = Field(
+        default=OPENROUTER_BASE_URL,
+        min_length=1,
+        description=(
+            "Where jev sends its decision requests: OpenRouter by default, or TypeSafe directly."
+        ),
+    )
+    model: str = Field(
+        default="~typesafe/jev-latest",
+        min_length=1,
+        description="Which Jev model answers the decision questions.",
+    )
+    api_key_env: str = Field(
+        default="OPENROUTER_API_KEY",
+        pattern=_ENV_NAME,
+        description="Name of the environment variable holding the API key (never the key itself).",
+    )
+    timeout_s: float = Field(
+        default=30.0, gt=0, description="Seconds to wait for one Jev answer before giving up."
+    )
+    min_confidence: float = Field(
+        default=0.55,
+        ge=0,
+        le=1,
+        description="Below this confidence on any answer, the plain rules decide instead of Jev.",
+    )
     # Instruction overrides, keyed "D4.effort" (one point) or "effort" (every point).
-    instructions: dict[str, str] = Field(default_factory=dict)
+    instructions: dict[str, str] = Field(
+        default_factory=dict,
+        description="Replace jev's instruction for a decision question, keyed like 'D4.effort'.",
+    )
 
     @field_validator("instructions")
     @classmethod
@@ -173,12 +197,25 @@ class LayaSettings(_Strict):
     """`[dispatcher.laya]`: Laya's vote in the consensus dispatcher (Jev scoring every allowed
     answer on the Laya CDA matrix). Laya reaches Jev with the `[dispatcher.jev]` settings."""
 
-    weights: dict[str, float] = Field(default_factory=lambda: dict(DEFAULT_LAYA_WEIGHTS))
+    weights: dict[str, float] = Field(
+        default_factory=lambda: dict(DEFAULT_LAYA_WEIGHTS),
+        description="How much each of the six criteria counts in Laya's vote; must add up to 1.",
+    )
     # The winner's weighted total (1-5 scale) must lead the runner-up by this much, also after
     # every low-confidence score is moved one level against it.
-    min_margin: float = Field(default=0.2, ge=0, le=4)
+    min_margin: float = Field(
+        default=0.2,
+        ge=0,
+        le=4,
+        description="How far ahead the winner must be for Laya to count it as agreement.",
+    )
     # Extra rounds after a first round without agreement, before the run needs a human.
-    follow_up_rounds: int = Field(default=2, ge=0, le=5)
+    follow_up_rounds: int = Field(
+        default=2,
+        ge=0,
+        le=5,
+        description="Extra voting rounds after a disagreement before a human is asked.",
+    )
 
     @field_validator("weights")
     @classmethod
@@ -199,9 +236,18 @@ class LayaSettings(_Strict):
 
 
 class DispatcherConfig(_Strict):
-    primary: DispatcherName = "consensus"
-    jev: JevSettings = Field(default_factory=JevSettings)
-    laya: LayaSettings = Field(default_factory=LayaSettings)
+    primary: DispatcherName = Field(
+        default="consensus",
+        description=(
+            "Who makes the decisions: Jev and Laya voting together, Jev alone, or fixed rules."
+        ),
+    )
+    jev: JevSettings = Field(
+        default_factory=JevSettings, description="Connection and gating for the Jev dispatcher."
+    )
+    laya: LayaSettings = Field(
+        default_factory=LayaSettings, description="Laya's vote in the consensus dispatcher."
+    )
 
     @model_validator(mode="before")
     @classmethod
@@ -219,11 +265,29 @@ class DispatcherConfig(_Strict):
 
 
 class BudgetConfig(_Strict):
-    per_run_usd: float = Field(default=5.0, gt=0)
-    per_task_usd: float = Field(default=1.5, gt=0)
-    max_plan_rounds: int = Field(default=3, gt=0)
-    max_task_attempts: int = Field(default=3, gt=0)
-    test_timeout_s: int = Field(default=1200, gt=0)  # per test command, task and integration
+    per_run_usd: float = Field(
+        default=5.0,
+        gt=0,
+        description="The most one run may spend on AI calls, in dollars; the run stops past this.",
+    )
+    per_task_usd: float = Field(
+        default=1.5,
+        gt=0,
+        description="The most one task may spend, in dollars; cannot exceed per_run_usd.",
+    )
+    max_plan_rounds: int = Field(
+        default=3,
+        gt=0,
+        description="How many times the planner may revise its plan before a human is asked.",
+    )
+    max_task_attempts: int = Field(
+        default=3,
+        gt=0,
+        description="How many tries a task gets before it escalates or stops.",
+    )
+    test_timeout_s: int = Field(
+        default=1200, gt=0, description="Seconds one test command may run before it is stopped."
+    )
 
     @model_validator(mode="after")
     def _task_within_run(self) -> BudgetConfig:
@@ -239,9 +303,23 @@ class IntegrationConfig(_Strict):
     """`[integration]`: the step that merges task branches and tests the result."""
 
     # Full test suite run on the result branch after each task's own test command.
-    test_command: str | None = Field(default=None, min_length=1)
+    test_command: str | None = Field(
+        default=None,
+        min_length=1,
+        description=(
+            "Full test suite run on the merged result, e.g. 'uv run pytest -q'; unset: no full "
+            "suite."
+        ),
+    )
     # Fix tasks D6 may add after failing integration tests before a human is asked.
-    max_fix_rounds: int = Field(default=2, ge=0)
+    max_fix_rounds: int = Field(
+        default=2,
+        ge=0,
+        description=(
+            "How many fix tasks the decider may add for failing integration tests before a human "
+            "is asked."
+        ),
+    )
 
 
 class WorkspaceConfig(_Strict):
@@ -250,13 +328,22 @@ class WorkspaceConfig(_Strict):
     # Run the repository's git hooks (pre-commit, commit-msg, ...) on jev's own commits and
     # merges. Off: jev passes `--no-verify`. Hooks are a quality signal, but a hook that hangs
     # stops the run (git calls time out, issue #24).
-    run_hooks: bool = True
+    run_hooks: bool = Field(
+        default=True,
+        description="Run the repo's git hooks (pre-commit, ...) on jev's own commits and merges.",
+    )
 
 
 class ApprovalConfig(_Strict):
     # Stop for a human after the plan is validated. Unset: off under the consensus dispatcher,
     # whose D3 approve vote (Jev and Laya agreeing) is the gate, and on otherwise (issue #66).
-    require_plan_approval: bool | None = None
+    require_plan_approval: bool | None = Field(
+        default=None,
+        description=(
+            "Stop and ask a human after the plan is checked, before building. Unset: off with "
+            "consensus, on otherwise."
+        ),
+    )
 
 
 # Learning profile names: letters, digits, `-` and `_`, starting with a letter or digit.
@@ -267,10 +354,22 @@ class LearningConfig(_Strict):
     """`[learning]`: recursive learning (docs/learning.md). Off by default: when on, each run
     ends with one extra model call (the learner)."""
 
-    enabled: bool = False
-    profile: str = Field(default="default", pattern=PROFILE_NAME_PATTERN)
-    max_lessons: int = Field(default=8, ge=0)  # lessons injected into one prompt
-    max_chars: int = Field(default=2000, ge=0)  # characters of lesson text in one prompt
+    enabled: bool = Field(
+        default=False,
+        description=(
+            "Learn from past runs: add distilled lessons to future prompts (costs one extra model "
+            "call per run)."
+        ),
+    )
+    profile: str = Field(
+        default="default",
+        pattern=PROFILE_NAME_PATTERN,
+        description="Which lesson store to read and write; `jev learning list` shows them.",
+    )
+    max_lessons: int = Field(default=8, ge=0, description="Most lessons added to a single prompt.")
+    max_chars: int = Field(
+        default=2000, ge=0, description="Most characters of lesson text added to a single prompt."
+    )
 
 
 FREE_MODELS_TOKEN = "free"  # in a role's `models`: the cached free models (docs/config.md)
@@ -280,16 +379,31 @@ class ModelsConfig(_Strict):
     """`[models]`: free OpenRouter models (docs/config.md "Free models"). They only apply to
     roles that can use the `api` worker; Claude Code and Codex never get a free model."""
 
-    prefer_free: bool = False  # put free models first for every role (roles may override)
-    free_models_limit: int = Field(default=3, ge=0)  # free models one `"free"` expands to
-    cache_ttl_hours: float = Field(default=24.0, gt=0)  # age before the model list is refetched
+    prefer_free: bool = Field(
+        default=False,
+        description="Offer free OpenRouter models first for roles that can use the API worker.",
+    )
+    free_models_limit: int = Field(
+        default=3, ge=0, description='How many cached free models the "free" entry expands to.'
+    )
+    cache_ttl_hours: float = Field(
+        default=24.0,
+        gt=0,
+        description=("Refetch the free-model list when the cache is older than this many hours."),
+    )
 
 
 class ReviewConfig(_Strict):
     # Review each task's diff after its tests pass. Unset: on under the consensus dispatcher,
     # so a task is done only when both votes accept a reviewed attempt, and off otherwise
     # (issue #67).
-    enabled: bool | None = None
+    enabled: bool | None = Field(
+        default=None,
+        description=(
+            "Have the reviewer check each finished task's diff after its tests pass. Unset: on "
+            "with consensus, off otherwise."
+        ),
+    )
 
 
 _TOOL_NAME_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9_.-]*$"
@@ -299,14 +413,51 @@ class QualityConfig(_Strict):
     """`[quality]`: the optional quality and security gate (docs/quality.md). Off by default
     ("none"): each level adds checks and, from `basic`, one AI code review per gate."""
 
-    level: QualityLevel = "none"
+    level: QualityLevel = Field(
+        default="none",
+        description=(
+            "How strict the quality and security gate is: none, basic, medium, production or "
+            "scalable (each level adds checks)."
+        ),
+    )
     # Full test suite for the gate; unset: `[integration] test_command`, else auto-detected.
-    test_command: str | None = Field(default=None, min_length=1)
+    test_command: str | None = Field(
+        default=None,
+        min_length=1,
+        description=(
+            "Full test suite the gate runs. Unset: [integration] test_command, else auto-detected."
+        ),
+    )
     # Minimum line coverage in percent; unset: 60 at medium, 80 at production and scalable.
-    min_coverage: float | None = Field(default=None, ge=0, le=100)
+    min_coverage: float | None = Field(
+        default=None,
+        ge=0,
+        le=100,
+        description=(
+            "Minimum line coverage in percent the gate demands. Unset: 60 at medium, 80 at "
+            "production and scalable."
+        ),
+    )
     # Tools that must be installed: a missing one fails its check instead of skipping it.
-    required_tools: list[str] = Field(default_factory=list)
-    timeout_s: int = Field(default=600, gt=0)  # per tool command
+    required_tools: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Tools that must be installed (e.g. ruff, gitleaks); a missing one fails its check "
+            "instead of skipping it."
+        ),
+    )
+    timeout_s: int = Field(default=600, gt=0, description="Seconds each gate tool command may run.")
+    # The score the gate's code review must award (0-100) for the work to pass. A whole
+    # number so the dashboard can show it as a slider; the gate blocks below it.
+    score_threshold: int = Field(
+        default=85,
+        ge=0,
+        le=100,
+        description=(
+            "Minimum score out of 100 the quality gate's review must give the work to pass; below "
+            "it the gate blocks."
+        ),
+    )
 
     @model_validator(mode="after")
     def _check_tools(self) -> QualityConfig:
@@ -331,23 +482,61 @@ class ShipConfig(_Strict):
     ships the run: `after_approval = "merge"` opens the PR ready, waits for its checks and
     merges it; "ask" waits for a person to approve, modify or stop first."""
 
-    enabled: bool = False
-    remote: str = Field(default="origin", pattern=_REMOTE_NAME)
+    enabled: bool = Field(
+        default=False,
+        description=(
+            "Push the finished run's branch and open a GitHub pull request with your gh login. "
+            "Never force-pushes."
+        ),
+    )
+    remote: str = Field(
+        default="origin",
+        pattern=_REMOTE_NAME,
+        description="Which git remote the result branch is pushed to.",
+    )
     # Base branch of the PR; empty: the repo's default branch (from the remote's HEAD or
     # `gh repo view`), else the branch checked out in the repo.
-    base: str = ""
-    branch_prefix: str = Field(default="jev/", pattern=_BRANCH_PREFIX)
-    draft: bool = True
-    labels: list[str] = Field(default_factory=list)
-    require_quality_pass: bool = True
+    base: str = Field(
+        default="",
+        description="Base branch of the pull request; empty means the repo's default branch.",
+    )
+    branch_prefix: str = Field(
+        default="jev/",
+        pattern=_BRANCH_PREFIX,
+        description="Pushed branch name is <branch_prefix><run_id>.",
+    )
+    draft: bool = Field(default=True, description="Open pull requests as drafts.")
+    labels: list[str] = Field(
+        default_factory=list,
+        description="Labels added to the pull request (they must already exist in the repo).",
+    )
+    require_quality_pass: bool = Field(
+        default=True,
+        description="Refuse to ship runs whose latest quality gate blocked.",
+    )
     # After both votes approve at D6; unset: "merge" under `primary = "consensus"`, else "ask".
-    after_approval: ShipMode | None = None
-    merge_method: MergeMethod = "squash"
+    after_approval: ShipMode | None = Field(
+        default=None,
+        description=(
+            'What happens when both votes approve: "merge" opens the PR ready and merges after '
+            'checks, "ask" waits for you first. Unset: merge with consensus, ask otherwise.'
+        ),
+    )
+    merge_method: MergeMethod = Field(
+        default="squash", description="How the pull request is merged: squash, merge or rebase."
+    )
     # A PR with no checks after `checks_grace_s`: stop for a person (true) or merge (false).
-    require_checks: bool = True
-    checks_grace_s: int = Field(default=120, ge=0)
-    checks_timeout_s: int = Field(default=3600, gt=0)
-    checks_poll_s: int = Field(default=30, gt=0)
+    require_checks: bool = Field(
+        default=True,
+        description="A pull request with no checks stops for a human instead of merging.",
+    )
+    checks_grace_s: int = Field(
+        default=120, ge=0, description="Seconds to wait for checks to appear on the pull request."
+    )
+    checks_timeout_s: int = Field(
+        default=3600, gt=0, description="Seconds to wait for the pull request's checks to finish."
+    )
+    checks_poll_s: int = Field(default=30, gt=0, description="Seconds between checks polls.")
 
     @model_validator(mode="after")
     def _check(self) -> ShipConfig:
@@ -372,47 +561,113 @@ CodexSandbox = Literal["read-only", "workspace-write", "danger-full-access"]
 class WorkerConfig(_Strict):
     """Settings shared by the workers that run a local CLI (Claude Code, Codex)."""
 
-    enabled: bool = True
-    command: str = Field(min_length=1)
-    timeout_s: int = Field(default=1200, gt=0)
+    enabled: bool = Field(default=True, description="Whether this worker may be given work.")
+    command: str = Field(
+        min_length=1, description="Executable to run (a name on PATH or a full path)."
+    )
+    timeout_s: int = Field(default=1200, gt=0, description="Seconds one worker call may run.")
     # Appended to every invocation, e.g. ["--max-turns", "40"].
-    extra_args: list[str] = Field(default_factory=list)
+    extra_args: list[str] = Field(
+        default_factory=list,
+        description=(
+            'Extra flags appended to every call of this worker, e.g. ["--max-turns", "40"].'
+        ),
+    )
 
 
 class ClaudeCodeConfig(WorkerConfig):
-    command: str = Field(default="claude", min_length=1)
-    permission_mode: ClaudePermissionMode = "acceptEdits"  # coder, in its own worktree
-    read_only_permission_mode: ClaudeReadOnlyPermissionMode = "dontAsk"  # all other roles
+    command: str = Field(
+        default="claude",
+        min_length=1,
+        description="Executable to run (a name on PATH or a full path).",
+    )
+    permission_mode: ClaudePermissionMode = Field(
+        default="acceptEdits",
+        description="Claude Code permission mode for the coder, working in its own worktree.",
+    )
+    read_only_permission_mode: ClaudeReadOnlyPermissionMode = Field(
+        default="dontAsk",
+        description="Permission mode for read-only roles (planner, validator, reviewer).",
+    )
     # Coder tools; unset keeps the built-in list (read/edit tools, `git status`/`git diff`).
-    allowed_tools: list[str] | None = None
+    allowed_tools: list[str] | None = Field(
+        default=None,
+        description=(
+            "Tools the coder may use; unset keeps the built-in list (read/edit tools, git "
+            "status/diff)."
+        ),
+    )
     # Claude Code's own per-attempt cap (`--max-budget-usd`); unset means budget.per_task_usd.
-    max_budget_usd: float | None = Field(default=None, gt=0)
-    bare: bool = False  # `--bare` mode; needs ANTHROPIC_API_KEY (see docs/security.md)
+    max_budget_usd: float | None = Field(
+        default=None,
+        gt=0,
+        description=(
+            "Claude Code's own spending cap per attempt, in dollars; unset means "
+            "budget.per_task_usd."
+        ),
+    )
+    bare: bool = Field(
+        default=False, description="Run Claude Code in --bare mode (needs ANTHROPIC_API_KEY)."
+    )
     # DANGEROUS: the coder runs with `--dangerously-skip-permissions` (any command, your
     # privileges). Only in a throwaway sandbox without secrets or network.
-    skip_permissions: bool = False
+    skip_permissions: bool = Field(
+        default=False,
+        description=(
+            "DANGEROUS: the coder runs with --dangerously-skip-permissions (any command, your "
+            "privileges). Only in a throwaway sandbox."
+        ),
+    )
 
 
 class CodexConfig(WorkerConfig):
-    command: str = Field(default="codex", min_length=1)
-    sandbox: CodexSandbox = "workspace-write"  # coder only; other roles are always read-only
+    command: str = Field(
+        default="codex",
+        min_length=1,
+        description="Executable to run (a name on PATH or a full path).",
+    )
+    sandbox: CodexSandbox = Field(
+        default="workspace-write",
+        description=(
+            "How much of the machine the coder may touch: read-only, workspace-write, or "
+            "danger-full-access."
+        ),
+    )
 
 
 class ApiWorkerConfig(_Strict):
     """A worker that calls an OpenAI-compatible HTTP API. The key comes from `api_key_env`."""
 
-    enabled: bool = True
-    base_url: str = Field(default=OPENROUTER_BASE_URL, min_length=1)
-    api_key_env: str = Field(default="OPENROUTER_API_KEY", pattern=_ENV_NAME)
+    enabled: bool = Field(default=True, description="Whether this worker may be given work.")
+    base_url: str = Field(
+        default=OPENROUTER_BASE_URL,
+        min_length=1,
+        description="OpenAI-compatible API endpoint the worker calls.",
+    )
+    api_key_env: str = Field(
+        default="OPENROUTER_API_KEY",
+        pattern=_ENV_NAME,
+        description="Name of the environment variable holding the API key (never the key itself).",
+    )
     # Model used when the role's `models` pool is empty; unset means such roles fail on api.
-    default_model: str | None = Field(default=None, min_length=1)
-    timeout_s: int = Field(default=600, gt=0)
+    default_model: str | None = Field(
+        default=None,
+        min_length=1,
+        description=(
+            "Model used when a role lists no models; unset means such roles cannot use this worker."
+        ),
+    )
+    timeout_s: int = Field(default=600, gt=0, description="Seconds one API call may take.")
 
 
 class WorkersConfig(_Strict):
-    claude_code: ClaudeCodeConfig = Field(default_factory=ClaudeCodeConfig)
-    codex: CodexConfig = Field(default_factory=CodexConfig)
-    api: ApiWorkerConfig = Field(default_factory=ApiWorkerConfig)
+    claude_code: ClaudeCodeConfig = Field(
+        default_factory=ClaudeCodeConfig, description="The Claude Code CLI worker."
+    )
+    codex: CodexConfig = Field(default_factory=CodexConfig, description="The Codex CLI worker.")
+    api: ApiWorkerConfig = Field(
+        default_factory=ApiWorkerConfig, description="The OpenRouter API worker."
+    )
 
     def names(self) -> list[str]:
         return list(type(self).model_fields)
@@ -444,13 +699,35 @@ class McpServerConfig(_Strict):
     jev reads their values when it starts the agent.
     """
 
-    command: str | None = Field(default=None, min_length=1)
-    args: list[str] = Field(default_factory=list)
-    env_from: list[str] = Field(default_factory=list)  # env var NAMES passed to the server
-    url: str | None = Field(default=None, pattern=r"^https?://")
-    transport: McpTransport = "http"  # remote servers only
-    bearer_token_env: str | None = Field(default=None, pattern=_ENV_NAME)
-    headers_from_env: dict[str, str] = Field(default_factory=dict)  # header -> env var NAME
+    command: str | None = Field(
+        default=None,
+        min_length=1,
+        description="Local server: the executable to start (set exactly one of command or url).",
+    )
+    args: list[str] = Field(
+        default_factory=list, description="Arguments for the local server command."
+    )
+    env_from: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Names of environment variables passed to the local server (names only, never values)."
+        ),
+    )
+    url: str | None = Field(
+        default=None,
+        pattern=r"^https?://",
+        description="Remote server: its https URL (set exactly one of command or url).",
+    )
+    transport: McpTransport = Field(default="http", description="Remote servers only: http or sse.")
+    bearer_token_env: str | None = Field(
+        default=None,
+        pattern=_ENV_NAME,
+        description="Remote servers only: name of the env var holding the bearer token.",
+    )
+    headers_from_env: dict[str, str] = Field(
+        default_factory=dict,
+        description="Remote servers only: HTTP header -> env var name holding its value.",
+    )
 
     @model_validator(mode="before")
     @classmethod
@@ -496,17 +773,29 @@ class McpServerConfig(_Strict):
 class PluginConfig(_Strict):
     """`[tools.plugins.<name>]`: a Claude Code plugin directory loaded with `--plugin-dir`."""
 
-    path: Path
+    path: Path = Field(description="Folder holding the Claude Code plugin.")
     # Permission rules the plugin's tools need in headless runs, e.g. "mcp__plugin_x_db__*".
-    allowed_tools: list[str] = Field(default_factory=list)
+    allowed_tools: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Permission patterns the plugin's tools need in headless runs, e.g. "
+            '"mcp__plugin_x_db__*".'
+        ),
+    )
 
 
 class ToolsConfig(_Strict):
     """`[tools]`: tools defined once and given to roles by name (`[roles.<role>] mcp = [...]`)."""
 
-    mcp: dict[str, McpServerConfig] = Field(default_factory=dict)
-    skills: dict[str, Path] = Field(default_factory=dict)  # name -> folder holding SKILL.md
-    plugins: dict[str, PluginConfig] = Field(default_factory=dict)
+    mcp: dict[str, McpServerConfig] = Field(
+        default_factory=dict, description="MCP servers, by name; roles pick them by name."
+    )
+    skills: dict[str, Path] = Field(
+        default_factory=dict, description="Skills, by name; each names a folder with a SKILL.md."
+    )
+    plugins: dict[str, PluginConfig] = Field(
+        default_factory=dict, description="Claude Code plugins, by name."
+    )
 
     @model_validator(mode="after")
     def _check_names(self) -> ToolsConfig:
@@ -521,22 +810,61 @@ class ToolsConfig(_Strict):
 
 
 class RoleConfig(_Strict):
-    workers: list[str] = Field(default_factory=list)
-    models: list[str] = Field(default_factory=list)  # empty means "not configured"
-    selection: Selection = "dispatcher"
+    workers: list[str] = Field(
+        default_factory=list,
+        description="Which workers may do this job (claude_code, codex, api).",
+    )
+    models: list[str] = Field(
+        default_factory=list,
+        description=(
+            'Which models the dispatcher may pick; empty means "let the worker use its default".'
+        ),
+    )
+    selection: Selection = Field(
+        default="dispatcher",
+        description='"dispatcher" lets jev choose worker/model/effort; "fixed" skips that choice.',
+    )
     # Overrides `[models] prefer_free` for this role; unset follows it.
-    prefer_free: bool | None = None
-    efforts: list[str] = Field(default_factory=lambda: ["low", "medium", "high"])
-    prefer_different_vendor_than: str | None = None
+    prefer_free: bool | None = Field(
+        default=None,
+        description="Offer free models first for this role; unset follows [models] prefer_free.",
+    )
+    efforts: list[str] = Field(
+        default_factory=lambda: ["low", "medium", "high"],
+        description="Effort levels the dispatcher may pick for this role.",
+    )
+    prefer_different_vendor_than: str | None = Field(
+        default=None,
+        description="Prefer a different vendor than the named role's, for cross-checking.",
+    )
     # Your own Jinja2 prompt template; relative paths are resolved against the repo root.
-    prompt_file: Path | None = None
+    prompt_file: Path | None = Field(
+        default=None,
+        description="Your own Jinja2 prompt template for this role, replacing the built-in one.",
+    )
     # Agent tools for this role, by name from `[tools]`.
-    mcp: list[str] = Field(default_factory=list)
-    skills: list[str] = Field(default_factory=list)
-    plugins: list[str] = Field(default_factory=list)
+    mcp: list[str] = Field(
+        default_factory=list, description="MCP servers this role may use, by name from [tools.mcp]."
+    )
+    skills: list[str] = Field(
+        default_factory=list, description="Skills this role gets, by name from [tools.skills]."
+    )
+    plugins: list[str] = Field(
+        default_factory=list,
+        description="Claude Code plugins this role gets, by name from [tools.plugins].",
+    )
     # Servers and the browser for this role (docs/servers.md); read-only roles get basic access.
-    servers: list[str] = Field(default_factory=list)
-    browser: bool = False
+    servers: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Servers this role may reach, by name from [servers.<name>]; read-only roles are "
+            "capped at basic access."
+        ),
+    )
+    browser: bool = Field(
+        default=False,
+        description="Give this role the virtual browser (needs [browser] enabled).",
+    )
 
 
 # Per-role defaults. A partial `[roles.<role>]` table is layered on top of these, so setting
@@ -552,14 +880,30 @@ _ROLE_DEFAULTS: dict[str, dict[str, Any]] = {
 
 
 class RolesConfig(_Strict):
-    planner: RoleConfig = Field(default_factory=lambda: RoleConfig(**_ROLE_DEFAULTS["planner"]))
-    validator: RoleConfig = Field(default_factory=lambda: RoleConfig(**_ROLE_DEFAULTS["validator"]))
-    coder: RoleConfig = Field(default_factory=lambda: RoleConfig(**_ROLE_DEFAULTS["coder"]))
-    reviewer: RoleConfig = Field(default_factory=lambda: RoleConfig(**_ROLE_DEFAULTS["reviewer"]))
-    code_reviewer: RoleConfig = Field(
-        default_factory=lambda: RoleConfig(**_ROLE_DEFAULTS["code_reviewer"])
+    planner: RoleConfig = Field(
+        default_factory=lambda: RoleConfig(**_ROLE_DEFAULTS["planner"]),
+        description="Turns the idea into a plan.",
     )
-    learner: RoleConfig = Field(default_factory=lambda: RoleConfig(**_ROLE_DEFAULTS["learner"]))
+    validator: RoleConfig = Field(
+        default_factory=lambda: RoleConfig(**_ROLE_DEFAULTS["validator"]),
+        description="Checks the plan before it is approved.",
+    )
+    coder: RoleConfig = Field(
+        default_factory=lambda: RoleConfig(**_ROLE_DEFAULTS["coder"]),
+        description="Writes the code for each task.",
+    )
+    reviewer: RoleConfig = Field(
+        default_factory=lambda: RoleConfig(**_ROLE_DEFAULTS["reviewer"]),
+        description="Reviews each task's diff after its tests pass.",
+    )
+    code_reviewer: RoleConfig = Field(
+        default_factory=lambda: RoleConfig(**_ROLE_DEFAULTS["code_reviewer"]),
+        description="The AI code review of the quality gate.",
+    )
+    learner: RoleConfig = Field(
+        default_factory=lambda: RoleConfig(**_ROLE_DEFAULTS["learner"]),
+        description="Distills lessons at the end of a run, when learning is on.",
+    )
 
     @model_validator(mode="before")
     @classmethod
@@ -599,28 +943,85 @@ class TrustConfig(_Strict):
     """`[trust]` (user config only): repositories whose jev.toml may change the guarded keys
     (`config.loader.GUARDED_KEYS`): absolute paths, or `"*"` for every repository."""
 
-    repos: list[str] = Field(default_factory=list)
+    repos: list[str] = Field(
+        default_factory=list,
+        description=(
+            'Repository paths whose jev.toml may change guarded keys; "*" trusts every repository.'
+        ),
+    )
+
+
+# The ~10 settings the dashboard shows first: plain-language, everyday knobs a beginner
+# can understand and safely change. Every other field stays available under the "Advanced"
+# toggle. Dotted paths into `JevConfig`; the settings page renders these in its beginner view.
+BEGINNER_FIELDS: tuple[str, ...] = (
+    "budget.per_run_usd",
+    "budget.per_task_usd",
+    "budget.max_task_attempts",
+    "quality.level",
+    "quality.score_threshold",
+    "approval.require_plan_approval",
+    "review.enabled",
+    "learning.enabled",
+    "ship.enabled",
+    "models.prefer_free",
+)
 
 
 class JevConfig(_Strict):
-    dispatcher: DispatcherConfig = Field(default_factory=DispatcherConfig)
-    budget: BudgetConfig = Field(default_factory=BudgetConfig)
-    approval: ApprovalConfig = Field(default_factory=ApprovalConfig)
-    integration: IntegrationConfig = Field(default_factory=IntegrationConfig)
-    workspace: WorkspaceConfig = Field(default_factory=WorkspaceConfig)
-    review: ReviewConfig = Field(default_factory=ReviewConfig)
-    quality: QualityConfig = Field(default_factory=QualityConfig)
-    learning: LearningConfig = Field(default_factory=LearningConfig)
-    ship: ShipConfig = Field(default_factory=ShipConfig)
-    models: ModelsConfig = Field(default_factory=ModelsConfig)
-    workers: WorkersConfig = Field(default_factory=WorkersConfig)
-    roles: RolesConfig = Field(default_factory=RolesConfig)
-    tools: ToolsConfig = Field(default_factory=ToolsConfig)
+    dispatcher: DispatcherConfig = Field(
+        default_factory=DispatcherConfig, description="Who makes the decisions."
+    )
+    budget: BudgetConfig = Field(
+        default_factory=BudgetConfig, description="Spending caps and attempt limits."
+    )
+    approval: ApprovalConfig = Field(
+        default_factory=ApprovalConfig, description="Whether a human gates the plan."
+    )
+    integration: IntegrationConfig = Field(
+        default_factory=IntegrationConfig,
+        description=("Merging task branches and testing the result."),
+    )
+    workspace: WorkspaceConfig = Field(
+        default_factory=WorkspaceConfig, description="The git worktrees task work happens in."
+    )
+    review: ReviewConfig = Field(
+        default_factory=ReviewConfig, description="Whether the reviewer checks each task's diff."
+    )
+    quality: QualityConfig = Field(
+        default_factory=QualityConfig, description="The optional quality and security gate."
+    )
+    learning: LearningConfig = Field(
+        default_factory=LearningConfig, description="Learning lessons from past runs."
+    )
+    ship: ShipConfig = Field(
+        default_factory=ShipConfig, description="Opening a GitHub pull request for a finished run."
+    )
+    models: ModelsConfig = Field(
+        default_factory=ModelsConfig, description="Free OpenRouter models."
+    )
+    workers: WorkersConfig = Field(
+        default_factory=WorkersConfig, description="The workers that run the agents."
+    )
+    roles: RolesConfig = Field(
+        default_factory=RolesConfig, description="Who does each job: planner, coder, reviewer, ..."
+    )
+    tools: ToolsConfig = Field(
+        default_factory=ToolsConfig, description="MCP servers, skills and plugins given to roles."
+    )
     # Servers, browser and workspace profiles (docs/servers.md).
-    servers: dict[str, ServerConfig] = Field(default_factory=dict)
-    browser: BrowserConfig = Field(default_factory=BrowserConfig)
-    profiles: dict[str, WorkspaceProfileConfig] = Field(default_factory=dict)
-    trust: TrustConfig = Field(default_factory=TrustConfig)
+    servers: dict[str, ServerConfig] = Field(
+        default_factory=dict, description="SSH servers agents may reach, by name."
+    )
+    browser: BrowserConfig = Field(
+        default_factory=BrowserConfig, description="The virtual browser for roles."
+    )
+    profiles: dict[str, WorkspaceProfileConfig] = Field(
+        default_factory=dict, description="Workspace profiles picked per run."
+    )
+    trust: TrustConfig = Field(
+        default_factory=TrustConfig, description="Repos allowed to change guarded keys."
+    )
 
     @property
     def plan_approval_required(self) -> bool:

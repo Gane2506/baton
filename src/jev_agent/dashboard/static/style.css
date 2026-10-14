@@ -629,6 +629,14 @@ details.entity > summary { cursor: pointer; font-size: var(--fs-13); }
 details.add-entity { border-bottom: 0; }
 details.add-entity > summary { color: var(--accent); font-weight: 500; }
 
+/* ---- settings: beginner view, advanced toggle, slider --------------------------- */
+
+.advanced-toggle label.check { gap: var(--s2); }
+.advanced-toggle .hint { margin: 0; }
+.slider-row { display: flex; align-items: center; gap: var(--s3); }
+.slider-row input[type="range"] { flex: 1; height: auto; padding: 0; accent-color: var(--accent); }
+.slider-row output { min-width: 3ch; text-align: right; font-variant-numeric: tabular-nums; }
+
 @media (max-width: 720px) {
   .field-row { grid-template-columns: 1fr; }
   .field-actions { justify-content: flex-start; }

@@ -40,7 +40,7 @@ from jev_agent.app.errors import JevError
 from jev_agent.cli.board_cmds import format_age
 from jev_agent.cli.status_cmds import format_time
 from jev_agent.config import ConfigError
-from jev_agent.config.schema import ShipMode
+from jev_agent.config.schema import BEGINNER_FIELDS, ShipMode
 from jev_agent.core.benchmarks import DEFAULT_LAST, format_value
 from jev_agent.core.chat import (
     BACKENDS,
@@ -379,6 +379,7 @@ class Dashboard:
                 "page_lede": lede,
                 "sections": secs,
                 "entities": ents,
+                "beginner_fields": BEGINNER_FIELDS,
                 "user_only": settings.USER_ONLY,
                 "user_file": user_file,
                 "summary": views.config_summary(repo),

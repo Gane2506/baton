@@ -65,15 +65,32 @@ def normalize_remote_path(value: str) -> str:
 class ServerConfig(_Strict):
     """`[servers.<name>]`: one machine agents may reach over SSH (docs/servers.md)."""
 
-    host: str
-    user: str | None = None
-    port: int | None = Field(default=None, ge=1, le=65535)
+    host: str = Field(description="Host name, IP address or ~/.ssh/config alias of the server.")
+    user: str | None = Field(default=None, description="SSH user; unset uses your local user name.")
+    port: int | None = Field(default=None, ge=1, le=65535, description="SSH port; unset means 22.")
     # A path to a private key file (never the key itself); unset: ssh-agent / ~/.ssh/config.
-    identity_file: str | None = None
-    access: AccessLevel = "basic"
-    workdir: str | None = None  # absolute path; commands run here
-    allowed_paths: list[str] = Field(default_factory=list)  # medium writes; default [workdir]
-    description: str = ""
+    identity_file: str | None = Field(
+        default=None,
+        description=(
+            "Path to a private key file (never the key itself); unset: ssh-agent or ~/.ssh/config."
+        ),
+    )
+    access: AccessLevel = Field(
+        default="basic",
+        description=(
+            'What agents may do: "basic" (read-only commands) or "medium" (limited writes).'
+        ),
+    )
+    workdir: str | None = Field(
+        default=None, description="Directory commands run in, as an absolute path on the server."
+    )
+    allowed_paths: list[str] = Field(
+        default_factory=list,
+        description="Where medium-level writes may go; unset means [workdir].",
+    )
+    description: str = Field(
+        default="", description="A note to yourself about what this server is."
+    )
 
     @field_validator("access", mode="before")
     @classmethod
@@ -121,21 +138,44 @@ class ServerConfig(_Strict):
 class BrowserConfig(_Strict):
     """`[browser]`: a headless Chromium driven through the Playwright MCP server."""
 
-    enabled: bool = False
-    headless: bool = True
+    enabled: bool = Field(
+        default=False,
+        description=(
+            "Turn on the virtual browser (headless Chromium via the Playwright MCP server)."
+        ),
+    )
+    headless: bool = Field(default=True, description="Run Chromium without a visible window.")
     # Where `jev browser install` installs Chromium: "local" or a `[servers.<name>]` name.
-    install_target: str = Field(default="local", min_length=1)
+    install_target: str = Field(
+        default="local",
+        min_length=1,
+        description='Where `jev browser install` puts Chromium: "local" or a [servers.<name>].',
+    )
 
 
 class WorkspaceProfileConfig(_Strict):
     """`[profiles.<name>]`: what a run may reach, picked with `--profile NAME`."""
 
-    servers: list[str] = Field(default_factory=list)
-    access_overrides: dict[str, AccessLevel] = Field(default_factory=dict)  # may only lower
-    browser: bool = False
-    learning: str | Literal[False] | None = None  # learning profile name, or false: no learning
-    quality: QualityLevel | None = None
-    description: str = ""
+    servers: list[str] = Field(
+        default_factory=list,
+        description="Servers a run with this profile may reach, by name from [servers.<name>].",
+    )
+    access_overrides: dict[str, AccessLevel] = Field(
+        default_factory=dict,
+        description="Lower a server's access for this profile (never raise it).",
+    )
+    browser: bool = Field(
+        default=False, description="Give runs with this profile the virtual browser."
+    )
+    learning: str | Literal[False] | None = Field(
+        default=None, description="Learning profile to use, or false for no learning."
+    )
+    quality: QualityLevel | None = Field(
+        default=None, description="Quality level for runs with this profile."
+    )
+    description: str = Field(
+        default="", description="A note to yourself about what this profile is for."
+    )
 
     @field_validator("access_overrides", mode="before")
     @classmethod
