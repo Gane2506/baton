@@ -1,87 +1,168 @@
 {% extends "base.html" %}
-{% from "macros.html" import badge, csrf_input, icon with context %}
+{% from "macros.html" import badge, icon, csrf_input with context %}
 {% block title %}Settings{% endblock %}
+
+{% macro field_input(f, field_id) %}
+  {% if f.kind == "bool" %}
+  <select id="{{ field_id }}" name="value">
+    <option value="true"{% if f.text == "true" %} selected{% endif %}>true</option>
+    <option value="false"{% if f.text != "true" %} selected{% endif %}>false</option>
+  </select>
+  {% elif f.kind == "tristate" %}
+  <select id="{{ field_id }}" name="value">
+    <option value="unset"{% if not f.text %} selected{% endif %}>default (unset)</option>
+    <option value="true"{% if f.text == "true" %} selected{% endif %}>true</option>
+    <option value="false"{% if f.text == "false" %} selected{% endif %}>false</option>
+  </select>
+  {% elif f.kind == "enum" %}
+  <select id="{{ field_id }}" name="value">
+    <option value="unset">default (unset)</option>
+    {% for c in f.choices %}<option value="{{ c }}"{% if f.text == c %} selected{% endif %}>{{ c }}</option>{% endfor %}
+  </select>
+  {% elif f.kind == "list" %}
+  <textarea id="{{ field_id }}" name="value" rows="3" placeholder="one per line">{{ f.text }}</textarea>
+  {% elif f.kind == "weights" %}
+  <div class="weights">
+    {% for name, value in f.parts %}
+    <label class="check small"><span class="mono">{{ name }}</span>
+      <input type="number" step="0.01" min="0" max="1" name="w_{{ name }}" value="{{ value }}">
+    </label>
+    {% endfor %}
+  </div>
+  {% elif f.kind in ("int", "float") %}
+  <input id="{{ field_id }}" type="number"{% if f.kind == "float" %} step="any"{% endif %} name="value" value="{{ f.text }}">
+  {% else %}
+  <input id="{{ field_id }}" type="text" name="value" value="{{ f.text }}">
+  {% endif %}
+{% endmacro %}
+
 {% block content %}
 <div class="page-head">
   <div class="titles">
     <h1>Settings</h1>
-    <p class="lede">Edit this repository's <code>jev.toml</code>. You see the diff before anything is written.</p>
+    <p class="lede">Everything in <code>jev.toml</code> and your user config, editable here. A
+    change saves to the repo's <code>jev.toml</code> unless the row says otherwise; keys that
+    decide where API keys go, which commands run and which tools agents get need the repo
+    trusted (see Trust) or a save to the user config (<span class="mono">{{ user_file }}</span>).</p>
   </div>
 </div>
-<div class="settings-layout">
-<nav class="settings-nav" aria-label="Setting sections">
-  <p class="settings-nav-label">jev.toml</p>
-  <ul>
-  {% for section in sections %}<li><a href="#s-{{ section.id }}">{{ section.title }}</a></li>{% endfor %}
-  </ul>
-  <p class="settings-nav-label">Read-only</p>
-  <ul>
-    <li><a href="#effective">Effective config</a></li>
-    <li><a href="#env">Environment variables</a></li>
-    <li><a href="#doctor">Doctor</a></li>
-    <li><a href="#dashboard">This dashboard</a></li>
-  </ul>
-</nav>
-<div class="settings-main">
-<p class="hint settings-intro">Changes go to this repository's <code>jev.toml</code> (comments and layout are kept) after you
-check the diff. Each field shows where its value comes from: the built-in <em>default</em>, your <em>user config</em>,
-or <em>jev.toml</em>. <em>Reset</em> removes the key from <code>jev.toml</code>, so your user config or the default
-applies again. Keys that decide where API keys go and what agents can run, and your user config, are not editable
-here (docs/security.md).</p>
 
-{% if plan and plan.errors %}
-<div class="flash error" role="alert">{{ icon("i-alert", "sm") }}<div>Not saved, nothing was written:{% for e in plan.errors %}<pre>{{ e }}</pre>{% endfor %}</div></div>
-{% elif plan and plan.field_errors %}
-<div class="flash error" role="alert">{{ icon("i-alert", "sm") }}<span>Not saved, nothing was written: fix the fields marked below.</span></div>
-{% endif %}
-
-<form method="post" action="/settings/preview" class="settings-form">
-  {{ csrf_input() }}
-  {% for section in sections %}
-  <section class="panel" id="s-{{ section.id }}">
-    <h2>{{ section.title }}</h2>
-    {% for f in section.fields %}
-    {% set id = "f-" ~ f.spec.key | replace(".", "-") %}
-    <div class="setting{% if f.error %} has-error{% endif %}">
-      <div class="setting-head">
-        <label for="{{ id }}">{{ f.spec.label }}</label>
-        <code class="small muted">{{ f.spec.key }}</code>
-        {{ badge(f.source, "set" if f.source == "jev.toml" else "src") }}
-      </div>
-      <div class="setting-control">
-      {% if f.spec.kind == "toggle" and not f.spec.auto %}
-        <input type="hidden" name="{{ f.spec.key }}" value="false">
-        <label class="check"><input type="checkbox" id="{{ id }}" name="{{ f.spec.key }}" value="true"{% if f.value == "true" %} checked{% endif %}> on</label>
-      {% elif f.spec.kind in ("toggle", "choice") %}
-        <select id="{{ id }}" name="{{ f.spec.key }}">
-          {% if f.spec.auto %}<option value=""{% if f.value == "" %} selected{% endif %}>auto: {{ f.spec.auto }}</option>{% endif %}
-          {% for value, text in f.spec.options %}<option value="{{ value }}"{% if f.value == value %} selected{% endif %}>{{ text }}</option>{% endfor %}
-        </select>
-      {% elif f.spec.kind in ("number", "integer") %}
-        <input type="number" id="{{ id }}" name="{{ f.spec.key }}" value="{{ f.value }}" min="0" step="{{ 'any' if f.spec.kind == 'number' else '1' }}" inputmode="decimal">
-        {% if f.spec.unit %}<span class="small muted">{{ f.spec.unit }}</span>{% endif %}
-      {% else %}
-        <input type="text" id="{{ id }}" name="{{ f.spec.key }}" value="{{ f.value }}"{% if f.spec.kind == "names" %} placeholder="(empty)"{% endif %}>
-      {% endif %}
-      {% if f.in_repo %}
-        <label class="check small"><input type="checkbox" name="{{ reset_field }}" value="{{ f.spec.key }}"{% if f.reset %} checked{% endif %}> reset</label>
-      {% endif %}
-      </div>
-      <p class="hint">{{ f.spec.help }}</p>
-      {% if f.note %}<p class="small warn-text">{{ f.note }}</p>{% endif %}
-      {% if f.error %}<p class="small error-text" role="alert">{{ f.error }}</p>{% endif %}
-    </div>
-    {% endfor %}
-  </section>
-  {% endfor %}
-  <div class="actions settings-save">
-    <button class="primary" type="submit">Review changes</button>
-    <a class="button" href="/settings">Discard</a>
-    <span class="hint">Shows the <code>jev.toml</code> diff first; nothing is written until you confirm.</span>
+<nav class="panel tight" aria-label="Settings sections">
+  <div class="actions">
+  {% for s in sections %}<a class="button small" href="#s-{{ s.path | replace('.', '-') }}">{{ s.title }}</a>{% endfor %}
+  {% for e in entities %}<a class="button small" href="#s-{{ e.path | replace('.', '-') }}">{{ e.title }}</a>{% endfor %}
   </div>
-</form>
+</nav>
 
-<section class="panel" id="effective">
+{% for s in sections %}
+<h2 class="section" id="s-{{ s.path | replace('.', '-') }}">{{ s.title }}</h2>
+<section class="panel">
+  {% for f in s.fields %}
+  {% set field_id = "v-" ~ (f.path | replace('.', '-')) %}
+  <form class="field-row" method="post" action="/settings/set">
+    {{ csrf_input() }}
+    <input type="hidden" name="path" value="{{ f.path }}">
+    <input type="hidden" name="kind" value="{{ f.kind }}">
+    <input type="hidden" name="target" value="{{ 'user' if s.path in user_only else 'repo' }}">
+    <label for="{{ field_id }}"><span class="mono">{{ f.key }}</span>{% if f.help %}<span class="hint">{{ f.help }}</span>{% endif %}</label>
+    <div class="field-control">{{ field_input(f, field_id) }}</div>
+    <div class="field-actions">
+      {% if f.source %}{{ badge(f.source, "note") }}{% endif %}
+      <button class="small" type="submit">Save</button>
+      {% if f.source %}<button class="small" type="submit" formaction="/settings/unset" formnovalidate>Reset</button>{% endif %}
+    </div>
+  </form>
+  {% endfor %}
+  {% if s.note %}<p class="hint">{{ s.note }}</p>{% endif %}
+</section>
+{% endfor %}
+
+{% for e in entities %}
+<h2 class="section" id="s-{{ e.path | replace('.', '-') }}">{{ e.title }}</h2>
+<section class="panel">
+  <p class="hint">Saved to the repo by default; these tables need the repo trusted unless you
+  save to the user config. Names come from this table, and roles pick them by name
+  (<code>mcp = [...]</code>, <code>skills = [...]</code> under <code>[roles.*]</code>).</p>
+  {% for en in e.entities %}
+  <details class="entity">
+    <summary><span class="mono">{{ en.name }}</span> {{ badge(en.source) }}</summary>
+    {% for f in en.fields %}
+    {% set field_id = "e-" ~ (e.path | replace('.', '-')) ~ "-" ~ en.name ~ "-" ~ f.key %}
+    <form class="field-row" method="post" action="/settings/set">
+      {{ csrf_input() }}
+      <input type="hidden" name="path" value="{{ e.path }}.{{ en.name }}.{{ f.key }}">
+      <input type="hidden" name="kind" value="{{ f.kind }}">
+      {% if f.choices %}<input type="hidden" name="choices" value="{{ f.choices | join('|') }}">{% endif %}
+      <label for="{{ field_id }}"><span class="mono">{{ f.key }}</span>{% if f.help %}<span class="hint">{{ f.help }}</span>{% endif %}</label>
+      <div class="field-control">{{ field_input(f, field_id) }}</div>
+      <div class="field-actions">
+        <select name="target" aria-label="save to">
+          <option value="repo">repo</option>
+          <option value="user">user</option>
+        </select>
+        <button class="small" type="submit">Save</button>
+        <button class="small" type="submit" formaction="/settings/unset" formnovalidate>Unset</button>
+      </div>
+    </form>
+    {% endfor %}
+    <form class="inline" method="post" action="/settings/entity" data-confirm="Remove {{ e.path }}.{{ en.name }}?">
+      {{ csrf_input() }}
+      <input type="hidden" name="section" value="{{ e.path }}">
+      <input type="hidden" name="action" value="remove">
+      <input type="hidden" name="name" value="{{ en.name }}">
+      <select name="target" aria-label="remove from"><option value="repo">repo</option><option value="user">user</option></select>
+      <button class="small danger" type="submit">Remove {{ en.name }}</button>
+    </form>
+  </details>
+  {% else %}
+  <div class="empty-inline">No entries yet.</div>
+  {% endfor %}
+
+  <details class="entity add-entity">
+    <summary>{{ icon("i-plus", "sm") }} Add to {{ e.title }}</summary>
+    <form method="post" action="/settings/entity">
+      {{ csrf_input() }}
+      <input type="hidden" name="section" value="{{ e.path }}">
+      <input type="hidden" name="action" value="add">
+      <input type="hidden" name="keys" value="{{ e.add_fields | map(attribute='key') | join(',') }}">
+      <input type="hidden" name="kinds" value="{{ e.add_fields | map(attribute='kind') | join(',') }}">
+      <div class="form-grid">
+        <div>
+          <label for="n-{{ e.path | replace('.', '-') }}">name</label>
+          <input type="text" id="n-{{ e.path | replace('.', '-') }}" name="name" required pattern="[A-Za-z0-9][A-Za-z0-9_-]*">
+        </div>
+        <div>
+          <label for="t-{{ e.path | replace('.', '-') }}">save to</label>
+          <select id="t-{{ e.path | replace('.', '-') }}" name="target">
+            <option value="repo">repo jev.toml</option>
+            <option value="user">user config</option>
+          </select>
+        </div>
+        {% for f in e.add_fields %}
+        <div>
+          <label for="a-{{ e.path | replace('.', '-') }}-{{ f.key }}">{{ f.key }}</label>
+          {% if f.kind == "list" %}
+          <textarea id="a-{{ e.path | replace('.', '-') }}-{{ f.key }}" name="f_{{ f.key }}" rows="2" placeholder="one per line"></textarea>
+          {% elif f.kind == "enum" or f.kind == "bool" %}
+          <select id="a-{{ e.path | replace('.', '-') }}-{{ f.key }}" name="f_{{ f.key }}">
+            <option value="">(default)</option>
+            {% for c in f.choices %}<option value="{{ c }}">{{ c }}</option>{% endfor %}
+            {% if f.kind == "bool" %}<option value="true">true</option><option value="false">false</option>{% endif %}
+          </select>
+          {% else %}
+          <input id="a-{{ e.path | replace('.', '-') }}-{{ f.key }}" type="text" name="f_{{ f.key }}" placeholder="{{ f.text }}">
+          {% endif %}
+        </div>
+        {% endfor %}
+      </div>
+      <button class="primary" type="submit">Add</button>
+    </form>
+  </details>
+</section>
+{% endfor %}
+
+<h2 class="section" id="s-readonly">Read-only</h2>
+<section class="panel">
   <h2>Effective config</h2>
   <div class="table-wrap"><table>
     <tbody>
@@ -90,9 +171,9 @@ here (docs/security.md).</p>
   </table></div>
 </section>
 
-<section class="panel" id="env">
+<section class="panel">
   <h2>Environment variables</h2>
-  <p class="hint">Names only; values are never shown.</p>
+  <p class="hint">Names only; values are never shown. Keys come from your shell, never from a config file.</p>
   <div class="table-wrap"><table>
     <thead><tr><th>variable</th><th>set</th><th>used for</th></tr></thead>
     <tbody>
@@ -101,7 +182,7 @@ here (docs/security.md).</p>
   </table></div>
 </section>
 
-<section class="panel" id="doctor">
+<section class="panel">
   <h2>Doctor</h2>
   <p class="hint">The checks of <code>jev doctor</code> (local only).</p>
   <div class="table-wrap"><table>
@@ -112,13 +193,12 @@ here (docs/security.md).</p>
   </table></div>
 </section>
 
-<section class="panel" id="dashboard">
+<section class="panel">
   <h2>This dashboard</h2>
   <dl class="facts">
     <dt>Listening on</dt><dd class="mono">{{ settings.host }}:{{ settings.port }}</dd>
     <dt>Access</dt><dd>{% if settings.token %}token required{% else %}loopback only, no token{% endif %}</dd>
+    <dt>Refresh</dt><dd>{{ settings.refresh_s }}s for live regions</dd>
   </dl>
 </section>
-</div>
-</div>
 {% endblock %}

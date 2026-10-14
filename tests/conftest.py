@@ -19,7 +19,12 @@ _UNSET_ENV = ("OPENROUTER_API_KEY", "TYPESAFE_API_KEY", "JEV_FAKE_WORKERS")
 collect_ignore = (
     []
     if find_spec("starlette")
-    else ["unit/test_dashboard.py", "unit/test_dashboard_errors.py", "unit/test_dashboard_web.py"]
+    else [
+        "unit/test_dashboard.py",
+        "unit/test_dashboard_errors.py",
+        "unit/test_dashboard_web.py",
+        "unit/test_settings_editor.py",
+    ]
 )
 
 TEST_USER_CONFIG = '[dispatcher]\nprimary = "rules"\n'
