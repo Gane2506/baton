@@ -21,6 +21,7 @@ from rich.markup import escape
 from rich.prompt import Prompt
 from rich.table import Table
 
+from jev_agent.app.chat import chat_title
 from jev_agent.app.runs import start_run
 from jev_agent.cli.repo import RepoOption
 from jev_agent.cli.run_cmds import print_outcome, print_warnings
@@ -467,10 +468,10 @@ def print_chat_list(root: Path) -> None:
         return
     table = Table(title="chats")
     table.add_column("id", no_wrap=True)
-    for column in ("updated", "backend", "learning", "turns", "runs", "spent", "brief"):
+    for column in ("updated", "backend", "learning", "turns", "runs", "spent", "title"):
         table.add_column(column, overflow="fold")
     for meta in chats:
-        title = brief_title(meta.brief) or "-"
+        title = chat_title(meta, root) or "-"
         table.add_row(
             meta.chat_id,
             meta.updated_at.replace("+00:00", "Z"),

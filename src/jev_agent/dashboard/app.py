@@ -304,15 +304,21 @@ class Dashboard:
         )
 
     def chats_page(self, request: Request) -> Response:
-        return self.page(
-            request,
-            "chats.html",
-            lambda repo: {
-                "chats": views.chats(repo),
+        query = request.query_params.get("q", "")
+
+        def build(repo: views.Repo) -> dict[str, Any]:
+            rows = views.chats(repo, query)
+            return {
+                "chats": rows,
+                "q": query.strip(),
+                "busy_ids": {
+                    meta.chat_id for meta, _ in rows if self.chat_runner.busy(meta.chat_id)
+                },
                 "profiles": repo.learning.profiles(),
                 "backends": chat.backend_readiness(repo.config),
-            },
-        )
+            }
+
+        return self.page(request, "chats.html", build)
 
     def _chat_context(self, chat_id: str) -> Callable[[views.Repo], dict[str, Any]]:
         def build(repo: views.Repo) -> dict[str, Any]:
@@ -602,6 +608,26 @@ class Dashboard:
         return self.back(to)
 
     # ---- actions: chat and runs --------------------------------------------------------------
+
+    async def chat_delete(self, request: Request) -> Response:
+        """Delete a saved chat: its transcript and brief. Runs it started are kept."""
+        await checked_form(request)  # CSRF, like every other POST; the id comes from the path
+        chat_id = request.path_params["chat_id"]
+        if self.chat_runner.busy(chat_id):
+            self.flash(request, "error", f"chat {chat_id} is replying right now; wait for it")
+            return self.back("/chats")
+
+        def remove() -> None:
+            with views.open_repo(self.settings.root) as repo:
+                chat.delete_chat(repo.root, chat_id)
+
+        try:
+            await run_in_threadpool(remove)
+        except (ChatError, ConfigError) as exc:
+            self.flash(request, "error", str(exc))
+            return self.back("/chats")
+        self.flash(request, "ok", f"deleted chat {chat_id}")
+        return self.back("/chats")
 
     async def chats_new(self, request: Request) -> Response:
         """A new browser chat: the same `core.chat` session `jev chat` starts."""
@@ -972,6 +998,7 @@ def create_app(
         Route("/chats/{chat_id}/brief", dash.chat_brief, methods=["POST"]),
         Route("/chats/{chat_id}/start", dash.chat_start, methods=["POST"]),
         Route("/chats/{chat_id}/queue", dash.chat_queue, methods=["POST"]),
+        Route("/chats/{chat_id}/delete", dash.chat_delete, methods=["POST"]),
         Route("/spend", dash.spend_page),
         Route("/kpis", dash.kpis_page),
         Route("/agents", dash.agents_page),

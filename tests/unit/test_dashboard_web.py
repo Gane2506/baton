@@ -99,6 +99,27 @@ def _brief(client: TestClient, chat_id: str) -> None:
     assert job is not None and job.state == "finished" and "brief" in job.message
 
 
+def test_chat_list_has_titles_search_and_delete(client: TestClient, fixture_repo: Path) -> None:
+    chat_id = _new_chat(client)
+    _say(client, chat_id, "please add a search box")
+    listing = client.get("/chats")
+    assert chat_id in listing.text and "please add a search box" in listing.text
+    assert f'action="/chats/{chat_id}/delete"' in listing.text
+
+    other = _new_chat(client)
+    _say(client, other, "unrelated idea about ships")
+    found = client.get("/chats?q=search")
+    assert chat_id in found.text and other not in found.text
+    assert "No chats match" in client.get("/chats?q=zzz-nothing-here").text
+
+    gone = _post(client, f"/chats/{chat_id}/delete")
+    assert gone.status_code == 303
+    remaining = client.get("/chats")
+    assert f'action="/chats/{chat_id}/delete"' not in remaining.text  # the row is gone
+    assert not (fixture_repo / ".jev" / "chats" / chat_id).exists()
+    assert other in remaining.text
+
+
 def test_sidebar_offers_a_new_chat_and_the_page_has_a_form(client: TestClient) -> None:
     page = client.get("/")
     assert 'class="sidebar-new"' in page.text and "New chat" in page.text

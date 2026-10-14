@@ -19,6 +19,7 @@ from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+from jev_agent.app.chat import chat_title
 from jev_agent.app.context import FAKE_WORKERS_ENV, STATE_DB_FILENAME
 from jev_agent.app.errors import JevError
 from jev_agent.cli.board_cmds import COLUMN_FOR_STATE, COLUMNS, Card, load_board
@@ -26,7 +27,6 @@ from jev_agent.cli.doctor_cmd import Check, run_checks
 from jev_agent.cli.quality_cmds import review_text
 from jev_agent.cli.queue_cmds import item_flags
 from jev_agent.cli.status_cmds import format_answers, learning_line, quality_line
-from jev_agent.cli.text import short
 from jev_agent.config import STATE_DIRNAME, JevConfig, load_config
 from jev_agent.core.benchmarks import DEFAULT_LAST, Summary, Trend, summarize, trends
 from jev_agent.core.chat import ChatMeta, list_chats, read_transcript
@@ -463,10 +463,20 @@ def learning_view(repo: Repo, profile: str | None, include_retired: bool) -> Lea
 # ---- chats -------------------------------------------------------------------------------
 
 
-def chats(repo: Repo) -> list[tuple[ChatMeta, str]]:
-    """Saved chats, newest first, with a short title from the brief."""
+def chats(repo: Repo, query: str = "") -> list[tuple[ChatMeta, str]]:
+    """Saved chats, newest first, titled by their brief or their opening message. `query`
+    filters on title, chat id, backend and model, case-insensitively."""
+    rows = [(meta, chat_title(meta, repo.root)) for meta in list_chats(repo.root)]
+    needle = query.strip().lower()
+    if not needle:
+        return rows
     return [
-        (meta, short(meta.brief or "", 70) if meta.brief else "") for meta in list_chats(repo.root)
+        (meta, title)
+        for meta, title in rows
+        if needle in title.lower()
+        or needle in meta.chat_id.lower()
+        or needle in meta.backend.lower()
+        or needle in (meta.model or "").lower()
     ]
 
 

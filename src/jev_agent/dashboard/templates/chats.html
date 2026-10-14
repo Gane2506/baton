@@ -55,25 +55,39 @@
 </section>
 
 <h2 class="section">Saved chats</h2>
+<form class="inline" method="get" action="/chats">
+  <label class="muted" for="q">Search</label>
+  <input type="search" id="q" name="q" value="{{ q }}" placeholder="title, chat id, backend" maxlength="80">
+  <button type="submit">Search</button>
+  {% if q %}<a href="/chats">Clear</a>{% endif %}
+</form>
 {% if chats %}
 <div class="table-wrap"><table>
-  <thead><tr><th>chat</th><th>updated</th><th>backend</th><th>learning</th><th class="num">turns</th><th class="num">runs</th><th class="num">spent</th><th>brief</th></tr></thead>
+  <thead><tr><th>chat</th><th>updated</th><th>backend</th><th class="num">turns</th><th class="num">runs</th><th class="num">spent</th><th>actions</th></tr></thead>
   <tbody>
   {% for meta, title in chats %}
     <tr>
-      <td class="mono"><a href="/chats/{{ meta.chat_id }}">{{ meta.chat_id }}</a></td>
+      <td>
+        <a href="/chats/{{ meta.chat_id }}">{{ title or "Untitled chat" }}</a>
+        <div class="muted small mono">{{ meta.chat_id }}</div>
+        {% if meta.chat_id in busy_ids %}<div class="muted small">replying...</div>{% endif %}
+      </td>
       <td class="small">{{ meta.updated_at | time }}</td>
       <td>{{ meta.backend }}{% if meta.model %}<div class="muted small">{{ meta.model }}</div>{% endif %}</td>
-      <td class="small">{{ meta.learning.describe() }}</td>
       <td class="num">{{ meta.turns }}</td>
       <td class="num">{{ meta.runs | length }}</td>
-      <td class="num">{{ meta.spent_usd | usd }}</td>
-      <td class="wrap small">{{ title or "-" }}</td>
+      <td class="num">{{ meta.spent_usd | usd }}<div class="muted small">of {{ meta.budget_usd | usd }}</div></td>
+      <td>
+        <a href="/chats/{{ meta.chat_id }}">Continue</a>
+        <form class="inline" method="post" action="/chats/{{ meta.chat_id }}/delete" data-confirm="Delete chat {{ meta.chat_id }}? Its transcript and brief go away; runs it started are kept.">
+          {{ csrf_input() }}<button class="small danger" type="submit">Delete</button>
+        </form>
+      </td>
     </tr>
   {% endfor %}
   </tbody>
 </table></div>
 {% else %}
-<div class="empty"><div class="title">No saved chats</div><p>Create one above, or in a terminal with <code>jev chat</code>.</p></div>
+<div class="empty"><div class="title">{% if q %}No chats match "{{ q }}"{% else %}No saved chats{% endif %}</div><p>{% if q %}Try another word, or <a href="/chats">clear the search</a>.{% else %}Create one above, or in a terminal with <code>jev chat</code>; every session is listable here and continues where it left off.{% endif %}</p></div>
 {% endif %}
 {% endblock %}

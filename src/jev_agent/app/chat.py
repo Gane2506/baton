@@ -9,6 +9,7 @@ touches a network directly: the backends do, and `JEV_FAKE_WORKERS=1` swaps in t
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 from pathlib import Path
@@ -19,14 +20,19 @@ from jev_agent.app.jobs import run_job_coroutine
 from jev_agent.app.runs import create_run
 from jev_agent.config.schema import JevConfig
 from jev_agent.core.chat import (
+    META_FILE,
+    TRANSCRIPT_FILE,
     ApiChatBackend,
     BackendName,
     ChatBackend,
     ChatError,
     ChatLearning,
+    ChatMeta,
     ChatSession,
     ClaudeChatBackend,
     EchoChatBackend,
+    brief_title,
+    chat_dir,
     chat_lessons,
     check_learning_choice,
     effective_profile,
@@ -124,6 +130,56 @@ def create_chat(
     prompt = render_system_prompt(root, chat_lessons(active, repo.learning, repo.config), active)
     session = ChatSession.create(root, backend, prompt, choice, profile, budget_usd)
     return session.meta.chat_id
+
+
+def delete_chat(root: Path, chat_id: str) -> None:
+    """Delete a saved chat's files; refused while another process has it open (`ChatInUse`,
+    a `ChatError` — a terminal `jev chat` or a reply in flight). Runs it started are kept."""
+    with hold_chat(root, chat_id):
+        directory = chat_dir(root, chat_id)
+        if not (directory / META_FILE).is_file():
+            raise ChatError(f"no chat {chat_id!r}; `jev chat --list` shows saved chats")
+        shutil.rmtree(directory)
+
+
+# Titles in chat lists stay one line and short.
+TITLE_MAX_CHARS = 70
+
+
+def first_user_message(root: Path, chat_id: str, max_lines: int = 400) -> str | None:
+    """The opening message of a saved chat, for lists. Reads at most `max_lines` transcript
+    lines and stops at the first user turn; `None` when there is none or it cannot be read."""
+    try:
+        path = chat_dir(root, chat_id) / TRANSCRIPT_FILE
+    except ChatError:
+        return None
+    if not path.is_file():
+        return None
+    try:
+        with path.open(encoding="utf-8") as handle:
+            for index, line in enumerate(handle):
+                if index >= max_lines:
+                    break
+                try:
+                    entry = json.loads(line)
+                except ValueError:
+                    continue
+                if (
+                    isinstance(entry, dict)
+                    and entry.get("kind") == "user"
+                    and str(entry.get("text", "")).strip()
+                ):
+                    return str(entry["text"]).strip()
+    except OSError:
+        return None
+    return None
+
+
+def chat_title(meta: ChatMeta, root: Path) -> str:
+    """What to call a chat in a list: its brief, else its opening message, else ''."""
+    text = brief_title(meta.brief) or first_user_message(root, meta.chat_id) or ""
+    line = " ".join(text.split())
+    return line if len(line) <= TITLE_MAX_CHARS else line[: TITLE_MAX_CHARS - 3].rstrip() + "..."
 
 
 def turn(root: Path, chat_id: str, text: str) -> str:
