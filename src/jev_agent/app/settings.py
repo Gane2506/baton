@@ -10,6 +10,7 @@ Nothing here prints or exits; errors are strings for the caller to show.
 
 from __future__ import annotations
 
+import os
 import re
 import tomllib
 import types
@@ -578,8 +579,8 @@ def _dict_value_model(path: str) -> type[BaseModel] | None:
 
 
 def _entity_fields(item: Any) -> list[EntityField]:
-    if isinstance(item, str):  # tools.skills: name -> path
-        return [EntityField("path", "str", (), item, "a folder with a SKILL.md")]
+    if isinstance(item, (str, os.PathLike)):  # tools.skills: name -> path
+        return [EntityField("path", "str", (), str(item), "a folder with a SKILL.md")]
     fields: list[EntityField] = []
     for name, info in type(item).model_fields.items():
         kind, choices = _kind_of(name, info.annotation)
