@@ -56,7 +56,7 @@ from jev_agent.quality.models import GateResult
 from jev_agent.workers.subprocess_runner import run_command
 
 cli = CliRunner()
-SECRET = "sk-or-v1-dashboard-test-secret-0123456789"
+SECRET = "-".join(["obviously", "not", "a", "real", "credential"])
 
 
 @pytest.fixture(autouse=True)
