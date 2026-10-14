@@ -78,6 +78,8 @@ from jev_agent.dispatch.guard import GuardedDispatcher
 from jev_agent.dispatch.requests import d1_intake, d2_validator, d3_after_validation, d6_integration
 from jev_agent.dispatch.rules import RulesDispatcher
 from jev_agent.quality.levels import QualityLevel
+from jev_agent.quality.models import ScoreBreakdown
+from jev_agent.quality.scoring import SCORE_FIX_TITLE, score_fix_rounds, ship_gate_outcome
 from jev_agent.servers.profiles import snapshot, write_run_profile
 from jev_agent.workers.base import WorkerOutput
 from jev_agent.workers.openrouter_models import ModelCatalog
@@ -503,12 +505,40 @@ class Pipeline:
         if action == "ship" and outcome.quality_state == "failed":
             action = "fix_task"  # the gate is a hard limit: never ship while it blocks
         if action == "ship":
-            await self._after_ship_vote(run, result.branch)
+            await self._ship_after_score_gate(run, outcome, order)
         elif action == "fix_task" and outcome.fixable and rounds < max_rounds:
             self._add_fix_task(run, outcome)
             self._move(run.id, step_gate_target(run_autonomy_mode(run), RunState.EXECUTING))
         else:
             raise Halt(RunState.NEEDS_HUMAN, _integration_stop_reason(outcome, rounds, max_rounds))
+
+    async def _ship_after_score_gate(
+        self, run: RunRecord, outcome: IntegrationOutcome, order: list[TaskCard]
+    ) -> None:
+        """D6 voted "ship": the score gate has the last word. A score below
+        `[quality] score_threshold` sends the result back for rework, at most
+        `[quality] score_max_retries` rounds; then the run stops for a human.
+        It never ships silently below the bar."""
+        score = outcome.quality.score if outcome.quality is not None else None
+        decision = ship_gate_outcome(
+            score,
+            max_retries=self.h.config.quality.score_max_retries,
+            retry_round=score_fix_rounds(card.title for card in order),
+        )
+        if decision == "ship":
+            await self._after_ship_vote(run, outcome.result.branch)
+            return
+        assert score is not None and outcome.quality is not None
+        if decision == "stop":
+            raise Halt(
+                RunState.NEEDS_HUMAN,
+                f"ship score gate: {score.total}/100 is below the threshold "
+                f"{score.threshold} after {self.h.config.quality.score_max_retries} "
+                f"rework round(s); see `jev quality show {run.id}` and branch "
+                f"{outcome.result.branch}",
+            )
+        self._add_score_fix_task(run, outcome, score)
+        self._move(run.id, step_gate_target(run_autonomy_mode(run), RunState.EXECUTING))
 
     async def _after_ship_vote(self, run: RunRecord, branch: str) -> None:
         """D6 voted "ship": ship and merge, wait for a person, or (shipping off) end DONE."""
@@ -575,8 +605,46 @@ class Pipeline:
         else:
             assert outcome.quality is not None
             fix = quality_fix_task_card(cards, outcome.quality)
-        tasks = [*cards, fix]
-        plan = Plan(summary=run.plan.summary, tasks=tasks, risks=run.plan.risks)
+        self._append_task(run, fix)
+
+    def _add_score_fix_task(
+        self, run: RunRecord, outcome: IntegrationOutcome, score: ScoreBreakdown
+    ) -> None:
+        """Append a task asking to raise the ship score to the threshold, keeping
+        what the other tasks built."""
+        assert run.plan is not None and outcome.quality is not None
+        cards = [task.card for task in self.store.list_tasks(run.id)]
+        rounds = score_fix_rounds(card.title for card in cards)
+        weak = [
+            f"{name} ({value}/5): {score.details[name]}"
+            for name, value in sorted(score.criteria.items(), key=lambda item: item[1])
+            if value < 5
+        ]
+        lines = "\n".join(f"- {line}" for line in weak) or "- (no weak criterion recorded)"
+        description = (
+            f"After merging all tasks, the ship score gate rates the result "
+            f"{score.total}/100, below the threshold {score.threshold}. Improve the code "
+            f"so it scores at least {score.threshold}/100, keeping what the other tasks "
+            f"built:\n\n{lines}\n\nThe full report is "
+            f"`.jev/runs/<run_id>/quality/{outcome.quality.label}.md`."
+        )
+        self._append_task(
+            run,
+            TaskCard(
+                id=f"T{1 + max(int(card.id[1:]) for card in cards)}",
+                title=f"{SCORE_FIX_TITLE} (round {rounds + 1})",
+                description=description,
+                depends_on=[card.id for card in cards],
+                acceptance_criteria=[f"ship score of at least {score.threshold}/100"],
+                test_command=None,
+            ),
+        )
+
+    def _append_task(self, run: RunRecord, card: TaskCard) -> None:
+        """Append `card`, after every other task, to the run's plan and task list."""
+        assert run.plan is not None
+        cards = [task.card for task in self.store.list_tasks(run.id)]
+        plan = Plan(summary=run.plan.summary, tasks=[*cards, card], risks=run.plan.risks)
         self.store.set_run_plan(run.id, plan, run.plan_round)
         self.store.upsert_tasks(run.id, plan)
 

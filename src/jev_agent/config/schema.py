@@ -507,14 +507,34 @@ class QualityConfig(_Strict):
     )
     timeout_s: int = Field(default=600, gt=0, description="Seconds each gate tool command may run.")
     # The score the gate's code review must award (0-100) for the work to pass. A whole
-    # number so the dashboard can show it as a slider; the gate blocks below it.
+    # number so the dashboard can show it as a slider; below it the result goes back
+    # for rework instead of shipping.
     score_threshold: int = Field(
         default=85,
         ge=0,
         le=100,
         description=(
             "Minimum score out of 100 the quality gate's review must give the work to pass; below "
-            "it the gate blocks."
+            "it the result goes back for rework instead of shipping."
+        ),
+    )
+    # Rework rounds the ship score gate allows before the run stops for a human.
+    score_max_retries: int = Field(
+        default=2,
+        ge=0,
+        le=10,
+        description=(
+            "How many times a result below the score threshold goes back for rework before the "
+            "run stops for a human; the run never ships below the threshold."
+        ),
+    )
+    # Skip the ship score gate for human-authored code. The user's call: scoring is
+    # optional for human contributions, but AI-generated code is always scored.
+    score_skip_human: bool = Field(
+        default=False,
+        description=(
+            "Skip the ship score gate for human-authored code; the score is still recorded. "
+            "AI-generated code is always gated."
         ),
     )
 

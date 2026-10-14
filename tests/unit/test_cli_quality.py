@@ -57,7 +57,8 @@ def test_run_flag_status_log_and_show(repo: Path) -> None:
     assert run.state is RunState.DONE and run.quality_level == "medium"
 
     code, out = _jev(repo, "status", run_id)
-    assert code == 0 and "quality: medium; T1 #1 passed, integration #1 passed" in out
+    assert code == 0 and "quality: medium; T1 #1 passed, score " in out
+    assert "integration #1 passed, score " in out
     code, out = _jev(repo, "log", run_id)
     assert code == 0 and "quality [T1] #1 medium: passed" in out
     assert "secrets=pass" in out and "attempt code_reviewer [T1]" in out

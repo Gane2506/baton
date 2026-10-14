@@ -112,8 +112,9 @@ def learning_line(run: RunRecord) -> str:
 
 
 def quality_line(run: RunRecord, reports: list[QualityReportRecord]) -> str:
-    """`production; T1 #2 passed, integration #1 blocked (...); `jev quality show RUN``,
-    `production (no gate has run yet)`, or `none`."""
+    """`production; T1 #2 passed, score 96/85, integration #1 blocked, score 72/85 (...);
+    `jev quality show RUN``, `production (no gate has run yet)`, or `none`. The score is
+    the gate's 0-100 ship score over the `[quality] score_threshold`."""
     if run.quality_level == "none" and not reports:
         return "none"
     latest: dict[str, QualityReportRecord] = {}
@@ -129,7 +130,8 @@ def quality_line(run: RunRecord, reports: list[QualityReportRecord]) -> str:
         verdict = "blocked" if r.blocked else "passed"
         counts = r.counts()
         serious = ", ".join(f"{counts[s]} {s}" for s in ("critical", "major") if counts[s])
-        parts.append(f"{key} #{r.number} {verdict}" + (f" ({serious})" if serious else ""))
+        score = f", score {r.score.total}/{r.score.threshold}" if r.score is not None else ""
+        parts.append(f"{key} #{r.number} {verdict}{score}" + (f" ({serious})" if serious else ""))
     return f"{run.quality_level}; {', '.join(parts)}; report: `jev quality show {run.id}`"
 
 
@@ -165,12 +167,15 @@ def timeline(
 
 
 def quality_gate_line(record: QualityReportRecord) -> str:
-    """`quality [T1] #2 production: blocked (...); ruff=fail tests=pass bandit=skipped`."""
+    """`quality [T1] #2 production: blocked (...); ruff=fail tests=pass bandit=skipped;
+    score 96/85`. The score is the gate's 0-100 ship score over its threshold."""
     r = record.result
     checks = " ".join(f"{c.name}={c.status}" for c in r.checks)
     line = f"quality [{r.task_id or 'integration'}] #{r.number} {r.level}: {r.summary_line()}"
     if checks:
         line += f"; {checks}"
+    if r.score is not None:
+        line += f"; score {r.score.total}/{r.score.threshold}"
     if r.blocked:
         line += f"; blocked by: {'; '.join(r.reasons)}"
     return line

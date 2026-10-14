@@ -244,7 +244,10 @@ async def test_policy_by_level_in_a_run(make_env: Any) -> None:
     major_security = _review(("major", "security", "path traversal"))
     env: Env = make_env({"code_reviewer": major_security}, level="medium")
     run = await env.pipeline.start(_idea(env.repo))
-    assert run.state is RunState.DONE  # reported only at medium
+    # The 0-100 ship gate now applies at every level: a major security finding
+    # scores below the 85 threshold, so the run halts for a human instead of
+    # shipping (the old "reported only at medium" no longer ships it).
+    assert run.state is RunState.NEEDS_HUMAN
     env = make_env({"code_reviewer": major_security}, level="production")
     run = await env.pipeline.start(_idea(env.repo))
     assert run.state is RunState.FAILED  # blocks at production

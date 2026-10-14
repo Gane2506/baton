@@ -81,6 +81,8 @@
 # required_tools = []              # e.g. ["ruff", "gitleaks"]: missing ones fail instead of skip
 # timeout_s = 600                  # per tool command
 # score_threshold = 85             # minimum review score (0-100) for the gate to pass
+# score_max_retries = 2          # ship-score rework rounds before the run stops for a human
+# score_skip_human = false       # true: skip the ship score gate for human-authored code
 
 # Recursive learning (docs/learning.md): lessons from past runs are added to future prompts.
 # Off by default because each run then ends with one extra model call (the learner). Toggle it

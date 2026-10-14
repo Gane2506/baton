@@ -280,7 +280,9 @@ review, and blocks work that fails. Off by default.
 | `min_coverage` | unset | Minimum line coverage in percent (0-100) on the result branch. Unset: 60 at `medium`, 80 at `production` and `scalable`. Only blocks from `production`. |
 | `required_tools` | `[]` | Tool names (e.g. `["ruff", "gitleaks"]`) that must be installed: a missing one fails its check, which blocks. Other missing tools only skip their check. `jev quality checks` lists the tool names. |
 | `timeout_s` | `600` | Timeout in seconds (> 0) for each tool command. |
-| `score_threshold` | `85` | Minimum review score (0-100) for the gate to pass; work scored below it blocks. The dashboard's Settings page shows it as a slider. |
+| `score_threshold` | `85` | Minimum review score (0-100) for the work to ship; a result scored below it goes back for rework instead of shipping. The dashboard's Settings page shows it as a slider. |
+| `score_max_retries` | `2` | How many times a result below the score threshold goes back for rework before the run stops for a human; the run never ships below the threshold. |
+| `score_skip_human` | `false` | Skip the ship score gate for human-authored code (your call); the score is still recorded. AI-generated code is always gated. |
 
 Precedence for the level: the run's `--quality` flag > the queue item's `--quality` > this key.
 The level a run used is stored with it. The AI review uses `[roles.code_reviewer]`.

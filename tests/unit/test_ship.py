@@ -34,7 +34,7 @@ from jev_agent.core.ship import (
     pr_title,
 )
 from jev_agent.core.store import Store
-from jev_agent.quality.models import GateResult
+from jev_agent.quality.models import GateResult, ScoreBreakdown
 
 FAKE_GH = Path(__file__).resolve().parents[1] / "fixtures" / "gh" / "fake_gh.py"
 SHIP_TOML = '[dispatcher]\nprimary = "rules"\n[ship]\nenabled = true\n'
@@ -285,6 +285,40 @@ def test_refusals(done_run: tuple[Path, str], gh: FakeGh, monkeypatch: pytest.Mo
     code, output = _jev(repo, "ship", run_id, "--yes")
     assert code == 1 and "not installed" in output
     assert "pr create" not in gh.commands()
+
+
+def test_refuses_below_threshold_score(done_run: tuple[Path, str], gh: FakeGh) -> None:
+    """`jev ship` honors the score gate, not just blocked gates."""
+    repo, run_id = done_run
+    (repo / "jev.toml").write_text(SHIP_TOML)
+    low = ScoreBreakdown(
+        criteria={
+            "correctness": 2,
+            "safety": 2,
+            "simplicity": 2,
+            "maintainability": 2,
+            "tool_fit": 2,
+            "user_preference": 3,
+        },
+        weights={
+            "correctness": 0.30,
+            "safety": 0.20,
+            "simplicity": 0.15,
+            "maintainability": 0.15,
+            "tool_fit": 0.10,
+            "user_preference": 0.10,
+        },
+        total=44,
+        threshold=85,
+        passed=False,
+    )
+    with _store(repo) as store:
+        store.add_quality_report(
+            run_id,
+            GateResult(level="basic", scope="integration", score=low),
+        )
+    code, output = _jev(repo, "ship", run_id, "--yes")
+    assert code == 1 and "scored below the ship threshold" in output
 
 
 def test_refuses_runs_that_are_not_done(fixture_repo: Path, origin: Path, gh: FakeGh) -> None:

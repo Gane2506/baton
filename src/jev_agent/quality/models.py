@@ -75,6 +75,23 @@ def sort_findings(findings: list[Finding]) -> list[Finding]:
     return sorted(findings, key=lambda f: (severity_rank(f.severity), f.file, f.line_start or 0))
 
 
+class ScoreBreakdown(BaseModel):
+    """The 0-100 ship score of one gate run (`quality/scoring.py`), with the
+    per-criterion audit trail. Stored on the `GateResult` so every gate decision
+    is audit-logged with its breakdown."""
+
+    criteria: dict[str, int] = Field(description="1-5 per Laya criterion, the Laya scale")
+    weights: dict[str, float] = Field(description="criterion weights used; add up to 1")
+    total: int = Field(ge=0, le=100, description="weighted criteria sum x 20")
+    threshold: int = Field(ge=0, le=100, description="the `[quality] score_threshold` used")
+    passed: bool = Field(description="skipped, or total >= threshold")
+    skipped: bool = Field(default=False, description="human-authored: scored but not gated")
+    skip_reason: str = ""
+    details: dict[str, str] = Field(
+        default_factory=dict, description="why each criterion scored as it did"
+    )
+
+
 class GateResult(BaseModel):
     """One run of the gate: on a task attempt (`scope` task, `number` = attempt) or on the
     result branch (`scope` integration, `number` = integration round)."""
@@ -89,6 +106,7 @@ class GateResult(BaseModel):
     review_detail: str = ""
     blocked: bool = False
     reasons: list[str] = Field(default_factory=list)  # why it blocked
+    score: ScoreBreakdown | None = None  # the 0-100 ship score; None before scoring existed
 
     @property
     def label(self) -> str:

@@ -493,6 +493,16 @@ def prepare_ship(
                 f"the quality gate blocked run {run_id} ({', '.join(blocked)}); see "
                 f"`jev quality show {run_id}`, or set `[ship] require_quality_pass = false`"
             )
+        below_bar = [
+            f"{g.label} ({g.score.total}/{g.score.threshold})"
+            for g in latest_per_gate([r.result for r in store.list_quality_reports(run_id)])
+            if g.score is not None and not g.score.passed
+        ]
+        if below_bar:
+            raise ShipError(
+                f"run {run_id} scored below the ship threshold ({', '.join(below_bar)}); see "
+                f"`jev quality show {run_id}`, or set `[ship] require_quality_pass = false`"
+            )
     shipped = store.list_shipped_prs(run_id)
     if shipped and not force_new:
         last = shipped[-1]

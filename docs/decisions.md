@@ -2,6 +2,23 @@
 
 Deviations from [PLAN.md](../PLAN.md) and choices it left open. Newest first.
 
+## 2026-10-14: Deterministic 0-100 ship score on the Laya scale
+
+- **No second scale.** The ship score reuses the six Laya criteria and the
+  configured `[dispatcher.laya]` weights (total = weighted 1-5 sum x 20); the
+  repo already encodes those weights, so inventing another rubric failed the
+  simplicity gate.
+- **Deterministic, no LLM judge.** Every signal is static (check statuses,
+  finding severities, diff-size bands, missing tools); user preference scores a
+  neutral 3/5, documented honestly. An LLM judge would route through the
+  dispatcher anyway — static signals were enough for a gate.
+- **The gate has the last word, including `jev ship`.** Below threshold, a fix
+  task with the weak-criteria breakdown goes back to EXECUTING (bounded by
+  `[quality] score_max_retries = 2`); retries spent halts with NEEDS_HUMAN.
+  `jev ship`'s `require_quality_pass` checks the score too, so the manual path
+  cannot bypass the gate. Human contributions can skip via
+  `[quality] score_skip_human` (still scored and recorded, marked skipped).
+
 ## 2026-10-14: Preview browser ships as polling v1, agent seam left for later
 
 - **Polling, not realtime, for the agent browser preview.** The pane polls

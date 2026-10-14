@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
+from jev_agent.config.schema import LAYA_CRITERIA
 from jev_agent.quality.levels import QualityLevel, at_least
 from jev_agent.quality.models import Finding, GateResult, sort_findings
 from jev_agent.roles.schemas import SEVERITIES, ChecklistItem, FileNote
@@ -37,6 +38,58 @@ def _verdict(result: GateResult) -> str:
     if not result.blocked:
         return "**passed**"
     return "**blocked**: " + "; ".join(result.reasons)
+
+
+def _score(result: GateResult) -> list[str]:
+    """The 0-100 ship score section: total, threshold, per-criterion table, audit notes."""
+    score = result.score
+    if score is None:
+        return ["## Score", "", "Not scored (this gate ran before scoring existed).", ""]
+    if score.skipped:
+        verdict = f"**{score.total}/100** (threshold {score.threshold}): **skipped**"
+        if score.skip_reason:
+            verdict += f" ({score.skip_reason})"
+    elif score.passed:
+        verdict = f"**{score.total}/100** (threshold {score.threshold}): passed the ship gate"
+    else:
+        verdict = (
+            f"**{score.total}/100** (threshold {score.threshold}): below the ship threshold; "
+            "the result goes back for rework"
+        )
+    lines = [
+        "## Score",
+        "",
+        verdict,
+        "",
+        "| Criterion | Weight | Score (1-5) |",
+        "| --- | --- | --- |",
+    ]
+    for name in LAYA_CRITERIA:
+        label = LAYA_CRITERIA[name].split(":", 1)[0]
+        lines.append(f"| {cell(label)} | {score.weights[name]:.0%} | {score.criteria[name]} |")
+    lines += ["", "Why each criterion scored as it did:", ""]
+    lines += [f"- {cell(name)}: {cell(score.details.get(name, ''))}" for name in LAYA_CRITERIA]
+    lines.append("")
+    return lines
+
+
+def _ship_score_summary(gates: Sequence[GateResult]) -> list[str]:
+    """One line on the latest integration gate's ship score, for the run review."""
+    scored = [g for g in gates if g.scope == "integration" and g.score is not None]
+    if not scored:
+        return []
+    score = scored[-1].score
+    assert score is not None
+    if score.skipped:
+        state = f"skipped ({score.skip_reason or 'human-authored code'})"
+    elif score.passed:
+        state = "passed the ship gate"
+    else:
+        state = "below the ship threshold"
+    return [
+        f"Ship score (integration): **{score.total}/100** (threshold {score.threshold}): {state}.",
+        "",
+    ]
 
 
 def _walkthrough(notes: Sequence[tuple[str, FileNote]], with_gate: bool) -> list[str]:
@@ -123,6 +176,7 @@ def render_gate(result: GateResult) -> str:
         "",
         " ".join(summary.split()),
         "",
+        *_score(result),
         "## Walkthrough",
         "",
         *_walkthrough(notes, with_gate=False),
@@ -161,6 +215,7 @@ def render_run_review(run_id: str, level: QualityLevel, results: Sequence[GateRe
     blocked = [g for g in gates if g.blocked]
     state = f"{len(blocked)} of {len(gates)} gate(s) blocked" if blocked else "every gate passed"
     lines += ["## Summary", "", f"{state}.", ""]
+    lines += _ship_score_summary(gates)
     lines += ["| Gate | Result | Findings | AI summary |", "| --- | --- | --- | --- |"]
     for g in gates:
         counts = ", ".join(f"{n} {s}" for s, n in g.counts().items() if n) or "none"

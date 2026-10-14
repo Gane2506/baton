@@ -22,6 +22,7 @@ from jev_agent.quality.models import CheckResult, GateResult, GateScope
 from jev_agent.quality.policy import blocking_reasons
 from jev_agent.quality.report import render_gate, render_run_review
 from jev_agent.quality.review import ai_review
+from jev_agent.quality.scoring import score_gate
 from jev_agent.quality.tools import QualitySettings, ToolRunner
 from jev_agent.runlog import log_path, redact
 
@@ -98,6 +99,23 @@ async def run_gate(
     )
     reasons = blocking_reasons(level, results, result.findings())
     result = result.model_copy(update={"blocked": bool(reasons), "reasons": reasons})
+    # The 0-100 ship score (quality/scoring.py): deterministic, from this gate's
+    # checks, findings and diff. Stored on the result, so the score and its
+    # breakdown are audit-logged with the gate decision.
+    skip_human = h.config.quality.score_skip_human
+    skip_reason = "human-authored code ([quality] score_skip_human)" if skip_human else ""
+    result = result.model_copy(
+        update={
+            "score": score_gate(
+                result,
+                diff=diff,
+                weights=h.config.dispatcher.laya.weights,
+                threshold=h.config.quality.score_threshold,
+                skipped=skip_human,
+                skip_reason=skip_reason,
+            )
+        }
+    )
     path = write_reports(h, run_id, result)
     h.store.add_quality_report(run_id, result, path)
     write_run_review(h, run_id)
