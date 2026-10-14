@@ -34,6 +34,7 @@
   <a href="#documentation">Docs</a> ·
   <a href="docs/config.md">Configuration</a> ·
   <a href="docs/security.md">Security</a> ·
+  <a href="docs/principles.md">Principles</a> ·
   <a href="CHANGELOG.md">Changelog</a> ·
   <a href="PLAN.md#14-roadmap-after-v01">Roadmap</a>
 </p>

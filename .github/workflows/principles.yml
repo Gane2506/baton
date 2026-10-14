@@ -1,0 +1,230 @@
+# Principles: the mechanically-checkable subset of docs/principles.md.
+#
+# Fast and deterministic by design: no `uv sync`, no test run, no network
+# beyond fetching the pinned ruff binary. The checks are proxies, not proofs —
+# each one names the principle it guards. Anything needing judgment stays in
+# review (see the "Mechanical enforcement" table in docs/principles.md).
+#
+# When a check's allowlist needs a new entry, add it here with a one-line
+# justification, in the same commit as the code that needs it.
+
+name: Principles
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  principles:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.3.0
+        with:
+          python-version: "3.12"
+
+      # P9 (isolated concurrent work): ruff PLW0603 forbids `global` statements.
+      # The ruff version comes from uv.lock, so this tracks the project's own pin.
+      - name: Ruff rules mapped to principles
+        run: |
+          V=$(python3 -c "import tomllib; print([p['version'] for p in tomllib.load(open('uv.lock','rb'))['package'] if p['name']=='ruff'][0])")
+          uvx "ruff@$V" check --extend-select PLW0603 src/ tests/
+
+      # P1/P2/P4/P6/P7/P8/P9/P10/P16 structural checks (stdlib only).
+      - name: Structural principle checks
+        run: |
+          python3 - <<'PYEOF'
+          import ast
+          import pathlib
+          import re
+          import sys
+
+          ROOT = pathlib.Path("src/jev_agent")
+          failures: list[str] = []
+
+          def fail(msg: str) -> None:
+              failures.append(msg)
+
+          def trees():
+              for path in sorted(ROOT.rglob("*.py")):
+                  yield path, ast.parse(path.read_text(encoding="utf-8"))
+
+          # P9: no mutable module-level run state. UPPER_CASE constants and
+          # dunder names (__all__) are data, not run state.
+          MUTABLE_CALLS = {"dict", "list", "set", "defaultdict", "Counter", "deque"}
+          for path, tree in trees():
+              for node in tree.body:
+                  if isinstance(node, ast.Assign):
+                      targets, value = node.targets, node.value
+                  elif isinstance(node, ast.AnnAssign) and node.value is not None:
+                      targets, value = [node.target], node.value
+                  else:
+                      continue
+                  names = [t.id for t in targets if isinstance(t, ast.Name)]
+                  mutable = isinstance(value, (ast.Dict, ast.List, ast.Set)) or (
+                      isinstance(value, ast.Call)
+                      and isinstance(value.func, ast.Name)
+                      and value.func.id in MUTABLE_CALLS
+                  )
+                  if mutable and any(
+                      not (n.isupper() or (n.startswith("__") and n.endswith("__")))
+                      for n in names
+                  ):
+                      fail(
+                          f"P9 {path}:{node.lineno}: module-level mutable {names} — "
+                          "run state needs an explicit owner, not module globals"
+                      )
+
+          # P4: dispatch/ decides; it does not do filesystem/process work.
+          # (dispatch/jev.py's HTTP call to the remote decision model is the
+          # documented exception: isolated in _post_with_retry, injectable.)
+          BANNED_DISPATCH_IMPORTS = {
+              "subprocess", "shutil", "tempfile", "multiprocessing", "pathlib", "socket",
+          }
+          for path, tree in trees():
+              if ROOT / "dispatch" not in path.parents:
+                  continue
+              for node in ast.walk(tree):
+                  mods: list[str] = []
+                  if isinstance(node, ast.Import):
+                      mods = [a.name.split(".")[0] for a in node.names]
+                  elif isinstance(node, ast.ImportFrom) and node.module:
+                      mods = [node.module.split(".")[0]]
+                  banned = BANNED_DISPATCH_IMPORTS.intersection(mods)
+                  if banned:
+                      fail(
+                          f"P4 {path}:{node.lineno}: dispatch/ imports {sorted(banned)} — "
+                          "decisions stay apart from filesystem/process work"
+                      )
+
+          # P1: no module-level dynamic dispatch hiding the call graph.
+          for path, tree in trees():
+              for node in tree.body:
+                  if (
+                      isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                      and node.name in ("__getattr__", "__dir__")
+                  ):
+                      fail(
+                          f"P1 {path}:{node.lineno}: module-level {node.name} — "
+                          "keep execution traceable, no dynamic dispatch"
+                      )
+
+          # P7: a blind `except Exception` must preserve the failure's meaning:
+          # re-raise, reference the caught exception, or log it with a traceback
+          # (log.exception / traceback.format_exc). Deliberate broad catches at
+          # trust boundaries are fine — they record type + message.
+          def _preserves(handler: ast.ExceptHandler) -> bool:
+              if any(isinstance(n, ast.Raise) for n in ast.walk(handler)):
+                  return True
+              loaded = {
+                  n.id
+                  for n in ast.walk(handler)
+                  if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load)
+              }
+              if handler.name and handler.name in loaded:
+                  return True
+              for n in ast.walk(handler):
+                  if (
+                      isinstance(n, ast.Call)
+                      and isinstance(n.func, ast.Attribute)
+                      and n.func.attr in ("exception", "format_exc")
+                  ):
+                      return True  # log.exception(...) records the traceback
+              return False
+
+          for path, tree in trees():
+              for node in ast.walk(tree):
+                  if not isinstance(node, ast.ExceptHandler):
+                      continue
+                  t = node.type
+                  blind = isinstance(t, ast.Name) and t.id in ("Exception", "BaseException")
+                  blind = blind or (
+                      isinstance(t, ast.Tuple)
+                      and any(
+                          isinstance(e, ast.Name) and e.id in ("Exception", "BaseException")
+                          for e in t.elts
+                      )
+                  )
+                  if blind and not _preserves(node):
+                      fail(
+                          f"P7 {path}:{node.lineno}: blind except discards the exception — "
+                          "record its type and message (or the traceback) or re-raise"
+                      )
+
+          # P2: whoever spawns a child owns its lifetime — a raw Popen must be
+          # waited on (communicate) in the same file.
+          for path, tree in trees():
+              src = ast.unparse(tree)
+              if "Popen(" in src and ".communicate(" not in src:
+                  fail(
+                      f"P2 {path}: subprocess.Popen without .communicate — "
+                      "the creator must own the child's lifetime"
+                  )
+
+          # P8: retries are bounded — time.sleep in src/ only where the wait is
+          # bounded and owned. Allowlist (justify additions here):
+          #   core/scheduler.py   — injectable sleep; lock-file retry is 20 x 0.01 s
+          #   core/migrations.py  — WAL setup retried against a monotonic deadline
+          #   cli/board_cmds.py    — user-facing watch loop, interval-flagged, Ctrl-C ends it
+          SLEEP_OK = {
+              "src/jev_agent/core/scheduler.py",
+              "src/jev_agent/core/migrations.py",
+              "src/jev_agent/cli/board_cmds.py",
+          }
+          for path, tree in trees():
+              for node in ast.walk(tree):
+                  if (
+                      isinstance(node, ast.Call)
+                      and isinstance(node.func, ast.Attribute)
+                      and node.func.attr == "sleep"
+                      and isinstance(node.func.value, ast.Name)
+                      and node.func.value.id == "time"
+                      and str(path) not in SLEEP_OK
+                  ):
+                      fail(
+                          f"P8 {path}:{node.lineno}: time.sleep outside the allowlisted "
+                          "bounded waits — bound the retry (count/deadline) and justify it here"
+                      )
+
+          # P6: validate at boundaries — no unvalidated numeric casts of env input.
+          ENV_CAST = re.compile(r"(int|float)\(\s*os\.(environ|getenv)")
+          for path, tree in trees():
+              for i, line in enumerate(
+                  path.read_text(encoding="utf-8").splitlines(), start=1
+              ):
+                  if ENV_CAST.search(line):
+                      fail(
+                          f"P6 {path}:{i}: unvalidated numeric cast of env input — "
+                          "validate at the boundary into a typed setting"
+                      )
+
+          # P10: integration tests exist at the boundaries; live tests stay opt-in.
+          if not list(pathlib.Path("tests/integration").glob("test_*.py")):
+              fail("P10 tests/integration/ has no tests — boundaries need integration tests")
+          live_src = "\n".join(
+              p.read_text(encoding="utf-8") for p in pathlib.Path("tests").rglob("*.py")
+          )
+          if "JEV_LIVE_TESTS" not in live_src:
+              fail("P10 live tests are not gated behind JEV_LIVE_TESTS")
+
+          # P16: a fresh checkout's setup/run/check commands are documented.
+          docs = (pathlib.Path("README.md").read_text(encoding="utf-8")
+                  + pathlib.Path("CONTRIBUTING.md").read_text(encoding="utf-8"))
+          for cmd in ("uv sync", "pytest", "ruff"):
+              if cmd not in docs:
+                  fail(f"P16 {cmd!r} is not documented in README.md/CONTRIBUTING.md")
+
+          if failures:
+              print("\n".join(failures))
+              sys.exit(1)
+          print(f"principles: {sum(1 for _ in trees())} modules checked, all clear")
+          PYEOF
+
+      # P12 (deliberate dependencies; reproducible installs): the lockfile
+      # matches pyproject.toml.
+      - name: Lockfile in sync
+        run: uv lock --check
