@@ -19,6 +19,10 @@ or `"openrouter"`), so the run log shows who served each decision. After both pr
 fail, the harness's guard still applies: rules for the `jev` dispatcher, a human stop for
 consensus.
 
+With `[dispatcher.cost] prefer_cheaper_leg` (the default), the cheaper leg goes first
+when both are reachable; cost changes only the order, never the availability — both legs
+are still tried, and `Decision.details["routing_reason"]` records why.
+
 The API key is read from the environment on each call and never
 appears in messages or `Decision.details`. Settings come from `[dispatcher.jev]`
 (`jev_agent.config.schema.JevSettings`).
@@ -37,7 +41,12 @@ from typing import Any
 
 import httpx
 
-from jev_agent.config.schema import NATIVE_JEV_BASE_URL, OPENROUTER_BASE_URL, JevSettings
+from jev_agent.config.schema import (
+    NATIVE_JEV_BASE_URL,
+    OPENROUTER_BASE_URL,
+    CostSettings,
+    JevSettings,
+)
 from jev_agent.core.models import Decision, DecisionPoint, DecisionRequest
 from jev_agent.dispatch.base import DispatchError
 from jev_agent.dispatch.requests import (
@@ -69,6 +78,9 @@ OPENROUTER_PROVIDER = "openrouter"
 # It travels on a copy of the response body, never on shared state, so concurrent runs
 # sharing one dispatcher cannot mix it up.
 PROVIDER_KEY = "jev_provider"
+# Key under which `post` reports why the legs ran in this order, when cost changed
+# the default native-first order. Recorded in `Decision.details["routing_reason"]`.
+ROUTING_REASON_KEY = "jev_routing_reason"
 
 # Input price for Jev 1.13 on both OpenRouter and TypeSafe; output tokens are free. Used only
 # when the response carries no `usage.cost` (native TypeSafe never does).
@@ -317,10 +329,22 @@ class JevDispatcher:
         *,
         client: httpx.AsyncClient | None = None,
         sleep: Sleep = asyncio.sleep,
+        price_per_input_token_usd: float | None = None,
     ) -> None:
         self.settings = settings or JevSettings()
         self._client = client
         self._sleep = sleep
+        # The configured price for this leg's model ([dispatcher.cost]); the module
+        # constant is only the default for callers that pass no price.
+        self._price_per_input = (
+            price_per_input_token_usd
+            if price_per_input_token_usd is not None
+            else PRICE_PER_INPUT_TOKEN_USD
+        )
+
+    def _input_price(self, provider: str | None) -> float:
+        """USD per input token for the leg that answered (`provider`)."""
+        return self._price_per_input
 
     async def decide(self, req: DecisionRequest) -> Decision:
         started = time.monotonic()
@@ -358,12 +382,16 @@ class JevDispatcher:
         if isinstance(provider, str):
             # Set by MultiProviderJevDispatcher.post: which provider answered.
             decision_details["provider"] = provider
+        routing_reason = body.get(ROUTING_REASON_KEY)
+        if isinstance(routing_reason, str):
+            # Set by MultiProviderJevDispatcher.post: why the legs ran in this order.
+            decision_details["routing_reason"] = routing_reason
         return Decision(
             point=req.point,
             answers={**direct, **answers},
             dispatcher=self.name,
             model=model if isinstance(model, str) else self.settings.model,
-            cost_usd=cost_from_usage(usage),
+            cost_usd=cost_from_usage(usage, self._input_price(provider)),
             latency_ms=int((time.monotonic() - started) * 1000),
             details=decision_details,
         )
@@ -503,12 +531,18 @@ class JevDispatcher:
 
 
 class MultiProviderJevDispatcher(JevDispatcher):
-    """Jev with no single-provider dependency: native TypeSafe first, then via OpenRouter.
+    """Jev with no single-provider dependency: native TypeSafe and OpenRouter back each other.
 
-    Every `post` tries the native TypeSafe API first. Only when that provider fails to
-    serve the request (unreachable, timed out, rate-limited, auth or key problems) is the
-    same payload sent to Jev through OpenRouter. Failures that would hit both providers
-    identically (oversized state, a rejected payload) raise at once instead.
+    Every `post` tries one leg first and, only when that provider fails to serve the
+    request (unreachable, timed out, rate-limited, auth or key problems), sends the same
+    payload to the other leg. Failures that would hit both providers identically
+    (oversized state, a rejected payload) raise at once instead.
+
+    Which leg goes first is cost-aware: with `[dispatcher.cost] prefer_cheaper_leg` (the
+    default) the cheaper leg leads when both are reachable. Cost never removes a leg and
+    never lowers the quality bar — the confidence gate and the guard's rules fallback
+    apply whichever leg answers. Every cost-influenced ordering is info-logged with its
+    reason and recorded in `Decision.details["routing_reason"]`.
 
     This is a `JevDispatcher`, so the consensus dispatcher uses it unchanged for both the
     Jev and the Laya vote. `Decision.details["provider"]` records who answered, and every
@@ -522,31 +556,113 @@ class MultiProviderJevDispatcher(JevDispatcher):
         *,
         client: httpx.AsyncClient | None = None,
         sleep: Sleep = asyncio.sleep,
+        cost: CostSettings | None = None,
     ) -> None:
         native_settings = native or JevSettings.for_native()
+        self._cost = cost if cost is not None else CostSettings()
+        self._leg_prices = {
+            NATIVE_PROVIDER: self._cost.native_price_per_million / 1_000_000,
+            OPENROUTER_PROVIDER: self._cost.openrouter_price_per_million / 1_000_000,
+        }
         # `settings` is the native one, so `build_payload` and the confidence gate behave
         # exactly as a native `JevDispatcher`; the OpenRouter leg rebuilds only the model.
-        super().__init__(settings=native_settings, client=client, sleep=sleep)
-        self._native = JevDispatcher(native_settings, client=client, sleep=sleep)
-        self._openrouter = JevDispatcher(openrouter or JevSettings(), client=client, sleep=sleep)
+        super().__init__(
+            settings=native_settings,
+            client=client,
+            sleep=sleep,
+            price_per_input_token_usd=self._leg_prices[NATIVE_PROVIDER],
+        )
+        self._native = JevDispatcher(
+            native_settings,
+            client=client,
+            sleep=sleep,
+            price_per_input_token_usd=self._leg_prices[NATIVE_PROVIDER],
+        )
+        self._openrouter = JevDispatcher(
+            openrouter or JevSettings(),
+            client=client,
+            sleep=sleep,
+            price_per_input_token_usd=self._leg_prices[OPENROUTER_PROVIDER],
+        )
+
+    def _input_price(self, provider: str | None) -> float:
+        """USD per input token for the leg that answered (`provider`)."""
+        if provider in self._leg_prices:
+            return self._leg_prices[provider]
+        return self._price_per_input
+
+    def _ordered_legs(self) -> list[tuple[str, JevDispatcher]]:
+        """Legs to try, in order. The cheaper keyed leg goes first when configured.
+
+        Keyless legs sort last, so a missing key fails over exactly as before; on equal
+        prices the sort is stable and native stays first. The chain itself — both legs,
+        then the harness guard — never changes.
+        """
+        legs = [
+            (NATIVE_PROVIDER, self._native, self._leg_prices[NATIVE_PROVIDER]),
+            (OPENROUTER_PROVIDER, self._openrouter, self._leg_prices[OPENROUTER_PROVIDER]),
+        ]
+        if not self._cost.prefer_cheaper_leg:
+            return [(name, dispatcher) for name, dispatcher, _ in legs]
+        keyed = [(name, d, price) for name, d, price in legs if _leg_key_set(d)]
+        keyless = [(name, d) for name, d, _ in legs if not _leg_key_set(d)]
+        keyed.sort(key=lambda item: item[2])
+        return [(name, d) for name, d, _ in keyed] + keyless
+
+    def _routing_reason(self, ordered: list[tuple[str, JevDispatcher]]) -> str | None:
+        """Why the legs run in this order, when cost changed the default native-first."""
+        if not self._cost.prefer_cheaper_leg or ordered[0][0] == NATIVE_PROVIDER:
+            return None
+        first, second = ordered[0][0], ordered[1][0]
+        cheap = self._leg_prices[first] * 1_000_000
+        pricey = self._leg_prices[second] * 1_000_000
+        return (
+            f"cheaper leg first: {first} ${cheap:g}/1M input tokens "
+            f"< {second} ${pricey:g}/1M ([dispatcher.cost])"
+        )
 
     async def post(self, payload: dict[str, Any]) -> dict[str, Any]:
-        """Send one System One request, native first, then OpenRouter on provider failure."""
-        try:
-            return _tagged(await self._native.post(payload), NATIVE_PROVIDER)
-        except DispatchError as exc:
-            if not _provider_failed(exc):
-                raise
-            log.warning("jev: native TypeSafe failed (%s); trying Jev via OpenRouter", exc)
-        openrouter_payload = {**payload, "model": self._openrouter.settings.model}
-        return _tagged(await self._openrouter.post(openrouter_payload), OPENROUTER_PROVIDER)
+        """Send one System One request: the preferred leg first, the other on failure."""
+        ordered = self._ordered_legs()
+        reason = self._routing_reason(ordered)
+        if reason is not None:
+            log.info("jev: cost-aware routing: %s", reason)
+        last_error: DispatchError | None = None
+        for provider, dispatcher in ordered:
+            # The OpenRouter leg answers as its own model; the native leg keeps the
+            # payload's (native) model.
+            leg_payload = (
+                payload
+                if provider == NATIVE_PROVIDER
+                else {**payload, "model": dispatcher.settings.model}
+            )
+            try:
+                return _tagged(await dispatcher.post(leg_payload), provider, reason)
+            except DispatchError as exc:
+                if not _provider_failed(exc):
+                    raise
+                log.warning("jev: %s leg failed (%s); trying the other leg", provider, exc)
+                last_error = exc
+        # Both legs failed with provider errors: the last one carries the meaning, and
+        # the harness guard turns it into the rules fallback (or a human stop).
+        assert last_error is not None  # a leg always either answers or raises
+        raise last_error
 
 
-def _tagged(body: dict[str, Any], provider: str) -> dict[str, Any]:
+def _tagged(
+    body: dict[str, Any], provider: str, routing_reason: str | None = None
+) -> dict[str, Any]:
     """A copy of the response body marked with the provider that answered it."""
     marked = dict(body)
     marked[PROVIDER_KEY] = provider
+    if routing_reason is not None:
+        marked[ROUTING_REASON_KEY] = routing_reason
     return marked
+
+
+def _leg_key_set(dispatcher: JevDispatcher) -> bool:
+    """Whether the leg's API key env var is set (no key: it fails over, as before)."""
+    return bool(os.environ.get(dispatcher.settings.api_key_env, "").strip())
 
 
 def _provider_failed(exc: DispatchError) -> bool:
@@ -616,8 +732,11 @@ def parse_answers(
     return answers, details
 
 
-def cost_from_usage(usage: dict[str, Any] | None) -> float | None:
-    """`usage.cost` when present (OpenRouter), else input tokens times the list price."""
+def cost_from_usage(
+    usage: dict[str, Any] | None,
+    price_per_input_token_usd: float = PRICE_PER_INPUT_TOKEN_USD,
+) -> float | None:
+    """`usage.cost` when present (OpenRouter), else input tokens times the given price."""
     if not usage:
         return None
     cost = usage.get("cost")
@@ -625,7 +744,7 @@ def cost_from_usage(usage: dict[str, Any] | None) -> float | None:
         return float(cost)
     tokens = usage.get("input_tokens")
     if isinstance(tokens, int) and not isinstance(tokens, bool):
-        return tokens * PRICE_PER_INPUT_TOKEN_USD
+        return tokens * price_per_input_token_usd
     return None
 
 
