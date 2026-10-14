@@ -12,7 +12,7 @@
 
 <p>
   <a href="https://github.com/Gane2506/baton/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/Gane2506/baton/actions/workflows/ci.yml/badge.svg"></a>
-  <a href="https://github.com/Gane2506/baton/releases"><img alt="Version 0.3.0" src="https://img.shields.io/badge/version-0.3.0-orange?style=flat-square"></a>
+  <a href="https://github.com/Gane2506/baton/releases"><img alt="Version 0.4.0" src="https://img.shields.io/badge/version-0.4.0-orange?style=flat-square"></a>
   <a href="pyproject.toml"><img alt="Python 3.11 | 3.12 | 3.13" src="https://img.shields.io/badge/python-3.11%20%7C%203.12%20%7C%203.13-3776AB?style=flat-square&logo=python&logoColor=white"></a>
   <a href="LICENSE"><img alt="License: Apache-2.0" src="https://img.shields.io/badge/license-Apache--2.0-blue?style=flat-square"></a>
   <a href="https://github.com/astral-sh/ruff"><img alt="Ruff" src="https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json&style=flat-square"></a>
