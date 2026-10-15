@@ -303,6 +303,42 @@ model call (the learner) whenever there is something to learn.
 Precedence: `jev run --learning NAME` / `--no-learning` > settings from `jev learning` > this
 table > the defaults. The learner's workers and models are set in `[roles.learner]`.
 
+## `[cache]`
+
+Exact-match cache for dispatcher decisions (phase 1) and read-only role calls (phase 2;
+issue [#10](https://github.com/Gane2506/baton/issues/10)). A cache hit serves the settled
+answer without calling the model again: the decision/attempt is still recorded (with a
+`cached` badge in `jev log` and on the dashboard), it costs $0, and the saved amount shows
+on the Spend page (`jev cache stats` for the totals).
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `enabled` | `true` | Master kill-switch. `jev run --no-cache` / `jev resume --no-cache` disables it for one run. |
+| `ttl_hours` | `168` | Decision entries expire after this long (roles/chat have overrides below). |
+| `max_entries` | `10000` | LRU eviction past this many entries. |
+| `max_mb` | `256` | Evict least-recently-hit entries past this size. |
+| `cache_roles` | `["planner", "validator", "reviewer", "code_reviewer"]` | Roles whose outputs may be cached. |
+| `cli_workers` | `false` | Also cache role calls made through `claude_code`/`codex` workers. |
+| `chat` | `false` | Opt-in exact-match caching for `jev chat` (phase 4; not implemented yet). |
+| `d6_decisions` | `false` | Cache D6 ship/fix decisions. Default off: a wrong cached `ship` vote is costly. |
+
+Hard rules, enforced in code rather than config: the **coder** and **learner** roles are
+never cached, only `success` results are stored, and rules-fallback answers are never
+stored. A repo change (HEAD, diff, untracked files) or a config change (`min_confidence`,
+Laya weights, model, prompt template, lessons) is automatically a different key, so stale
+answers can't be served after the code or settings moved. `jev cache clear` flushes
+entries (`--type decisions|roles`, `--older-than HOURS`).
+
+### `[cache.semantic]` (phase 3, default off)
+
+Similarity matching for near-duplicate calls. Ships with the `Embedder` protocol and the
+stdlib SimHash backend (`embedder = "simhash"`; `"openrouter"` uses the embeddings API and
+needs `OPENROUTER_API_KEY`). Nothing is served semantically by default: `mode = "shadow"`
+measures agreement against live calls without serving (`jev cache calibrate` picks the
+thresholds from stored history first; `mode = "serve"` turns serving on for decisions —
+role outputs stay exact-match until shadow data proves them safe). Live semantic serving is
+gated on sustained ≥ 0.99 agreement (`min_agreement`); below it, serving auto-disables.
+
 ## `[ship]`
 
 `jev ship RUN` pushes a DONE run's result branch to a new branch on your remote and opens a

@@ -2,6 +2,25 @@
 
 Deviations from [PLAN.md](../PLAN.md) and choices it left open. Newest first.
 
+## 2026-10-15: Decision/role cache (#10)
+
+- Exact-match first, semantic second. Phase 1 caches settled dispatcher decisions in
+  `Harness.decide`; phase 2 caches read-only role outputs in `Harness.run_worker`. The
+  cache lives in the repo's own `.jev/state.db` (`cache_entries`, migration v16), so it is
+  repo-scoped by construction.
+- Caching sits in the harness, never inside the dispatchers: a vote is not a decision,
+  and Jev's vote and Laya's vote must always be evaluated together.
+- Hard rules in code, not config: coder and learner are never cached; only `success`
+  results are stored; rules-fallback answers are never stored; CLI workers and D6 are
+  excluded by default; `--no-cache` kills it per run.
+- Invalidation is structural: the repo fingerprint (HEAD + diff + untracked files) and
+  the config fingerprint are part of every key; volatile state is stripped so resumes hit.
+- Every hit is visible: `details.cached_from`/`cache_hit`, `[served from cache]` on worker
+  summaries, a `cached` badge in `jev log` and the dashboard, `saved_usd` on Spend.
+- Phase 3 (semantic) ships default-off: `Embedder` protocol + stdlib SimHash, `jev cache
+  calibrate` for threshold picking, shadow mode for measurement. `jev laya tune` dedupes
+  on `cached_from`.
+
 ## 2026-10-14: Cost-aware dispatch without touching the fallback chain
 
 - **Cost changes order, never availability.** With `[dispatcher.cost]
