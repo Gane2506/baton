@@ -370,6 +370,8 @@ MIGRATIONS: list[str] = [
     # invalidate automatically. `cost_usd` is the *original* call cost: a hit serves at
     # $0 and `cost_usd * hit_count` is the saved amount shown on the Spend page.
     # `key_json` carries provenance (`decision_id` / `run_id`, simhash for phase 3).
+    # `cache_shadow` holds shadow-mode measurements for semantic serving (§6): one row
+    # per would-be semantic hit, comparing the cached answer with the live one.
     """
     CREATE TABLE cache_entries (
         key_hash   TEXT PRIMARY KEY,
@@ -384,10 +386,6 @@ MIGRATIONS: list[str] = [
     );
     CREATE INDEX idx_cache_entries_expires ON cache_entries (expires_at);
     CREATE INDEX idx_cache_entries_kind ON cache_entries (kind);
-    """,
-    # 16 (cont.): shadow-mode measurements for semantic serving (issue #10 §6): one
-    # row per would-be semantic hit, comparing the cached answer with the live one.
-    """
     CREATE TABLE cache_shadow (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         key_hash TEXT NOT NULL,
