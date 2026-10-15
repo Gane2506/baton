@@ -14,6 +14,7 @@ from rich.console import Console
 from rich.markup import escape
 from rich.table import Table
 
+from jev_agent.app.ship import CHOICES, decide_ship, describe_pr
 from jev_agent.cli.repo import RepoOption
 from jev_agent.cli.run_cmds import exit_for, print_outcome, print_warnings
 from jev_agent.cli.wiring import (
@@ -47,9 +48,6 @@ from jev_agent.core.ship import (
 from jev_agent.core.store import NotFoundError, ShippedPrRecord
 
 console = Console()
-
-# `jev ship <choice> RUN`: what a person decides for a run waiting to ship (AWAITING_SHIP).
-CHOICES = ("approve", "modify", "stop")
 
 
 def ship_repo(repo: Path, *, create: bool = True) -> AbstractContextManager[RepoContext]:
@@ -147,26 +145,14 @@ def ship(
 
 def decide(choice: str, run_id: str, notes: str | None, repo: Path) -> None:
     """`jev ship approve | modify | stop RUN`, through the run's pipeline (and its lease)."""
-    if choice == "modify" and not (notes or "").strip():
-        raise fail('say what to change: `jev ship modify RUN_ID --notes "..."`')
-    if choice != "modify" and notes is not None:
-        raise fail("--notes goes with `jev ship modify RUN_ID`")
     with cli_context(repo) as ctx:
         if ctx.has_workers:
             print_warnings(ctx)
-        execute = ctx.has_workers
         try:
-            if choice == "approve":
-                record = asyncio.run(ctx.pipeline.approve(run_id, execute=execute))
-            elif choice == "modify":
-                record = asyncio.run(
-                    ctx.pipeline.request_changes(run_id, notes or "", execute=execute)
-                )
-            else:
-                record = asyncio.run(ctx.pipeline.stop_ship(run_id))
+            record = asyncio.run(decide_ship(ctx, choice, run_id, notes))
         except (NotFoundError, PipelineError, RunInUseError) as exc:
             raise fail(str(exc)) from exc
-        if not execute and choice != "stop":
+        if not ctx.has_workers and choice != "stop":
             console.print(f"Done. {escape(NO_WORKERS_MESSAGE)} Then run `jev resume {run_id}`.")
         print_outcome(record, ctx.store)
     exit_for(record)
@@ -176,12 +162,6 @@ def _quoted(command: list[str]) -> str:
     return " ".join(
         arg if arg and " " not in arg and '"' not in arg else json.dumps(arg) for arg in command
     )
-
-
-def describe_pr(pr: ShippedPrRecord) -> str:
-    number = f"PR #{pr.number}" if pr.number is not None else "a PR"
-    where = pr.url or f"{pr.repo} ({pr.branch})"
-    return f"{number}: {where}"
 
 
 def sync(run_id: str | None, all_: bool, repo: Path) -> None:

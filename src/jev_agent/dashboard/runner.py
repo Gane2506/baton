@@ -27,7 +27,7 @@ from typing import Literal
 from jev_agent.app.context import NO_WORKERS_MESSAGE, open_context, open_repo
 from jev_agent.app.jobs import STOPPED_MESSAGE, JobCancel, JobState, bind_job, run_job_coroutine
 from jev_agent.app.runs import approve_run, create_run, resume_run
-from jev_agent.cli.ship_cmds import describe_pr
+from jev_agent.app.ship import describe_pr
 from jev_agent.config.schema import ShipMode
 from jev_agent.core.pipeline import PipelineError
 from jev_agent.core.ship import Gh, prepare_ship

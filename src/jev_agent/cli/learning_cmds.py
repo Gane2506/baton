@@ -17,17 +17,35 @@ from rich.console import Console
 from rich.markup import escape
 from rich.table import Table
 
+from jev_agent.app.learning import (
+    active_profile,
+    create_profile,
+    use_learning_profile,
+)
+from jev_agent.app.learning import (
+    delete as delete_learning_profile,
+)
+from jev_agent.app.learning import (
+    disable as disable_learning_profile,
+)
+from jev_agent.app.learning import (
+    enable as enable_learning_profile,
+)
+from jev_agent.app.learning import (
+    flush as flush_learning_profile,
+)
+from jev_agent.app.learning import (
+    forget as forget_lesson,
+)
+from jev_agent.app.learning import (
+    lessons as profile_lessons,
+)
+from jev_agent.app.learning import (
+    overview as learning_overview,
+)
 from jev_agent.cli.repo import RepoOption
 from jev_agent.cli.wiring import RepoContext, fail, repo_context
-from jev_agent.core.learning import (
-    Learning,
-    LearningError,
-    delete_profile,
-    disable_learning,
-    enable_learning,
-    learning_status,
-    use_profile,
-)
+from jev_agent.core.learning import Learning, LearningError
 
 console = Console()
 
@@ -55,20 +73,21 @@ def _context(repo: Path, *, create: bool = True) -> Iterator[tuple[RepoContext, 
 
 
 def _active(ctx: RepoContext) -> str:
-    return learning_status(ctx.store, ctx.config).profile
+    return active_profile(ctx.store, ctx.config)
 
 
 @learning_app.command("list")
 def list_profiles(repo: RepoOption = Path(".")) -> None:
     """List profiles, with scope, on/off, lesson count and the active one."""
     with _context(repo, create=False) as (ctx, learning):
-        status = learning_status(ctx.store, ctx.config)
+        view = learning_overview(ctx.store, ctx.config, learning)
+        status = view.status
         state = "[green]on[/green]" if status.enabled else "off"
         console.print(
             f"learning is {state} for this repo ({status.enabled_source}); "
             f"active profile: [bold]{escape(status.profile)}[/bold] ({status.profile_source})"
         )
-        profiles = learning.profiles()
+        profiles = view.profiles
         if not profiles:
             console.print("No profiles yet. `jev learning enable` creates the active one.")
             return
@@ -97,7 +116,7 @@ def show(
     """Show a profile's lessons."""
     with _context(repo, create=False) as (ctx, learning):
         name = profile or _active(ctx)
-        lessons = learning.lessons(name, include_retired)
+        lessons = profile_lessons(learning, name, include_retired)
         if not lessons:
             console.print(f"Profile {escape(name)} has no lessons.")
             return
@@ -133,7 +152,7 @@ def create(
 ) -> None:
     """Create a profile (repo scope unless --shared)."""
     with _context(repo) as (_, learning):
-        profile = learning.create(name, shared=shared)
+        profile = create_profile(learning, name, shared=shared)
         where = learning.shared_path if shared else "this repo's .jev/state.db"
         console.print(f"Created profile {escape(profile.name)} ({profile.scope}: {where}).")
 
@@ -142,8 +161,8 @@ def create(
 def use(name: ProfileArg, repo: RepoOption = Path(".")) -> None:
     """Make a profile the active one for this repo."""
     with _context(repo) as (ctx, learning):
-        use_profile(ctx.store, learning, name)
-        status = learning_status(ctx.store, ctx.config)
+        use_learning_profile(ctx.store, learning, name)
+        status = learning_overview(ctx.store, ctx.config, learning).status
         note = "" if status.enabled else " Learning is off; `jev learning enable` turns it on."
         console.print(f"Active profile: {escape(name)}.{note}")
 
@@ -152,7 +171,7 @@ def use(name: ProfileArg, repo: RepoOption = Path(".")) -> None:
 def enable(name: OptionalProfileArg = None, repo: RepoOption = Path(".")) -> None:
     """Turn learning on for this repo (no NAME), or re-enable one profile."""
     with _context(repo) as (ctx, learning):
-        active = enable_learning(ctx.store, ctx.config, learning, name)
+        active = enable_learning_profile(ctx.store, ctx.config, learning, name)
         if name is None:
             console.print(
                 f"Learning is on for this repo, with profile {escape(active)}. Each run now "
@@ -166,7 +185,7 @@ def enable(name: OptionalProfileArg = None, repo: RepoOption = Path(".")) -> Non
 def disable(name: OptionalProfileArg = None, repo: RepoOption = Path(".")) -> None:
     """Turn learning off for this repo (no NAME), or disable one profile."""
     with _context(repo) as (ctx, learning):
-        disable_learning(ctx.store, learning, name)
+        disable_learning_profile(ctx.store, learning, name)
         if name is None:
             console.print("Learning is off for this repo. Lessons are kept.")
         else:
@@ -185,7 +204,7 @@ def flush(
         learning.db_for(target)  # unknown profile: error before asking
         if not yes and not typer.confirm(f"Delete all lessons of profile {target}?"):
             raise typer.Exit(1)
-        count = learning.flush(target)
+        count = flush_learning_profile(learning, target)
         console.print(f"Deleted {count} lesson(s) from {escape(target)}.")
 
 
@@ -193,10 +212,10 @@ def flush(
 def delete(name: ProfileArg, yes: YesOption = False, repo: RepoOption = Path(".")) -> None:
     """Delete a profile and all its lessons."""
     with _context(repo) as (ctx, learning):
-        learning.db_for(name)
+        learning.db_for(name)  # unknown profile: error before asking
         if not yes and not typer.confirm(f"Delete profile {name} and all its lessons?"):
             raise typer.Exit(1)
-        delete_profile(ctx.store, learning, name)
+        delete_learning_profile(ctx.store, learning, name)
         console.print(f"Deleted profile {escape(name)}.")
 
 
@@ -207,5 +226,5 @@ def forget(
 ) -> None:
     """Retire one lesson so it is never used again."""
     with _context(repo) as (_, learning):
-        lesson = learning.forget(lesson_id)
+        lesson = forget_lesson(learning, lesson_id)
         console.print(f"Retired {lesson.id} from {escape(lesson.profile)}.")

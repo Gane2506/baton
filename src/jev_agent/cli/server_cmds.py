@@ -15,18 +15,15 @@ from rich.markup import escape
 from rich.table import Table
 
 from jev_agent import __version__
+from jev_agent.app.profiles import describe_profile, list_profiles, set_default_profile
 from jev_agent.cli.repo import RepoOption
 from jev_agent.cli.wiring import cli_errors, fail, repo_config, repo_context, repo_root
 from jev_agent.config import STATE_DIRNAME, JevConfig
 from jev_agent.config.servers_schema import NO_PROFILE
 from jev_agent.mcp_runs import runs_mcp
 from jev_agent.servers.access import (
-    READ_ONLY_ROLES,
-    WRITE_ROLE,
     allowed_grants,
-    browser_for,
     parse_allow,
-    server_grants,
 )
 from jev_agent.servers.browser import install_argv
 from jev_agent.servers.mcp import servers_mcp
@@ -34,10 +31,7 @@ from jev_agent.servers.policy import PolicyContext, check_command
 from jev_agent.servers.profiles import (
     ProfileError,
     choose_interactively,
-    get_profile,
     repo_default,
-    set_repo_default,
-    snapshot,
 )
 from jev_agent.servers.service import ServerService
 from jev_agent.servers.ssh import SshRunner, run_process
@@ -205,21 +199,12 @@ def _confirm(yes: bool) -> bool:
 # ---- jev profile -------------------------------------------------------------------------
 
 
-def _servers_text(config: JevConfig, name: str) -> str:
-    profile = config.profiles[name]
-    parts = []
-    for server in profile.servers:
-        level = profile.access_overrides.get(server, config.servers[server].access)
-        parts.append(f"{server} ({level})")
-    return ", ".join(parts) or "none"
-
-
 @profile_app.command("list")
 def profile_list(repo: RepoOption = Path(".")) -> None:
     """List workspace profiles; the repo default is marked with *."""
     root, config = _load(repo)
-    default = repo_default(root / STATE_DIRNAME)
-    if not config.profiles:
+    profiles = list_profiles(config, root / STATE_DIRNAME)
+    if not profiles:
         console.print(
             escape("No workspace profiles. Define them in jev.toml under [profiles.NAME].")
         )
@@ -227,14 +212,13 @@ def profile_list(repo: RepoOption = Path(".")) -> None:
     table = Table(title="workspace profiles")
     for column in ("profile", "servers", "browser", "learning", "quality", "description"):
         table.add_column(column, overflow="fold")
-    for name, profile in config.profiles.items():
-        learning = "off" if profile.learning is False else (profile.learning or "-")
+    for profile in profiles:
         table.add_row(
-            escape(name + (" *" if name == default else "")),
-            escape(_servers_text(config, name)),
+            escape(profile.name + (" *" if profile.is_default else "")),
+            escape(profile.servers),
             "yes" if profile.browser else "no",
-            escape(str(learning)),
-            profile.quality or "-",
+            escape(profile.learning),
+            profile.quality,
             escape(profile.description),
         )
     console.print(table)
@@ -247,27 +231,21 @@ def profile_show(
     """Show a profile and what each role gets from it."""
     root, config = _load(repo)
     try:
-        profile = snapshot(config, name)
+        profile = describe_profile(config, root / STATE_DIRNAME, name)
     except ProfileError as exc:
         raise fail(str(exc)) from exc
-    default = repo_default(root / STATE_DIRNAME)
     console.print(
-        f"profile [bold]{escape(name)}[/bold]" + (" (repo default)" if name == default else "")
+        f"profile [bold]{escape(name)}[/bold]" + (" (repo default)" if profile.is_default else "")
     )
     if profile.description:
         console.print(f"  {escape(profile.description)}")
-    console.print(f"  servers: {escape(_servers_text(config, name))}")
-    learning = "off" if profile.learning is False else (profile.learning or "repo setting")
+    console.print(f"  servers: {escape(profile.servers)}")
     console.print(
-        f"  browser: {'yes' if profile.browser else 'no'}; learning: {escape(str(learning))}"
+        f"  browser: {'yes' if profile.browser else 'no'}; learning: {escape(profile.learning)}"
     )
-    console.print(escape(f"  quality: {profile.quality or 'config [quality] level'}"))
-    for role in (WRITE_ROLE, *sorted(READ_ONLY_ROLES - {"chat"})):
-        grants = server_grants(config, role, profile)
-        text = ", ".join(f"{s}: {lvl}" for s, lvl in grants.items()) or "no servers"
-        if browser_for(config, role, profile):
-            text += "; browser"
-        console.print(f"  {role}: {escape(text)}")
+    console.print(escape(f"  quality: {profile.quality}"))
+    for grant in profile.roles:
+        console.print(f"  {grant.role}: {escape(grant.text)}")
 
 
 @profile_app.command("use")
@@ -279,14 +257,13 @@ def profile_use(
     root, config = _load(repo)
     state_dir = root / STATE_DIRNAME
     if name == NO_PROFILE:
-        set_repo_default(state_dir, None)
+        set_default_profile(config, state_dir, None)
         console.print("No default workspace profile: runs use none unless --profile is given.")
         return
     try:
-        get_profile(config, name)
+        set_default_profile(config, state_dir, name)
     except ProfileError as exc:
         raise fail(str(exc)) from exc
-    set_repo_default(state_dir, name)
     console.print(f"Default workspace profile: {escape(name)}")
 
 

@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import datetime
 from enum import StrEnum
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, cast
 from zoneinfo import ZoneInfo
 
 import typer
@@ -13,17 +14,17 @@ from rich.console import Console
 from rich.markup import escape
 from rich.table import Table
 
+from jev_agent.app.errors import JevError
+from jev_agent.app.format import short
+from jev_agent.app.queue import QueueOptions, item_flags
 from jev_agent.cli.repo import RepoOption
 from jev_agent.cli.run_cmds import (
     AskBeforeShipOption,
     AutoShipOption,
     QualityOption,
-    quality_level,
     ship_mode_flag,
 )
-from jev_agent.cli.text import short
 from jev_agent.cli.wiring import RepoContext, fail, repo_context
-from jev_agent.config.schema import ShipMode
 from jev_agent.config.servers_schema import NO_PROFILE
 from jev_agent.core.learning import LearningError, check_profile_name
 from jev_agent.core.queue import (
@@ -42,9 +43,10 @@ from jev_agent.core.recurrence import (
     next_due,
     parse_schedule,
 )
-from jev_agent.core.store import NotFoundError, QueueItem, QueuePriority, RecurringTask
-from jev_agent.quality.levels import QualityLevel
+from jev_agent.core.store import NotFoundError, QueuePriority, RecurringTask
 from jev_agent.servers.profiles import ProfileError, get_profile
+
+__all__ = ["item_flags"]
 
 console = Console()
 
@@ -61,23 +63,6 @@ class Priority(StrEnum):
     high = "high"
     normal = "normal"
     low = "low"
-
-
-def item_flags(item: QueueItem) -> str:
-    flags = []
-    if item.plan_only:
-        flags.append("plan-only")
-    if item.no_learning:
-        flags.append("no-learning")
-    elif item.learning_profile:
-        flags.append(f"learning={item.learning_profile}")
-    if item.profile:
-        flags.append(f"profile={item.profile}")
-    if item.quality:
-        flags.append(f"quality={item.quality}")
-    if item.ship_mode:
-        flags.append("auto-ship" if item.ship_mode == "merge" else "ask-before-ship")
-    return " ".join(flags)
 
 
 def _format_local(moment: datetime, tz: ZoneInfo) -> str:
@@ -110,20 +95,13 @@ def _add_recurring(
     ctx: RepoContext,
     brief: str,
     repeat: str,
-    priority: QueuePriority,
-    plan_only: bool,
-    learning_profile: str | None,
-    no_learning: bool,
-    profile: str | None,
-    quality: QualityLevel | None,
-    ship_mode: ShipMode | None,
+    options: QueueOptions,
 ) -> None:
     """Create a recurring task (`--repeat`); mirrors add_idea's option checks."""
     text = brief.strip()
     if not text:
         raise fail("the brief is empty")
-    if learning_profile is not None and no_learning:
-        raise fail("--learning and --no-learning cannot be used together")
+    learning_profile = options.learning
     if learning_profile is not None:
         try:
             check_profile_name(learning_profile)
@@ -134,7 +112,7 @@ def _add_recurring(
                 f"no learning profile named {learning_profile!r}; "
                 f"create it with `jev learning create {learning_profile}`"
             )
-    if profile is not None and not profile.strip():
+    if options.profile is not None and not options.profile.strip():
         raise fail("--profile needs a name")
     try:
         schedule = parse_schedule(repeat)
@@ -148,13 +126,13 @@ def _add_recurring(
         schedule,
         tz_name,
         due,
-        priority=priority,
-        plan_only=plan_only,
-        learning_profile=learning_profile,
-        no_learning=no_learning,
-        profile=profile,
-        quality=quality,
-        ship_mode=ship_mode,
+        priority=cast(QueuePriority, options.priority),
+        plan_only=options.plan_only,
+        learning_profile=options.learning,
+        no_learning=options.no_learning,
+        profile=options.profile,
+        quality=options.quality,
+        ship_mode=options.ship_mode,
     )
     console.print(
         f"recurring task [bold]#{task.id}[/bold]: {escape(describe(schedule))} "
@@ -198,26 +176,29 @@ def add(
     repo: RepoOption = Path("."),
 ) -> None:
     """Add an idea to the queue, or schedule it to repeat with --repeat."""
-    level = quality_level(quality)
+    try:
+        options = QueueOptions(
+            priority=priority.value,
+            plan_only=plan_only,
+            learning=learning,
+            no_learning=no_learning,
+            profile=profile,
+            quality=quality,
+        )
+    except JevError as exc:
+        raise fail(str(exc)) from exc
     with repo_context(repo) as ctx:
-        mode = ship_mode_flag(ctx.config, auto_ship, ask_before_ship)
+        options = replace(options, ship_mode=ship_mode_flag(ctx.config, auto_ship, ask_before_ship))
         if repeat is not None:
-            _add_recurring(
-                ctx,
-                idea,
-                repeat,
-                priority.value,
-                plan_only,
-                learning,
-                no_learning,
-                profile,
-                level,
-                mode,
-            )
+            _add_recurring(ctx, idea, repeat, options)
             return
-        if profile is not None and profile.strip() and profile != NO_PROFILE:
+        if (
+            options.profile is not None
+            and options.profile.strip()
+            and options.profile != NO_PROFILE
+        ):
             try:
-                get_profile(ctx.config, profile)
+                get_profile(ctx.config, options.profile)
             except ProfileError as exc:
                 raise fail(str(exc)) from exc
         try:
@@ -225,13 +206,13 @@ def add(
                 ctx.store,
                 ctx.learning,
                 idea,
-                priority.value,
-                plan_only=plan_only,
-                learning_profile=learning,
-                no_learning=no_learning,
-                profile=profile,
-                quality=level,
-                ship_mode=mode,
+                options.priority,
+                plan_only=options.plan_only,
+                learning_profile=options.learning,
+                no_learning=options.no_learning,
+                profile=options.profile,
+                quality=options.quality,
+                ship_mode=options.ship_mode,
             )
         except QueueError as exc:
             raise fail(str(exc)) from exc

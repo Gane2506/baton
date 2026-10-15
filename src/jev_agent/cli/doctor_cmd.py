@@ -1,61 +1,54 @@
 """`jev doctor`: check git state, config validity, the dispatcher, worker CLIs, API keys and the
-agent tools (MCP servers, skills, plugins) each role is given."""
+agent tools (MCP servers, skills, plugins) each role is given.
+
+The checks live in `jev_agent.app.doctor` (issue #92); this module renders the table and
+keeps the test indirections (`which`, `ssh_runner`, `resolve_host`) that earlier tests
+patch on this module.
+"""
 
 from __future__ import annotations
 
-import os
 import shutil
 import socket
-import sqlite3
 from collections.abc import Callable
-from dataclasses import dataclass
 from pathlib import Path
-from typing import Annotated, Literal
+from typing import Annotated
 
 import typer
 from rich.console import Console
 from rich.markup import escape
 from rich.table import Table
 
-from jev_agent.cli.quality_cmds import missing_tools
-from jev_agent.cli.repo import RepoOption, find_git_root
-from jev_agent.cli.wiring import worker_readiness
-from jev_agent.config import CONFIG_FILENAME, STATE_DIRNAME, ConfigError, JevConfig, load_config
-from jev_agent.config.schema import role_can_use_free, role_prefers_free, role_uses_free
-from jev_agent.core.learning import Learning, learning_status
-from jev_agent.core.store import Store, StoreError
-from jev_agent.roles import ROLE_SCHEMAS, PromptError, load_template
-from jev_agent.runlog.redact import redact
-from jev_agent.servers.access import WRITE_ROLE
-from jev_agent.servers.audit import AuditEntry, AuditLog, audit_path
-from jev_agent.servers.browser import PLAYWRIGHT_MCP_VERSION
-from jev_agent.servers.profiles import repo_default
-from jev_agent.servers.ssh import (
-    SSH_COMMAND,
-    SshRunner,
-    SshTransport,
-    control_dir,
-    run_process,
-    ssh_options,
-)
-from jev_agent.workers.openrouter_models import ModelCatalog, cache_path
-from jev_agent.workers.tools import tools_for_role
+from jev_agent.app.doctor import Check, Status
+from jev_agent.app.doctor import run_checks as _run_checks
+from jev_agent.cli.repo import RepoOption
+from jev_agent.cli.wiring import cli_errors
+from jev_agent.servers.ssh import SshRunner, run_process
+
+__all__ = ["Check", "Status", "doctor", "resolve_host", "run_checks", "ssh_runner", "which"]
 
 console = Console()
 
 # "note" is informational, like "ok", but points at something worth knowing.
-Status = Literal["ok", "note", "warn", "fail"]
 _STYLE: dict[Status, str] = {"ok": "green", "note": "cyan", "warn": "yellow", "fail": "red"}
 
-# Indirection so tests can fake PATH lookups without real CLIs installed.
+# Indirections so tests can fake PATH lookups without real CLIs installed, and never run ssh
+# or touch DNS. `run_checks` passes them into `app.doctor.run_checks`.
 which: Callable[[str], str | None] = shutil.which
+ssh_runner: SshRunner = run_process
 
 
-@dataclass(frozen=True)
-class Check:
-    name: str
-    status: Status
-    detail: str
+def resolve_host(host: str) -> bool:
+    try:
+        socket.getaddrinfo(host, None)
+    except (OSError, UnicodeError):
+        return False
+    return True
+
+
+def run_checks(repo: Path, *, connect: bool = False) -> list[Check]:
+    """`app.doctor.run_checks`, with this module's test indirections."""
+    return _run_checks(repo, connect=connect, find=which, ssh=ssh_runner, resolve=resolve_host)
 
 
 def doctor(
@@ -66,7 +59,8 @@ def doctor(
     ] = False,
 ) -> None:
     """Check git state, config validity, worker CLIs, API keys, servers and the browser."""
-    checks = run_checks(repo, connect=connect)
+    with cli_errors():
+        checks = run_checks(repo, connect=connect)
     table = Table(title="jev doctor")
     table.add_column("check")
     table.add_column("status")
@@ -79,494 +73,3 @@ def doctor(
     console.print(table)
     if any(check.status == "fail" for check in checks):
         raise typer.Exit(1)
-
-
-def run_checks(repo: Path, *, connect: bool = False) -> list[Check]:
-    checks: list[Check] = []
-    root = find_git_root(repo)
-    if root is None:
-        root = repo.resolve()
-        checks.append(Check("git repo", "fail", f"{root} is not inside a git repository"))
-    else:
-        checks.append(Check("git repo", "ok", str(root)))
-
-    try:
-        config = load_config(root)
-    except ConfigError as exc:
-        checks.append(Check("config", "fail", str(exc)))
-        config = None
-    else:
-        source = root / CONFIG_FILENAME
-        detail = "valid" if source.exists() else f"valid (no {CONFIG_FILENAME}; using defaults)"
-        checks.append(Check("config", "ok", detail))
-
-    state_dir = root / STATE_DIRNAME
-    if state_dir.is_dir():
-        checks.append(Check(f"{STATE_DIRNAME}/", "ok", str(state_dir)))
-    else:
-        checks.append(Check(f"{STATE_DIRNAME}/", "warn", "missing; run `jev init`"))
-
-    if config is not None:
-        checks.append(_dispatcher_check(config))
-        worker_checks = _worker_checks(config, ModelCatalog.load(cache_path(root)))
-        checks.extend(worker_checks)
-        checks.append(_learning_check(config, state_dir, worker_checks))
-        checks.append(_quality_check(config, root, worker_checks))
-        checks.extend(_free_model_checks(config, root))
-        checks.extend(_prompt_checks(config, root))
-        checks.extend(_tool_checks(config, root))
-        checks.extend(_server_checks(config, state_dir, connect))
-    return checks
-
-
-# ---- servers, browser, profiles (docs/servers.md) -----------------------------------------
-
-# Indirections so tests never run ssh or touch DNS.
-ssh_runner: SshRunner = run_process
-
-
-def resolve_host(host: str) -> bool:
-    try:
-        socket.getaddrinfo(host, None)
-    except (OSError, UnicodeError):
-        return False
-    return True
-
-
-def _ssh_hostname(config: JevConfig, name: str) -> str | None:
-    """What `ssh -G HOST` (config evaluation only, no connection) says the host name is."""
-    server = config.servers[name]
-    argv = [SSH_COMMAND, "-G", *ssh_options(server, None), "--", server.host]
-    result = ssh_runner(argv, stdin=None, timeout_s=10)
-    if not result.ok:
-        return None
-    for line in result.stdout.decode("utf-8", errors="replace").splitlines():
-        key, _, value = line.partition(" ")
-        if key == "hostname":
-            return value.strip() or None
-    return None
-
-
-def _server_checks(config: JevConfig, state_dir: Path, connect: bool) -> list[Check]:
-    checks: list[Check] = []
-    if config.servers:
-        ssh_path = which(SSH_COMMAND)
-        if ssh_path is None:
-            checks.append(Check("ssh", "fail", "`ssh` not found on PATH; servers cannot be used"))
-        else:
-            checks.append(Check("ssh", "ok", ssh_path))
-        for name in config.servers:
-            checks.append(_server_check(config, name, state_dir, connect and ssh_path is not None))
-    for role in ROLE_SCHEMAS:
-        names = getattr(config.roles, role).servers
-        if names and role != WRITE_ROLE:
-            checks.append(
-                Check(
-                    f"role {role} servers",
-                    "note",
-                    f"{', '.join(names)}: capped at basic (read-only role)",
-                )
-            )
-    checks.extend(_browser_checks(config))
-    checks.append(_profiles_check(config, state_dir))
-    return checks
-
-
-def _server_check(config: JevConfig, name: str, state_dir: Path, connect: bool) -> Check:
-    server = config.servers[name]
-    label = f"server {name}"
-    about = f"access {server.access}"
-    roots = server.write_roots()
-    if server.access == "medium":
-        about += f", writes in {', '.join(roots)}" if roots else ", no allowed_paths: no writes"
-    if which(SSH_COMMAND) is None:
-        return Check(label, "warn", f"{server.host}: {about}; ssh missing")
-    hostname = _ssh_hostname(config, name)
-    if hostname is None:
-        return Check(label, "warn", f"{server.host}: `ssh -G` failed; {about}")
-    via = f"{server.host} -> {hostname}" if hostname != server.host else server.host
-    if not resolve_host(hostname):
-        return Check(label, "warn", f"{via}: does not resolve (DNS); {about}")
-    if not connect:
-        return Check(label, "ok", f"{via}: resolves; {about} (`jev doctor --connect` logs in)")
-    transport = SshTransport(server, sockets=control_dir(state_dir), runner=ssh_runner)
-    result = transport.check()
-    AuditLog(audit_path(state_dir)).write(
-        AuditEntry(
-            run_id=None, role="doctor", server=name, access=server.access, action="connect",
-            command="true", allowed=True, exit_code=result.exit_code,
-            duration_s=result.duration_s,
-        )
-    )  # fmt: skip
-    if result.ok:
-        return Check(label, "ok", f"{via}: login works (BatchMode); {about}")
-    lines = result.stderr.decode("utf-8", errors="replace").strip().splitlines()
-    err = redact(lines[-1] if lines else f"exit {result.exit_code}")
-    hint = (
-        " (host key unknown: connect once by hand to check and accept it)"
-        if "host key" in err.lower()
-        else ""
-    )
-    return Check(label, "fail", f"{via}: cannot log in: {err}{hint}")
-
-
-def _browser_checks(config: JevConfig) -> list[Check]:
-    roles = [r for r in ROLE_SCHEMAS if getattr(config.roles, r).browser]
-    profiles = [n for n, p in config.profiles.items() if p.browser]
-    if not (config.browser.enabled or roles or profiles):
-        return []
-    users = []
-    if roles:
-        users.append(f"roles: {', '.join(roles)}")
-    if profiles:
-        users.append(f"profiles (coder): {', '.join(profiles)}")
-    used_by = "; ".join(users) or "no role has browser = true"
-    if roles and not config.browser.enabled:
-        return [Check("browser", "warn", f"{used_by}, but [browser] enabled = false")]
-    npx = which("npx")
-    if npx is None:
-        return [Check("browser", "warn", f"`npx` not found on PATH (install Node.js); {used_by}")]
-    mode = "headless" if config.browser.headless else "headed (needs a display)"
-    return [
-        Check(
-            "browser",
-            "ok",
-            f"Playwright MCP {PLAYWRIGHT_MCP_VERSION}, {mode}; {used_by}; "
-            "install Chromium with `jev browser install`",
-        )
-    ]
-
-
-def _profiles_check(config: JevConfig, state_dir: Path) -> Check:
-    default = repo_default(state_dir)
-    if not config.profiles:
-        if default:
-            return Check("profiles", "warn", f".jev/profile names {default!r}, but none defined")
-        return Check("profiles", "ok", "none defined")
-    names = ", ".join(config.profiles)
-    if default and default not in config.profiles:
-        return Check("profiles", "warn", f"{names}; default {default!r} is not defined")
-    return Check("profiles", "ok", f"{names}; default: {default or 'none'}")
-
-
-def _tool_checks(config: JevConfig, root: Path) -> list[Check]:
-    """Per role: its tools, and what its workers cannot use. Per tool in use: env vars set
-    (names only, never values), `command` on PATH, skill and plugin paths present."""
-    checks: list[Check] = []
-    used_mcp: dict[str, list[str]] = {}
-    for role in ROLE_SCHEMAS:
-        role_config = getattr(config.roles, role)
-        tools = tools_for_role(config, role, root)
-        if not tools:
-            continue
-        for name in tools.mcp:
-            used_mcp.setdefault(name, []).append(role)
-        checks.append(Check(f"role {role} tools", "ok", tools.describe()))
-        unusable: list[str] = []
-        workers = [w for w in role_config.workers if config.workers.is_enabled(w)]
-        if "codex" in workers:
-            missing = [f"skill {s.name}" for s in tools.skills]
-            missing += [f"plugin {p.name}" for p in tools.plugins]
-            missing += [
-                f"mcp {n} (SSE)" for n, m in tools.mcp.items() if m.url and m.transport != "http"
-            ]
-            if missing:
-                unusable.append(f"codex cannot use {', '.join(missing)}")
-        if "api" in workers:
-            unusable.append("the api worker gets no tools")
-        if unusable:
-            checks.append(Check(f"role {role} tools", "note", "; ".join(unusable)))
-        if role != "coder" and tools.mcp:
-            checks.append(
-                Check(
-                    f"role {role} tools",
-                    "note",
-                    f"read-only role with MCP servers ({', '.join(tools.mcp)}): it can do "
-                    "whatever those servers allow, writes included; see docs/security.md",
-                )
-            )
-        for skill in tools.skills:
-            if not (skill.path / "SKILL.md").is_file():
-                checks.append(
-                    Check(f"tools.skills.{skill.name}", "fail", f"no SKILL.md in {skill.path}")
-                )
-        for plugin in tools.plugins:
-            if not plugin.path.exists():
-                checks.append(
-                    Check(f"tools.plugins.{plugin.name}", "fail", f"{plugin.path} does not exist")
-                )
-    for name, roles in used_mcp.items():
-        checks.append(_mcp_check(config, name, roles))
-    return checks
-
-
-def _mcp_check(config: JevConfig, name: str, roles: list[str]) -> Check:
-    server = config.tools.mcp[name]
-    label = f"tools.mcp.{name}"
-    problems: list[str] = []
-    if server.command is not None and which(server.command) is None:
-        problems.append(f"`{server.command}` not found on PATH")
-    unset = [var for var in server.env_names() if not os.environ.get(var, "").strip()]
-    if unset:
-        problems.append(f"{', '.join(unset)} not set")
-    if problems:
-        return Check(label, "warn", "; ".join(problems))
-    where = server.command or server.url or ""
-    env = f"; {', '.join(server.env_names())} set" if server.env_names() else ""
-    return Check(label, "ok", f"{where} (for {', '.join(roles)}){env}")
-
-
-FREE_PRIVACY_NOTE = (
-    "free models: providers serving them may log prompts or train on them; your OpenRouter "
-    "privacy settings (https://openrouter.ai/settings/privacy) decide which providers may be "
-    "used, separately for free and paid models. Prompts include your idea, plan and diffs."
-)
-
-
-def _free_model_checks(config: JevConfig, root: Path) -> list[Check]:
-    """`[models] prefer_free`, the cached model list (no network: doctor only reads the cache),
-    which roles would use free models, and the privacy note when any does."""
-    roles = [name for name, _ in config.roles.items()]
-    asking = [r for r in roles if role_uses_free(config, r)]
-    using = [r for r in asking if role_can_use_free(config, r)]
-    overrides = [
-        f"{r}={'on' if role_prefers_free(config, r) else 'off'}"
-        for r, rc in config.roles.items()
-        if rc.prefer_free is not None
-    ]
-    catalog = ModelCatalog.load(cache_path(root))
-    ttl_s = config.models.cache_ttl_hours * 3600
-    if catalog is None:
-        cache = "no model list cached (`jev models free --refresh`)"
-    else:
-        stale = ", stale" if catalog.is_stale(ttl_s) else ""
-        cache = (
-            f"{len(catalog.free())} free model(s) cached, "
-            f"fetched {catalog.age_s() / 3600:.1f}h ago{stale}"
-        )
-    prefer = "on" if config.models.prefer_free else "off"
-    detail = f"prefer_free {prefer}"
-    if overrides:
-        detail += f" (role overrides: {', '.join(overrides)})"
-    detail += f"; {cache}; roles using free models: {', '.join(using) or 'none'}"
-    status: Status = "ok"
-    if using and catalog is None:
-        status = "warn"
-        detail += '; `"free"` expands to nothing until the list is cached'
-    checks = [Check("free models", status, detail)]
-    unable = [r for r in asking if r not in using]
-    if unable:
-        checks.append(
-            Check(
-                "free models",
-                "note",
-                f"{', '.join(unable)}: free models run only on the api worker, which "
-                "these roles do not use; Claude Code and Codex keep their own models",
-            )
-        )
-    if using:
-        checks.append(Check("free models privacy", "note", FREE_PRIVACY_NOTE))
-    return checks
-
-
-def _prompt_checks(config: JevConfig, root: Path) -> list[Check]:
-    """Each custom `prompt_file` must exist and parse as a Jinja2 template (else fail).
-
-    Undefined variables only show when a run renders the template.
-    """
-    checks: list[Check] = []
-    for role in ROLE_SCHEMAS:
-        prompt_file = getattr(config.roles, role).prompt_file
-        if prompt_file is None:
-            continue
-        path = prompt_file if prompt_file.is_absolute() else root / prompt_file
-        try:
-            load_template(role, path)
-        except PromptError as exc:
-            checks.append(Check(f"role {role} prompt", "fail", exc.detail + f": {path}"))
-        else:
-            checks.append(Check(f"role {role} prompt", "ok", str(path)))
-    return checks
-
-
-def _dispatcher_check(config: JevConfig) -> Check:
-    """Which dispatcher decides, and whether Jev's key env var is set (never its value).
-
-    Without the key, consensus cannot decide at all (fail); jev falls back to rules (warn)."""
-    primary = config.dispatcher.primary
-    if primary == "rules":
-        return Check("dispatcher", "ok", "rules")
-    jev = config.dispatcher.jev
-    who = "consensus: Jev, then Laya" if primary == "consensus" else "jev"
-    where = f"{who} ({jev.model} at {jev.base_url})"
-    if os.environ.get(jev.api_key_env, "").strip():
-        return Check("dispatcher", "ok", f"{where}; {jev.api_key_env} is set")
-    if primary == "consensus":
-        return Check(
-            "dispatcher",
-            "fail",
-            f"{where}; {jev.api_key_env} is not set, so every run stops for a human at its "
-            'first decision (set it, or set `[dispatcher] primary = "rules"`)',
-        )
-    return Check(
-        "dispatcher",
-        "warn",
-        f"{where}; {jev.api_key_env} is not set, so decisions fall back to the rules dispatcher",
-    )
-
-
-def _learning_check(config: JevConfig, state_dir: Path, worker_checks: list[Check]) -> Check:
-    """On/off and where that comes from, the active profile and its lesson count. Reads the
-    repo settings only if the state database already exists (doctor never creates it)."""
-    db_path = state_dir / "state.db"
-    try:
-        if db_path.is_file():
-            with Store.open(db_path) as store:
-                status = learning_status(store, config)
-                learning = Learning.for_store(store)
-                try:
-                    profile = learning.get(status.profile)
-                finally:
-                    learning.close()
-        else:
-            status, profile = learning_status(None, config), None
-    except (StoreError, sqlite3.Error) as exc:
-        return Check("learning", "warn", f"cannot read learning settings: {exc}")
-    if profile is None:
-        about = f"profile {status.profile} (not created yet)"
-    else:
-        flag = "" if profile.enabled else ", disabled"
-        about = f"profile {profile.name} ({profile.scope}{flag}, {profile.lessons} lesson(s))"
-    if not status.enabled:
-        return Check("learning", "ok", f"off ({status.enabled_source}); {about}")
-    detail = f"on ({status.enabled_source}); {about}; each run ends with one learner call"
-    learner_ok = any(c.name == "role learner" and c.status == "ok" for c in worker_checks)
-    if not learner_ok:
-        return Check("learning", "warn", f"{detail}, but the learner role has no usable worker")
-    if profile is not None and not profile.enabled:
-        return Check("learning", "warn", f"{detail}, but the profile is disabled")
-    return Check("learning", "ok", detail)
-
-
-def _quality_check(config: JevConfig, root: Path, worker_checks: list[Check]) -> Check:
-    """The quality level and, for that level, which tools that apply here are missing."""
-    level = config.quality.level
-    if level == "none":
-        return Check("quality", "ok", "level none (task test commands only)")
-    detail = f"level {level}"
-    reviewer = any(c.name == "role code_reviewer" and c.status == "ok" for c in worker_checks)
-    if not reviewer:
-        detail += "; no worker for the AI review"
-    missing = list(dict.fromkeys(missing_tools(root, config, level)))
-    required = [t for t in missing if t in config.quality.required_tools]
-    if required:
-        return Check("quality", "fail", f"{detail}; required tools missing: {', '.join(required)}")
-    if missing:
-        return Check(
-            "quality",
-            "warn",
-            f"{detail}; not installed (their checks are skipped): {', '.join(missing)}; "
-            "see `jev quality checks`",
-        )
-    if not reviewer:
-        return Check("quality", "warn", detail)
-    return Check("quality", "ok", f"{detail}; every tool for this level is installed")
-
-
-def _permission_checks(config: JevConfig) -> list[Check]:
-    """Warn about settings that let an agent act outside its worktree's guard rails."""
-    checks: list[Check] = []
-    claude, codex = config.workers.claude_code, config.workers.codex
-    if claude.enabled and claude.skip_permissions:
-        checks.append(
-            Check(
-                "claude_code permissions",
-                "warn",
-                "skip_permissions = true: the coder runs with --dangerously-skip-permissions "
-                "and can run any command as you; use only in a throwaway sandbox",
-            )
-        )
-    if codex.enabled and codex.sandbox == "danger-full-access":
-        checks.append(
-            Check(
-                "codex sandbox",
-                "warn",
-                'sandbox = "danger-full-access": the coder runs without a sandbox; '
-                "use only in a throwaway sandbox",
-            )
-        )
-    for name, cli in (("claude_code", claude), ("codex", codex)):
-        risky = [arg for arg in cli.extra_args if "dangerous" in arg.lower()]
-        if cli.enabled and risky:
-            checks.append(
-                Check(
-                    f"{name} extra_args", "warn", f"passes {', '.join(risky)}; see docs/security.md"
-                )
-            )
-    return checks
-
-
-def _worker_checks(config: JevConfig, catalog: ModelCatalog | None) -> list[Check]:
-    """Each worker and role, by the rule runs use (`wiring.worker_readiness`, issue #19)."""
-    checks: list[Check] = []
-    readiness = worker_readiness(config, catalog, find=which)
-    workers = config.workers
-    for name, cli in (("claude_code", workers.claude_code), ("codex", workers.codex)):
-        label = f"worker {name}"
-        if not cli.enabled:
-            checks.append(Check(label, "ok", "disabled"))
-        elif name in readiness.problems:
-            checks.append(Check(label, "warn", readiness.problems[name]))
-        else:
-            checks.append(Check(label, "ok", readiness.paths[name]))
-
-    checks.extend(_permission_checks(config))
-
-    api = workers.api
-    if not api.enabled:
-        checks.append(Check("worker api", "ok", "disabled"))
-    elif "api" in readiness.problems:
-        checks.append(Check("worker api", "warn", readiness.problems["api"]))
-    else:
-        model = api.default_model or "none; roles use their `models`"
-        checks.append(
-            Check("worker api", "ok", f"{api.api_key_env} is set; default model: {model}")
-        )
-    usable = {n for n in workers.names() if workers.is_enabled(n) and readiness.ready(n)}
-
-    for role_name, role in config.roles.items():
-        candidates = [w for w in role.workers if w in usable and readiness.ready_for(role_name, w)]
-        skipped = readiness.role_problems.get(role_name, {})
-        if candidates:
-            detail = ", ".join(candidates)
-            detail += "".join(f"; {w} skipped: {why}" for w, why in skipped.items())
-            checks.append(Check(f"role {role_name}", "ok", detail))
-        elif role_name == "learner":  # only needed when learning is on
-            checks.append(
-                Check("role learner", "warn", "no usable worker; learning cannot add lessons")
-            )
-        elif role_name == "code_reviewer":  # only needed when the quality gate is on
-            status: Status = "ok" if config.quality.level == "none" else "warn"
-            checks.append(
-                Check(
-                    "role code_reviewer",
-                    status,
-                    "no usable worker; the quality gate's AI review will be skipped",
-                )
-            )
-        else:
-            detail = "no usable worker"
-            detail += "".join(f"; {w} skipped: {why}" for w, why in skipped.items())
-            checks.append(Check(f"role {role_name}", "fail", detail))
-
-    if "codex" in usable and any("codex" in role.workers for _, role in config.roles.items()):
-        checks.append(
-            Check(
-                "codex cost",
-                "note",
-                "Codex reports no cost, so its attempts count $0 toward the [budget] caps; "
-                "they are bounded only by max_task_attempts and timeout_s. Set a spend limit "
-                "with your OpenAI account too.",
-            )
-        )
-    return checks

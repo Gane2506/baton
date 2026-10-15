@@ -11,7 +11,14 @@ from rich.console import Console
 from rich.markup import escape
 
 from jev_agent.app.context import NO_WORKERS_MESSAGE, AppContext
-from jev_agent.app.runs import approve_run, resume_run
+from jev_agent.app.errors import JevError
+from jev_agent.app.format import format_answers
+from jev_agent.app.runs import (
+    RunOptions,
+    approve_run,
+    require_ship_enabled,
+    resume_run,
+)
 from jev_agent.app.runs import start_run as start_run
 from jev_agent.cli.repo import RepoOption
 from jev_agent.cli.server_cmds import pick_profile_for_run
@@ -99,10 +106,11 @@ def ship_mode_flag(config: JevConfig, auto_ship: bool, ask_before_ship: bool) ->
         raise fail("--auto-ship and --ask-before-ship cannot be used together")
     if not (auto_ship or ask_before_ship):
         return None
-    if not config.ship.enabled:
-        flag = "--auto-ship" if auto_ship else "--ask-before-ship"
-        raise fail(f"{flag} needs shipping on: set `[ship] enabled = true` (see docs/ship.md)")
-    return "merge" if auto_ship else "ask"
+    flag = "--auto-ship" if auto_ship else "--ask-before-ship"
+    try:
+        return require_ship_enabled(config, "merge" if auto_ship else "ask", what=flag)
+    except JevError as exc:
+        raise fail(str(exc)) from exc
 
 
 _STYLE = {
@@ -141,8 +149,6 @@ def print_warnings(ctx: AppContext) -> None:
 
 def print_ship_preview(preview: ShipPreview) -> None:
     """What a person reviews before `jev ship approve | modify | stop`."""
-    from jev_agent.cli.status_cmds import format_answers  # status_cmds imports this module
-
     console.print(f"  PR title: {escape(preview.title)}")
     console.print(f"  branch: {preview.branch}")
     if preview.diff is not None:
@@ -209,24 +215,31 @@ def run(
     """Take an idea through planning, validation, approval, execution and integration.
 
     Exit codes: 0 done or awaiting approval, 3 stopped short of DONE, 1 error."""
-    level = quality_level(quality)
+    try:
+        options = RunOptions(
+            plan_only=plan_only,
+            learning=learning,
+            no_learning=no_learning,
+            quality=quality,
+            profile=profile,
+        )
+    except JevError as exc:
+        raise fail(str(exc)) from exc
     with cli_context(repo) as ctx:
-        if learning is not None and no_learning:
-            raise fail("--learning and --no-learning cannot be used together")
         mode = ship_mode_flag(ctx.config, auto_ship, ask_before_ship)
         if not ctx.has_workers:
             raise fail(NO_WORKERS_MESSAGE)
         print_warnings(ctx)
-        profile = pick_profile_for_run(ctx.config, ctx.root, profile)
+        profile = pick_profile_for_run(ctx.config, ctx.root, options.profile)
         try:
             record = asyncio.run(
                 start_run(
                     ctx,
                     idea,
-                    plan_only=plan_only,
-                    learning=learning,
-                    no_learning=no_learning,
-                    quality=level,
+                    plan_only=options.plan_only,
+                    learning=options.learning,
+                    no_learning=options.no_learning,
+                    quality=options.quality,
                     profile=profile,
                     ship_mode=mode,
                 )
@@ -290,10 +303,16 @@ def resume(
     it started with, unless --learning, --no-learning or --quality says otherwise).
 
     Exit codes: 0 done or awaiting approval, 3 stopped short of DONE, 1 error."""
-    level = quality_level(quality)
+    try:
+        options = RunOptions(
+            learning=learning,
+            no_learning=no_learning,
+            quality=quality,
+            profile=profile,
+        )
+    except JevError as exc:
+        raise fail(str(exc)) from exc
     with cli_context(repo) as ctx:
-        if learning is not None and no_learning:
-            raise fail("--learning and --no-learning cannot be used together")
         if not ctx.has_workers:
             raise fail(NO_WORKERS_MESSAGE)
         print_warnings(ctx)
@@ -302,10 +321,10 @@ def resume(
                 resume_run(
                     ctx,
                     run_id,
-                    learning=learning,
-                    no_learning=no_learning,
-                    quality=level,
-                    profile=profile,
+                    learning=options.learning,
+                    no_learning=options.no_learning,
+                    quality=parse_level(options.quality) if options.quality is not None else None,
+                    profile=options.profile,
                 )
             )
         except (NotFoundError, PipelineError, LearningError, ProfileError, RunInUseError) as exc:

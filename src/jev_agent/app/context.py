@@ -31,7 +31,7 @@ from typing import cast
 import httpx
 
 from jev_agent.app.errors import JevError
-from jev_agent.cli.repo import LEGACY_MESSAGE, find_git_root, legacy_layout
+from jev_agent.app.repo import LEGACY_MESSAGE, find_git_root, legacy_layout
 from jev_agent.config import STATE_DIRNAME, ConfigError, JevConfig, load_config
 from jev_agent.config.schema import JevSettings, role_can_use_free, role_uses_free
 from jev_agent.core.learning import Learning
@@ -327,7 +327,7 @@ def build_registry(
 def repo_root(repo: Path) -> Path:
     """The git repo containing `repo`; `JevError` when there is none or it still has the jao
     (v0.1) layout."""
-    root = find_git_root(repo, allow_legacy=True)
+    root = find_git_root(repo)
     if root is None:
         raise JevError(f"{repo.resolve()} is not inside a git repository")
     if legacy_layout(root):

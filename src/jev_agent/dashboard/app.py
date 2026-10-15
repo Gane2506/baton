@@ -43,10 +43,30 @@ from starlette.staticfiles import StaticFiles
 
 from jev_agent import __version__
 from jev_agent.app import chat, settings
+from jev_agent.app.board import DONE_LIMIT, state_legend
 from jev_agent.app.errors import JevError
-from jev_agent.cli.board_cmds import DONE_LIMIT, format_age, state_legend
-from jev_agent.cli.quality_cmds import review_text
-from jev_agent.cli.status_cmds import format_answers, format_time
+from jev_agent.app.format import format_age, format_answers, format_time
+from jev_agent.app.learning import (
+    create_profile as learning_create,
+)
+from jev_agent.app.learning import (
+    disable as learning_disable,
+)
+from jev_agent.app.learning import (
+    enable as learning_enable,
+)
+from jev_agent.app.learning import (
+    flush as flush_lessons,
+)
+from jev_agent.app.learning import (
+    forget as learning_forget,
+)
+from jev_agent.app.learning import (
+    use_learning_profile,
+)
+from jev_agent.app.quality import review_text
+from jev_agent.app.queue import QueueOptions
+from jev_agent.app.runs import RunOptions, require_ship_enabled
 from jev_agent.config import STATE_DIRNAME, ConfigError
 from jev_agent.config.schema import BEGINNER_FIELDS, JevConfig, JevSettings, ShipMode
 from jev_agent.config.servers_schema import ServerConfig
@@ -61,12 +81,7 @@ from jev_agent.core.chat import (
     ChatMeta,
 )
 from jev_agent.core.kpi import DiffStat, diff_stat
-from jev_agent.core.learning import (
-    LearningError,
-    disable_learning,
-    enable_learning,
-    use_profile,
-)
+from jev_agent.core.learning import LearningError
 from jev_agent.core.lease import RunInUseError
 from jev_agent.core.models import RunState, TaskState
 from jev_agent.core.pipeline import STOPPED, PipelineError, cancel_run
@@ -1467,19 +1482,30 @@ class Dashboard:
         quality = _text(form, "quality") or None
         profile = _text(form, "profile") or None
         ship_choice = _text(form, "ship_mode")
-
-        def start() -> str:
-            with views.open_repo(self.settings.root) as repo:
-                mode = _ship_mode(repo, ship_choice)
-            run_id = prepare_run(
-                self.settings.root,
-                idea,
+        try:
+            options = RunOptions(
                 plan_only=plan_only,
                 learning=None if learning in (None, "", "none") else learning,
                 no_learning=learning == "none",
                 quality=quality,
                 profile=profile,
-                ship_mode=cast(ShipMode | None, mode),
+            )
+        except JevError as exc:
+            self.flash(request, "error", str(exc))
+            return self.back("/")
+
+        def start() -> str:
+            with views.open_repo(self.settings.root) as repo:
+                mode = require_ship_enabled(repo.config, cast(ShipMode | None, ship_choice or None))
+            run_id = prepare_run(
+                self.settings.root,
+                idea,
+                plan_only=options.plan_only,
+                learning=options.learning,
+                no_learning=options.no_learning,
+                quality=options.quality,
+                profile=options.profile,
+                ship_mode=mode,
             )
             if not self.launcher.start(run_id, "start"):
                 raise PipelineError(f"run {run_id} is already being worked on here")
@@ -1506,19 +1532,28 @@ class Dashboard:
     async def queue_add(self, request: Request) -> Response:
         def add(repo: views.Repo, form: FormData) -> str:
             learning_choice = _text(form, "learning")
+            options = QueueOptions(
+                priority=_text(form, "priority") or "normal",
+                plan_only=form.get("plan_only") == "on",
+                learning=learning_choice if learning_choice not in (None, "", "none") else None,
+                no_learning=learning_choice == "none",
+                profile=_text(form, "profile") or None,
+                quality=_text(form, "quality") or None,
+                ship_mode=require_ship_enabled(
+                    repo.config, cast(ShipMode | None, _text(form, "ship_mode") or None)
+                ),
+            )
             item = add_idea(
                 repo.store,
                 repo.learning,
                 _text(form, "idea") or "",
-                _text(form, "priority") or "normal",
-                plan_only=form.get("plan_only") == "on",
-                learning_profile=learning_choice
-                if learning_choice not in (None, "", "none")
-                else None,
-                no_learning=learning_choice == "none",
-                profile=_text(form, "profile") or None,
-                quality=_text(form, "quality") or None,
-                ship_mode=_ship_mode(repo, _text(form, "ship_mode")),
+                options.priority,
+                plan_only=options.plan_only,
+                learning_profile=options.learning,
+                no_learning=options.no_learning,
+                profile=options.profile,
+                quality=options.quality,
+                ship_mode=options.ship_mode,
             )
             return f"queued item {item.id} ({item.priority})"
 
@@ -1617,7 +1652,7 @@ class Dashboard:
 
         def flush() -> int:
             with views.open_repo(self.settings.root) as repo:
-                return repo.learning.flush(name)
+                return flush_lessons(repo.learning, name)
 
         try:
             deleted = await run_in_threadpool(flush)
@@ -1647,15 +1682,6 @@ def _chat_learning(value: str | None) -> ChatLearning:
     if value == "none":
         return ChatLearning(off=True)
     return ChatLearning(profile=value)
-
-
-def _ship_mode(repo: views.Repo, value: str | None) -> str | None:
-    """The queue form's "after review passes" ship choice; it needs shipping on."""
-    if not value:
-        return None
-    if not repo.config.ship.enabled:
-        raise QueueError("that choice needs shipping on: set `[ship] enabled = true`")
-    return value
 
 
 def _int(value: str) -> int:
@@ -1862,19 +1888,19 @@ def _step_blocks(repo: views.Repo, meta: ChatMeta) -> list[dict[str, Any]]:
 
 def _learning_create(repo: views.Repo, form: FormData) -> str:
     name = _text(form, "name") or ""
-    profile = repo.learning.create(name, shared=form.get("shared") == "on")
+    profile = learning_create(repo.learning, name, shared=form.get("shared") == "on")
     return f"created profile {profile.name} ({profile.scope})"
 
 
 def _learning_use(repo: views.Repo, form: FormData) -> str:
     name = _text(form, "profile") or ""
-    use_profile(repo.store, repo.learning, name)
+    use_learning_profile(repo.store, repo.learning, name)
     return f"active profile: {name}"
 
 
 def _learning_enable(repo: views.Repo, form: FormData) -> str:
     name = _text(form, "profile") or None
-    active = enable_learning(repo.store, repo.config, repo.learning, name)
+    active = learning_enable(repo.store, repo.config, repo.learning, name)
     if name is None:
         return f"learning is on for this repo, with profile {active}"
     return f"profile {name} is enabled"
@@ -1882,14 +1908,14 @@ def _learning_enable(repo: views.Repo, form: FormData) -> str:
 
 def _learning_disable(repo: views.Repo, form: FormData) -> str:
     name = _text(form, "profile") or None
-    disable_learning(repo.store, repo.learning, name)
+    learning_disable(repo.store, repo.learning, name)
     if name is None:
         return "learning is off for this repo; lessons are kept"
     return f"profile {name} is disabled"
 
 
 def _learning_forget(repo: views.Repo, form: FormData) -> str:
-    lesson = repo.learning.forget(_text(form, "lesson") or "")
+    lesson = learning_forget(repo.learning, _text(form, "lesson") or "")
     return f"retired {lesson.id} from {lesson.profile}"
 
 

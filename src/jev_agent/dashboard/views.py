@@ -20,14 +20,14 @@ from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
+from jev_agent.app.board import COLUMN_FOR_STATE, COLUMNS, Card, load_board
 from jev_agent.app.chat import chat_title
 from jev_agent.app.context import FAKE_WORKERS_ENV, STATE_DB_FILENAME
+from jev_agent.app.doctor import Check, run_checks
 from jev_agent.app.errors import JevError
-from jev_agent.cli.board_cmds import COLUMN_FOR_STATE, COLUMNS, Card, load_board
-from jev_agent.cli.doctor_cmd import Check, run_checks
-from jev_agent.cli.quality_cmds import review_text
-from jev_agent.cli.queue_cmds import item_flags
-from jev_agent.cli.status_cmds import format_answers, learning_line, quality_line
+from jev_agent.app.format import format_answers, learning_line, quality_line
+from jev_agent.app.quality import review_text
+from jev_agent.app.queue import item_flags
 from jev_agent.config import STATE_DIRNAME, JevConfig, load_config
 from jev_agent.core.benchmarks import DEFAULT_LAST, Summary, Trend, summarize, trends
 from jev_agent.core.budget import (

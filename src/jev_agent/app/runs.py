@@ -7,19 +7,60 @@ prints or exits. Errors are `JevError` (context wiring) or domain exceptions
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 from jev_agent.app.context import AppContext, RepoContext
-from jev_agent.config import STATE_DIRNAME
-from jev_agent.config.schema import ShipMode
-from jev_agent.core.learning import Learning, LearningError, check_profile_name, resolve_learning
-from jev_agent.core.models import AutonomyMode, Idea
-from jev_agent.core.store import RunRecord
-from jev_agent.quality.levels import QualityLevel, parse_level
-from jev_agent.servers.profiles import (
+from jev_agent.app.errors import JevError
+from jev_agent.app.profiles import (
     effective_name,
     get_profile,
     snapshot,
     write_run_profile,
 )
+from jev_agent.config import STATE_DIRNAME
+from jev_agent.config.schema import JevConfig, ShipMode
+from jev_agent.core.learning import Learning, LearningError, check_profile_name, resolve_learning
+from jev_agent.core.models import AutonomyMode, Idea
+from jev_agent.core.store import RunRecord
+from jev_agent.quality.levels import QualityLevel, parse_level
+
+
+@dataclass(frozen=True)
+class RunOptions:
+    """Flags for starting or resuming a run, validated once (issue #92).
+
+    Raises `JevError` (user-facing) for `--learning` with `--no-learning`, or an unknown
+    quality level. `ship_mode` is validated separately by `require_ship_enabled`, which
+    needs the config.
+    """
+
+    plan_only: bool = False
+    learning: str | None = None
+    no_learning: bool = False
+    quality: str | None = None
+    profile: str | None = None
+    ship_mode: ShipMode | None = None
+
+    def __post_init__(self) -> None:
+        if self.quality is not None:
+            try:
+                parse_level(self.quality)
+            except ValueError as exc:
+                raise JevError(str(exc)) from exc
+        if self.learning is not None and self.no_learning:
+            raise JevError("--learning and --no-learning cannot be used together")
+
+
+def require_ship_enabled(
+    config: JevConfig, ship_mode: ShipMode | None, *, what: str = "that choice"
+) -> ShipMode | None:
+    """The run's ship mode, or None; `JevError` when a mode is chosen but `[ship] enabled`
+    is false. `what` names the choice the way the front end does (`--auto-ship`, ...)."""
+    if ship_mode is None:
+        return None
+    if not config.ship.enabled:
+        raise JevError(f"{what} needs shipping on: set `[ship] enabled = true` (see docs/ship.md)")
+    return ship_mode
 
 
 def _learning(ctx: RepoContext | AppContext) -> Learning:

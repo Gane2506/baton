@@ -2,15 +2,21 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import datetime
 from pathlib import Path
-from typing import Annotated, Any
+from typing import Annotated
 
 import typer
 from rich.console import Console
 from rich.markup import escape
 from rich.table import Table
 
+from jev_agent.app.format import (
+    format_answers,
+    format_time,
+    learning_line,
+    quality_line,
+)
 from jev_agent.cli.repo import RepoOption
 from jev_agent.cli.run_cmds import RunId
 from jev_agent.cli.wiring import fail, repo_context
@@ -31,13 +37,6 @@ from jev_agent.core.store import (
 )
 
 console = Console()
-
-
-def format_time(value: datetime) -> str:
-    """UTC with an explicit `Z`, like run ids (which are UTC too): `2026-10-12 15:30:12Z`."""
-    if value.tzinfo is None:  # stored times are UTC; never let the local zone creep in
-        value = value.replace(tzinfo=UTC)
-    return value.astimezone(UTC).strftime("%Y-%m-%d %H:%M:%SZ")
 
 
 def _usd(value: float | None) -> str:
@@ -117,38 +116,6 @@ def _print_run(store: Store, run: RunRecord, config: JevConfig) -> None:
     console.print(table)
 
 
-def learning_line(run: RunRecord) -> str:
-    """`profile default (learned into default: 1 added, ...)`, or `off`."""
-    if run.learning_profile is None:
-        return "off"
-    outcome = f" ({run.learning_outcome})" if run.learning_outcome else ""
-    return f"profile {run.learning_profile}{outcome}"
-
-
-def quality_line(run: RunRecord, reports: list[QualityReportRecord]) -> str:
-    """`production; T1 #2 passed, score 96/85, integration #1 blocked, score 72/85 (...);
-    `jev quality show RUN``, `production (no gate has run yet)`, or `none`. The score is
-    the gate's 0-100 ship score over the `[quality] score_threshold`."""
-    if run.quality_level == "none" and not reports:
-        return "none"
-    latest: dict[str, QualityReportRecord] = {}
-    for record in reports:
-        key = record.result.task_id or "integration"
-        latest.pop(key, None)
-        latest[key] = record
-    if not latest:
-        return f"{run.quality_level} (no gate has run yet)"
-    parts = []
-    for key, record in latest.items():
-        r = record.result
-        verdict = "blocked" if r.blocked else "passed"
-        counts = r.counts()
-        serious = ", ".join(f"{counts[s]} {s}" for s in ("critical", "major") if counts[s])
-        score = f", score {r.score.total}/{r.score.threshold}" if r.score is not None else ""
-        parts.append(f"{key} #{r.number} {verdict}{score}" + (f" ({serious})" if serious else ""))
-    return f"{run.quality_level}; {', '.join(parts)}; report: `jev quality show {run.id}`"
-
-
 def log(run_id: RunId, repo: RepoOption = Path(".")) -> None:
     """Show the run's timeline: every decision and every worker attempt."""
     with repo_context(repo, create=False) as ctx:
@@ -207,38 +174,6 @@ def _decision_line(record: DecisionRecord) -> str:
     if record.fallback_reason:
         line += f"  FALLBACK: {record.fallback_reason}"
     return line
-
-
-def _number(value: Any) -> float | None:
-    if isinstance(value, int | float) and not isinstance(value, bool):
-        return float(value)
-    return None
-
-
-def format_answers(answers: dict[str, str], details: dict[str, Any]) -> str:
-    """`worker=codex (0.91, Laya +0.45)`: each answer, with Jev's confidence and Laya's margin."""
-    jev_votes = details.get("answers")
-    laya_votes = details.get("laya")
-    if not isinstance(jev_votes, dict):
-        jev_votes = {}
-    if not isinstance(laya_votes, dict):
-        laya_votes = {}
-    parts = []
-    for name, value in answers.items():
-        part = f"{name}={value}"
-        jev = jev_votes.get(name)
-        laya = laya_votes.get(name)
-        confidence = _number(jev.get("confidence")) if isinstance(jev, dict) else None
-        margin = _number(laya.get("margin")) if isinstance(laya, dict) else None
-        notes = []
-        if confidence is not None:
-            notes.append(f"{confidence:.2f}")
-        if margin is not None:
-            notes.append(f"Laya {margin:+.2f}")
-        if notes:
-            part += f" ({', '.join(notes)})"
-        parts.append(part)
-    return " ".join(parts)
 
 
 def _attempt_line(a: AttemptRecord) -> str:
