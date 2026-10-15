@@ -275,7 +275,28 @@
       var on = document.body.classList.toggle("chat-fullscreen");
       store.set("jev-chat-fullscreen", on ? "1" : "0");
       sidebarToggle.setAttribute("aria-pressed", on ? "true" : "false");
+      sidebarToggle.setAttribute("aria-expanded", on ? "false" : "true");
+      sidebarToggle.setAttribute(
+        "aria-label",
+        on ? "Expand sidebar" : "Collapse sidebar"
+      );
+      syncSidebarIcon();
     });
+    // A6: give the chevron a direction cue like the pane toggles — it points
+    // the way the content moves (right while the sidebar is collapsed and the
+    // click would expand it, left once it is open).
+    function syncSidebarIcon() {
+      var use = sidebarToggle.querySelector("use");
+      if (use) {
+        use.setAttribute(
+          "href",
+          document.body.classList.contains("chat-fullscreen")
+            ? "#i-right"
+            : "#i-left"
+        );
+      }
+    }
+    syncSidebarIcon();
     // The drawer can also close via scrim or Escape: keep the button's state
     // honest without stealing focus management from app.js.
     document.addEventListener("jev:nav", function (event) {

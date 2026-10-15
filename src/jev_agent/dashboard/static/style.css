@@ -438,7 +438,6 @@ label.check input { width: auto; height: auto; }
   background-repeat: no-repeat;
   background-attachment: local, local, scroll, scroll;
 }
-
 table { border-collapse: collapse; width: 100%; font-size: var(--fs-13); }
 th, td { text-align: left; padding: 7px 12px; border-bottom: 1px solid var(--border); vertical-align: top; }
 tr:last-child td { border-bottom: 0; }
