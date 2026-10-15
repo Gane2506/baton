@@ -167,8 +167,8 @@ def decision_cache_key(
         "questions": req.questions,
         "state": strip_volatile(req.state),
         "config_fp": _config_fingerprint(config, dispatcher_name),
-        "run_id": run_id,
-        "decision_id": None,  # filled in on put, after record_decision returns the id
+        # run_id/decision_id are provenance, filled in on put — not key material,
+        # so a resumed run hits the same entry.
         "simhash": SimHashEmbedder().fingerprint(text),
     }
     return _build("decision", components, text, config.cache.ttl_hours)
@@ -284,7 +284,7 @@ def role_cache_key(
             canonical_json(sorted(lesson_texts)).encode()
         ).hexdigest(),
         "role_config_fp": hashlib.sha256(role_config_json.encode()).hexdigest(),
-        "run_id": run_id,
+        # run_id is provenance, filled in on put — not key material.
         "simhash": SimHashEmbedder().fingerprint(text),
     }
     return _build("role", components, text, config.cache.ttl_hours_overrides.roles)

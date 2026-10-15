@@ -1312,7 +1312,7 @@ class Store:
         rows = self._conn.execute(
             "SELECT json_extract(key_json, '$.run_id') AS run_id,"
             " COALESCE(SUM(cost_usd * hit_count), 0) FROM cache_entries"
-            " GROUP BY run_id"
+            " GROUP BY run_id HAVING SUM(cost_usd * hit_count) > 0"
         ).fetchall()
         return {row[0]: float(row[1]) for row in rows if row[0]}
 
