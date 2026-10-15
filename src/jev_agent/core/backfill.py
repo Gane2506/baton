@@ -30,6 +30,7 @@ from jev_agent.core.events import (
     PlanSetPayload,
     RunCreatedPayload,
     RunStateChangedPayload,
+    TaskAssignedPayload,
     TaskStateChangedPayload,
     TasksUpsertedPayload,
     ValidationRecordedPayload,
@@ -45,6 +46,7 @@ _TYPE_ORDER: dict[EventType, int] = {
     EventType.DESIGN_SET: 11,
     EventType.VALIDATION_RECORDED: 12,
     EventType.TASKS_UPSERTED: 20,
+    EventType.TASK_ASSIGNED: 20,
     EventType.TASK_STATE_CHANGED: 21,
     EventType.ATTEMPT_STARTED: 30,
     EventType.ATTEMPT_FINISHED: 31,
@@ -86,34 +88,51 @@ def _candidates(store: Store, run_id: str) -> list[tuple[datetime, int, EventTyp
                 PlanSetPayload(round=run.plan_round, plan=run.plan.model_dump(mode="json")),
             )
         )
-        tasks = store.list_tasks(run_id)
-        if tasks:
+    tasks = store.list_tasks(run_id)
+    if tasks:
+        out.append(
+            (
+                created,
+                _TYPE_ORDER[EventType.TASKS_UPSERTED],
+                EventType.TASKS_UPSERTED,
+                TasksUpsertedPayload(
+                    task_ids=[t.id for t in tasks], from_plan_round=run.plan_round
+                ),
+            )
+        )
+    for task in tasks:
+        if task.worker is not None:
+            # Approximate: only the latest assignment survives in the snapshot.
             out.append(
                 (
                     created,
-                    _TYPE_ORDER[EventType.TASKS_UPSERTED],
-                    EventType.TASKS_UPSERTED,
-                    TasksUpsertedPayload(
-                        task_ids=[t.id for t in tasks], from_plan_round=run.plan_round
+                    _TYPE_ORDER[EventType.TASK_ASSIGNED],
+                    EventType.TASK_ASSIGNED,
+                    TaskAssignedPayload(
+                        task_id=task.id,
+                        state=str(task.state),
+                        worker=task.worker,
+                        model=task.model,
+                        effort=task.effort,
+                        decision_id=None,
                     ),
                 )
             )
-        for task in tasks:
-            if task.state != TaskState.PENDING:
-                # Approximate: only the current state survives in the snapshot.
-                out.append(
-                    (
-                        created,
-                        _TYPE_ORDER[EventType.TASK_STATE_CHANGED],
-                        EventType.TASK_STATE_CHANGED,
-                        TaskStateChangedPayload(
-                            task_id=task.id,
-                            from_state=str(TaskState.PENDING),
-                            to_state=str(task.state),
-                            note=task.note,
-                        ),
-                    )
+        if task.state != TaskState.PENDING:
+            # Approximate: only the current state survives in the snapshot.
+            out.append(
+                (
+                    created,
+                    _TYPE_ORDER[EventType.TASK_STATE_CHANGED],
+                    EventType.TASK_STATE_CHANGED,
+                    TaskStateChangedPayload(
+                        task_id=task.id,
+                        from_state=str(TaskState.PENDING),
+                        to_state=str(task.state),
+                        note=task.note,
+                    ),
                 )
+            )
     if run.design is not None:
         out.append(
             (

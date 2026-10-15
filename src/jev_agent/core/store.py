@@ -906,6 +906,7 @@ class Store:
                 EventType.TASK_ASSIGNED,
                 TaskAssignedPayload(
                     task_id=task_id,
+                    state=str(state),
                     worker=worker,
                     model=model,
                     effort=effort,

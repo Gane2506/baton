@@ -110,6 +110,7 @@ class TaskStateChangedPayload(BaseModel):
 
 class TaskAssignedPayload(BaseModel):
     task_id: str
+    state: str | None = None  # the task's new state (set_task_assignment sets it too)
     worker: str
     model: str | None = None
     effort: str | None = None

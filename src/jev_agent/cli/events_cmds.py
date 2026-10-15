@@ -121,7 +121,7 @@ def summarize(event: Event) -> str:
     return event.type.value  # pragma: no cover - every type is matched above
 
 
-def _event_line(event: Event) -> str:
+def event_line(event: Event) -> str:
     ts = event.ts.strftime("%H:%M:%S")
     marker = " ~" if event.synthetic else ""
     parent = f" ←{event.parent_run_seq}" if event.parent_run_seq else ""
@@ -184,7 +184,7 @@ def timeline(
             )
         return
     for event in events:
-        console.print(_event_line(event))
+        console.print(event_line(event))
 
 
 @events_app.command("backfill")
