@@ -3,6 +3,7 @@
 
 import asyncio
 import json
+import os
 from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
@@ -13,6 +14,7 @@ import pytest
 from jev_agent.config.schema import JevConfig
 from jev_agent.core.chat import (
     BRIEF_REQUEST,
+    META_FILE,
     ApiChatBackend,
     BudgetReached,
     ChatError,
@@ -237,6 +239,25 @@ def test_claude_backend_failure_is_a_reply(tmp_path: Path) -> None:
     assert "--max-budget-usd" not in runner.calls[0][0]
 
 
+def test_claude_lost_session_cost_is_counted(tmp_path: Path) -> None:
+    """The failed `--resume` call's cost is added to the retry's, not dropped."""
+    lost = {
+        "type": "result",
+        "subtype": "error_during_execution",
+        "is_error": True,
+        "result": "No conversation found for session gone",
+        "session_id": "gone",
+        "total_cost_usd": 0.05,
+    }
+    runner = FakeRunner([lost, _result("New", cost=0.03)])
+    backend = ClaudeChatBackend(tmp_path, runner=runner, env={})
+    reply = asyncio.run(
+        backend.send("S", [], "x", session_id="gone", budget_left_usd=1, log_path=tmp_path / "l")
+    )
+    assert reply.ok and reply.text == "New"
+    assert reply.cost_usd == pytest.approx(0.08)
+
+
 # ---- API backend -------------------------------------------------------------------------
 
 
@@ -332,6 +353,29 @@ def test_session_persistence_budget_and_brief(tmp_path: Path) -> None:
         chat_dir(tmp_path, "../x")
     with pytest.raises(ChatError, match="no chat"):
         ChatSession.load_meta(tmp_path, "c-20200101-000000-abcd")
+
+
+def test_save_writes_meta_json_atomically(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """`meta.json` is written to a temp file and renamed into place: a crash mid-write never
+    leaves a half-written meta.json behind."""
+    session = ChatSession.create(tmp_path, EchoChatBackend("api"), "S", ChatLearning(), None, 1.0)
+    real_replace = os.replace
+    calls: list[tuple[object, object]] = []
+
+    def fake_replace(src: object, dst: object) -> None:
+        calls.append((src, dst))
+        real_replace(src, dst)  # type: ignore[arg-type]
+
+    monkeypatch.setattr("os.replace", fake_replace)
+    session.save()
+    assert len(calls) == 1
+    src, dst = (Path(str(p)) for p in calls[0])
+    assert dst == session.dir / META_FILE
+    assert src.parent == session.dir and src.name.startswith(".meta.json.") and src.suffix == ".tmp"
+    assert not src.exists()  # the rename moved it; no temp file is left behind
+    assert (
+        json.loads((session.dir / META_FILE).read_text("utf-8"))["chat_id"] == session.meta.chat_id
+    )
 
 
 def test_session_note_after_learning_change(tmp_path: Path) -> None:

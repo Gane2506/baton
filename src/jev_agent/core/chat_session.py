@@ -1,0 +1,383 @@
+"""`jev chat`'s persistence and conversation: `ChatSession` (metadata, transcript and backend),
+the saved-chat helpers (`list_chats`, `read_transcript`, `hold_chat`) and the chat budget."""
+
+from __future__ import annotations
+
+import fcntl
+import json
+import os
+import re
+import secrets
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
+from dataclasses import asdict, dataclass, field
+from datetime import UTC, datetime
+from pathlib import Path
+from typing import TYPE_CHECKING, Any
+
+from jev_agent.config import STATE_DIRNAME
+from jev_agent.core.chat_backends import BACKENDS, BackendName, Turn
+from jev_agent.core.chat_learning import ChatLearning
+from jev_agent.core.chat_prompts import BRIEF_REQUEST, extract_brief
+from jev_agent.runlog.redact import redact
+
+if TYPE_CHECKING:
+    from jev_agent.core.chat_backends import ChatBackend, Reply
+
+CHATS_DIRNAME = "chats"
+TRANSCRIPT_FILE = "transcript.jsonl"
+META_FILE = "meta.json"
+BACKEND_LOG_FILE = "backend.log"
+LOCK_FILE = "chat.lock"
+DEFAULT_BUDGET_USD = 1.00
+_CHAT_ID = re.compile(r"^c-\d{8}-\d{6}-[0-9a-f]{4}$")
+
+
+class ChatError(Exception):
+    """A chat cannot be opened, resumed or continued. The message is user-facing."""
+
+
+class BudgetReached(ChatError):
+    """The chat has spent its budget; no more model calls."""
+
+
+def new_chat_id() -> str:
+    """A short, sortable chat id: `c-` plus UTC time and 4 random hex chars."""
+    return f"c-{datetime.now(UTC):%Y%m%d-%H%M%S}-{secrets.token_hex(2)}"
+
+
+def _now() -> str:
+    return datetime.now(UTC).isoformat(timespec="seconds")
+
+
+@dataclass
+class ChatMeta:
+    chat_id: str
+    created_at: str
+    updated_at: str
+    learning: ChatLearning
+    profile: str | None  # workspace profile, passed to launched runs
+    backend: BackendName
+    model: str | None
+    session_id: str | None = None
+    budget_usd: float = DEFAULT_BUDGET_USD
+    spent_usd: float = 0.0
+    unknown_cost_calls: int = 0  # model calls that reported no cost
+    turns: int = 0  # messages answered by the model
+    brief: str | None = None
+    brief_turns: int = 0  # `turns` when the brief was written; more turns make it stale
+    runs: list[dict[str, str]] = field(default_factory=list)  # {"run_id", "kind", "at"}
+    queue_items: list[dict[str, Any]] = field(default_factory=list)  # {"id", "priority", "at"}
+    quality: str | None = None  # quality level for launched runs; None: [quality] level
+
+    def to_json(self) -> dict[str, Any]:
+        data = asdict(self)
+        data["learning"] = self.learning.to_json()
+        return data
+
+    @classmethod
+    def from_json(cls, data: dict[str, Any]) -> ChatMeta:
+        known = set(cls.__dataclass_fields__)
+        values = {k: v for k, v in data.items() if k in known}
+        values["learning"] = ChatLearning.from_json(data.get("learning"))
+        if values.get("backend") not in BACKENDS:
+            raise ChatError(f"chat {data.get('chat_id')!r} has an unknown backend")
+        return cls(**values)
+
+
+def chats_dir(root: Path) -> Path:
+    return root / STATE_DIRNAME / CHATS_DIRNAME
+
+
+def chat_dir(root: Path, chat_id: str) -> Path:
+    if not _CHAT_ID.match(chat_id):
+        raise ChatError(f"{chat_id!r} is not a chat id (they look like c-20261012-153012-ab12)")
+    return chats_dir(root) / chat_id
+
+
+def list_chats(root: Path) -> list[ChatMeta]:
+    """Saved chats, newest first. Unreadable ones are skipped."""
+    found: list[ChatMeta] = []
+    base = chats_dir(root)
+    if not base.is_dir():
+        return found
+    for path in sorted(base.iterdir(), reverse=True):
+        try:
+            found.append(ChatMeta.from_json(json.loads((path / META_FILE).read_text("utf-8"))))
+        except (OSError, ValueError, TypeError, ChatError):
+            continue
+    return found
+
+
+def read_transcript(root: Path, chat_id: str) -> list[dict[str, Any]]:
+    """Every entry of a saved chat's transcript (already redacted), oldest first; lines that
+    cannot be parsed are skipped. Raises `ChatError` for a malformed id."""
+    path = chat_dir(root, chat_id) / TRANSCRIPT_FILE
+    entries: list[dict[str, Any]] = []
+    if not path.is_file():
+        return entries
+    for line in path.read_text(encoding="utf-8").splitlines():
+        try:
+            entry = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(entry, dict):
+            entries.append(entry)
+    return entries
+
+
+class ChatInUse(ChatError):
+    """Another process (a terminal `jev chat` or a dashboard reply) has this chat open."""
+
+
+@contextmanager
+def hold_chat(root: Path, chat_id: str) -> Iterator[None]:
+    """Hold the saved chat's lock for the block: one process at a time loads, changes and
+    saves a chat, so a terminal and the dashboard never overwrite each other's `meta.json`.
+    An exclusive `flock` on `chat.lock`; the kernel drops it when the holder dies. Raises
+    `ChatInUse` at once when it is taken, and `ChatError` for an unknown chat."""
+    directory = chat_dir(root, chat_id)
+    if not (directory / META_FILE).is_file():
+        raise ChatError(f"no chat {chat_id!r}; `jev chat --list` shows saved chats")
+    fd = os.open(directory / LOCK_FILE, os.O_RDWR | os.O_CREAT, 0o644)
+    try:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise ChatInUse(
+                f"chat {chat_id} is open elsewhere (a terminal `jev chat` or the dashboard); "
+                "try again when that is done"
+            ) from None
+        try:
+            yield
+        finally:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+    finally:
+        os.close(fd)
+
+
+class ChatSession:
+    """One chat: its metadata, transcript and backend. Every change is saved at once."""
+
+    def __init__(
+        self,
+        root: Path,
+        meta: ChatMeta,
+        backend: ChatBackend,
+        system_prompt: str,
+        *,
+        clock: Callable[[], str] | None = None,
+    ) -> None:
+        self.root = root
+        self._clock = _now if clock is None else clock
+        self.meta = meta
+        self.backend = backend
+        self.system_prompt = system_prompt
+        self.dir = chat_dir(root, meta.chat_id)
+        self.history: list[Turn] = []
+        # Sent ahead of the next message when the instructions change mid-session (Claude Code
+        # keeps the original instructions in its session).
+        self.pending_note: str | None = None
+
+    @classmethod
+    def create(
+        cls,
+        root: Path,
+        backend: ChatBackend,
+        system_prompt: str,
+        learning: ChatLearning,
+        profile: str | None,
+        budget_usd: float,
+        *,
+        clock: Callable[[], str] | None = None,
+        chat_id: str | None = None,
+    ) -> ChatSession:
+        clock = _now if clock is None else clock
+        now = clock()
+        meta = ChatMeta(
+            chat_id=new_chat_id() if chat_id is None else chat_id,
+            created_at=now,
+            updated_at=now,
+            learning=learning,
+            profile=profile,
+            backend=backend.name,
+            model=backend.model,
+            budget_usd=budget_usd,
+        )
+        session = cls(root, meta, backend, system_prompt, clock=clock)
+        session.dir.mkdir(parents=True, exist_ok=True)
+        session.save()
+        return session
+
+    @staticmethod
+    def load_meta(root: Path, chat_id: str) -> ChatMeta:
+        path = chat_dir(root, chat_id) / META_FILE
+        try:
+            return ChatMeta.from_json(json.loads(path.read_text(encoding="utf-8")))
+        except FileNotFoundError as exc:
+            raise ChatError(f"no chat {chat_id!r}; `jev chat --list` shows saved chats") from exc
+        except (ValueError, TypeError) as exc:
+            raise ChatError(f"chat {chat_id!r} cannot be read: {exc}") from exc
+
+    @classmethod
+    def resume(
+        cls, root: Path, meta: ChatMeta, backend: ChatBackend, system_prompt: str
+    ) -> ChatSession:
+        """Reopen a saved chat. A different backend than before starts a new model session
+        (the earlier turns are sent along); the transcript is kept either way."""
+        session = cls(root, meta, backend, system_prompt)
+        if backend.name != meta.backend:
+            meta.session_id = None
+        meta.backend, meta.model = backend.name, backend.model
+        session.history = session.read_history()
+        session.save()
+        return session
+
+    # ---- files ---------------------------------------------------------------------------
+
+    @property
+    def transcript_path(self) -> Path:
+        return self.dir / TRANSCRIPT_FILE
+
+    @property
+    def log_path(self) -> Path:
+        return self.dir / BACKEND_LOG_FILE
+
+    def save(self) -> None:
+        self.meta.updated_at = self._clock()
+        self.dir.mkdir(parents=True, exist_ok=True)
+        text = json.dumps(self.meta.to_json(), indent=2)
+        # Write-temp-then-rename: a crash mid-write never leaves a half-written meta.json.
+        tmp = self.dir / f".{META_FILE}.{os.getpid()}.tmp"
+        tmp.write_text(redact(text) + "\n", encoding="utf-8")
+        os.replace(tmp, self.dir / META_FILE)
+
+    def record(self, kind: str, text: str, **extra: Any) -> None:
+        """Append one redacted entry to the transcript."""
+        entry = {"at": self._clock(), "kind": kind, "text": redact(text), **extra}
+        self.dir.mkdir(parents=True, exist_ok=True)
+        with self.transcript_path.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(entry) + "\n")
+
+    def read_history(self) -> list[Turn]:
+        """The user/assistant turns from the transcript, in order."""
+        turns: list[Turn] = []
+        if not self.transcript_path.exists():
+            return turns
+        for line in self.transcript_path.read_text(encoding="utf-8").splitlines():
+            try:
+                entry = json.loads(line)
+            except ValueError:
+                continue
+            if isinstance(entry, dict) and entry.get("kind") in ("user", "assistant"):
+                turns.append(Turn(entry["kind"], str(entry.get("text", ""))))
+        return turns
+
+    # ---- talking -------------------------------------------------------------------------
+
+    @property
+    def budget_left(self) -> float:
+        return max(self.meta.budget_usd - self.meta.spent_usd, 0.0)
+
+    def set_system_prompt(self, prompt: str, note: str) -> None:
+        """New instructions (e.g. other lessons after `/learning`). A backend that keeps a
+        session gets `note` ahead of the next message, since its session has the old ones."""
+        self.system_prompt = prompt
+        if self.backend.keeps_session and self.meta.session_id:
+            self.pending_note = note
+
+    async def say(self, message: str) -> Reply:
+        """Send `message` to the model. Raises `BudgetReached` when the budget is spent."""
+        if self.meta.spent_usd >= self.meta.budget_usd:
+            raise BudgetReached(
+                f"this chat has spent ${self.meta.spent_usd:.2f} of its "
+                f"${self.meta.budget_usd:.2f} budget; no more model calls "
+                "(resume with a higher --budget-usd to continue)"
+            )
+        sent = message
+        if self.pending_note:
+            sent = f"[Note from jev: {self.pending_note}]\n\n{message}"
+        reply = await self.backend.send(
+            self.system_prompt,
+            self.history,
+            sent,
+            session_id=self.meta.session_id,
+            budget_left_usd=self.budget_left,
+            log_path=self.log_path,
+        )
+        if reply.cost_usd is not None:
+            self.meta.spent_usd = round(self.meta.spent_usd + reply.cost_usd, 6)
+        elif reply.ok:
+            self.meta.unknown_cost_calls += 1
+        if reply.session_id:
+            self.meta.session_id = reply.session_id
+        if reply.ok:
+            self.pending_note = None
+            self.history += [Turn("user", message), Turn("assistant", reply.text)]
+            self.record("user", message)
+            self.record("assistant", reply.text, cost_usd=reply.cost_usd)
+            self.meta.turns += 1
+        else:
+            self.record("error", reply.text, message=message)
+        self.save()
+        return reply
+
+    async def make_brief(self) -> Reply:
+        """Ask for the idea brief; on success `meta.brief` holds it (markers removed)."""
+        reply = await self.say(BRIEF_REQUEST)
+        if reply.ok:
+            self.meta.brief = extract_brief(reply.text)
+            self.meta.brief_turns = self.meta.turns
+            self.record("brief", self.meta.brief)
+            self.save()
+        return reply
+
+    @property
+    def brief_is_current(self) -> bool:
+        """A brief exists and nothing was said since it was written."""
+        return bool(self.meta.brief) and self.meta.turns <= self.meta.brief_turns
+
+    # ---- bookkeeping ---------------------------------------------------------------------
+
+    def set_learning(self, choice: ChatLearning) -> None:
+        self.meta.learning = choice
+        self.record("event", f"learning: {choice.describe()}")
+        self.save()
+
+    def set_quality(self, level: str | None) -> None:
+        self.meta.quality = level
+        self.record("event", f"quality: {level or 'default'}")
+        self.save()
+
+    def add_run(self, run_id: str, kind: str) -> None:
+        self.meta.runs.append({"run_id": run_id, "kind": kind, "at": self._clock()})
+        self.record("event", f"{kind} run {run_id} started", run_id=run_id)
+        self.save()
+
+    def add_queue_item(self, item_id: int, priority: str) -> None:
+        self.meta.queue_items.append({"id": item_id, "priority": priority, "at": self._clock()})
+        self.record("event", f"queued item {item_id} ({priority})", queue_item=item_id)
+        self.save()
+
+
+__all__ = [
+    "BACKEND_LOG_FILE",
+    "CHATS_DIRNAME",
+    "DEFAULT_BUDGET_USD",
+    "LOCK_FILE",
+    "META_FILE",
+    "TRANSCRIPT_FILE",
+    "_CHAT_ID",
+    "BudgetReached",
+    "ChatError",
+    "ChatInUse",
+    "ChatMeta",
+    "ChatSession",
+    "_now",
+    "chat_dir",
+    "chats_dir",
+    "hold_chat",
+    "list_chats",
+    "new_chat_id",
+    "read_transcript",
+]
