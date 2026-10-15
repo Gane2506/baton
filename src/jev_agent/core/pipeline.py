@@ -43,6 +43,13 @@ from jev_agent.config.schema import JevConfig, ShipMode
 from jev_agent.core.assign import Assignment
 from jev_agent.core.commands import CommandRunner, ShellCommandRunner
 from jev_agent.core.design_system import get_design_system, render_for_prompt
+from jev_agent.core.events import (
+    ACTOR_HUMAN,
+    EventType,
+    HumanApprovedPayload,
+    HumanNotePayload,
+    RunResumedPayload,
+)
 from jev_agent.core.harness import DEFAULT_TIMEOUT_S, Halt, Harness
 from jev_agent.core.integration import (
     IntegrationOutcome,
@@ -258,13 +265,20 @@ class Pipeline:
         """Pass the human gate the run waits at: the plan (then execute it), a pipeline
         step in ASK_EVERY_STEP mode (then run it), or shipping (then ship and merge it).
         With `execute` False only the gate is passed."""
-        async with hold_run_lease(self.store, run_id):
+        async with hold_run_lease(self.store, run_id, reason="approve"):
             gates = {gate: step for step, gate in STEP_GATES.items()}
             gates[RunState.AWAITING_SHIP] = RunState.SHIPPING
             self._require_state(run_id, set(gates), "approve")
-            nxt = gates[self.store.get_run(run_id).state]
+            gate = self.store.get_run(run_id).state
+            nxt = gates[gate]
             if not self.store.set_run_state(run_id, nxt, unless=STOPPED):
                 raise PipelineError(f"cannot approve run {run_id}: it was stopped meanwhile")
+            self.store.emit(
+                run_id,
+                EventType.HUMAN_APPROVED,
+                HumanApprovedPayload(gate=str(gate), execute=execute),
+                actor=ACTOR_HUMAN,
+            )
             if not execute:
                 return self.store.get_run(run_id)
             return await self._advance(run_id)
@@ -274,7 +288,7 @@ class Pipeline:
         goes back to EXECUTING; D6 votes on the new result again."""
         if not notes.strip():
             raise PipelineError("say what to change: the notes are empty")
-        async with hold_run_lease(self.store, run_id):
+        async with hold_run_lease(self.store, run_id, reason="approve"):
             self._require_state(run_id, {RunState.AWAITING_SHIP}, "modify")
             run = self.store.get_run(run_id)
             assert run.plan is not None
@@ -283,6 +297,12 @@ class Pipeline:
             plan = Plan(summary=run.plan.summary, tasks=tasks, risks=run.plan.risks)
             self.store.set_run_plan(run_id, plan, run.plan_round)
             self.store.upsert_tasks(run_id, plan)
+            self.store.emit(
+                run_id,
+                EventType.HUMAN_NOTE,
+                HumanNotePayload(notes=notes, task_id=tasks[-1].id),
+                actor=ACTOR_HUMAN,
+            )
             if not self.store.set_run_state(run_id, RunState.EXECUTING, unless=STOPPED):
                 raise PipelineError(f"cannot modify run {run_id}: it was stopped meanwhile")
             if not execute:
@@ -300,15 +320,16 @@ class Pipeline:
             await self._cleanup(run_id)
             return await self._finish(run_id)
 
-    async def resume(self, run_id: str) -> RunRecord:
+    async def resume(self, run_id: str, *, via: str = "resume command") -> RunRecord:
         """Continue a run that stopped mid-way (for example because the process died), or a
         NEEDS_HUMAN run whose cause the human has fixed (`resume_state` is set)."""
         # Under the lease: the open attempts closed below are then surely from a dead process.
-        async with hold_run_lease(self.store, run_id):
-            return await self._resume(run_id)
+        async with hold_run_lease(self.store, run_id, reason="resume"):
+            return await self._resume(run_id, via=via)
 
-    async def _resume(self, run_id: str) -> RunRecord:
+    async def _resume(self, run_id: str, *, via: str = "resume command") -> RunRecord:
         run = self.store.get_run(run_id)
+        from_state = str(run.state)
         if run.state in APPROVAL_GATES:
             raise PipelineError(f"run {run_id} is awaiting approval; use `jev approve {run_id}`")
         if run.state is RunState.AWAITING_SHIP:
@@ -322,6 +343,11 @@ class Pipeline:
             self.store.set_run_learning_outcome(run_id, None)  # learn again when it ends
         elif run.state in STOPPED:
             raise PipelineError(f"run {run_id} is {run.state}; it cannot be resumed")
+        self.store.emit(
+            run_id,
+            EventType.RUN_RESUMED,
+            RunResumedPayload(from_state=from_state, via=via),
+        )
         self._close_interrupted_attempts(run_id)
         return await self._advance(run_id)
 

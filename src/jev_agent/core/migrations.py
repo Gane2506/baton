@@ -379,7 +379,7 @@ MIGRATIONS: list[str] = [
     """
     CREATE TABLE run_events (
         seq            INTEGER PRIMARY KEY AUTOINCREMENT,  -- global insertion order
-        run_id         TEXT NOT NULL REFERENCES runs (id),
+        run_id         TEXT NOT NULL REFERENCES runs (id) ON DELETE CASCADE,
         run_seq        INTEGER NOT NULL,                   -- per-run ordering
         type           TEXT NOT NULL,
         schema_v       INTEGER NOT NULL DEFAULT 1,

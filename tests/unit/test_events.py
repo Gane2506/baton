@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -250,3 +251,210 @@ def test_events_unknown_run_is_a_one_line_error(fixture_repo: Path) -> None:
     result = CliRunner().invoke(app, ["events", "nope", "--repo", str(fixture_repo)])
     assert result.exit_code == 1
     assert "not found" in result.stderr
+
+
+# ---- Phase 1: full dual-write coverage -------------------------------------------
+
+
+def _payloads(store: Store, run_id: str, event_type: EventType) -> list[dict[str, Any]]:
+    return [e.payload for e in store.list_events(run_id, event_types={event_type})]
+
+
+def test_plan_validation_design_emissions(store: Store, tmp_path: Path) -> None:
+    from jev_agent.core.models import DesignDoc, ValidationResult
+
+    run = store.create_run(_idea(tmp_path))
+    store.set_run_plan(run.id, _plan("T1", "T2"), 2)
+    store.set_run_validation(
+        run.id, ValidationResult(verdict="revise", issues=["too big"], challenges=[])
+    )
+    store.set_run_design(run.id, DesignDoc(title="d", summary="s"))
+    (plan_payload,) = _payloads(store, run.id, EventType.PLAN_SET)
+    assert plan_payload["round"] == 2
+    assert [t["id"] for t in plan_payload["plan"]["tasks"]] == ["T1", "T2"]
+    (validation_payload,) = _payloads(store, run.id, EventType.VALIDATION_RECORDED)
+    assert validation_payload["verdict"] == "revise"
+    assert validation_payload["issues"] == ["too big"]
+    (design_payload,) = _payloads(store, run.id, EventType.DESIGN_SET)
+    assert design_payload["design"]["title"] == "d"
+
+
+def test_upsert_tasks_and_assignment_emissions(store: Store, tmp_path: Path) -> None:
+    run = store.create_run(_idea(tmp_path))
+    store.set_run_plan(run.id, _plan("T1", "T2"), 3)
+    plan_set_seq = store.latest_event_seq(run.id, EventType.PLAN_SET)
+    store.upsert_tasks(run.id, _plan("T1", "T2"))
+    (upserted,) = _payloads(store, run.id, EventType.TASKS_UPSERTED)
+    assert upserted["task_ids"] == ["T1", "T2"]
+    assert upserted["from_plan_round"] == 3
+    upserted_event = store.list_events(run.id, event_types={EventType.TASKS_UPSERTED})[0]
+    assert upserted_event.parent_run_seq == plan_set_seq  # parent: the plan.set
+
+    decision_id = store.record_decision(run.id, "T1", _decision_request(), _decision())
+    store.set_task_assignment(run.id, "T1", TaskState.DISPATCHED, "claude-code", "m", "high")
+    (assigned,) = _payloads(store, run.id, EventType.TASK_ASSIGNED)
+    assert assigned["task_id"] == "T1"
+    assert assigned["worker"] == "claude-code"
+    assert assigned["decision_id"] == decision_id  # parent: the D4 decision
+
+
+def test_quality_report_emission_links_attempt(store: Store, tmp_path: Path) -> None:
+    from jev_agent.quality.models import GateResult
+
+    run = store.create_run(_idea(tmp_path))
+    store.upsert_tasks(run.id, _plan("T1"))
+    attempt_id = store.start_attempt(run.id, "T1", 1, "coder", "w")
+    store.finish_attempt(
+        attempt_id,
+        WorkerResult(status="success", summary="ok", raw_log_path=tmp_path / "l"),
+    )
+    report_id = store.add_quality_report(
+        run.id,
+        GateResult(level="basic", scope="task", task_id="T1", blocked=True, reasons=["r1"]),
+    )
+    (gate,) = _payloads(store, run.id, EventType.GATE_CHECKED)
+    assert gate["report_id"] == report_id
+    assert gate["blocked"] is True
+    assert gate["top_findings"] == ["r1"]
+    finished_seq = store.latest_event_seq(
+        run.id, EventType.ATTEMPT_FINISHED, attempt_id=attempt_id
+    )
+    gate_event = store.list_events(run.id, event_types={EventType.GATE_CHECKED})[0]
+    assert gate_event.parent_run_seq == finished_seq
+
+
+def test_shipped_pr_emissions(store: Store, tmp_path: Path) -> None:
+    run = store.create_run(_idea(tmp_path))
+    pr = store.add_shipped_pr(
+        run.id,
+        remote="origin",
+        repo="o/r",
+        branch="b",
+        base="main",
+        number=42,
+        url="https://example.test/42",
+        title="t",
+        draft=False,
+    )
+    store.update_shipped_pr(
+        pr.id,
+        state="merged",
+        draft=False,
+        merged_at=None,
+        closed_at=None,
+        review_comments=1,
+        reviews=2,
+        ci_status="success",
+        commits_after_open=0,
+        additions=10,
+        deletions=2,
+        changed_files=3,
+        reverted=False,
+        raw=None,
+    )
+    ships = _payloads(store, run.id, EventType.SHIP_RECORDED)
+    assert len(ships) == 2
+    assert ships[0]["pr_id"] == pr.id and ships[0]["number"] == 42
+    assert ships[0]["state"] == "open" and ships[0]["ci_status"] is None
+    assert ships[1]["state"] == "merged" and ships[1]["ci_status"] == "success"
+
+
+def test_lease_claim_release_takeover_emissions(store: Store, tmp_path: Path) -> None:
+    run = store.create_run(_idea(tmp_path))
+    assert store.claim_run_lease(run.id, "t1", 111, "h1", lambda h: True, reason="start") is None
+    (claimed,) = _payloads(store, run.id, EventType.LEASE_CLAIMED)
+    assert (claimed["pid"], claimed["host"], claimed["reason"]) == (111, "h1", "start")
+    # A live holder blocks the claim and emits nothing.
+    holder = store.claim_run_lease(run.id, "t2", 222, "h2", lambda h: False)
+    assert holder is not None and holder.token == "t1"
+    assert _payloads(store, run.id, EventType.LEASE_TAKEN_OVER) == []
+    # A stale holder's lease is taken over.
+    assert store.claim_run_lease(run.id, "t2", 222, "h2", lambda h: True) is None
+    (taken_over,) = _payloads(store, run.id, EventType.LEASE_TAKEN_OVER)
+    assert (taken_over["old_pid"], taken_over["new_pid"]) == (111, 222)
+    store.release_run_lease(run.id, "t2")
+    (released,) = _payloads(store, run.id, EventType.LEASE_RELEASED)
+    assert released["held_s"] is not None and released["held_s"] >= 0
+
+
+def test_spend_emission_carries_running_total(store: Store, tmp_path: Path) -> None:
+    run = store.create_run(_idea(tmp_path))
+    store.upsert_tasks(run.id, _plan("T1"))
+    store.add_spend(run.id, "T1", 1.5)
+    store.add_spend(run.id, "T1", 2.5)
+    spends = _payloads(store, run.id, EventType.SPEND_ADDED)
+    assert [s["usd"] for s in spends] == [1.5, 2.5]
+    assert [s["running_total"] for s in spends] == [1.5, 4.0]
+    # Streaming updates stay snapshot-only: no event.
+    store.add_run_spend(run.id, 0.1)
+    assert len(_payloads(store, run.id, EventType.SPEND_ADDED)) == 2
+
+
+def test_emit_attempt_tests(store: Store, tmp_path: Path) -> None:
+    run = store.create_run(_idea(tmp_path))
+    store.upsert_tasks(run.id, _plan("T1"))
+    store.start_attempt(run.id, "T1", 1, "coder", "w")
+    seq = store.emit_attempt_tests(run.id, "T1", 1, "failed")
+    assert seq is not None
+    (tested,) = _payloads(store, run.id, EventType.ATTEMPT_TESTED)
+    assert tested["tests"] == "failed" and tested["task_id"] == "T1"
+    tested_event = store.list_events(run.id, event_types={EventType.ATTEMPT_TESTED})[0]
+    assert tested_event.parent_run_seq is None  # no finished event yet in this script
+    assert store.emit_attempt_tests(run.id, "T1", 99, "failed") is None  # unknown attempt
+
+
+class _FakeHarness:
+    """Just enough harness for the human-gate pipeline methods: no workers, no network."""
+
+    def __init__(self, store: Store) -> None:
+        self.store = store
+
+
+@pytest.mark.asyncio
+async def test_pipeline_human_gate_emissions(store: Store, tmp_path: Path) -> None:
+    from jev_agent.core.pipeline import Pipeline
+
+    pipeline = Pipeline(_FakeHarness(store))  # type: ignore[arg-type]
+    run = store.create_run(_idea(tmp_path))
+    store.set_run_state(run.id, RunState.AWAITING_APPROVAL)
+    await pipeline.approve(run.id, execute=False)
+    (approved,) = _payloads(store, run.id, EventType.HUMAN_APPROVED)
+    assert approved["gate"] == "AWAITING_APPROVAL" and approved["execute"] is False
+    event = store.list_events(run.id, event_types={EventType.HUMAN_APPROVED})[0]
+    assert event.actor == "human"
+
+
+@pytest.mark.asyncio
+async def test_pipeline_request_changes_emits_human_note(store: Store, tmp_path: Path) -> None:
+    from jev_agent.core.pipeline import Pipeline
+
+    pipeline = Pipeline(_FakeHarness(store))  # type: ignore[arg-type]
+    run = store.create_run(_idea(tmp_path))
+    store.set_run_plan(run.id, _plan("T1"), 1)
+    store.upsert_tasks(run.id, _plan("T1"))
+    store.set_run_state(run.id, RunState.AWAITING_SHIP)
+    await pipeline.request_changes(run.id, "make it blue", execute=False)
+    (note,) = _payloads(store, run.id, EventType.HUMAN_NOTE)
+    assert note["notes"] == "make it blue"
+    assert note["task_id"] == "T2"  # the appended changes card
+
+
+@pytest.mark.asyncio
+async def test_pipeline_resume_emits_run_resumed(store: Store, tmp_path: Path) -> None:
+    from jev_agent.core.pipeline import Pipeline
+
+    pipeline = Pipeline(_FakeHarness(store))  # type: ignore[arg-type]
+    run = store.create_run(_idea(tmp_path))
+    store.set_run_state(run.id, RunState.NEEDS_HUMAN, resume_state=RunState.PLANNING)
+    advanced = []
+
+    async def _no_advance(run_id: str):  # type: ignore[no-untyped-def]
+        advanced.append(run_id)
+        return store.get_run(run_id)
+
+    pipeline._advance = _no_advance  # type: ignore[method-assign]
+    await pipeline.resume(run.id)
+    (resumed,) = _payloads(store, run.id, EventType.RUN_RESUMED)
+    assert resumed["from_state"] == "NEEDS_HUMAN"
+    assert resumed["via"] == "resume command"
+    assert advanced == [run.id]

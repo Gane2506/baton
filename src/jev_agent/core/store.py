@@ -27,12 +27,24 @@ from jev_agent.core.events import (
     EVENT_SCHEMA_V,
     AttemptFinishedPayload,
     AttemptStartedPayload,
+    AttemptTestedPayload,
     DecisionRecordedPayload,
+    DesignSetPayload,
     Event,
     EventType,
+    GateCheckedPayload,
+    LeaseClaimedPayload,
+    LeaseReleasedPayload,
+    LeaseTakenOverPayload,
+    PlanSetPayload,
     RunCreatedPayload,
     RunStateChangedPayload,
+    ShipRecordedPayload,
+    SpendAddedPayload,
+    TaskAssignedPayload,
     TaskStateChangedPayload,
+    TasksUpsertedPayload,
+    ValidationRecordedPayload,
     event_from_row,
 )
 from jev_agent.core.migrations import SchemaVersionError, apply_migrations, configure_connection
@@ -638,16 +650,55 @@ class Store:
 
     def set_run_validation(self, run_id: str, validation: ValidationResult | None) -> None:
         value = None if validation is None else validation.model_dump_json()
-        self._update_run(run_id, "validation_json = ?", (value,))
+        with self._tx() as db:
+            cur = db.execute(
+                "UPDATE runs SET validation_json = ?, updated_at = ? WHERE id = ?",
+                (value, self._clock(), run_id),
+            )
+            if cur.rowcount == 0:
+                raise NotFoundError(f"run {run_id!r} not found")
+            if validation is not None:
+                self._emit(
+                    db,
+                    run_id,
+                    EventType.VALIDATION_RECORDED,
+                    ValidationRecordedPayload(
+                        verdict=str(validation.verdict),
+                        issues=list(validation.issues),
+                        validation=validation.model_dump(mode="json"),
+                    ),
+                )
 
     def set_run_plan(self, run_id: str, plan: Plan, plan_round: int) -> None:
-        self._update_run(
-            run_id, "plan_json = ?, plan_round = ?", (plan.model_dump_json(), plan_round)
-        )
+        with self._tx() as db:
+            cur = db.execute(
+                "UPDATE runs SET plan_json = ?, plan_round = ?, updated_at = ? WHERE id = ?",
+                (plan.model_dump_json(), plan_round, self._clock(), run_id),
+            )
+            if cur.rowcount == 0:
+                raise NotFoundError(f"run {run_id!r} not found")
+            self._emit(
+                db,
+                run_id,
+                EventType.PLAN_SET,
+                PlanSetPayload(round=plan_round, plan=plan.model_dump(mode="json")),
+            )
 
     def set_run_design(self, run_id: str, design: DesignDoc) -> None:
         """Persist the designer's design doc for the run (the DESIGNING pipeline stage)."""
-        self._update_run(run_id, "design_json = ?", (design.model_dump_json(),))
+        with self._tx() as db:
+            cur = db.execute(
+                "UPDATE runs SET design_json = ?, updated_at = ? WHERE id = ?",
+                (design.model_dump_json(), self._clock(), run_id),
+            )
+            if cur.rowcount == 0:
+                raise NotFoundError(f"run {run_id!r} not found")
+            self._emit(
+                db,
+                run_id,
+                EventType.DESIGN_SET,
+                DesignSetPayload(design=design.model_dump(mode="json")),
+            )
 
     def set_run_learning(self, run_id: str, profile: str | None) -> None:
         """Change the learning profile the run uses from now on (None: learning off)."""
@@ -680,7 +731,12 @@ class Store:
         self._update_run(run_id, "spend_usd = spend_usd + ?", (usd,))
 
     def add_spend(self, run_id: str, task_id: str | None, usd: float) -> None:
-        """Add `usd` to the run total and, if `task_id` is given, to that task, atomically."""
+        """Add `usd` to the run total and, if `task_id` is given, to that task, atomically.
+
+        Emits `spend.added` with the running total. Spend is the noisiest event source,
+        so only this method emits: per-attempt and per-decision costs, never streaming
+        updates (`add_run_spend` stays snapshot-only).
+        """
         with self._tx() as db:
             cur = db.execute(
                 "UPDATE runs SET spend_usd = spend_usd + ?, updated_at = ? WHERE id = ?",
@@ -695,6 +751,15 @@ class Store:
                 )
                 if cur.rowcount == 0:
                     raise NotFoundError(f"task {task_id!r} not found in run {run_id!r}")
+            total = db.execute(
+                "SELECT spend_usd FROM runs WHERE id = ?", (run_id,)
+            ).fetchone()["spend_usd"]
+            self._emit(
+                db,
+                run_id,
+                EventType.SPEND_ADDED,
+                SpendAddedPayload(usd=usd, task_id=task_id, running_total=float(total)),
+            )
 
     def _update_run(self, run_id: str, assignments: str, params: tuple[object, ...]) -> None:
         with self._tx() as db:
@@ -730,6 +795,16 @@ class Store:
                     " position = excluded.position, card_json = excluded.card_json",
                     (run_id, card.id, position, card.model_dump_json(), TaskState.PENDING),
                 )
+            plan_round = db.execute(
+                "SELECT plan_round FROM runs WHERE id = ?", (run_id,)
+            ).fetchone()["plan_round"]
+            self._emit(
+                db,
+                run_id,
+                EventType.TASKS_UPSERTED,
+                TasksUpsertedPayload(task_ids=ids, from_plan_round=int(plan_round or 0)),
+                parent_run_seq=self._latest_event_seq_locked(db, run_id, EventType.PLAN_SET),
+            )
 
     def get_task(self, run_id: str, task_id: str) -> TaskRecord:
         row = self._conn.execute(
@@ -807,7 +882,37 @@ class Store:
         params: tuple[object, ...] = (state, worker, model, effort)
         if note is not None:
             assignments, params = assignments + ", note = ?", (*params, note)
-        self._update_task(run_id, task_id, assignments, params)
+        with self._tx() as db:
+            cur = db.execute(
+                f"UPDATE tasks SET {assignments} WHERE run_id = ? AND id = ?",
+                (*params, run_id, task_id),
+            )
+            if cur.rowcount == 0:
+                raise NotFoundError(f"task {task_id!r} not found in run {run_id!r}")
+            decision_id: int | None = None
+            parent = self._latest_event_seq_locked(
+                db, run_id, EventType.DECISION_RECORDED, task_id=task_id
+            )
+            if parent is not None:
+                row = db.execute(
+                    "SELECT payload_json FROM run_events WHERE run_id = ? AND run_seq = ?",
+                    (run_id, parent),
+                ).fetchone()
+                if row is not None:
+                    decision_id = json.loads(row["payload_json"]).get("decision_id")
+            self._emit(
+                db,
+                run_id,
+                EventType.TASK_ASSIGNED,
+                TaskAssignedPayload(
+                    task_id=task_id,
+                    worker=worker,
+                    model=model,
+                    effort=effort,
+                    decision_id=decision_id,
+                ),
+                parent_run_seq=parent,
+            )
 
     def increment_task_attempts(self, run_id: str, task_id: str) -> int:
         """Add one to the task's attempt counter and return the new value."""
@@ -945,6 +1050,29 @@ class Store:
                 parent_run_seq=parent,
             )
 
+    def emit_attempt_tests(
+        self, run_id: str, task_id: str | None, attempt_no: int, tests: str
+    ) -> int | None:
+        """Record a coder attempt's test outcome (`attempt.tested`: "passed" | "failed" |
+        "skipped"). The attempt row already exists (`finish_attempt` ran first); this is a
+        standalone annotation event, and what `jev bisect --test` scans for."""
+        row = self._conn.execute(
+            "SELECT id FROM attempts WHERE run_id = ? AND IFNULL(task_id, '') = IFNULL(?, '')"
+            " AND attempt_no = ? ORDER BY id DESC LIMIT 1",
+            (run_id, task_id, attempt_no),
+        ).fetchone()
+        if row is None:
+            return None
+        attempt_id = int(row["id"])
+        return self.emit(
+            run_id,
+            EventType.ATTEMPT_TESTED,
+            AttemptTestedPayload(attempt_id=attempt_id, task_id=task_id, tests=tests),
+            parent_run_seq=self.latest_event_seq(
+                run_id, EventType.ATTEMPT_FINISHED, attempt_id=attempt_id
+            ),
+        )
+
     def get_attempt(self, attempt_id: int) -> AttemptRecord:
         row = self._conn.execute("SELECT * FROM attempts WHERE id = ?", (attempt_id,)).fetchone()
         if row is None:
@@ -1044,6 +1172,22 @@ class Store:
                 ),
             )
             assert cur.lastrowid is not None
+            self._emit(
+                db,
+                run_id,
+                EventType.GATE_CHECKED,
+                GateCheckedPayload(
+                    report_id=cur.lastrowid,
+                    task_id=result.task_id,
+                    scope=str(result.scope),
+                    level=str(result.level),
+                    blocked=result.blocked,
+                    top_findings=result.top_findings(),
+                ),
+                parent_run_seq=self._latest_event_seq_locked(
+                    db, run_id, EventType.ATTEMPT_FINISHED, task_id=result.task_id
+                ),
+            )
             return cur.lastrowid
 
     def list_quality_reports(self, run_id: str) -> list[QualityReportRecord]:
@@ -1098,6 +1242,12 @@ class Store:
             )
             assert cur.lastrowid is not None
             pr_id = cur.lastrowid
+            self._emit(
+                db,
+                run_id,
+                EventType.SHIP_RECORDED,
+                ShipRecordedPayload(pr_id=pr_id, number=number, state=str(state), ci_status=None),
+            )
         return self.get_shipped_pr(pr_id)
 
     def get_shipped_pr(self, pr_id: int) -> ShippedPrRecord:
@@ -1161,6 +1311,18 @@ class Store:
             )
             if cur.rowcount == 0:
                 raise NotFoundError(f"shipped PR {pr_id} not found")
+            row = db.execute(
+                "SELECT run_id, number FROM shipped_prs WHERE id = ?", (pr_id,)
+            ).fetchone()
+            assert row is not None
+            self._emit(
+                db,
+                str(row["run_id"]),
+                EventType.SHIP_RECORDED,
+                ShipRecordedPayload(
+                    pr_id=pr_id, number=row["number"], state=str(state), ci_status=ci_status
+                ),
+            )
         return self.get_shipped_pr(pr_id)
 
     def set_run_kpis(self, run_id: str, kpis_json: str) -> None:
@@ -1190,12 +1352,22 @@ class Store:
         return None if row is None else _run_lease(row)
 
     def claim_run_lease(
-        self, run_id: str, token: str, pid: int, host: str, stale: Callable[[RunLease], bool]
+        self,
+        run_id: str,
+        token: str,
+        pid: int,
+        host: str,
+        stale: Callable[[RunLease], bool],
+        *,
+        reason: str = "drive",
     ) -> RunLease | None:
         """Take the run's lease unless a holder that `stale` calls live has it.
 
         The check and the write are one transaction, so two claimers never both win. Returns
         None when the lease was taken (a stale holder's lease is replaced), else the holder.
+        Emits `lease.claimed` for a fresh claim, `lease.taken_over` when a stale holder's
+        lease is replaced. `reason` says why the claim was made ("start" | "approve" |
+        "resume" | "recovery" | "drive").
         """
         with self._tx() as db:
             self._require_run(run_id)
@@ -1212,6 +1384,23 @@ class Store:
                 " acquired_at = excluded.acquired_at, heartbeat_at = excluded.heartbeat_at",
                 (run_id, token, pid, host, now, now),
             )
+            if row is None:
+                self._emit(
+                    db,
+                    run_id,
+                    EventType.LEASE_CLAIMED,
+                    LeaseClaimedPayload(pid=pid, host=host, reason=reason),
+                )
+            else:
+                old = _run_lease(row)
+                self._emit(
+                    db,
+                    run_id,
+                    EventType.LEASE_TAKEN_OVER,
+                    LeaseTakenOverPayload(
+                        old_pid=old.pid, old_host=old.host, new_pid=pid, new_host=host
+                    ),
+                )
         return None
 
     def renew_run_lease(self, run_id: str, token: str) -> bool:
@@ -1226,7 +1415,25 @@ class Store:
     def release_run_lease(self, run_id: str, token: str) -> None:
         """Drop the lease if it is still held with `token` (a new holder's lease stays)."""
         with self._tx() as db:
+            row = db.execute(
+                "SELECT acquired_at FROM run_leases WHERE run_id = ? AND token = ?",
+                (run_id, token),
+            ).fetchone()
             db.execute("DELETE FROM run_leases WHERE run_id = ? AND token = ?", (run_id, token))
+            if row is not None and row["acquired_at"]:
+                try:
+                    held_s = (
+                        datetime.fromisoformat(self._clock())
+                        - datetime.fromisoformat(row["acquired_at"])
+                    ).total_seconds()
+                except ValueError:
+                    held_s = None
+                self._emit(
+                    db,
+                    run_id,
+                    EventType.LEASE_RELEASED,
+                    LeaseReleasedPayload(held_s=held_s),
+                )
 
     # ---- settings (set by `jev learning`) --------------------------------------------------
 

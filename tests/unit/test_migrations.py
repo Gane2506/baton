@@ -79,4 +79,13 @@ def test_migration_17_adds_run_events_and_lease_event_seq(tmp_path: Path) -> Non
     conn.execute("INSERT INTO run_events (run_id, run_seq, type, ts, actor, payload_json)"
                  " VALUES ('r', 1, 'run.created', 't', 'pipeline', '{}')")
     assert conn.execute("SELECT COUNT(*) FROM run_events").fetchone()[0] == 1
+    # Deleting a run cascades to its events, like its lease row.
+    conn.execute(
+        "INSERT INTO runs (id, idea_json, state, created_at, updated_at)"
+        " VALUES ('r2', '{}', 'INTAKE', 't', 't')"
+    )
+    conn.execute("INSERT INTO run_events (run_id, run_seq, type, ts, actor, payload_json)"
+                 " VALUES ('r2', 1, 'run.created', 't', 'pipeline', '{}')")
+    conn.execute("DELETE FROM runs WHERE id = 'r2'")
+    assert conn.execute("SELECT COUNT(*) FROM run_events WHERE run_id = 'r2'").fetchone()[0] == 0
     conn.close()
