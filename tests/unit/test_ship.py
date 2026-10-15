@@ -930,6 +930,52 @@ def test_pending_checks_are_polled_until_green(
     assert len(views) == 2
 
 
+def test_pending_checks_forever_hit_the_timeout_and_stop(
+    waiting_run: tuple[Path, str, str], gh: FakeGh
+) -> None:
+    repo, run_id, sha = waiting_run
+    (repo / "jev.toml").write_text(SHIP_TOML + "checks_poll_s = 1\nchecks_timeout_s = 1\n")
+    pending = [{"name": "test", "status": "IN_PROGRESS", "conclusion": None}]
+    gh.answer(MERGE_KEY, _open_view(sha, pending))
+    code, output = _jev(repo, "ship", "approve", run_id)
+    assert code == 3 and "checks did not finish within 1 s" in output, output
+    assert "pr merge" not in gh.commands()  # nothing is merged on a timeout
+    assert _state(repo, run_id) is RunState.NEEDS_HUMAN
+
+
+def test_merge_timeout_with_github_merged_counts_as_merged(
+    waiting_run: tuple[Path, str, str], gh: FakeGh
+) -> None:
+    import asyncio
+
+    from jev_agent.config.loader import load_config
+    from jev_agent.core.ship import ship_and_merge
+
+    repo, run_id, sha = waiting_run
+    with _store(repo) as store:
+        store.set_run_state(run_id, RunState.SHIPPING)
+    gh.answer(MERGE_KEY, _open_view(sha))
+    gh.responses["pr merge"] = {"code": 0, "stdout": "", "sleep": 5}
+    gh.answer("auth status")  # rewrite responses.json with the sleep
+    gh.answer(SYNC_KEY, json.dumps(PR_VIEW))
+
+    async def no_sleep(_: float) -> None:
+        return None
+
+    with _store(repo) as store:
+        pr = asyncio.run(
+            ship_and_merge(
+                repo, load_config(repo), store, run_id, gh=Gh(repo, timeout_s=0.5), sleep=no_sleep
+            )
+        )
+    assert (pr.number, pr.state, pr.head_oid) == (42, "merged", sha)
+    merges = [argv for argv in gh.calls() if argv[:2] == ["pr", "merge"]]
+    assert len(merges) == 1 and "--match-head-commit" in merges[0]
+    with _store(repo) as store:
+        [record] = store.list_shipped_prs(run_id)
+        assert record.state == "merged"
+
+
 def test_modify_adds_a_task_with_the_notes_and_votes_again(
     waiting_run: tuple[Path, str, str], gh: FakeGh
 ) -> None:

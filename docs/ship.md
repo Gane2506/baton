@@ -161,8 +161,8 @@ and a finished merge are found, not redone.
 - the push or `gh pr create` failed, as for `jev ship`;
 - under consensus, Jev and Laya do not agree at D6: that stops before anything ships.
 
-The shapes of `gh pr view --json` and `gh pr merge` are not verified against a live repository
-yet ([verification.md](verification.md) section 8).
+The shapes of `gh pr view --json` and `gh pr merge` are verified against a live repository
+([verification.md](verification.md) section 8, 2026-10-15).
 
 ## KPIs
 

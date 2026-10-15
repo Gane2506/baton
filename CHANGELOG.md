@@ -5,6 +5,29 @@ All notable changes to this project are documented here. The format is based on
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Design detail for every entry is in
 [docs/decisions.md](docs/decisions.md).
 
+## [Unreleased]
+
+### Fixed
+
+- **Ship/merge path verified live** ([#68](https://github.com/Gane2506/baton/issues/68)).
+  `gh pr view --json` and `gh pr merge` were exercised against a disposable scratch repo:
+  merge success (exit 0, no output off-terminal), refusal on a wrong `--match-head-commit`
+  (exit 1) and on required reviews (exit 1), idempotent re-merge of an already-merged PR,
+  and the real `statusCheckRollup` shapes — all match what `merge_check` assumes. Findings
+  are recorded in `docs/verification.md` section 8. Offline tests now also cover the
+  checks-timeout stop in the polling loop and a `gh pr merge` timeout that GitHub still
+  merged (counts as merged).
+
+### Added
+
+- **`jev init --demo` and `jev demo reset`** ([#105](https://github.com/Gane2506/baton/issues/105)).
+  One command scaffolds a demo project pre-populated with sample runs, queue items, lessons,
+  spend data, shipped PRs and a saved chat, reusing `examples/demo/seed_demo.py` (now also
+  importable as `jev_agent.demo.seeder`, with a `demo_config=False` mode for real user use).
+  Demo data is clearly marked (`.jev/demo.json`, a dashboard banner, `[demo]` log notes);
+  seeding touches nothing outside the repo and needs no repo trust, and `jev demo reset`
+  removes the demo state again. See [docs/demo.md](docs/demo.md).
+
 ## [0.4.0] - 2026-10-14
 
 ### Added

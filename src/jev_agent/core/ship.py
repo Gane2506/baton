@@ -832,7 +832,8 @@ def _failed_checks(rollup: object) -> list[str]:
 def merge_check(view: object, head_oid: str, waited_s: float, settings: ShipConfig) -> MergeCheck:
     """Decide from one `gh pr view --json` answer (`MERGE_VIEW_FIELDS`) whether the PR can be
     merged now. Only the voted commit `head_oid` is ever merged; anything that is not clearly
-    fine stops for a person. gh's value shapes are not verified live (docs/verification.md)."""
+    fine stops for a person. gh's value shapes were verified live (docs/verification.md
+    section 8, 2026-10-15); anything unexpected still stops for a person."""
     if not isinstance(view, dict):
         return MergeCheck("stop", "gh pr view did not return an object")
     state = pr_state(view.get("state"))

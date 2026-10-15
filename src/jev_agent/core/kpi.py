@@ -251,8 +251,8 @@ def ci_status(rollup: object) -> str:
 
 
 def pr_state(value: object) -> PrState:
-    """gh's PR `state` (`OPEN`, `CLOSED`, `MERGED`) as a stored state. gh's value shapes are
-    not verified live (docs/verification.md section 8), so anything else reads as `open`."""
+    """gh's PR `state` (`OPEN`, `CLOSED`, `MERGED`, verified live in docs/verification.md
+    section 8) as a stored state. Anything else reads as `open`."""
     text = value.lower() if isinstance(value, str) else ""
     for state in PR_STATES:
         if text == state:

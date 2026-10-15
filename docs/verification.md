@@ -567,17 +567,65 @@ repository.
   a person instead of waiting. **UNVERIFIED** live: whether gh can still enable auto-merge when
   a required check is missing from what `statusCheckRollup` reports.
 - **`gh pr view --json`** also lists `headRefOid` and `mergeable` (and `mergeStateStatus`,
-  `reviewDecision`). Value shapes **UNVERIFIED**: `mergeable` is taken to be `MERGEABLE`,
-  `CONFLICTING` or `UNKNOWN` (GitHub's GraphQL enum); only `CONFLICTING` stops a merge.
+  `reviewDecision`). Value shapes are verified live since 2026-10-15 (below): `mergeable`
+  observed as `MERGEABLE` on open PRs and `UNKNOWN` after merging (GitHub's GraphQL enum);
+  only `CONFLICTING` stops a merge.
 - **Exit codes** (`gh help exit-codes`): 0 success, 1 any failure, 2 cancelled, 4 needs
-  authentication. What `gh pr merge` prints when not on a terminal is **UNVERIFIED**; jev does
-  not read it: after the command it reads the PR back and trusts only `state: MERGED`. The fake
-  `gh` in the tests answers `pr merge` with exit 0 and no output.
+  authentication. What `gh pr merge` prints when not on a terminal is verified live since
+  2026-10-15 (below): exit 0 with no output. jev does not read it: after the command it reads
+  the PR back and trusts only `state: MERGED`. The fake `gh` in the tests answers `pr merge`
+  with exit 0 and no output.
 
 Needs one live check on a scratch repository (with the maintainer's OK): a PR with green
 checks, one with a failing check, one without CI, and one on a branch with required reviews,
 to confirm the `gh pr view` value shapes and that `gh pr merge` refuses (exit 1) rather than
 enabling auto-merge.
+
+#### Live check on 2026-10-15 (issue #68's remaining boxes)
+
+Run with `gh` 2.102.0 against a disposable scratch repo, `Gane2506/jev-merge-test-disposable`
+(private; made public briefly to set branch protection, then private again; the repo could not
+be deleted afterwards — the VM's token lacks the `delete_repo` scope, so it is left private
+with a disposable name). Four scratch PRs were opened and merged/refused; no other
+repository was touched.
+
+- **`gh pr view --json state,isDraft,headRefOid,mergeable,statusCheckRollup` on an open PR.**
+  `state` is `OPEN` (uppercase), `isDraft` a boolean, `headRefOid` the full 40-character SHA,
+  `mergeable` was `MERGEABLE`. `statusCheckRollup` entries carry `__typename` (`CheckRun` or
+  `StatusContext`): check runs have `status` (`COMPLETED`) and `conclusion` (`SUCCESS` /
+  `FAILURE`) with `name`; status contexts have `context` and `state` (`PENDING`), and no
+  `status`/`conclusion`. This matches what `ci_status` and `merge_check` assume. A
+  pending non-required status (a third-party `CodeRabbit` context) makes `ci_status` return
+  `pending`, so jev waits on it, exactly as designed.
+- **`gh pr merge <n> --repo <repo> --squash --match-head-commit <sha>` (jev's exact form).**
+  Exit 0 with **no output** when not on a terminal — the fake `gh`'s "exit 0 and no output"
+  assumption was right. Read back afterwards: `state` `MERGED`, `mergedAt`/`closedAt` set to
+  ISO-8601 `Z` times, `mergeable` now `UNKNOWN` (jev only ever stops on `CONFLICTING`, and it
+  checks `state` first, so this is harmless).
+- **Merge refusal.** With a wrong `--match-head-commit`: exit 1,
+  `GraphQL: Head branch was modified. Review and try the merge again. (mergePullRequest)`.
+  The pin works: only the voted commit merges. On a branch with required approving reviews
+  (set via the API): exit 1,
+  `X Pull request ... is not mergeable: the base branch policy prohibits the merge.`
+  followed by suggestions to add `--auto` or `--admin` — flags jev deliberately never passes,
+  so a held PR stops for a person instead of queueing silently.
+- **Merging an already-merged PR**: exit **0** with the warning
+  `! Pull request ... was already merged` on stderr. jev reads the PR back and finds
+  `state: MERGED`, so this is idempotent, as the SHIPPING step's "found, not redone" design
+  requires.
+- **`gh pr view` for `jev ship sync`'s fields** (`state,createdAt,mergedAt,closedAt,reviews,
+  comments,commits,additions,deletions,changedFiles,statusCheckRollup,isDraft`): `state`
+  `MERGED`, ISO `Z` times, `reviews`/`comments`/`commits` are arrays (reviews and comments
+  carry `body`), matching `github_kpis`'s expectations.
+- jev's own `merge_check` and `ci_status` were run against the captured live payloads: a
+  failing check run maps to "stop: checks failed: test", a pending status context to "wait",
+  and `pr_state("MERGED")` to "merged".
+
+No live check was done for the checks timeout (1 h) or a merge queue; those paths are
+covered by the fake-`gh` tests. With this, both of issue #68's remaining boxes are done:
+the merge path is verified live and recorded here, and offline tests cover merge success,
+merge failure, the checks timeout and `gh pr view --json` parsing
+(`tests/unit/test_ship.py`).
 
 ---
 
