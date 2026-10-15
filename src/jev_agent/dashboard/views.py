@@ -826,10 +826,32 @@ class EnvVar:
     name: str
     used_for: str
     is_set: bool  # never the value
+    from_secrets: bool = False  # this process got it from ~/.jev/secrets.env
+
+    @property
+    def status(self) -> str:
+        """Display label. Keys from the real environment cannot be removed here."""
+        if not self.is_set:
+            return "Not set"
+        return "Set" if self.from_secrets else "Set (environment)"
+
+
+def env_var_names(config: JevConfig) -> list[str]:
+    """Variable names the config points at — the datalist for the add-key form.
+    The test hook is excluded; it is not a real key."""
+    names = [config.dispatcher.jev.api_key_env, config.workers.api.api_key_env]
+    for _name, server in config.tools.mcp.items():
+        names += list(server.env_from)
+        if server.bearer_token_env:
+            names.append(server.bearer_token_env)
+        names += list(server.headers_from_env.values())
+    return sorted({n for n in names if n and n != FAKE_WORKERS_ENV})
 
 
 def env_vars(config: JevConfig) -> list[EnvVar]:
     """Environment variables the config names, and whether each is set. Never values."""
+    from jev_agent.core.secrets import loaded_names, read_secrets
+
     wanted: list[tuple[str, str]] = [
         (config.dispatcher.jev.api_key_env, "[dispatcher.jev] api_key_env"),
         (config.workers.api.api_key_env, "[workers.api] api_key_env"),
@@ -846,8 +868,18 @@ def env_vars(config: JevConfig) -> list[EnvVar]:
     seen: dict[str, list[str]] = {}
     for name, used in wanted:
         seen.setdefault(name, []).append(used)
+    # Keys saved through the dashboard show here even when the config no longer
+    # (or never did) reference them, so they stay visible and removable.
+    for name in read_secrets():
+        seen.setdefault(name, []).append("secrets file (~/.jev/secrets.env)")
+    from_file = loaded_names()
     return [
-        EnvVar(name, ", ".join(uses), bool(os.environ.get(name, "").strip()))
+        EnvVar(
+            name,
+            ", ".join(uses),
+            bool(os.environ.get(name, "").strip()),
+            name in from_file,
+        )
         for name, uses in seen.items()
     ]
 

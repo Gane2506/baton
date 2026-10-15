@@ -60,14 +60,51 @@
 <section class="panel" aria-label="Key health">
   <h2>Keys <span class="muted">·</span> names only, never values</h2>
   <div class="table-wrap"><table>
-    <thead><tr><th>variable</th><th>used for</th><th>status</th></tr></thead>
+    <thead><tr><th>variable</th><th>used for</th><th>status</th><th></th></tr></thead>
     <tbody>
     {% for v in env_vars %}
       <tr><td class="mono">{{ v.name }}</td><td class="small">{{ v.used_for }}</td>
-      <td>{{ badge("Set", "ok") if v.is_set else badge("Not set", "warn") }}</td></tr>
+      <td>{{ badge(v.status, "ok" if v.is_set else "warn") }}</td>
+      <td class="actions">{% if v.from_secrets and v.is_set %}
+        <form method="post" action="/connections/keys/remove" class="inline">
+          {{ csrf_input() }}
+          <input type="hidden" name="name" value="{{ v.name }}">
+          <button type="submit" class="small danger">Remove</button>
+        </form>{% endif %}</td></tr>
     {% endfor %}
     </tbody>
   </table></div>
+  <details class="add-key">
+    <summary>Add key</summary>
+    <form method="post" action="/connections/keys/add">
+      {{ csrf_input() }}
+      <div class="field-row">
+        <label for="key-name">Variable
+          <span class="hint">The environment variable name; the list suggests the ones your config uses.</span>
+        </label>
+        <div class="field-control">
+          <input type="text" id="key-name" name="name" list="key-names" required
+                 pattern="[A-Za-z_][A-Za-z0-9_]*" placeholder="OPENROUTER_API_KEY" autocomplete="off">
+          <datalist id="key-names">
+            {% for n in key_names %}<option value="{{ n }}">{% endfor %}
+          </datalist>
+        </div>
+        <div class="field-actions"></div>
+      </div>
+      <div class="field-row">
+        <label for="key-value">Value
+          <span class="hint">Typed blind; never shown again after saving.</span>
+        </label>
+        <div class="field-control">
+          <input type="password" id="key-value" name="value" required autocomplete="new-password">
+        </div>
+        <div class="field-actions"><button type="submit">Save</button></div>
+      </div>
+    </form>
+    <p class="hint">Saved to <code>~/.jev/secrets.env</code> (mode 600) and in effect
+    immediately — no restart needed. Keys already in your real environment show as
+    "Set (environment)" and are managed outside jev.</p>
+  </details>
 </section>
 
 <p class="hint">Server configuration itself is edited below, in place.</p>

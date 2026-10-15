@@ -160,6 +160,19 @@ access to it like shell access to the repo.
 - **No secrets.** The config cannot hold secrets (secret-looking keys are rejected); the
   Settings page lists environment variable names and whether they are set, never values.
 
+### Adding API keys from the Connections page
+
+`jev` reads API keys only from the process environment, but you never have to leave
+the dashboard to set one. The Connections page's **Keys** section has an *Add key*
+form: pick a variable (the dropdown suggests the names your config uses, e.g.
+`OPENROUTER_API_KEY`) and paste the value. It is saved to `~/.jev/secrets.env`
+(mode 600, directory 700) and takes effect immediately — no dashboard restart.
+The file is loaded at startup by both the CLI and the dashboard; a real environment
+variable with the same name always wins over the file. Keys saved this way show a
+*Remove* button; keys that come from your real environment show as "Set
+(environment)" and are managed outside jev. Values are never rendered, logged, or
+echoed back anywhere.
+
 ### On a VPS: use an SSH tunnel
 
 Keep the default bind address and tunnel the port over SSH:

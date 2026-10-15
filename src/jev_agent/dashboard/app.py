@@ -759,6 +759,7 @@ class Dashboard:
                 "agg_label": label,
                 "route": _dispatcher_route(repo.config),
                 "env_vars": views.env_vars(repo.config),
+                "key_names": views.env_var_names(repo.config),
                 # the settings editor, unchanged from the old connections page
                 "sections": secs,
                 "entities": ents,
@@ -810,6 +811,34 @@ class Dashboard:
             return _refresh_servers(repo.config, repo.state_dir)
 
         return await self.act(request, "/connections", refresh)
+
+    async def connections_key_add(self, request: Request) -> Response:
+        """Save a key to ~/.jev/secrets.env (POST): it applies to this process at
+        once, so the page shows "Set" without a restart. The value travels only in
+        the POST body and is never rendered, logged, or flashed back."""
+
+        def add(repo: views.Repo, form: FormData) -> str:
+            from jev_agent.core.secrets import write_secret
+
+            name = str(form.get("name", "")).strip()
+            value = str(form.get("value", ""))
+            write_secret(name, value)
+            return f"{name} saved to the secrets file; it is in effect now."
+
+        return await self.act(request, "/connections", add)
+
+    async def connections_key_remove(self, request: Request) -> Response:
+        """Delete a secrets-file key (POST). Keys from the real environment cannot
+        reach this path: the template only offers removal for file-backed keys."""
+
+        def remove(repo: views.Repo, form: FormData) -> str:
+            from jev_agent.core.secrets import delete_secret
+
+            name = str(form.get("name", "")).strip()
+            delete_secret(name)
+            return f"{name} removed from the secrets file."
+
+        return await self.act(request, "/connections", remove)
 
     # ---- agent browser preview (workstream F) ----------------------------------
 
@@ -1950,6 +1979,9 @@ def create_app(
     """Build the app. Raises `DashboardConfigError` for a non-loopback host without a token.
     `executor` runs approve/resume jobs (tests pass a fake one)."""
     settings.check()
+    from jev_agent.core.secrets import load_secrets
+
+    load_secrets()  # ~/.jev/secrets.env: real environment always wins
     dash = Dashboard(settings, RunLauncher(settings.root, executor))
     routes = [
         Route("/", dash.board_page),
@@ -1991,6 +2023,8 @@ def create_app(
         Route("/connections", dash.connections_page),
         Route("/connections/live", dash.connections_live),
         Route("/connections/refresh", dash.connections_refresh, methods=["POST"]),
+        Route("/connections/keys/add", dash.connections_key_add, methods=["POST"]),
+        Route("/connections/keys/remove", dash.connections_key_remove, methods=["POST"]),
         Route("/preview/live", dash.preview_live),
         Route("/preview/frame", dash.preview_frame),
         Route("/preview/takeover", dash.preview_takeover, methods=["POST"]),

@@ -412,12 +412,14 @@ def _dispatcher_check(config: JevConfig) -> Check:
             "dispatcher",
             "fail",
             f"{where}; {jev.api_key_env} is not set, so every run stops for a human at its "
-            'first decision (set it, or set `[dispatcher] primary = "rules"`)',
+            "first decision (set it via the dashboard Connections page or export it, or set "
+            '`[dispatcher] primary = "rules"`)',
         )
     return Check(
         "dispatcher",
         "warn",
-        f"{where}; {jev.api_key_env} is not set, so decisions fall back to the rules dispatcher",
+        f"{where}; {jev.api_key_env} is not set, so decisions fall back to the rules dispatcher "
+        "(set it via the dashboard Connections page or export it)",
     )
 
 

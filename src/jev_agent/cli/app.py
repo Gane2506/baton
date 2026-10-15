@@ -91,4 +91,7 @@ app.command("chat", rich_help_panel=PANEL_LEARN)(chat)
 
 
 def main() -> None:
+    from jev_agent.core.secrets import load_secrets
+
+    load_secrets()  # ~/.jev/secrets.env: real environment always wins
     app()
