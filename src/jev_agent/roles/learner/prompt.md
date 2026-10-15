@@ -35,6 +35,15 @@ skill unless the maintainer has approved it.
 - `roles` says who should see a lesson: any of planner, validator, coder, reviewer.
 - `tags` are words that decide when the lesson is shown: file paths, directories, module names
   or topics the lesson is about. Leave them empty for a lesson that applies everywhere.
+- A path-looking tag (`src/auth/`, `src/auth/login.py`) also records the lesson as
+  *applying to* that module, so `jev learning graph query --module src/auth` finds it.
+- A new lesson can name its relations to the existing lessons, all advisory (nothing is
+  ever retired automatically):
+  - `"supersedes": ["L9"]` when it replaces an older lesson — the old one stays active
+    until a human retires it, with the lineage visible.
+  - `"contradicts": ["L4"]` when it genuinely disagrees with another lesson (different
+    contexts are not contradictions — prefer `applies_to` to scope by module instead).
+  - `"applies_to": ["src/auth/"]` when the lesson is about modules its tags do not name.
 - At most {{ max_adds }} new lessons. An empty reply is fine when there is nothing to learn.
 - Never include secrets, keys, tokens, personal data or long code.
 
@@ -44,7 +53,7 @@ Reply with exactly one JSON object and nothing else:
 
 ```json
 {
-  "add": [{"text": "one lesson", "roles": ["coder"], "tags": ["src/module.py"]}],
+  "add": [{"text": "one lesson", "roles": ["coder"], "tags": ["src/module.py"], "supersedes": ["L9"], "contradicts": [], "applies_to": []}],
   "update": [{"id": "L1", "text": "the improved lesson"}],
   "retire": ["L2"]
 }

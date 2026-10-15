@@ -33,7 +33,10 @@ from jev_agent.core.learning import (
     LessonDB,
     context_terms,
     normalize_tag,
+    qualify_module,
+    repo_slug_for,
     select_lessons,
+    split_module_ref,
 )
 from jev_agent.core.models import LESSON_ROLES, RunState, TaskState
 from jev_agent.core.store import LearningCounts, RunRecord, Store
@@ -48,6 +51,9 @@ MAX_ADDS = 5
 MAX_UPDATES = 10
 MAX_TAGS = 8
 MAX_TAG_CHARS = 60
+# Edges (`supersedes`, `contradicts`, `applies-to`) the learner may declare per run, across
+# all its drafts. Advisory only: creating them never retires a lesson.
+MAX_EDGES_PER_RUN = 8
 # Existing lessons shown to the learner, so it can refine, merge and retire them.
 SHOWN_LESSONS = 30
 SHOWN_CHARS = 6_000
@@ -62,6 +68,7 @@ class Applied:
     added: list[str]
     updated: list[str]
     retired: list[str]
+    edges: tuple[str, ...] = ()  # graph edges recorded, as "S12 supersedes S9"
 
     def counts(self) -> LearningCounts:
         """What is stored on the run (`runs.learning_counts_json`) and read by the KPIs."""
@@ -69,8 +76,11 @@ class Applied:
 
     def describe(self) -> str:
         """The human-readable outcome line; never parsed (the counts are stored as data)."""
-        c = self.counts()
-        return f"{c.added} added, {c.updated} updated, {c.retired} retired"
+        counts = self.counts()
+        line = f"{counts.added} added, {counts.updated} updated, {counts.retired} retired"
+        if self.edges:
+            line += f", {len(self.edges)} graph edge(s)"
+        return line
 
 
 async def learn(h: Harness, run: RunRecord) -> str:
@@ -142,7 +152,7 @@ async def _distill(h: Harness, run: RunRecord, db: LessonDB, profile: str) -> st
     if not isinstance(parsed, LearnerOutput):
         result = output.result
         return f"skipped: the learner gave no valid output ({result.status}: {result.summary})"
-    applied = apply_learner_output(db, profile, parsed, shown, run.id)
+    applied = apply_learner_output(db, profile, parsed, shown, run.id, repo_slug_for(h.repo))
     h.store.add_run_learning_counts(run.id, applied.counts())
     return f"learned into {profile}: {applied.describe()}"
 
@@ -262,6 +272,7 @@ def apply_learner_output(
     output: LearnerOutput,
     shown: list[Lesson],
     run_id: str | None = None,
+    repo_slug: str | None = None,
 ) -> Applied:
     """Store the learner's changes, within limits.
 
@@ -269,10 +280,17 @@ def apply_learner_output(
     clipped to 300 characters; unknown roles are dropped (no roles left: every role); tags are
     normalized. Updates and retirements only apply to lessons that were shown to the learner,
     so it cannot touch other profiles. Adds that repeat an existing lesson are ignored.
+
+    Each added draft may declare `supersedes`/`contradicts` (lesson ids it replaces or
+    disagrees with) and `applies_to` (module paths); at most `MAX_EDGES_PER_RUN` edges are
+    recorded per run, as `learner` origin. Edges are advisory only: `supersedes` never
+    retires the old lesson, and `contradicts` only affects selection after the pair has
+    co-injected before. Unknown lesson ids and non-path `applies_to` values are skipped.
     """
     by_id = {lesson.id.upper(): lesson for lesson in shown}
     existing = {" ".join(lesson.text.lower().split()) for lesson in db.list_lessons(profile)}
     added: list[str] = []
+    drafts: list[tuple[str, Any]] = []  # (new lesson id, the draft that made it)
     for draft in output.add[:MAX_ADDS]:
         text = clean_text(draft.text)
         key = text.lower()
@@ -280,10 +298,16 @@ def apply_learner_output(
             continue
         roles = [r for r in LESSON_ROLES if r in {x.strip().lower() for x in draft.roles}]
         lesson = db.add_lesson(
-            profile, text, roles or list(LESSON_ROLES), clean_tags(draft.tags), run_id
+            profile,
+            text,
+            roles or list(LESSON_ROLES),
+            clean_tags(draft.tags),
+            run_id,
+            repo_slug=repo_slug,
         )
         existing.add(key)
         added.append(lesson.id)
+        drafts.append((lesson.id, draft))
     updated: list[str] = []
     for edit in output.update[:MAX_UPDATES]:
         target = by_id.get(edit.id.strip().upper())
@@ -299,4 +323,45 @@ def apply_learner_output(
             continue
         db.retire(profile, target.number)
         retired.append(target.id)
-    return Applied(added, updated, retired)
+    edges = _apply_declared_edges(db, profile, by_id, drafts, repo_slug)
+    return Applied(added, updated, retired, tuple(edges))
+
+
+def _apply_declared_edges(
+    db: LessonDB,
+    profile: str,
+    by_id: dict[str, Lesson],
+    drafts: list[tuple[str, Any]],
+    repo_slug: str | None,
+) -> list[str]:
+    """Record the drafts' `supersedes`/`contradicts`/`applies_to` declarations, bounded by
+    `MAX_EDGES_PER_RUN`. Sloppy declarations are skipped, never fatal."""
+    if not db.graph_ready():
+        return []
+    written: list[str] = []
+    for lesson_id, draft in drafts:
+        declarations: list[tuple[str, str]] = [
+            ("supersedes", target) for target in draft.supersedes
+        ]
+        declarations += [("contradicts", target) for target in draft.contradicts]
+        declarations += [("applies_to", target) for target in draft.applies_to]
+        for kind, target in declarations:
+            if len(written) >= MAX_EDGES_PER_RUN:
+                return written
+            try:
+                if kind == "applies_to":
+                    slug, _ = split_module_ref(target)
+                    ref = target if slug else qualify_module(target.strip(), repo_slug)
+                    created = db.add_edge(profile, lesson_id, "applies-to", ref, origin="learner")
+                else:
+                    other = by_id.get(target.strip().upper())
+                    if other is None or other.id == lesson_id:
+                        continue
+                    created = db.add_edge(
+                        profile, lesson_id, kind, other.id, origin="learner"
+                    )
+            except LearningError:
+                continue
+            if created:
+                written.append(f"{lesson_id} {kind} {target}".replace("applies_to", "applies-to"))
+    return written
