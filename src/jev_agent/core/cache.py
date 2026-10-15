@@ -53,6 +53,7 @@ __all__ = [
     "role_cache_key",
     "role_normalized_text",
     "strip_volatile",
+    "tuned_laya_fingerprint",
 ]
 
 #: Appended to a worker summary when the output was served from the cache.
@@ -106,17 +107,22 @@ def canonical_json(obj: Any) -> str:
     return json.dumps(obj, sort_keys=True, separators=(",", ":"), default=str)
 
 
-def _config_fingerprint(config: JevConfig, dispatcher_name: str) -> str:
+def _config_fingerprint(
+    config: JevConfig, dispatcher_name: str, laya_weights_fp: str | None = None
+) -> str:
     """Hash of the settings a cached answer is only valid under.
 
     `min_confidence` gates answers, Laya weights move votes, the model and base URL
     pick the answerer — a cached answer gated at 0.55 must never serve a run gated
-    at 0.9. The jev package version is included so upgrades invalidate.
+    at 0.9. Profile-tuned Laya weights (`jev laya tune --apply`) are fingerprinted
+    separately: they change the vote without changing jev.toml. The jev package
+    version is included so upgrades invalidate.
     """
     record = {
         "dispatcher": dispatcher_name,
         "jev": config.dispatcher.jev.model_dump(mode="json"),
         "laya": config.dispatcher.laya.model_dump(mode="json"),
+        "laya_tuned_fp": laya_weights_fp,
         "jev_version": __version__,
     }
     return hashlib.sha256(canonical_json(record).encode()).hexdigest()
@@ -157,6 +163,7 @@ def decision_cache_key(
     dispatcher_name: str,
     config: JevConfig,
     run_id: str,
+    laya_weights_fp: str | None = None,
 ) -> CacheKey:
     """Exact-match key for a dispatcher decision (phase 1)."""
     text = decision_normalized_text(req)
@@ -166,12 +173,17 @@ def decision_cache_key(
         "point": req.point,
         "questions": req.questions,
         "state": strip_volatile(req.state),
-        "config_fp": _config_fingerprint(config, dispatcher_name),
+        "config_fp": _config_fingerprint(config, dispatcher_name, laya_weights_fp),
         # run_id/decision_id are provenance, filled in on put — not key material,
         # so a resumed run hits the same entry.
         "simhash": SimHashEmbedder().fingerprint(text),
     }
     return _build("decision", components, text, config.cache.ttl_hours)
+
+
+def tuned_laya_fingerprint(weights: dict[str, float]) -> str:
+    """Fingerprint for profile-tuned Laya weights, so a retuned profile is a new key."""
+    return hashlib.sha256(canonical_json(weights).encode()).hexdigest()
 
 
 def normalize_prompt(prompt: str, repo: Path) -> str:
@@ -208,11 +220,9 @@ def repo_fingerprint(repo: Path) -> str:
         digest.update(b"\x00")
         digest.update(diff.encode())
         untracked = _git(repo, "status", "--porcelain=v1", "-z", "--untracked-files=all")
-        paths = [
-            line[3:]
-            for line in untracked.split("\0")
-            if line.startswith("?? ")
-        ][:_FP_MAX_FILES]
+        paths = [line[3:] for line in untracked.split("\0") if line.startswith("?? ")][
+            :_FP_MAX_FILES
+        ]
         for rel in sorted(paths):
             digest.update(b"\x00")
             digest.update(rel.encode())
@@ -257,7 +267,7 @@ def role_cache_key(
     role: str,
     worker: str,
     model: str | None,
-    effort: str,
+    effort: str | None,
     prompt: str,
     workdir: Path,
     repo: Path,
@@ -280,9 +290,7 @@ def role_cache_key(
         "prompt": normalized,
         "repo_fp": repo_fingerprint(workdir),
         "template_fp": _template_fingerprint(template),
-        "lessons_fp": hashlib.sha256(
-            canonical_json(sorted(lesson_texts)).encode()
-        ).hexdigest(),
+        "lessons_fp": hashlib.sha256(canonical_json(sorted(lesson_texts)).encode()).hexdigest(),
         "role_config_fp": hashlib.sha256(role_config_json.encode()).hexdigest(),
         # run_id is provenance, filled in on put — not key material.
         "simhash": SimHashEmbedder().fingerprint(text),
@@ -398,7 +406,7 @@ class OpenRouterEmbedder:
     def similarity(self, a: str, b: str) -> float:
         va = json.loads(a)
         vb = json.loads(b)
-        dot = sum(x * y for x, y in zip(va, vb))
+        dot = sum(x * y for x, y in zip(va, vb, strict=True))
         na = sum(x * x for x in va) ** 0.5
         nb = sum(x * x for x in vb) ** 0.5
         return dot / (na * nb) if na and nb else 0.0
@@ -476,7 +484,8 @@ class Cache:
         size_mb = self.store.cache_size_bytes() / (1024 * 1024)
         if size_mb > self.settings.max_mb:
             # Evict least-recently-hit first until under budget (keep at least 100).
-            self.store.cache_evict_lru(max(100, int(self.settings.max_entries * size_mb / self.settings.max_mb)))
+            over = self.settings.max_entries * size_mb / self.settings.max_mb
+            self.store.cache_evict_lru(max(100, int(over)))
 
     def stats(self) -> CacheStats:
         return self.store.cache_stats()
@@ -502,12 +511,10 @@ class Cache:
             elif name == "simhash":
                 self._embedder = SimHashEmbedder()
             else:
-                raise ValueError(f'unknown [cache.semantic] embedder: {name!r}')
+                raise ValueError(f"unknown [cache.semantic] embedder: {name!r}")
         return self._embedder
 
-    def similar(
-        self, kind: str, text: str, threshold: float
-    ) -> list[tuple[CacheEntry, float]]:
+    def similar(self, kind: str, text: str, threshold: float) -> list[tuple[CacheEntry, float]]:
         """Entries of `kind` whose normalized text is at least `threshold`-similar.
 
         Used by shadow mode (measure) and — only when explicitly enabled — by live

@@ -19,12 +19,11 @@ from jev_agent.core.cache import (
     CACHE_MARKER,
     Cache,
     CacheEntry,
-    canonical_json,
     decision_cache_key,
     decision_normalized_text,
-    normalize_prompt,
     role_cache_key,
     role_normalized_text,
+    tuned_laya_fingerprint,
 )
 from jev_agent.core.commands import CommandRunner
 from jev_agent.core.learning import Learning, LearningError, Lesson, context_terms, select_lessons
@@ -194,12 +193,16 @@ class Harness:
         dispatchers, so Jev's vote and Laya's vote are always evaluated together.
         """
         dispatcher = self.dispatcher
+        laya_weights_fp: str | None = None
         if isinstance(dispatcher.primary, ConsensusDispatcher):
             weights = self.laya_weights(run_id)
             if weights is not None:
                 dispatcher = GuardedDispatcher(
                     dispatcher.primary.with_weights(weights), dispatcher.fallback
                 )
+                # Tuned weights change the vote without changing jev.toml: fingerprint
+                # them separately so a retuned profile is a different cache key.
+                laya_weights_fp = tuned_laya_fingerprint(weights)
         key = None
         entry = None
         if self._decisions_cached(dispatcher) and self._decision_cacheable(req):
@@ -208,6 +211,7 @@ class Harness:
                 dispatcher_name=dispatcher.primary.name,
                 config=self.config,
                 run_id=run_id,
+                laya_weights_fp=laya_weights_fp,
             )
             entry = self.cache.get(key)
         shadow: list[tuple[CacheEntry, float]] = []
@@ -266,9 +270,7 @@ class Harness:
 
     def _decision_cacheable(self, req: DecisionRequest) -> bool:
         """Per-point policy: D6 (ship/fix) is excluded unless explicitly enabled."""
-        if req.point == "D6" and not self.config.cache.d6_decisions:
-            return False
-        return True
+        return not (req.point == "D6" and not self.config.cache.d6_decisions)
 
     def _served_decision(self, entry: CacheEntry, *, semantic: bool = False) -> Decision:
         """Rebuild a decision from a cache entry: $0 cost, provenance in `details`."""
@@ -478,9 +480,8 @@ class Harness:
             return False
         if role not in self.config.cache.cache_roles:
             return False
-        if assignment.worker in ("claude_code", "codex") and not self.config.cache.cli_workers:
-            return False
-        return True
+        cli = assignment.worker in ("claude_code", "codex")
+        return not cli or self.config.cache.cli_workers
 
     def _lesson_texts(self, lesson_ids: Sequence[str], run_id: str) -> list[str]:
         """Lesson texts behind the ids, so lesson *edits* change the key (not just ids)."""

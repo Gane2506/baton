@@ -15,13 +15,12 @@ from jev_agent.core.assign import Assignment
 from jev_agent.core.cache import (
     Cache,
     SimHashEmbedder,
-    canonical_json,
     decision_cache_key,
-    decision_normalized_text,
     normalize_prompt,
     repo_fingerprint,
     role_cache_key,
     strip_volatile,
+    tuned_laya_fingerprint,
 )
 from jev_agent.core.harness import Harness
 from jev_agent.core.models import (
@@ -38,7 +37,6 @@ from jev_agent.core.tuning import run_samples
 from jev_agent.dispatch.guard import GuardedDispatcher
 from jev_agent.dispatch.rules import RulesDispatcher
 from jev_agent.workers.base import WorkerOutput
-
 
 # ---- fixtures ------------------------------------------------------------------------
 
@@ -67,11 +65,15 @@ def git_repo(tmp_path: Path) -> Path:
     (repo / "f.txt").write_text("v1\n", encoding="utf-8")
     subprocess.run(
         ["git", "-c", "user.email=t@t", "-c", "user.name=t", "add", "."],
-        cwd=repo, check=True, capture_output=True,
+        cwd=repo,
+        check=True,
+        capture_output=True,
     )
     subprocess.run(
         ["git", "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-m", "one"],
-        cwd=repo, check=True, capture_output=True,
+        cwd=repo,
+        check=True,
+        capture_output=True,
     )
     return repo
 
@@ -208,6 +210,24 @@ def test_decision_key_changes_with_min_confidence(tmp_path: Path) -> None:
     assert key1.key_hash != key2.key_hash
 
 
+def test_decision_key_changes_with_tuned_laya_weights(tmp_path: Path) -> None:
+    from jev_agent.config.schema import DEFAULT_LAYA_WEIGHTS
+
+    config = JevConfig()
+    key1 = decision_cache_key(_req(), dispatcher_name="consensus", config=config, run_id="r")
+    tuned = {**DEFAULT_LAYA_WEIGHTS, "correctness": 0.5, "safety": 0.0}
+    total = sum(tuned.values())
+    tuned = {k: v / total for k, v in tuned.items()}
+    key2 = decision_cache_key(
+        _req(),
+        dispatcher_name="consensus",
+        config=config,
+        run_id="r",
+        laya_weights_fp=tuned_laya_fingerprint(tuned),
+    )
+    assert key1.key_hash != key2.key_hash
+
+
 def test_repo_fingerprint_changes_on_repo_change(git_repo: Path) -> None:
     before = repo_fingerprint(git_repo)
     (git_repo / "f.txt").write_text("v2\n", encoding="utf-8")
@@ -288,9 +308,7 @@ async def test_decide_caches_and_serves(store: Store, run_id: str, tmp_path: Pat
 
 
 @pytest.mark.asyncio
-async def test_decide_volatile_state_still_hits(
-    store: Store, run_id: str, tmp_path: Path
-) -> None:
+async def test_decide_volatile_state_still_hits(store: Store, run_id: str, tmp_path: Path) -> None:
     stub = _StubDispatcher(_decision())
     harness = _harness(store, tmp_path, GuardedDispatcher(stub))
     await harness.decide(run_id, None, _req())
@@ -300,9 +318,7 @@ async def test_decide_volatile_state_still_hits(
 
 
 @pytest.mark.asyncio
-async def test_decide_config_change_invalidates(
-    store: Store, run_id: str, tmp_path: Path
-) -> None:
+async def test_decide_config_change_invalidates(store: Store, run_id: str, tmp_path: Path) -> None:
     stub1 = _StubDispatcher(_decision())
     await _harness(store, tmp_path, GuardedDispatcher(stub1)).decide(run_id, None, _req())
     assert stub1.calls == 1
@@ -333,9 +349,7 @@ def _d6_req() -> DecisionRequest:
 
 
 @pytest.mark.asyncio
-async def test_decide_d6_not_cached_by_default(
-    store: Store, run_id: str, tmp_path: Path
-) -> None:
+async def test_decide_d6_not_cached_by_default(store: Store, run_id: str, tmp_path: Path) -> None:
     stub = _StubDispatcher(_d6_decision())
     harness = _harness(store, tmp_path, GuardedDispatcher(stub))
     req = _d6_req()
@@ -345,9 +359,7 @@ async def test_decide_d6_not_cached_by_default(
 
 
 @pytest.mark.asyncio
-async def test_decide_d6_cached_when_enabled(
-    store: Store, run_id: str, tmp_path: Path
-) -> None:
+async def test_decide_d6_cached_when_enabled(store: Store, run_id: str, tmp_path: Path) -> None:
     stub = _StubDispatcher(_d6_decision())
     config = JevConfig.model_validate({"cache": {"d6_decisions": True}})
     harness = _harness(store, tmp_path, GuardedDispatcher(stub), config=config)
@@ -430,9 +442,7 @@ def _run_kwargs(run_id: str, git_repo: Path, role: str = "planner") -> dict[str,
 
 
 @pytest.mark.asyncio
-async def test_run_worker_caches_success(
-    store: Store, run_id: str, git_repo: Path
-) -> None:
+async def test_run_worker_caches_success(store: Store, run_id: str, git_repo: Path) -> None:
     worker = _FakeWorker(_success_result(git_repo), parsed=_plan_parsed())
     harness = _harness(store, git_repo, Mock(), workers=_FakeRegistry(worker))
     kwargs = _run_kwargs(run_id, git_repo)
@@ -463,9 +473,7 @@ async def test_run_worker_repo_change_invalidates(
 
 
 @pytest.mark.asyncio
-async def test_run_worker_coder_never_cached(
-    store: Store, run_id: str, git_repo: Path
-) -> None:
+async def test_run_worker_coder_never_cached(store: Store, run_id: str, git_repo: Path) -> None:
     worker = _FakeWorker(_success_result(git_repo))
     harness = _harness(store, git_repo, Mock(), workers=_FakeRegistry(worker))
     kwargs = _run_kwargs(run_id, git_repo, role="coder")
@@ -476,9 +484,7 @@ async def test_run_worker_coder_never_cached(
 
 
 @pytest.mark.asyncio
-async def test_run_worker_learner_never_cached(
-    store: Store, run_id: str, git_repo: Path
-) -> None:
+async def test_run_worker_learner_never_cached(store: Store, run_id: str, git_repo: Path) -> None:
     worker = _FakeWorker(_success_result(git_repo))
     harness = _harness(store, git_repo, Mock(), workers=_FakeRegistry(worker))
     kwargs = _run_kwargs(run_id, git_repo, role="learner")
@@ -489,12 +495,8 @@ async def test_run_worker_learner_never_cached(
 
 
 @pytest.mark.asyncio
-async def test_run_worker_failure_never_cached(
-    store: Store, run_id: str, git_repo: Path
-) -> None:
-    failed = WorkerResult(
-        status="failure", summary="boom", raw_log_path=git_repo / "log.txt"
-    )
+async def test_run_worker_failure_never_cached(store: Store, run_id: str, git_repo: Path) -> None:
+    failed = WorkerResult(status="failure", summary="boom", raw_log_path=git_repo / "log.txt")
     worker = _FakeWorker(failed, parsed=_plan_parsed())
     harness = _harness(store, git_repo, Mock(), workers=_FakeRegistry(worker))
     kwargs = _run_kwargs(run_id, git_repo)
@@ -533,9 +535,7 @@ async def test_run_worker_cli_worker_cached_when_enabled(
 
 
 @pytest.mark.asyncio
-async def test_run_worker_no_cache_disables(
-    store: Store, run_id: str, git_repo: Path
-) -> None:
+async def test_run_worker_no_cache_disables(store: Store, run_id: str, git_repo: Path) -> None:
     worker = _FakeWorker(_success_result(git_repo), parsed=_plan_parsed())
     config = JevConfig.model_validate({"cache": {"enabled": False}})
     harness = _harness(store, git_repo, Mock(), workers=_FakeRegistry(worker), config=config)
