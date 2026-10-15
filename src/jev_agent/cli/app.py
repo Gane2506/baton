@@ -5,6 +5,7 @@ from rich.console import Console
 
 from jev_agent import __version__
 from jev_agent.cli.board_cmds import board
+from jev_agent.cli.cache_cmds import cache_app
 from jev_agent.cli.chat_cmds import chat
 from jev_agent.cli.dashboard_cmd import dashboard
 from jev_agent.cli.demo_cmds import demo_app
@@ -75,6 +76,7 @@ app.command("log", rich_help_panel=PANEL_OBSERVE)(log)
 app.command("board", rich_help_panel=PANEL_OBSERVE)(board)
 app.command("dashboard", rich_help_panel=PANEL_OBSERVE)(dashboard)
 app.command("kpi", rich_help_panel=PANEL_OBSERVE)(kpi)
+app.add_typer(cache_app, name="cache", rich_help_panel=PANEL_OBSERVE)
 app.add_typer(quality_app, name="quality", rich_help_panel=PANEL_OBSERVE)
 
 # --- Configure: set up the environment and tooling ---
