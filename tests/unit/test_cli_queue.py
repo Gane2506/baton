@@ -178,6 +178,9 @@ def test_scheduler_applies_item_quality(fixture_repo: Path) -> None:
 def test_queue_add_checks_profile(fixture_repo: Path) -> None:
     code, output = _jev(fixture_repo, "queue", "add", "x", "--profile", "box")
     assert code == 1 and "no workspace profile named 'box'" in output
+    # A blank profile is rejected at add time, not when the scheduler runs it (#32).
+    code, output = _jev(fixture_repo, "queue", "add", "x", "--profile", "  ")
+    assert code == 1 and "--profile needs a name" in output
     (fixture_repo / "jev.toml").write_text(
         '[servers.web]\nhost = "web1"\n[profiles.box]\nservers = ["web"]\n'
     )
