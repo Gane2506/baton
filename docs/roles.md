@@ -2,8 +2,9 @@
 
 A role is a job in the pipeline: **planner**, **validator**, **coder** or **reviewer**, plus
 the **learner**, which distills lessons at the end of a run when learning is on
-([learning.md](learning.md)), and the **code reviewer**, the AI review of the quality gate
-([quality.md](quality.md)). Each role is two things:
+([learning.md](learning.md)), the **code reviewer**, the AI review of the quality gate
+([quality.md](quality.md)), and the **designer**, which designs the UI when the plan calls
+for it (see [Design systems](#design-systems)). Each role is two things:
 
 - a prompt template, `src/jev_agent/roles/<role>/prompt.md` (Jinja2), and
 - an output format, defined in Python (`src/jev_agent/roles/schemas.py` and `src/jev_agent/core/models.py`).
@@ -17,11 +18,11 @@ Which worker, model and effort play a role is set per role in `[roles.<role>]` (
 
 ## Workers and roles
 
-| Worker | Planner | Validator | Coder | Reviewer | Code reviewer | Learner |
-| --- | --- | --- | --- | --- | --- | --- |
-| `claude_code` | yes (read-only) | yes (read-only) | yes | yes (read-only) | yes (read-only) | yes (read-only) |
-| `codex` | yes (read-only) | yes (read-only) | yes | yes (read-only) | yes (read-only) | yes (read-only) |
-| `api` | yes | yes | no | yes | yes | yes |
+| Worker | Planner | Validator | Coder | Reviewer | Code reviewer | Learner | Designer |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `claude_code` | yes (read-only) | yes (read-only) | yes | yes (read-only) | yes (read-only) | yes (read-only) | yes (read-only) |
+| `codex` | yes (read-only) | yes (read-only) | yes | yes (read-only) | yes (read-only) | yes (read-only) | yes (read-only) |
+| `api` | yes | yes | no | yes | yes | yes | yes |
 
 Read-only means the agent can read the repository but its write tools are disabled
 ([security.md](security.md)). The `api` worker sees only the prompt, not the repository, so its
@@ -219,6 +220,33 @@ it never edits the repository. It runs when D7 says `learn` (see
 | `retire` | list of strings | Ids of shown lessons to retire. |
 
 An invalid reply only skips the learning step; the run's outcome does not change.
+
+## Designer
+
+**Purpose.** When the planner sets `needs_design` on the plan (the work involves UI/frontend),
+the pipeline runs a `DESIGNING` step after validation: the designer produces a `DesignDoc`
+(screens and their components, grounded in the repo's stored design system) which is approved
+together with the plan at `AWAITING_APPROVAL`. During `EXECUTING`, UI tasks receive the design
+as context. The designer is read-only; it never edits the repository.
+
+**Output.** One JSON object (`DesignDoc` in `core/models.py`): `title`, `summary`,
+`screens` (each with `name`, `description`, `components`), `tokens_ref` (the design-system
+version it was built against), `notes`, `version`.
+
+## Design systems
+
+A design system is a per-repo, versioned store of UI decisions: design tokens (colors, type
+scale, spacing, radii) in `tokens.json` plus component notes and voice in `design-system.md`,
+under `.jev/design/`. It survives across runs and is injected into the designer and coder
+prompts so UI work follows it.
+
+- `jev design show` — print the current system.
+- `jev design init` — scaffold a starter system.
+- `jev design generate --brief "..."` — have the designer role build (or refresh) the system
+  from a brief, or from the repo itself.
+
+Regenerating versions the old files (`design-system.v<n>.md`, `tokens.v<n>.json`) before
+overwriting. When a run's design evolves the system, the designer updates the stored copy.
 
 ## Skills in every prompt
 

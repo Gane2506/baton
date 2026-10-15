@@ -90,6 +90,10 @@ def _print_run(store: Store, run: RunRecord, config: JevConfig) -> None:
     console.print(f"idea: {escape(run.idea.text)}")
     if run.plan is not None:
         console.print(f"plan (round {run.plan_round}): {escape(run.plan.summary)}")
+    if run.design is not None:
+        console.print(f"design: {escape(run.design.title)}")
+        if run.design.summary:
+            console.print(f"  {escape(run.design.summary)}")
     if run.validation is not None:
         console.print(f"validation: {run.validation.verdict}")
         for issue in run.validation.issues:

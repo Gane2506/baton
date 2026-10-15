@@ -61,9 +61,16 @@ States for a **run** (one idea):
 
 ```
 INTAKE -> PLANNING -> VALIDATING -> (loop back to PLANNING, max N rounds)
+       -> DESIGNING (only when the plan sets `needs_design`, i.e. the work involves UI)
        -> AWAITING_APPROVAL -> EXECUTING -> INTEGRATING -> DONE
 any state -> NEEDS_HUMAN | FAILED | BUDGET_EXCEEDED | CANCELLED
 ```
+
+In `DESIGNING` the **designer** role produces a `DesignDoc` (screens/specs) grounded in the
+repo's stored design system (`.jev/design/`, see `jev design --help`); plan and design are
+approved together at `AWAITING_APPROVAL`, and UI tasks receive the design as context during
+`EXECUTING`. In `ASK_EVERY_STEP` autonomy mode the design step waits at `AWAITING_DESIGNING`
+like every other step waits at its own gate.
 
 States for a **task** (one unit of work from the plan):
 

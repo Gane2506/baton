@@ -112,3 +112,39 @@ def test_artifacts_page_search_filters_rows(client: TestClient, fixture_repo: Pa
         store.set_run_plan(run.id, _plan(), 1)
     assert "Plan: add the thing" in client.get("/artifacts").text
     assert "Plan: add the thing" not in client.get("/artifacts?q=zzzznothing").text
+
+
+def test_artifacts_lists_designs(fixture_repo: Path) -> None:
+    from jev_agent.core.models import DesignDoc, ScreenSpec
+
+    with _store(fixture_repo) as store:
+        run = store.create_run(Idea(text="redesign the dashboard", repo_path=fixture_repo))
+        store.set_run_plan(run.id, _plan(), 1)
+        store.set_run_design(
+            run.id,
+            DesignDoc(
+                title="Dashboard refresh",
+                summary="new look",
+                screens=[ScreenSpec(name="Board", description="kanban")],
+            ),
+        )
+        run_id = run.id
+    with dashboard_app_module.views.open_repo(fixture_repo) as repo:
+        rows, _ = views.artifacts(repo, kind="design")
+    assert len(rows) == 1
+    assert rows[0].kind == "design"
+    assert rows[0].run_id == run_id
+    assert rows[0].url == f"/runs/{run_id}#design"
+    assert "Dashboard refresh" in rows[0].title
+
+
+def test_run_page_shows_design(client: TestClient, fixture_repo: Path) -> None:
+    from jev_agent.core.models import DesignDoc
+
+    with _store(fixture_repo) as store:
+        run = store.create_run(Idea(text="redesign the dashboard", repo_path=fixture_repo))
+        store.set_run_design(run.id, DesignDoc(title="Dashboard refresh"))
+        run_id = run.id
+    text = client.get(f"/runs/{run_id}").text
+    assert "Dashboard refresh" in text
+    assert 'id="design"' in text

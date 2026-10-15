@@ -541,8 +541,8 @@ def chats(repo: Repo, query: str = "") -> list[tuple[ChatMeta, str]]:
 
 # ---- artifacts ---------------------------------------------------------------------------
 
-ARTIFACT_KINDS = ("plan", "diff", "tests")
-ARTIFACT_LABELS = {"plan": "Plan", "diff": "Diff", "tests": "Tests & Quality"}
+ARTIFACT_KINDS = ("plan", "diff", "tests", "design")
+ARTIFACT_LABELS = {"plan": "Plan", "diff": "Diff", "tests": "Tests & Quality", "design": "Design"}
 _DIFF_STATES = (
     RunState.INTEGRATING,
     RunState.SHIPPING,
@@ -575,7 +575,8 @@ def artifacts(
     """Every work product across all runs, newest first, plus the chat list for filters.
 
     Plans come from runs with a validated plan, diffs from runs that reached the
-    integration states, and test reports from the quality-gate table. Preview and
+    integration states, test reports from the quality-gate table, and designs from
+    runs that went through the DESIGNING stage. Preview and
     terminal streams are live-only (no stored history) and are not aggregated here.
     `kind` filters to one artifact type, `chat_id` to one chat, `q` searches titles,
     run titles and chat titles case-insensitively.
@@ -603,6 +604,19 @@ def artifacts(
                     chat_title=ctitle,
                     created_at=run.created_at,
                     url=f"/chats/{cid}/work/plan" if cid else f"/runs/{run.id}",
+                )
+            )
+        if run.design is not None:
+            out.append(
+                Artifact(
+                    kind="design",
+                    title=f"Design: {run.design.title or run_title}",
+                    run_id=run.id,
+                    run_title=run_title,
+                    chat_id=cid,
+                    chat_title=ctitle,
+                    created_at=run.updated_at,
+                    url=f"/runs/{run.id}#design",
                 )
             )
         if run.state in _DIFF_STATES:
