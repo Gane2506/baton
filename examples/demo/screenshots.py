@@ -59,6 +59,11 @@ SHOTS = [
     Shot("dashboard-spend.png", "/spend", height=1580),
     Shot("dashboard-kpis.png", "/kpis", height=1700),
     Shot("dashboard-settings.png", "/settings", height=1400),
+    Shot("dashboard-fleet.png", "/fleet"),
+    Shot("dashboard-agents.png", "/agents", height=1400),
+    Shot("dashboard-chats.png", "/chats"),
+    Shot("dashboard-tools.png", "/tools", height=1400),
+    Shot("dashboard-connections.png", "/connections", height=1600),
 ]
 QUALITY = "dashboard-quality.png"  # the run page's "Quality review" section only
 

@@ -23,6 +23,7 @@ import seed_demo  # noqa: E402
 
 from jev_agent.cli.app import app  # noqa: E402
 from jev_agent.core.chat import list_chats  # noqa: E402
+from jev_agent.core.pipeline import STOPPED  # noqa: E402
 from jev_agent.core.store import Store  # noqa: E402
 from jev_agent.dashboard.app import create_app  # noqa: E402
 from jev_agent.dashboard.security import DashboardSettings  # noqa: E402
@@ -93,3 +94,12 @@ def test_seed_demo_and_dashboard_pages(demo_repo: Path) -> None:
         assert chats, "the seed saved no chats"
         _check(client, f"/chats/{chats[0].chat_id}")
         _check(client, f"/chats/{chats[0].chat_id}/live")
+        with Store.open(demo_repo / ".jev" / "state.db") as store:
+            running = [
+                a
+                for r in store.list_runs()
+                if r.state not in STOPPED
+                for a in store.list_attempts(r.id)
+                if a.result is None
+            ]
+        assert running, "the seed left no running attempt: /fleet renders its empty state"

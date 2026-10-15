@@ -227,6 +227,25 @@ def record_attempt(store: Store, clock: Clock, root: Path, run_id: str, a: Attem
         store.add_spend(run_id, a.task, a.cost)
 
 
+def record_running_attempt(
+    store: Store, root: Path, run_id: str, task: str, worker: str, model: str | None
+) -> None:
+    """Start an attempt that never finishes: the dashboard's Fleet page lists it as an agent
+    currently working (its `started_at` comes from the caller's clock, so set it recent).
+    The log is marked as demo: no agent ran."""
+    number = store.increment_task_attempts(run_id, task)
+    path = log_path(root / STATE_DIRNAME, run_id, task, str(number))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        f"[demo] role=coder task={task} attempt={number} worker={worker} "
+        f"model={model or 'default'}\n"
+        "--- note ---\nIllustrative demo log written by examples/demo/seed_demo.py; "
+        "no agent ran.\n",
+        encoding="utf-8",
+    )
+    store.start_attempt(run_id, task, number, "coder", worker, model, "medium", path, ())
+
+
 def write_quality(store: Store, root: Path, run_id: str, gates: Sequence[GateResult]) -> None:
     qdir = quality_dir(root / STATE_DIRNAME, run_id)
     qdir.mkdir(parents=True, exist_ok=True)
@@ -749,6 +768,9 @@ def seed_simple(store: Store, clock: Clock, root: Path, now: datetime, spec: Sim
         )
         store.set_task_assignment(run_id, task, TaskState.RUNNING, worker, model, "medium")
         if last and spec.state is RunState.EXECUTING:
+            # four minutes into the attempt: Fleet shows it as a working agent, not stale
+            clock.set(now - timedelta(minutes=4))
+            record_running_attempt(store, root, run_id, task, worker, model)
             return run_id  # still running
         failed = last and spec.state is RunState.NEEDS_HUMAN
         record_attempt(
