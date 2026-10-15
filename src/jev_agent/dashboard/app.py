@@ -479,13 +479,16 @@ class Dashboard:
     def render(
         self, request: Request, template: str, status_code: int = 200, **context: Any
     ) -> HTMLResponse:
+        # Flashes are shown once, on the next successful full-page render. A failed
+        # request (e.g. a live poll hitting error.html) must not eat them (#52).
+        show_flashes = 200 <= status_code < 300 and not template.startswith("_")
         page = self.env.get_template(template).render(
             request=request,
             path=request.url.path,
             csrf=request.state.csrf,
             refresh_ms=int(self.settings.refresh_s * 1000),
             root=self.settings.root,
-            flashes=self.take_flashes(request) if not template.startswith("_") else [],
+            flashes=self.take_flashes(request) if show_flashes else [],
             **context,
         )
         return HTMLResponse(page, status_code=status_code)

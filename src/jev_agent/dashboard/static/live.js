@@ -10,43 +10,70 @@
  * Added:
  * - [data-copy="text"] buttons copy their value and flash a check for a moment.
  * - Submitting a form disables its submit button until the page navigates (no double POST).
+ * - Live polls never overlap (a tick is skipped while a fetch is pending) and back off
+ *   exponentially while the server keeps failing, so dead servers are not hammered.
  */
 (function () {
   "use strict";
 
   /* ---- live regions ------------------------------------------------------ */
 
-  function refresh(el) {
-    if (document.hidden || el.contains(document.activeElement)) {
-      return;
+  // One watcher per region: a tick is skipped while a fetch is still pending (so a slow
+  // response can never be overwritten by an older one), and consecutive failures back
+  // off exponentially up to a minute (so a dead server is not hammered by every tab).
+  // A region removed from the page stops polling its detached node.
+  var BACKOFF_MAX_MS = 60000;
+
+  function watch(el) {
+    var base =
+      Math.max(parseInt(el.getAttribute("data-live-every") || "3000", 10) || 3000, 1000);
+    var pending = false;
+    var failures = 0;
+
+    function wait() {
+      return Math.min(base * Math.pow(2, Math.min(failures, 5)), BACKOFF_MAX_MS);
     }
-    fetch(el.getAttribute("data-live"), {
-      credentials: "same-origin",
-      headers: { "X-Requested-With": "fetch" },
-    })
-      .then(function (response) {
-        if (!response.ok) {
-          throw new Error("HTTP " + response.status);
-        }
-        return response.text();
+
+    function tick() {
+      if (!el.isConnected) {
+        return;
+      }
+      if (pending || document.hidden || el.contains(document.activeElement)) {
+        window.setTimeout(tick, base);
+        return;
+      }
+      pending = true;
+      fetch(el.getAttribute("data-live"), {
+        credentials: "same-origin",
+        headers: { "X-Requested-With": "fetch" },
       })
-      .then(function (html) {
-        if (!el.contains(document.activeElement)) {
-          el.innerHTML = html;
-        }
-        el.removeAttribute("data-stale");
-      })
-      .catch(function () {
-        el.setAttribute("data-stale", "true");
-      });
+        .then(function (response) {
+          if (!response.ok) {
+            throw new Error("HTTP " + response.status);
+          }
+          return response.text();
+        })
+        .then(function (html) {
+          failures = 0;
+          if (el.isConnected && !el.contains(document.activeElement)) {
+            el.innerHTML = html;
+          }
+          el.removeAttribute("data-stale");
+        })
+        .catch(function () {
+          failures += 1;
+          el.setAttribute("data-stale", "true");
+        })
+        .then(function () {
+          pending = false;
+          window.setTimeout(tick, wait());
+        });
+    }
+
+    window.setTimeout(tick, base);
   }
 
-  document.querySelectorAll("[data-live]").forEach(function (el) {
-    var every = parseInt(el.getAttribute("data-live-every") || "3000", 10);
-    window.setInterval(function () {
-      refresh(el);
-    }, Math.max(every || 3000, 1000));
-  });
+  document.querySelectorAll("[data-live]").forEach(watch);
 
   /* ---- confirmations ----------------------------------------------------- */
 

@@ -277,6 +277,19 @@ def test_queue_page_and_actions(client: TestClient, planned: tuple[Path, str]) -
         assert len(store.list_queue()) == 1
 
 
+def test_fragment_error_keeps_flash_messages(client: TestClient) -> None:
+    # A live poll that fails (rendering error.html) must not eat the session's flash
+    # messages: they survive until the next successful full-page render (#52).
+    response = _post(client, "/queue/add", {"idea": "flash idea"})
+    assert response.status_code == 303
+    failed_poll = client.get("/runs/nope/live")
+    assert failed_poll.status_code == 404
+    page = client.get("/queue")
+    assert page.status_code == 200
+    assert "queued item 1 (normal)" in page.text  # the flash survived the failed poll
+    assert "queued item 1 (normal)" not in client.get("/queue").text  # shown once
+
+
 def test_queue_page_shows_scheduler_holder(client: TestClient, planned: tuple[Path, str]) -> None:
     import os
     import socket
