@@ -13,11 +13,23 @@
    high-contrast); `auto` follows the OS. See the theme profiles block.
 
    System rules:
-   - Type: 3 weights (400 read / 500 ui / 600 announce), 6 sizes. Data, ids and
-     timestamps are always mono with tabular numerals.
-   - Radius: 6px controls, 10px containers, pill for status badges only.
+   - Type: 3 weights (400 read / 500 ui / 600 announce), the documented
+     --text-* scale (xs 13 / sm 14 / base 15 / lg 17 / xl 22 / 2xl 28).
+     Body, inputs and buttons read at --text-base (15px) so the page is
+     comfortable at desktop distance; no UI-facing text goes below 13px.
+     Data, ids and timestamps are always mono with tabular numerals.
+   - Radius: 8px controls, 10px containers, pill for status badges only.
    - One accent (teal), used for the interactive signal only. State colors are
      semantic and always paired with text, never color alone.
+   - Buttons: one system (.btn + variant). .btn-primary for Add/Save/confirm,
+     .btn-secondary (or plain .btn) for the rest, .btn-danger for destructive,
+     .btn-ghost for quiet toolbar use, .btn-sm for compact rows, .btn-icon
+     for icon-only. "Add to …" expanders are <details class="disclosure">
+     whose summary renders as a real button with native expand/collapse.
+   - Labels: Title Case, 13px/600, muted ("Name", "Save to", "Command") —
+     never raw config keys. Jinja templates use the field_label()/pretty()
+     macros in macros.html (pretty("bearer_token_env") -> "Bearer token env",
+     "url" -> "URL").
    - Motion: functional only (hover, focus, one live pulse). Reduced motion
      collapses everything to static.
    ========================================================================== */
@@ -60,6 +72,27 @@
   --fs-16: 16px;
   --fs-20: 20px;
   --fs-26: 26px;
+
+  /* ---- documented type scale (Workstream 1) --------------------------------
+     --text-* is the scale every component uses. Minimum 13px for UI-facing
+     text: xs (13px) is reserved for badges, table headers and metadata;
+     body, inputs and buttons read at --text-base (15px) so the page stays
+     comfortable at desktop distance. The older --fs-* tokens above are kept
+     working for existing templates; new work uses --text-*. */
+  --text-xs: 13px;
+  --text-sm: 14px;
+  --text-base: 15px;
+  --text-lg: 17px;
+  --text-xl: 22px;
+  --text-2xl: 28px;
+
+  /* ---- control metrics ------------------------------------------------------
+     One height for every text input, select, button and disclosure control
+     (--control-h); --control-h-sm is the compact size for table/toolbar rows.
+     All controls share --radius-control. */
+  --control-h: 38px;
+  --control-h-sm: 30px;
+  --radius-control: 8px;
 
   --s1: 4px;
   --s2: 8px;
@@ -198,7 +231,7 @@ body {
   margin: 0;
   background: var(--bg);
   color: var(--fg);
-  font: 400 var(--fs-14) / 1.55 var(--sans);
+  font: 400 var(--text-base) / 1.6 var(--sans);
   -webkit-font-smoothing: antialiased;
 }
 
@@ -283,21 +316,30 @@ pre code { background: none; padding: 0; }
 }
 
 .sidebar nav { flex: 1; overflow-y: auto; }
-.nav-group { margin-bottom: var(--s4); }
+/* Nav groups get real air between them (ChatGPT-style rhythm): the label sits
+   above its rows with a comfortable gap, and the first group starts flush. */
+.nav-group { margin: 0 0 var(--s5); }
+.nav-group:first-child { margin-top: var(--s1); }
 .nav-label {
-  font-size: var(--fs-11); font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em;
-  color: var(--faint); padding: 0 var(--s2); margin-bottom: var(--s1);
+  font-size: var(--fs-11); font-weight: 600; text-transform: uppercase; letter-spacing: 0.09em;
+  color: var(--faint); padding: 0 var(--s3); margin: 0 0 var(--s2);
 }
+/* Icon+label rows: 14px text, generous hit area, 2px rhythm between rows. */
 .sidebar nav a {
   display: flex; align-items: center; gap: 10px;
-  padding: 7px 10px; margin: 1px 0;
-  border-radius: 6px;
+  padding: 9px var(--s3); margin: 2px 0;
+  border-radius: var(--radius-control);
   color: var(--muted); text-decoration: none;
-  font-size: var(--fs-13); font-weight: 500;
+  font-size: var(--text-sm); font-weight: 500;
   transition: background-color 120ms ease, color 120ms ease;
 }
 .sidebar nav a:hover { background: var(--surface-2); color: var(--fg); }
-.sidebar nav a.active { background: var(--accent-soft); color: var(--accent); }
+/* Active row: pill wash plus an accent edge bar so the current page reads at
+   a glance, in every theme. */
+.sidebar nav a.active {
+  background: var(--accent-soft); color: var(--accent); font-weight: 600;
+  box-shadow: inset 3px 0 0 var(--accent);
+}
 .sidebar nav a.active .icon { color: var(--accent); }
 
 .sidebar-foot {
@@ -316,7 +358,7 @@ pre code { background: none; padding: 0; }
   margin-bottom: var(--s5);
 }
 .page-head .titles { min-width: 0; flex: 1 1 320px; }
-.page-head h1 { font-size: var(--fs-26); }
+.page-head h1 { font-size: var(--text-2xl); letter-spacing: -0.02em; }
 .page-head .lede { color: var(--muted); font-size: var(--fs-14); margin: var(--s1) 0 0; }
 .page-head .actions { display: flex; flex-wrap: wrap; gap: var(--s2); align-items: center; }
 
@@ -347,67 +389,146 @@ pre code { background: none; padding: 0; }
   display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between;
   gap: var(--s2) var(--s4); margin-bottom: var(--s3);
 }
-.panel-head h2, .panel h2 { font-size: var(--fs-16); margin: 0; }
+.panel-head h2, .panel h2 { font-size: var(--text-lg); margin: 0; }
 .panel h3 { font-size: var(--fs-14); margin: var(--s4) 0 var(--s2); }
 
-h2.section { font-size: var(--fs-16); margin: var(--s6) 0 var(--s3); }
+h2.section { font-size: var(--text-lg); margin: var(--s6) 0 var(--s3); }
 h2.section:first-child { margin-top: 0; }
 
 .grid-2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: var(--s4); align-items: start; }
 .grid-2 > .panel { margin-bottom: 0; }
 
-/* ---- buttons ------------------------------------------------------------- */
+/* ---- buttons ---------------------------------------------------------------
+   One button system. The base .btn is the neutral/secondary button; pair it
+   with one variant class:
 
-button, .button {
-  font: 500 var(--fs-13) / 1 var(--sans);
-  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
-  height: 30px; padding: 0 12px;
-  border-radius: 6px;
+     .btn .btn-primary    Add / Save / confirm — solid accent, the one loud button
+     .btn .btn-secondary  Cancel / back / ordinary actions (same as plain .btn)
+     .btn .btn-danger     destructive actions — outline, never solid
+     .btn .btn-ghost      quiet toolbar use
+     .btn .btn-sm         compact rows (tables, field actions)
+     .btn .btn-icon       icon-only square
+
+   The element selectors (button.primary, button.small, button.danger,
+   button.ghost, button.icon-btn, .button) keep working so existing templates
+   don't need a rewrite; new markup uses the .btn-* classes.
+   Every button is --control-h tall so buttons and inputs align in a row. */
+
+.btn, button, .button {
+  font: 500 var(--text-sm) / 1 var(--sans);
+  display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+  height: var(--control-h); padding: 0 18px;
+  border-radius: var(--radius-control);
   border: 1px solid var(--border-strong);
-  background: var(--surface);
+  background: var(--surface-2);
   color: var(--fg);
   cursor: pointer;
   text-decoration: none;
-  transition: background-color 120ms ease, border-color 120ms ease, transform 60ms ease;
+  white-space: nowrap;
+  transition: background-color 120ms ease, border-color 120ms ease, color 120ms ease, transform 60ms ease;
 }
-button:hover, .button:hover { background: var(--surface-2); }
-button:active, .button:active { transform: translateY(1px); }
-button.primary {
+.btn:hover, button:hover, .button:hover { border-color: var(--accent); }
+.btn:active, button:active, .button:active { transform: translateY(1px); }
+.btn-primary, button.primary {
   background: var(--accent); border-color: var(--accent); color: var(--accent-ink);
+  font-weight: 600;
 }
-button.primary:hover { filter: brightness(1.06); background: var(--accent); }
-button.danger { border-color: color-mix(in srgb, var(--bad) 60%, transparent); color: var(--bad); background: transparent; }
-button.danger:hover { background: color-mix(in srgb, var(--bad) 10%, transparent); }
-button.ghost { border-color: transparent; background: transparent; color: var(--muted); }
-button.ghost:hover { background: var(--surface-2); color: var(--fg); }
-button.small, .button.small { height: 24px; padding: 0 9px; font-size: var(--fs-12); }
-button.icon-btn {
-  width: 28px; height: 28px; padding: 0; border-color: transparent; background: transparent; color: var(--muted);
+.btn-primary:hover, button.primary:hover {
+  background: var(--accent); border-color: var(--accent); color: var(--accent-ink);
+  filter: brightness(1.08);
 }
-button.icon-btn:hover { background: var(--surface-2); color: var(--fg); }
-button:disabled, .button:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
+.btn-danger, button.danger {
+  border-color: color-mix(in srgb, var(--bad) 55%, transparent);
+  color: var(--bad); background: transparent;
+}
+.btn-danger:hover, button.danger:hover {
+  background: color-mix(in srgb, var(--bad) 12%, transparent);
+  border-color: var(--bad); color: var(--bad);
+}
+.btn-ghost, button.ghost { border-color: transparent; background: transparent; color: var(--muted); }
+.btn-ghost:hover, button.ghost:hover { background: var(--surface-2); color: var(--fg); border-color: transparent; }
+.btn-sm, button.small, .button.small {
+  height: var(--control-h-sm); padding: 0 12px; gap: 6px;
+  font-size: var(--text-xs); border-radius: var(--radius-control);
+}
+.btn-icon, button.icon-btn {
+  width: var(--control-h-sm); height: var(--control-h-sm); padding: 0;
+  border-color: transparent; background: transparent; color: var(--muted);
+}
+.btn-icon:hover, button.icon-btn:hover { background: var(--surface-2); color: var(--fg); border-color: transparent; }
+.btn:disabled, button:disabled, .button:disabled { opacity: 0.45; cursor: not-allowed; transform: none; }
 
 form.inline { display: inline-flex; }
 .actions { display: flex; flex-wrap: wrap; gap: var(--s2); align-items: center; }
 .actions .sep { width: 1px; height: 20px; background: var(--border); margin: 0 var(--s1); }
 
-/* ---- forms --------------------------------------------------------------- */
+/* ---- form controls ---------------------------------------------------------
+   ONE consistent style for every text input, select and textarea:
+   --control-h tall, --radius-control corners, --text-sm text, one border,
+   one focus ring, one disabled state. All colors come from the theme
+   variables, so every theme profile (dark, light, oled, solarized,
+   high-contrast) gets the same treatment.
 
-label { display: block; font-size: var(--fs-12); font-weight: 500; color: var(--muted); margin-bottom: var(--s1); }
-.input, input[type="text"], input[type="number"], input[type="search"], select, textarea {
-  font: 400 var(--fs-13) / 1.4 var(--sans);
+   Label convention (binding on every template, including other workstreams):
+   - Write labels in Title Case: "Name", "Save to", "Command" — never raw
+     config keys like "bearer_token_env".
+   - In Jinja, render config keys through the pretty()/field_label() macros
+     in macros.html: {{ field_label(f.key, field_id) }} turns
+     "bearer_token_env" into "Bearer token env" ("url" -> "URL", "mcp" -> "MCP"
+     via the macro's acronym list).
+   - Keep the raw key only as a .mono caption when it helps map the control
+     back to the config file; the label itself stays human-readable. */
+
+.field-label, label {
+  display: block;
+  font-size: var(--text-xs); font-weight: 600; color: var(--muted);
+  letter-spacing: 0.01em; margin-bottom: 6px;
+}
+.input,
+input[type="text"], input[type="number"], input[type="search"],
+input[type="password"], input[type="url"], input[type="email"],
+select, textarea {
+  font: 400 var(--text-sm) / 1.45 var(--sans);
   width: 100%;
-  padding: 6px 9px;
-  border-radius: 6px;
+  padding: 0 12px;
+  border-radius: var(--radius-control);
   border: 1px solid var(--border-strong);
   background: var(--surface);
   color: var(--fg);
+  transition: border-color 120ms ease, box-shadow 120ms ease;
 }
-input, select { height: 30px; }
-textarea { min-height: 76px; resize: vertical; }
-label.check { display: inline-flex; flex-direction: row; align-items: center; gap: 7px; margin: 0; font-size: var(--fs-13); color: var(--fg); font-weight: 400; }
-label.check input { width: auto; height: auto; }
-.hint { font-size: var(--fs-12); color: var(--muted); margin: var(--s1) 0 0; }
+.input,
+input[type="text"], input[type="number"], input[type="search"],
+input[type="password"], input[type="url"], input[type="email"],
+select { height: var(--control-h); }
+textarea { min-height: 96px; padding: 10px 12px; resize: vertical; line-height: 1.55; }
+.input::placeholder,
+input::placeholder, textarea::placeholder { color: var(--faint); opacity: 1; }
+.input:focus,
+input[type="text"]:focus, input[type="number"]:focus, input[type="search"]:focus,
+input[type="password"]:focus, input[type="url"]:focus, input[type="email"]:focus,
+select:focus, textarea:focus {
+  outline: none; /* the global :focus-visible outline is replaced by the ring */
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+.input:disabled,
+input[type="text"]:disabled, input[type="number"]:disabled, input[type="search"]:disabled,
+input[type="password"]:disabled, input[type="url"]:disabled, input[type="email"]:disabled,
+select:disabled, textarea:disabled {
+  opacity: 0.55; cursor: not-allowed; background: var(--surface-2);
+}
+input[type="checkbox"], input[type="radio"] {
+  width: 17px; height: 17px; margin: 0; flex: none;
+  accent-color: var(--accent); cursor: pointer;
+}
+input[type="checkbox"]:disabled, input[type="radio"]:disabled { cursor: not-allowed; }
+label.check {
+  display: inline-flex; flex-direction: row; align-items: center; gap: 8px;
+  margin: 0; font-size: var(--text-sm); color: var(--fg); font-weight: 400;
+  cursor: pointer;
+}
+.hint { font-size: var(--text-xs); color: var(--muted); margin: 6px 0 0; line-height: 1.5; }
 
 .form-grid {
   display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
@@ -687,10 +808,11 @@ svg.trend .pt.bad { fill: var(--bad); stroke: var(--surface); stroke-width: 1.5;
 
 .sidebar-new {
   display: flex; align-items: center; justify-content: center; gap: 8px;
-  height: 32px; margin: 0 var(--s2);
-  border: 1px solid var(--border-strong); border-radius: 6px;
+  height: var(--control-h); margin: 0 var(--s2);
+  border: 1px solid var(--border-strong); border-radius: var(--radius-control);
   background: var(--surface-2); color: var(--fg);
-  font-size: var(--fs-13); font-weight: 500; text-decoration: none;
+  font-size: var(--text-sm); font-weight: 600; text-decoration: none;
+  transition: border-color 120ms ease, color 120ms ease;
 }
 .sidebar-new:hover { border-color: var(--accent); color: var(--accent); }
 .sidebar-new-form { margin: 0 var(--s2); }
@@ -709,9 +831,9 @@ details.panel[open] > summary { margin-bottom: var(--s3); }
 
 .theme-pick {
   display: flex; align-items: center; justify-content: space-between; gap: var(--s2);
-  margin-bottom: var(--s2); font-size: var(--fs-12); color: var(--muted);
+  margin-bottom: var(--s2); font-size: var(--text-xs); font-weight: 600; color: var(--muted);
 }
-.theme-pick select { width: auto; height: 26px; padding: 2px 6px; font-size: var(--fs-12); }
+.theme-pick select { width: auto; height: var(--control-h-sm); padding: 0 8px; font-size: var(--text-xs); }
 
 /* ---- settings editor rows ---------------------------------------------------------------- */
 
@@ -726,7 +848,7 @@ details.panel[open] > summary { margin-bottom: var(--s3); }
 .field-row:last-of-type { border-bottom: 0; }
 .field-row > label {
   margin: 0; display: flex; flex-direction: column; gap: 2px;
-  font-weight: 500; color: var(--fg); font-size: var(--fs-12);
+  font-weight: 600; color: var(--fg); font-size: var(--text-xs);
 }
 .field-row > label .hint { margin: 0; font-weight: 400; }
 .field-control textarea { min-height: 56px; }
@@ -738,8 +860,40 @@ details.panel[open] > summary { margin-bottom: var(--s3); }
 
 details.entity { border-bottom: 1px solid var(--border); padding: var(--s2) 0; }
 details.entity > summary { cursor: pointer; font-size: var(--fs-13); }
-details.add-entity { border-bottom: 0; }
-details.add-entity > summary { color: var(--accent); font-weight: 500; }
+/* ---- disclosure buttons -----------------------------------------------------
+   "Add to …" expanders are REAL buttons that keep the native <details> /
+   <summary> expand-collapse behavior (no JS needed, works with keyboard).
+   Markup:  <details class="disclosure"><summary>…</summary> … </details>
+   The existing details.add-entity summaries (settings/tools "Add to …"
+   expanders) get the same treatment without a template change. */
+
+details.disclosure, details.add-entity { border-bottom: 0; margin: var(--s2) 0; }
+details.disclosure > summary, details.add-entity > summary {
+  display: inline-flex; align-items: center; gap: 8px;
+  height: var(--control-h); padding: 0 16px;
+  border: 1px solid var(--border-strong); border-radius: var(--radius-control);
+  background: var(--surface-2); color: var(--fg);
+  font-size: var(--text-sm); font-weight: 600;
+  cursor: pointer; list-style: none; user-select: none;
+  transition: border-color 120ms ease, color 120ms ease, box-shadow 120ms ease;
+}
+details.disclosure > summary::-webkit-details-marker,
+details.add-entity > summary::-webkit-details-marker { display: none; }
+details.disclosure > summary::marker,
+details.add-entity > summary::marker { content: ""; }
+details.disclosure > summary .icon,
+details.add-entity > summary .icon { color: var(--accent); }
+details.disclosure > summary:hover,
+details.add-entity > summary:hover { border-color: var(--accent); }
+details.disclosure[open] > summary,
+details.add-entity[open] > summary {
+  border-color: var(--accent); color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+details.disclosure > summary:focus-visible,
+details.add-entity > summary:focus-visible {
+  outline: 2px solid var(--accent); outline-offset: 2px;
+}
 
 /* ---- settings: beginner view, advanced toggle, slider --------------------------- */
 

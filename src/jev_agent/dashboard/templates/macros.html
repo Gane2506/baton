@@ -1,5 +1,34 @@
 {% macro csrf_input() %}<input type="hidden" name="{{ csrf_field }}" value="{{ csrf }}">{% endmacro %}
 
+{# ---- design-system conventions (Workstream 1) --------------------------------
+   Buttons:  class="btn btn-primary" | "btn btn-secondary" | "btn btn-danger"
+             | "btn btn-ghost", plus "btn-sm" for compact rows and "btn-icon"
+             for icon-only buttons. (Legacy button.primary / button.small /
+             button.danger / button.ghost / button.icon-btn selectors still work.)
+   Labels:   field labels render Title Case ("Name", "Save to", "Command") —
+             never raw config keys. Use field_label(key, for_id), which runs
+             the key through pretty(): "bearer_token_env" -> "Bearer token env",
+             with the acronym list below for "url" -> "URL" etc. Literal labels
+             are written in Title Case by hand.
+   Disclose: <details class="disclosure"><summary>…</summary>…</details> renders
+             a real button that keeps native expand/collapse (no JS).
+   Type:     --text-xs/sm/base/lg/xl/2xl = 13/14/15/17/22/28px; body, inputs and
+             buttons read at --text-base. See the scale comment in style.css.
+   --------------------------------------------------------------------------- #}
+
+{# Acronyms that render fully uppercase inside pretty() labels. #}
+{% set _LABEL_ACRONYMS = {"url": "URL", "api": "API", "mcp": "MCP", "id": "ID"} %}
+
+{% macro pretty(key) -%}
+{# Render a config key as a human-readable label: "bearer_token_env" -> "Bearer token env". #}
+{{- _LABEL_ACRONYMS.get((key|string).lower(), (key|string).replace("_", " ").capitalize()) -}}
+{%- endmacro %}
+
+{% macro field_label(key, for_id="") -%}
+{# The one label every form field uses: <label for="…">Bearer token env</label> #}
+<label{% if for_id %} for="{{ for_id }}"{% endif %}>{{ pretty(key) }}</label>
+{%- endmacro %}
+
 {% macro badge(text, cls=none, live=false) %}{# Pulse means "active right now": the macro decides from the
   status value, so callers never pass live for a mere state (E2/E3). #}{% set _live = live or (text|string|lower in ("running", "executing", "integrating", "shipping")) %}<span class="badge{{ ' live' if _live }} s-{{ cls if cls is not none else text }}">{{ text }}</span>{% endmacro %}
 
@@ -7,7 +36,7 @@
 
 {% macro icon(name, cls="") %}<svg class="icon {{ cls }}" aria-hidden="true"><use href="#{{ name }}"></use></svg>{% endmacro %}
 
-{% macro copy_button(value, label="Copy") %}<button type="button" class="icon-btn copy" data-copy="{{ value }}" aria-label="{{ label }}">{{ icon("i-copy", "sm") }}</button>{% endmacro %}
+{% macro copy_button(value, label="Copy") %}<button type="button" class="btn-icon copy" data-copy="{{ value }}" aria-label="{{ label }}">{{ icon("i-copy", "sm") }}</button>{% endmacro %}
 
 {% macro empty(title, text="", action="") %}<div class="empty">{{ icon("i-info", "") }}{% if title %}<div class="title">{{ title }}</div>{% endif %}{% if text %}<p>{{ text }}</p>{% endif %}{{ action }}</div>{% endmacro %}
 
