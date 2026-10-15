@@ -64,6 +64,16 @@ All notable changes to this project are documented here. The format is based on
   seeding touches nothing outside the repo and needs no repo trust, and `jev demo reset`
   removes the demo state again. See [docs/demo.md](docs/demo.md).
 
+- **Capability benchmark scoreboard (Phase 1).** New `src/jev_agent/capbench/` package
+  with `jev capbench run|grade|report|tasks`: three fixed tasks (`benchmarks/tasks/`,
+  each a `brief.md` + self-contained `fixture/` + deterministic `grade.py`) run through
+  the real pipeline in throwaway sandbox repos (fixed `$2` budget cap, `basic` quality
+  level, pinned worker profile) and graded by hidden pytest, diff-size bands and the
+  gate's ship score — no LLM judge. The public scoreboard is `docs/benchmarks.md`
+  (currently an unevaluated template — no scores are fabricated) plus a README badge
+  fed by `docs/benchmarks.json`. Manual trigger only: no nightly schedule was created
+  (the ~$3–7/night model spend needs explicit go-ahead).
+
 ## [0.4.0] - 2026-10-14
 
 ### Added

@@ -18,6 +18,7 @@
   <a href="https://github.com/astral-sh/ruff"><img alt="Ruff" src="https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json&style=flat-square"></a>
   <a href="https://mypy-lang.org/"><img alt="mypy strict: checked" src="https://img.shields.io/badge/mypy%20strict-checked-2A6DB2?style=flat-square"></a>
   <a href="https://github.com/astral-sh/uv"><img alt="uv" src="https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/uv/main/assets/badge/v0.json&style=flat-square"></a>
+  <a href="docs/benchmarks.md"><img alt="capbench" src="https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/Gane2506/baton/main/docs/benchmarks.json&style=flat-square"></a>
 </p>
 
 <p>
