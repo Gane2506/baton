@@ -11,6 +11,7 @@ from jev_agent.cli.dashboard_cmd import dashboard
 from jev_agent.cli.demo_cmds import demo_app
 from jev_agent.cli.design_cmds import design_app
 from jev_agent.cli.doctor_cmd import doctor
+from jev_agent.cli.events_cmds import events_app
 from jev_agent.cli.init_cmd import init
 from jev_agent.cli.laya_cmds import laya_app
 from jev_agent.cli.learning_cmds import learning_app
@@ -79,6 +80,7 @@ app.command("dashboard", rich_help_panel=PANEL_OBSERVE)(dashboard)
 app.command("kpi", rich_help_panel=PANEL_OBSERVE)(kpi)
 app.add_typer(capbench_app, name="capbench", rich_help_panel=PANEL_OBSERVE)
 app.add_typer(quality_app, name="quality", rich_help_panel=PANEL_OBSERVE)
+app.add_typer(events_app, name="events", rich_help_panel=PANEL_OBSERVE)
 
 # --- Configure: set up the environment and tooling ---
 app.command("doctor", rich_help_panel=PANEL_CONFIGURE)(doctor)

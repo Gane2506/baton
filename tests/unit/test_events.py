@@ -193,3 +193,60 @@ def test_run_seq_is_unique_per_run(store: Store, tmp_path: Path) -> None:
             " payload_json) VALUES (?, 1, 'run.created', 1, 't', 'pipeline', '{}')",
             (run.id,),
         )
+
+
+# ---- `jev events` CLI ----------------------------------------------------------------------
+
+
+def _seed_repo_run(repo: Path) -> str:
+    """Create a run with a few events in the fixture repo's state DB."""
+    from jev_agent.app.context import state_db_path
+
+    with Store.open(state_db_path(repo)) as store:
+        run = store.create_run(_idea(repo))
+        store.set_run_state(run.id, RunState.PLANNING, "seed")
+        return run.id
+
+
+def test_events_timeline_cli(fixture_repo: Path) -> None:
+    from typer.testing import CliRunner
+
+    from jev_agent.cli.app import app
+
+    run_id = _seed_repo_run(fixture_repo)
+    result = CliRunner().invoke(app, ["events", run_id, "--repo", str(fixture_repo)])
+    assert result.exit_code == 0, result.output
+    assert "run.created" in result.output
+    assert "run.state_changed" in result.output
+    assert "INTAKE → PLANNING" in result.output
+
+
+def test_events_timeline_filters_and_json(fixture_repo: Path) -> None:
+    from typer.testing import CliRunner
+
+    from jev_agent.cli.app import app
+
+    run_id = _seed_repo_run(fixture_repo)
+    runner = CliRunner()
+    filtered = runner.invoke(
+        app, ["events", run_id, "--repo", str(fixture_repo), "-t", "run.created"]
+    )
+    assert filtered.exit_code == 0, filtered.output
+    assert "run.created" in filtered.output
+    assert "run.state_changed" not in filtered.output
+    as_json = runner.invoke(app, ["events", run_id, "--repo", str(fixture_repo), "--json"])
+    assert as_json.exit_code == 0, as_json.output
+    import json as _json
+
+    first = _json.loads(as_json.output.splitlines()[0])
+    assert first["type"] == "run.created" and first["run_seq"] == 1
+
+
+def test_events_unknown_run_is_a_one_line_error(fixture_repo: Path) -> None:
+    from typer.testing import CliRunner
+
+    from jev_agent.cli.app import app
+
+    result = CliRunner().invoke(app, ["events", "nope", "--repo", str(fixture_repo)])
+    assert result.exit_code == 1
+    assert "not found" in result.stderr
