@@ -115,6 +115,12 @@
         <span>{{ text }}</span>
       </div>
       {% endfor %}
+      {% if demo %}
+      <div class="flash" role="status">
+        <svg class="icon" aria-hidden="true"><use href="#i-info"></use></svg>
+        <span>Demo data — the runs, queue and spend here are made up (<code>jev init --demo</code>). Remove them with <code>jev demo reset</code>.</span>
+      </div>
+      {% endif %}
       <main>
       {% block content %}{% endblock %}
       </main>

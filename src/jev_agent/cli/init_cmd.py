@@ -48,11 +48,21 @@ def init(
             help="Move a repo set up with jao v0.1 to the jev names (jao.toml, .jao/, branches).",
         ),
     ] = False,
+    demo: Annotated[
+        bool,
+        typer.Option(
+            "--demo",
+            help="Seed a demo project: sample runs, queue items, lessons and spend data, "
+            "clearly marked as demo. Touches nothing outside this repo.",
+        ),
+    ] = False,
 ) -> None:
     """Create jev.toml and .jev/ in the repo, and add .jev/ to .gitignore."""
     root = find_git_root(repo, allow_legacy=migrate)
     if root is None:
         raise fail(f"{repo.resolve()} is not inside a git repository.")
+    if migrate and demo:
+        raise fail("Cannot combine --demo with --migrate.")
     if migrate:
         _migrate(root)
         return
@@ -76,9 +86,44 @@ def init(
     else:
         console.print(f"{_IGNORE_ENTRY} is already in {root / '.gitignore'}", markup=False)
 
+    if demo:
+        _seed_demo(root)
     console.print("[green]Done.[/green] Run [bold]jev doctor[/bold] to check your setup.")
     if is_interactive():
         print_welcome()
+
+
+def _seed_demo(root: Path) -> None:
+    """Run the demo seeder against the freshly initialised repo and mark the data as demo."""
+    from jev_agent.demo import (
+        STATE_DB_FILENAME,
+        is_demo_repo,
+        marker_path,
+        write_demo_marker,
+    )
+    from jev_agent.demo.seeder import seed
+
+    state_dir = root / STATE_DIRNAME
+    if (state_dir / STATE_DB_FILENAME).exists() or is_demo_repo(root):
+        raise fail(
+            f"{state_dir} already holds state: --demo seeds a fresh repo only. "
+            "Start from a clean repo instead."
+        )
+    try:
+        seed(root, demo_config=False)
+    except SystemExit as exc:
+        raise fail(f"demo seeding failed: {exc}") from exc
+    except Exception as exc:  # CLI boundary: report the failure, don't traceback
+        raise fail(f"demo seeding failed unexpectedly: {exc}") from exc
+    write_demo_marker(root, seeded_by="jev init --demo")
+    console.print(
+        f"Demo data seeded and marked as demo in {escape(str(marker_path(root)))} "
+        f"(logs are labeled {escape('[demo]')})."
+    )
+    console.print(
+        "Explore it with [bold]jev board[/bold] or [bold]jev dashboard[/bold]; "
+        "remove it with [bold]jev demo reset[/bold]."
+    )
 
 
 def add_to_gitignore(gitignore: Path, entry: str) -> bool:

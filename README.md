@@ -271,6 +271,11 @@ jev init
 This writes `jev.toml`, creates `.jev/` (state database, logs, worktrees) and adds `.jev/` to
 `.gitignore`.
 
+**Just exploring?** `jev init --demo` seeds the repo with made-up runs, queue items,
+lessons and spend data, so you can try `jev board` and `jev dashboard` right away. The
+data is clearly marked as demo (`.jev/demo.json`, plus a banner in the dashboard) and
+`jev demo reset` removes it again. See [docs/demo.md](docs/demo.md).
+
 **2. Edit `jev.toml`.** The defaults work. Two things you may want to change:
 
 ```toml
@@ -612,6 +617,7 @@ caps: jev's budget does not limit Codex spend, only `max_task_attempts` and the 
 - [docs/queue.md](docs/queue.md): idea queue, scheduler and kanban board
 - [docs/chat.md](docs/chat.md): talking an idea through before a run
 - [docs/dashboard.md](docs/dashboard.md): the web dashboard and its security model
+- [docs/demo.md](docs/demo.md): `jev init --demo` demo projects and `jev demo reset`
 - [docs/ship.md](docs/ship.md): `jev ship` pull requests, `jev kpi` and the benchmarks
 - [docs/servers.md](docs/servers.md): servers over SSH, access levels, audit log, browser, profiles
 - [docs/security.md](docs/security.md): isolation, permissions, keys, terms of use

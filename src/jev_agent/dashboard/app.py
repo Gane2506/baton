@@ -110,6 +110,7 @@ from jev_agent.dashboard.security import (
     checked_form,
     same_origin,
 )
+from jev_agent.demo import is_demo_repo
 from jev_agent.quality.levels import LEVELS
 from jev_agent.servers.audit import AuditEntry, AuditLog, audit_path
 from jev_agent.servers.ssh import (
@@ -489,6 +490,7 @@ class Dashboard:
             csrf=request.state.csrf,
             refresh_ms=int(self.settings.refresh_s * 1000),
             root=self.settings.root,
+            demo=is_demo_repo(self.settings.root),
             flashes=self.take_flashes(request) if show_flashes else [],
             **context,
         )

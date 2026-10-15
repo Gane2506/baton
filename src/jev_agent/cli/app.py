@@ -7,6 +7,7 @@ from jev_agent import __version__
 from jev_agent.cli.board_cmds import board
 from jev_agent.cli.chat_cmds import chat
 from jev_agent.cli.dashboard_cmd import dashboard
+from jev_agent.cli.demo_cmds import demo_app
 from jev_agent.cli.doctor_cmd import doctor
 from jev_agent.cli.init_cmd import init
 from jev_agent.cli.laya_cmds import laya_app
@@ -66,6 +67,7 @@ app.command("cancel", rich_help_panel=PANEL_RUN)(cancel)
 app.add_typer(queue_app, name="queue", rich_help_panel=PANEL_RUN)
 app.add_typer(scheduler_app, name="scheduler", rich_help_panel=PANEL_RUN)
 app.command("ship", rich_help_panel=PANEL_RUN)(ship)
+app.add_typer(demo_app, name="demo", rich_help_panel=PANEL_RUN)
 
 # --- Observe: watch and inspect what is happening ---
 app.command("status", rich_help_panel=PANEL_OBSERVE)(status)
