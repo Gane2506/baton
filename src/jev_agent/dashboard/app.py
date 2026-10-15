@@ -141,6 +141,7 @@ STATIC_DIR = Path(__file__).parent / "static"
 NAV = (
     ("/", "Board"),
     ("/queue", "Queue"),
+    ("/artifacts", "Artifacts"),
     ("/agents", "Agents"),
     ("/fleet", "Fleet"),
     ("/chats", "Chats"),
@@ -659,6 +660,25 @@ class Dashboard:
             }
 
         return self.page(request, "chats.html", build)
+
+    def artifacts_page(self, request: Request) -> Response:
+        kind = request.query_params.get("kind", "")
+        chat_id = request.query_params.get("chat", "")
+        query = request.query_params.get("q", "")
+
+        def build(repo: views.Repo) -> dict[str, Any]:
+            rows, chat_options = views.artifacts(repo, kind, chat_id, query)
+            return {
+                "artifacts": rows,
+                "chat_options": chat_options,
+                "kind": kind,
+                "chat_id": chat_id,
+                "q": query.strip(),
+                "kinds": views.ARTIFACT_KINDS,
+                "kind_labels": views.ARTIFACT_LABELS,
+            }
+
+        return self.page(request, "artifacts.html", build)
 
     def _chat_context(self, chat_id: str) -> Callable[[views.Repo], dict[str, Any]]:
         def build(repo: views.Repo) -> dict[str, Any]:
@@ -1946,6 +1966,7 @@ def create_app(
         Route("/queue/recurring/{id}/pause", dash.queue_recurring_pause, methods=["POST"]),
         Route("/queue/recurring/{id}/resume", dash.queue_recurring_resume, methods=["POST"]),
         Route("/queue/recurring/{id}/remove", dash.queue_recurring_remove, methods=["POST"]),
+        Route("/artifacts", dash.artifacts_page),
         Route("/learning", dash.learning_page),
         Route("/learning/{action}", dash.learning_action, methods=["POST"]),
         Route("/chats", dash.chats_page),

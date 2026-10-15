@@ -539,6 +539,116 @@ def chats(repo: Repo, query: str = "") -> list[tuple[ChatMeta, str]]:
     ]
 
 
+# ---- artifacts ---------------------------------------------------------------------------
+
+ARTIFACT_KINDS = ("plan", "diff", "tests")
+ARTIFACT_LABELS = {"plan": "Plan", "diff": "Diff", "tests": "Tests & Quality"}
+_DIFF_STATES = (
+    RunState.INTEGRATING,
+    RunState.SHIPPING,
+    RunState.AWAITING_SHIP,
+    RunState.DONE,
+)
+
+
+@dataclass(frozen=True)
+class Artifact:
+    """One work product from a run: a plan, a diff, or a quality report.
+
+    `url` deep-links to the existing viewer (the chat's work tab when the run
+    came from a chat, otherwise the run page); this page never duplicates viewers.
+    """
+
+    kind: str  # one of ARTIFACT_KINDS
+    title: str
+    run_id: str
+    run_title: str
+    chat_id: str | None
+    chat_title: str | None
+    created_at: datetime
+    url: str
+
+
+def artifacts(
+    repo: Repo, kind: str = "", chat_id: str = "", q: str = ""
+) -> tuple[list[Artifact], list[tuple[str, str]]]:
+    """Every work product across all runs, newest first, plus the chat list for filters.
+
+    Plans come from runs with a validated plan, diffs from runs that reached the
+    integration states, and test reports from the quality-gate table. Preview and
+    terminal streams are live-only (no stored history) and are not aggregated here.
+    `kind` filters to one artifact type, `chat_id` to one chat, `q` searches titles,
+    run titles and chat titles case-insensitively.
+    """
+    run_chat: dict[str, tuple[str, str]] = {}
+    chat_options: list[tuple[str, str]] = []
+    for meta in list_chats(repo.root):
+        title = chat_title(meta, repo.root)
+        chat_options.append((meta.chat_id, title))
+        for entry in meta.runs:
+            run_chat.setdefault(entry["run_id"], (meta.chat_id, title))
+
+    out: list[Artifact] = []
+    for run in repo.store.list_runs():
+        cid, ctitle = run_chat.get(run.id, (None, None))
+        run_title = run.idea.text
+        if run.plan is not None:
+            out.append(
+                Artifact(
+                    kind="plan",
+                    title=f"Plan: {run_title}",
+                    run_id=run.id,
+                    run_title=run_title,
+                    chat_id=cid,
+                    chat_title=ctitle,
+                    created_at=run.created_at,
+                    url=f"/chats/{cid}/work/plan" if cid else f"/runs/{run.id}",
+                )
+            )
+        if run.state in _DIFF_STATES:
+            out.append(
+                Artifact(
+                    kind="diff",
+                    title=f"Diff: {run_title}",
+                    run_id=run.id,
+                    run_title=run_title,
+                    chat_id=cid,
+                    chat_title=ctitle,
+                    created_at=run.updated_at,
+                    url=f"/chats/{cid}/work/diff" if cid else f"/runs/{run.id}",
+                )
+            )
+        for report in repo.store.list_quality_reports(run.id):
+            out.append(
+                Artifact(
+                    kind="tests",
+                    title=f"Quality report {report.result.label}: {run_title}",
+                    run_id=run.id,
+                    run_title=run_title,
+                    chat_id=cid,
+                    chat_title=ctitle,
+                    created_at=report.created_at,
+                    url=f"/chats/{cid}/work/tests" if cid else f"/runs/{run.id}#quality-review",
+                )
+            )
+
+    needle = q.strip().lower()
+    rows = [
+        a
+        for a in out
+        if (not kind or a.kind == kind)
+        and (not chat_id or a.chat_id == chat_id)
+        and (
+            not needle
+            or needle in a.title.lower()
+            or needle in a.run_title.lower()
+            or needle in (a.chat_title or "").lower()
+        )
+    ]
+    rows.sort(key=lambda a: a.created_at, reverse=True)
+    return rows, chat_options
+
+
 # ---- repo KPIs ---------------------------------------------------------------------------
 
 

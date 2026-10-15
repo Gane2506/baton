@@ -59,8 +59,8 @@
   <symbol id="i-sync" viewBox="0 0 24 24"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/></symbol>
 </svg>
 
-{% set icons = {"/": "i-board", "/queue": "i-queue", "/agents": "i-models", "/fleet": "i-fleet", "/chats": "i-chats", "/learning": "i-learning", "/tools": "i-terminal", "/connections": "i-profiles", "/spend": "i-spend", "/kpis": "i-kpis", "/settings": "i-settings"} %}
-{% set groups = {"Overview": ["/"], "Work": ["/queue"], "Agents": ["/agents", "/fleet", "/chats", "/learning"], "Integrations": ["/tools", "/connections"], "Insight": ["/spend", "/kpis"], "System": ["/settings"]} %}
+{% set icons = {"/": "i-board", "/queue": "i-queue", "/artifacts": "i-log", "/agents": "i-models", "/fleet": "i-fleet", "/chats": "i-chats", "/learning": "i-learning", "/tools": "i-terminal", "/connections": "i-profiles", "/spend": "i-spend", "/kpis": "i-kpis", "/settings": "i-settings"} %}
+{% set groups = {"Overview": ["/"], "Work": ["/queue", "/artifacts"], "Agents": ["/agents", "/fleet", "/chats", "/learning"], "Integrations": ["/tools", "/connections"], "Insight": ["/spend", "/kpis"], "System": ["/settings"]} %}
 
 {# Slim top bar with a hamburger: visible only on narrow screens, where the
    sidebar becomes an overlay drawer. The chat page keeps its own header and

@@ -463,7 +463,8 @@ td .mono, td.mono { font-size: var(--fs-12); }
 }
 .badge::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
 
-.s-DONE, .s-done, .s-ok, .s-passed, .s-approve, .s-finished, .s-merged, .s-success, .s-enabled {
+.s-DONE, .s-done, .s-ok, .s-passed, .s-approve, .s-finished, .s-merged, .s-success, .s-enabled,
+.s-tests {
   color: var(--ok); border-color: color-mix(in srgb, var(--ok) 50%, transparent);
   background: color-mix(in srgb, var(--ok) 10%, transparent);
 }
@@ -478,7 +479,8 @@ td .mono, td.mono { font-size: var(--fs-12); }
   background: color-mix(in srgb, var(--bad) 10%, transparent);
 }
 .s-EXECUTING, .s-INTEGRATING, .s-SHIPPING, .s-RUNNING, .s-running, .s-REVIEWING, .s-note, .s-info,
-.s-queued, .s-INTAKE, .s-PLANNING, .s-VALIDATING, .s-TESTING, .s-repo, .s-user {
+.s-queued, .s-INTAKE, .s-PLANNING, .s-VALIDATING, .s-TESTING, .s-repo, .s-user,
+.s-plan, .s-diff {
   color: var(--info); border-color: color-mix(in srgb, var(--info) 50%, transparent);
   background: color-mix(in srgb, var(--info) 10%, transparent);
 }

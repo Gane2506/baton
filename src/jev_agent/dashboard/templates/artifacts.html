@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+{% from "macros.html" import badge, empty, icon with context %}
+{% block title %}Artifacts{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div class="titles">
+    <h1>Artifacts</h1>
+    <p class="lede">Every work product the runs produced — plans, diffs, and test reports —
+    across all chats and runs. Preview and terminal streams are live-only and stay in the
+    chat; everything kept is here.</p>
+  </div>
+</div>
+
+<section class="panel tight">
+  <form class="inline" method="get" action="/artifacts">
+    <label class="muted" for="kind">Type</label>
+    <select id="kind" name="kind">
+      <option value="">All types</option>
+      {% for k in kinds %}<option value="{{ k }}"{% if kind == k %} selected{% endif %}>{{ kind_labels[k] }}</option>{% endfor %}
+    </select>
+    <label class="muted" for="chat">Chat</label>
+    <select id="chat" name="chat">
+      <option value="">All chats</option>
+      {% for cid, ctitle in chat_options %}<option value="{{ cid }}"{% if chat_id == cid %} selected{% endif %}>{{ ctitle or "Untitled chat" }}</option>{% endfor %}
+    </select>
+    <label class="muted" for="q">Search</label>
+    <input type="search" id="q" name="q" value="{{ q }}" placeholder="title, run, chat" maxlength="80">
+    <button type="submit">Filter</button>
+    {% if kind or chat_id or q %}<a href="/artifacts">Clear</a>{% endif %}
+  </form>
+</section>
+
+{% if artifacts %}
+<div class="table-wrap"><table>
+  <thead><tr><th>artifact</th><th>type</th><th>run</th><th>chat</th><th>created</th></tr></thead>
+  <tbody>
+  {% for a in artifacts %}
+    <tr>
+      <td><a href="{{ a.url }}">{{ a.title }}</a></td>
+      <td>{{ badge(kind_labels[a.kind], a.kind) }}</td>
+      <td>
+        <a href="/runs/{{ a.run_id }}">{{ a.run_title | truncate(60) }}</a>
+        <div class="muted small mono">{{ a.run_id }}</div>
+      </td>
+      <td>{% if a.chat_id %}<a href="/chats/{{ a.chat_id }}">{{ a.chat_title or "Untitled chat" }}</a>{% else %}<span class="muted">—</span>{% endif %}</td>
+      <td class="small">{{ a.created_at | time }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table></div>
+{% else %}
+{{ empty(
+  "No artifacts" + (" match these filters" if kind or chat_id or q else " yet"),
+  "Artifacts appear here as runs produce plans, diffs, and test reports." +
+  (" Try clearing the filters." if kind or chat_id or q else " Start a run with <code>jev run \"your idea\"</code> and its work products will show up here.")
+) }}
+{% endif %}
+{% endblock %}
