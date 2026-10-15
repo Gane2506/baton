@@ -618,6 +618,12 @@ SNAPSHOT_ONLY_METHODS: dict[str, str] = {
     "increment_task_attempts": "counter; the attempt.started event carries the attempt",
     "mark_task_lessons_scored": "lesson bookkeeping flag",
     "renew_run_lease": "heartbeat (every 15s); liveness derives from lease.claimed",
+    "cache_clear": "cache maintenance; hits surface as decision/attempt events",
+    "cache_delete_expired": "cache maintenance; hits surface as decision/attempt events",
+    "cache_evict_lru": "cache maintenance; hits surface as decision/attempt events",
+    "cache_get": "read with hit-count side effect; the served decision is the event",
+    "cache_put": "cache write; the stored decision/attempt is the event",
+    "cache_shadow_log": "measurement log, not run state",
 }
 
 

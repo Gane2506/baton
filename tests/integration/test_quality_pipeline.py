@@ -116,6 +116,7 @@ def make_env(python_repo: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Any
         max_fix_rounds: int = 2,
         dispatcher: Any = None,
         quality: dict[str, Any] | None = None,
+        cache: dict[str, Any] | None = None,
     ) -> Env:
         installed.clear()
         installed.update(tools_installed)
@@ -131,6 +132,7 @@ def make_env(python_repo: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Any
                 "approval": {"require_plan_approval": False},
                 "quality": {"level": level, **(quality or {})},
                 "integration": {"max_fix_rounds": max_fix_rounds},
+                "cache": cache or {},
             }
         )
         pipeline = build_pipeline(
@@ -232,8 +234,13 @@ async def test_rules_escalate_when_the_gate_keeps_blocking(make_env: Any) -> Non
 
 
 async def test_dispatcher_cannot_wave_a_blocked_task_through(make_env: Any) -> None:
+    # The script changes the review verdict between attempts without changing the code;
+    # the role cache would (correctly) serve attempt 1's CRITICAL review for the identical
+    # attempt-2 diff, so this dispatcher/gate test opts the gate's reviewer out of the cache.
     env: Env = make_env(
-        {"code_reviewer:T1:1": CRITICAL, "code_reviewer": CLEAN}, dispatcher=_AlwaysDone()
+        {"code_reviewer:T1:1": CRITICAL, "code_reviewer": CLEAN},
+        dispatcher=_AlwaysDone(),
+        cache={"cache_roles": ["planner", "validator", "reviewer"]},
     )
     run = await env.pipeline.start(_idea(env.repo))
     assert run.state is RunState.DONE

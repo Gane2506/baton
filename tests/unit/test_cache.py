@@ -181,6 +181,23 @@ def test_strip_volatile_removes_rounds_and_counters() -> None:
     assert stripped == {"idea": "add search", "nested": {"keep": "yes"}}
 
 
+def test_strip_volatile_keeps_bare_attempt_number() -> None:
+    """The D5/D8 `attempt` number drives the retry/escalate ladder: it is
+    decision-relevant, so two D5 requests differing only by attempt must key
+    differently (regression: the volatile regex used to strip it, replaying the
+    first D5 answer for every later attempt)."""
+    assert strip_volatile({"attempt": 1, "tests": "failed"}) == {
+        "attempt": 1,
+        "tests": "failed",
+    }
+    assert strip_volatile({"attempt": 2, "tests": "failed"}) == {
+        "attempt": 2,
+        "tests": "failed",
+    }
+    # ...but the counter variants stay volatile.
+    assert strip_volatile({"attempt_no": 3, "attempts": 3}) == {}
+
+
 def test_normalize_prompt_replaces_volatile_bits(tmp_path: Path) -> None:
     prompt = (
         f"work in {tmp_path}/jev/abc123/task-x on run 9f2e4d6a8b1c2d3e\n"
@@ -457,6 +474,25 @@ async def test_run_worker_caches_success(store: Store, run_id: str, git_repo: Pa
     assert second.result.cost_usd == 0
     assert store.get_run(run_id).spend_usd == spend_after_first
     assert len(store.list_attempts(run_id)) == 2  # the hit is still recorded
+
+
+@pytest.mark.asyncio
+async def test_run_worker_cache_hit_restores_parsed_output(
+    store: Store, run_id: str, git_repo: Path
+) -> None:
+    """A cached role hit must behave like the live call: consumers such as the quality
+    gate read `output.parsed`, so the structured output has to survive the round-trip
+    (regression: the hit path dropped it, making the gate pass on a cached review)."""
+    worker = _FakeWorker(_success_result(git_repo), parsed=_plan_parsed())
+    harness = _harness(store, git_repo, Mock(), workers=_FakeRegistry(worker))
+    kwargs = _run_kwargs(run_id, git_repo)
+    first = await harness.run_worker(**kwargs)
+    assert isinstance(first.parsed, Plan)
+
+    second = await harness.run_worker(**kwargs)
+    assert worker.calls == 1  # served from cache
+    assert isinstance(second.parsed, Plan)
+    assert second.parsed == first.parsed
 
 
 @pytest.mark.asyncio

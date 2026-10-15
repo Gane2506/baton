@@ -63,8 +63,10 @@ CACHE_MARKER = "[served from cache]"
 _VOLATILE_KEYS = frozenset({"previous_rounds"})
 #: Matches volatile counters/timestamps anywhere in a state key: `attempt_no`,
 #: `budget_usd`, `spend_usd`, `cost_estimate`, `created_at`, `latency_ms`, ...
+#: Note: the bare key `attempt` (the D5/D8 attempt number) is deliberately NOT
+#: matched — it drives the retry/escalate ladder, so it is decision-relevant.
 _VOLATILE_RE = re.compile(
-    r"(^|_)(attempt|attempts|budget|budgets|spend|spent|cost|costs|token|tokens|"
+    r"(^|_)(attempts|attempt_no|budget|budgets|spend|spent|cost|costs|token|tokens|"
     r"timestamp|timestamps|latency|duration)(_|$)|(_at|_ms|_us)$"
 )
 _UUID_RE = re.compile(

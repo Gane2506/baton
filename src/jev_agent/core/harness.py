@@ -12,6 +12,8 @@ from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from pydantic import ValidationError
+
 from jev_agent.config.schema import JevConfig
 from jev_agent.core.assign import Assignment, fit_free, quota_fallback, reassign
 from jev_agent.core.budget import Budget
@@ -483,14 +485,14 @@ class Harness:
                     self.config.cache.semantic.role_threshold,
                 )
         if role_entry is not None:
-            result = WorkerResult.model_validate_json(role_entry.value_json)
-            result = result.model_copy(
+            output = _role_cache_output(role, role_entry.value_json)
+            result = output.result.model_copy(
                 update={
                     "cost_usd": 0.0,
-                    "summary": f"{result.summary} {CACHE_MARKER}",
+                    "summary": f"{output.result.summary} {CACHE_MARKER}",
                 }
             )
-            output = WorkerOutput(result=result)
+            output = output.model_copy(update={"result": result})
             self.store.finish_attempt(attempt_id, output.result)
             return output  # no add_spend: the hit costs $0
         try:
@@ -509,7 +511,7 @@ class Harness:
         if role_key is not None and output.result.status == "success":
             self.cache.put(
                 role_key,
-                output.result.model_dump_json(),
+                _role_cache_value(output),
                 output.result.cost_usd or 0.0,
                 run_id=run_id,
             )
@@ -550,7 +552,7 @@ class Harness:
 
     def _measure_shadow_role(self, candidate: CacheEntry, live: WorkerResult) -> None:
         """Shadow mode: compare a would-be semantic hit with the live result (never serve)."""
-        cached = WorkerResult.model_validate_json(candidate.value_json)
+        cached = _role_cache_result(candidate.value_json)
         if cached.status == "success" and live.status == "success":
             agreement = _token_overlap(cached.summary, live.summary)
         else:
@@ -644,6 +646,48 @@ def _require_structured_output(role: Role, output: WorkerOutput) -> WorkerOutput
     summary = f"no valid {schema.__name__} output; {output.result.summary}"
     result = output.result.model_copy(update={"status": "error", "summary": summary})
     return WorkerOutput(result=result, parsed=None)
+
+
+def _role_cache_value(output: WorkerOutput) -> str:
+    """Serialize a role output for the cache, preserving the parsed structured output.
+
+    A cached role hit must behave like the live call: consumers such as the quality
+    gate read `output.parsed` (e.g. `QualityReview`), not just the summary. Storing
+    only the `WorkerResult` would silently drop it.
+    """
+    parsed = output.parsed
+    return json.dumps(
+        {
+            "result": output.result.model_dump(mode="json"),
+            "parsed": parsed.model_dump(mode="json") if parsed is not None else None,
+        }
+    )
+
+
+def _role_cache_result(value_json: str) -> WorkerResult:
+    """Extract just the `WorkerResult` from a cached role entry (shadow measurement)."""
+    try:
+        payload = json.loads(value_json)
+        return WorkerResult.model_validate(payload["result"])
+    except (json.JSONDecodeError, KeyError, ValidationError):
+        # Entry written before parsed outputs were cached: the value was the result.
+        return WorkerResult.model_validate_json(value_json)
+
+
+def _role_cache_output(role: Role, value_json: str) -> WorkerOutput:
+    """Restore a cached role output, including its parsed structured output."""
+    try:
+        payload = json.loads(value_json)
+        result = WorkerResult.model_validate(payload["result"])
+        parsed = payload.get("parsed")
+        output = WorkerOutput(
+            result=result,
+            parsed=ROLE_SCHEMAS[role].model_validate(parsed) if parsed is not None else None,
+        )
+    except (json.JSONDecodeError, KeyError, ValidationError):
+        # Entry written before parsed outputs were cached: the value was the result.
+        output = WorkerOutput(result=WorkerResult.model_validate_json(value_json))
+    return _require_structured_output(role, output)
 
 
 def _token_overlap(a: str, b: str) -> float:
