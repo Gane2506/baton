@@ -3,7 +3,7 @@ no-secrets payload audit."""
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any
 
@@ -565,3 +565,181 @@ def test_backfill_cli(fixture_repo: Path, tmp_path: Path) -> None:
     timeline = CliRunner().invoke(app, ["events", run_id, "--repo", str(fixture_repo)])
     assert timeline.exit_code == 0, timeline.output
     assert "~" in timeline.output  # synthetic markers
+
+
+# ---- Phase 1: drift guard ------------------------------------------------------------------
+
+#: Store methods that must emit >=1 event per call (design R1: the event log drifts
+#: otherwise). Maps method name -> event types it may emit.
+EMITTING_METHODS: dict[str, set[EventType]] = {
+    "create_run": {EventType.RUN_CREATED},
+    "set_run_state": {EventType.RUN_STATE_CHANGED},
+    "set_run_plan": {EventType.PLAN_SET},
+    "set_run_validation": {EventType.VALIDATION_RECORDED},
+    "set_run_design": {EventType.DESIGN_SET},
+    "upsert_tasks": {EventType.TASKS_UPSERTED},
+    "set_task_state": {EventType.TASK_STATE_CHANGED},
+    "set_task_assignment": {EventType.TASK_ASSIGNED},
+    "start_attempt": {EventType.ATTEMPT_STARTED},
+    "finish_attempt": {EventType.ATTEMPT_FINISHED},
+    "emit_attempt_tests": {EventType.ATTEMPT_TESTED},
+    "record_decision": {EventType.DECISION_RECORDED},
+    "add_quality_report": {EventType.GATE_CHECKED},
+    "add_shipped_pr": {EventType.SHIP_RECORDED},
+    "update_shipped_pr": {EventType.SHIP_RECORDED},
+    "add_spend": {EventType.SPEND_ADDED},
+    "claim_run_lease": {EventType.LEASE_CLAIMED, EventType.LEASE_TAKEN_OVER},
+    "release_run_lease": {EventType.LEASE_RELEASED},
+    "emit": {EventType.DECISION_REQUESTED, EventType.RUN_RESUMED},  # standalone events
+}
+
+#: Mutating store methods with deliberately no event (all are outside the per-run
+#: event taxonomy: repo-scoped queue/recurring/settings rows, or derived snapshots).
+SNAPSHOT_ONLY_METHODS: dict[str, str] = {
+    "add_queue_item": "repo-scoped queue, not a run mutation",
+    "claim_queue_item": "repo-scoped queue, not a run mutation",
+    "set_queue_order": "repo-scoped queue, not a run mutation",
+    "set_queue_status": "repo-scoped queue, not a run mutation",
+    "delete_queue_item": "repo-scoped queue, not a run mutation",
+    "clear_queued": "repo-scoped queue, not a run mutation",
+    "link_new_run": "repo-scoped queue trigger, not a run mutation",
+    "add_recurring_task": "repo-scoped recurring tasks, not a run mutation",
+    "set_recurring_enabled": "repo-scoped recurring tasks, not a run mutation",
+    "update_recurring_after_enqueue": "repo-scoped recurring tasks, not a run mutation",
+    "clear_recurring_active": "repo-scoped recurring tasks, not a run mutation",
+    "remove_recurring_task": "repo-scoped recurring tasks, not a run mutation",
+    "set_setting": "repo settings, not a run mutation",
+    "set_run_kpis": "derived KPI document, replaced wholesale",
+    "set_run_learning": "learning bookkeeping; learning work is attempt/decision events",
+    "set_run_learning_outcome": "learning bookkeeping; learning work is attempt/decision events",
+    "add_run_learning_counts": "learning bookkeeping; learning work is attempt/decision events",
+    "set_run_quality": "run knob change; no event type in the taxonomy",
+    "add_run_spend": "streaming spend; batched into add_spend's spend.added",
+    "add_task_spend": "task-only spend; prefer add_spend",
+    "increment_task_attempts": "counter; the attempt.started event carries the attempt",
+    "mark_task_lessons_scored": "lesson bookkeeping flag",
+    "renew_run_lease": "heartbeat (every 15s); liveness derives from lease.claimed",
+}
+
+
+def _writing_methods() -> set[str]:
+    """Public Store methods that write, by source inspection: they open a transaction
+    themselves or delegate to a helper that does."""
+    import inspect
+
+    from jev_agent.core.store import Store
+
+    marks = (
+        "_tx()",
+        "_update_run(",
+        "_update_task(",
+        "_update_queue_item(",
+        "self.emit(",
+        "CREATE TEMP TRIGGER",  # link_new_run's queue-linking trigger
+    )
+    return {
+        name
+        for name, fn in inspect.getmembers(Store, predicate=inspect.isfunction)
+        if not name.startswith("_") and any(m in inspect.getsource(fn) for m in marks)
+    }
+
+
+def test_every_writing_method_is_classified() -> None:
+    """A new mutating Store method fails here until it is classified as emitting or
+    snapshot-only (with a reason). This is the drift guard for the event log."""
+    detected = _writing_methods()
+    classified = set(EMITTING_METHODS) | set(SNAPSHOT_ONLY_METHODS)
+    assert detected - classified == set(), (
+        f"unclassified mutating methods: {sorted(detected - classified)}"
+    )
+    assert classified - detected == set(), f"stale classification: {sorted(classified - detected)}"
+
+
+def _scripted_run_calls(store: Store, tmp_path: Path, run_id: str) -> dict[str, None]:
+    """Call every emitting method once on a scripted run; returns the method names."""
+    from jev_agent.core.events import DecisionRequestedPayload, RunResumedPayload
+    from jev_agent.core.models import DesignDoc, ValidationResult
+    from jev_agent.quality.models import GateResult
+
+    done: dict[str, None] = {}
+
+    def step(name: str, call: Callable[[], object]) -> None:
+        before = store.event_tip(run_id)
+        call()
+        fresh = [e.type for e in store.list_events(run_id, after_seq=before)]
+        assert any(t in EMITTING_METHODS[name] for t in fresh), f"{name} emitted no event"
+        done[name] = None
+
+    plan = _plan("T1")
+    validation = ValidationResult(verdict="approve", issues=[], challenges=[])
+    gate = GateResult(level="basic", scope="task", task_id="T1")
+    result = WorkerResult(status="success", summary="ok", raw_log_path=tmp_path / "l")
+    pr_id: list[int] = []
+
+    def _add_pr() -> None:
+        pr = store.add_shipped_pr(
+            run_id, remote="o", repo="o/r", branch="b", base="main",
+            number=1, url=None, title="t", draft=False,
+        )
+        pr_id.append(pr.id)
+
+    def _sync_pr() -> None:
+        store.update_shipped_pr(
+            pr_id[0], state="merged", draft=False, merged_at=None, closed_at=None,
+            review_comments=0, reviews=0, ci_status="success", commits_after_open=0,
+            additions=0, deletions=0, changed_files=0, reverted=False, raw=None,
+        )
+
+    step("set_run_plan", lambda: store.set_run_plan(run_id, plan, 1))
+    step("set_run_validation", lambda: store.set_run_validation(run_id, validation))
+    step("set_run_design", lambda: store.set_run_design(run_id, DesignDoc(title="d")))
+    step("upsert_tasks", lambda: store.upsert_tasks(run_id, plan))
+    step("set_task_state", lambda: store.set_task_state(run_id, "T1", TaskState.RUNNING))
+    step(
+        "set_task_assignment",
+        lambda: store.set_task_assignment(run_id, "T1", TaskState.DISPATCHED, "w", None, None),
+    )
+    attempt_id = store.start_attempt(run_id, "T1", 1, "coder", "w")
+    done["start_attempt"] = None
+    assert EventType.ATTEMPT_STARTED in [e.type for e in store.list_events(run_id)]
+    step("finish_attempt", lambda: store.finish_attempt(attempt_id, result))
+    step("emit_attempt_tests", lambda: store.emit_attempt_tests(run_id, "T1", 1, "passed"))
+    requested = store.emit(
+        run_id,
+        EventType.DECISION_REQUESTED,
+        DecisionRequestedPayload(point="D4", task_id="T1", questions={"a": ["b"]}),
+    )
+    done["emit"] = None
+    assert requested is not None
+    step(
+        "record_decision",
+        lambda: store.record_decision(
+            run_id, "T1", _decision_request(), _decision(), parent_run_seq=requested
+        ),
+    )
+    step("add_quality_report", lambda: store.add_quality_report(run_id, gate))
+    step("add_shipped_pr", _add_pr)
+    step("update_shipped_pr", _sync_pr)
+    step("add_spend", lambda: store.add_spend(run_id, "T1", 0.5))
+    step(
+        "claim_run_lease",
+        lambda: store.claim_run_lease(run_id, "tok", 1, "h", lambda h: True, reason="start"),
+    )
+    step("release_run_lease", lambda: store.release_run_lease(run_id, "tok"))
+    step(
+        "emit",
+        lambda: store.emit(
+            run_id, EventType.RUN_RESUMED, RunResumedPayload(from_state="INTAKE", via="t")
+        ),
+    )
+    step("set_run_state", lambda: store.set_run_state(run_id, RunState.PLANNING))
+    return done
+
+
+def test_every_emitting_method_emits_in_a_scripted_run(store: Store, tmp_path: Path) -> None:
+    """Each classified-emitting method produces >=1 event of its type in a scripted run."""
+    run = store.create_run(_idea(tmp_path))  # create_run -> run.created
+    assert EventType.RUN_CREATED in [e.type for e in store.list_events(run.id)]
+    done = _scripted_run_calls(store, tmp_path, run.id)
+    missing = set(EMITTING_METHODS) - set(done) - {"create_run"}
+    assert missing == set(), f"methods not exercised: {sorted(missing)}"
