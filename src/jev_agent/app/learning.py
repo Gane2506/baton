@@ -7,13 +7,18 @@ exits; problems are `LearningError` (a `ValueError`) with user-facing messages.
 
 from __future__ import annotations
 
+import sqlite3
 from dataclasses import dataclass
 
 from jev_agent.config.schema import JevConfig
 from jev_agent.core.learning import (
+    EdgeView,
+    GraphStats,
     Learning,
+    LearningError,
     LearningStatus,
     Lesson,
+    LessonEdge,
     Profile,
     delete_profile,
     disable_learning,
@@ -84,3 +89,74 @@ def delete(store: Store, learning: Learning, name: str) -> None:
 def forget(learning: Learning, lesson_id: str) -> Lesson:
     """Retire one lesson so it is never used again; returns it."""
     return learning.forget(lesson_id)
+
+
+# ---- the lesson graph (`jev learning graph ...`) ----------------------------------------
+
+
+@dataclass(frozen=True)
+class LessonNeighborhood:
+    """A lesson with its 1-hop graph neighborhood, for `graph show` and the dashboard."""
+
+    lesson: Lesson
+    edges: list[EdgeView]
+    co_occurs: list[tuple[str, int]]  # (lesson id, times co-injected)
+
+
+def graph_query(
+    learning: Learning,
+    name: str,
+    text: str,
+    *,
+    module: str | None = None,
+    run_state: str | None = None,
+    since: str | None = None,
+    limit: int = 20,
+) -> list[Lesson]:
+    """Full-text lesson search with module/run filters. `LearningError` for a bad query or
+    an unknown profile."""
+    return learning.db_for(name).graph_query(
+        name, text, module=module, run_state=run_state, since=since, limit=limit
+    )
+
+
+def graph_show(
+    learning: Learning, lesson_id: str, attempts_conn: sqlite3.Connection | None = None
+) -> LessonNeighborhood:
+    """A lesson and its 1-hop neighborhood. `LearningError` for an unknown id."""
+    db, lesson = learning.find_lesson(lesson_id)
+    co: list[tuple[str, int]] = (
+        db.co_occurs(attempts_conn, lesson.profile, lesson.number) if attempts_conn else []
+    )
+    return LessonNeighborhood(lesson, db.edges_for_lesson(lesson.profile, lesson.number), co)
+
+
+def graph_link(learning: Learning, src: str, edge: str, dst: str) -> LessonEdge:
+    """Record a graph edge between two lessons (or a lesson and a module for `applies-to`).
+    Both lessons must live in the same profile; cross-profile edges are deferred.
+    `supersedes` is advisory: the old lesson stays active until a human retires it.
+    `LearningError` for unknown ids, a duplicate edge, or a bad edge type."""
+    db, lesson = learning.find_lesson(src)
+    if edge != "applies-to":
+        _, other = learning.find_lesson(dst)
+        if other.profile != lesson.profile:
+            raise LearningError(
+                f"cross-profile edges are not supported: {src} is in {lesson.profile!r},"
+                f" {dst} in {other.profile!r}"
+            )
+    if not db.add_edge(lesson.profile, lesson.id, edge, dst):
+        raise LearningError(f"edge {lesson.id} {edge} {dst} is already recorded")
+    return LessonEdge(lesson.id, edge, dst, "manual")
+
+
+def graph_unlink(learning: Learning, src: str, edge: str, dst: str) -> bool:
+    """Remove a recorded graph edge; False when there was none. `contradicts` matches in
+    either direction."""
+    db, lesson = learning.find_lesson(src)
+    return db.remove_edge(lesson.profile, lesson.id, edge, dst)
+
+
+def graph_stats(learning: Learning, name: str) -> GraphStats:
+    """Lesson/edge counts, open contradictions, and top modules. `LearningError` for an
+    unknown profile."""
+    return learning.db_for(name).graph_stats(name)
