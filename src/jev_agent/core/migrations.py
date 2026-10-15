@@ -371,7 +371,7 @@ MIGRATIONS: list[str] = [
     """
     ALTER TABLE runs ADD COLUMN design_json TEXT;
     """,
-    # 17: event-sourced execution state (docs/events.md): the append-only `run_events`
+    # 18: event-sourced execution state (docs/events.md): the append-only `run_events`
     # log every run mutation is dual-written to, plus `run_leases.event_seq` so a
     # driver can record how far its event log has got (used by `jev status` in Phase 3).
     # The single-writer invariant (one lease holder per run; `run_seq = MAX(run_seq)+1`
