@@ -86,6 +86,100 @@ PROFILE_LAYA_WEIGHTS = """
     ALTER TABLE learning_profiles ADD COLUMN laya_weights_json TEXT;
 """
 
+# The queryable lesson graph (docs/learning.md, "Lesson graph"): module nodes, edges between
+# lessons (and lessons to modules), an FTS5 index over lesson text + tags kept in sync by
+# triggers, and a backfill of both from the existing lessons. Used by shared migration 4;
+# the same SQL is intended for the repo database's migration when it adopts the graph, so
+# keep it self-contained (no reference to a version number). Never edit this text.
+#
+# Safe defaults, decided at implementation time:
+# - `supersedes` edges are advisory only: creating one never retires the old lesson. The
+#   old lesson stays active until a human retires it; `graph show` displays the chain.
+# - `contradicts` edges are advisory: selection only suppresses the lower-scored side of a
+#   pair when the pair has actually co-injected before (evidence in attempts.lesson_ids).
+# - `derived-from` is not stored: it is the `lesson_run_edges` view over lessons.source_run.
+# - `co-occurs-with` is computed on demand, never stored (hence absent from the CHECK).
+# - No embeddings, no vector store: querying is FTS5 + SQL only.
+LESSON_GRAPH_V1 = """
+    -- Module nodes: normalized repo-relative paths (`src/auth/login.py`, `src/auth/`). For
+    -- shared profiles the path is qualified with the repo slug that produced the lesson
+    -- (`baton:src/auth/`); repo_slug is NULL for unqualified (repo-scope or unknown) paths.
+    CREATE TABLE lesson_modules (
+        profile       TEXT NOT NULL REFERENCES learning_profiles (name) ON DELETE CASCADE,
+        path          TEXT NOT NULL,
+        repo_slug     TEXT,
+        first_seen_at TEXT NOT NULL,
+        PRIMARY KEY (profile, path, repo_slug)
+    );
+
+    -- Materialized edges. Only what cannot be derived cheaply is stored: `derived-from`
+    -- is the view below, `co-occurs-with` is computed on demand.
+    CREATE TABLE lesson_edges (
+        id         INTEGER PRIMARY KEY,
+        profile    TEXT NOT NULL REFERENCES learning_profiles (name) ON DELETE CASCADE,
+        src_type   TEXT NOT NULL CHECK (src_type IN ('lesson', 'run', 'task', 'module')),
+        src_id     TEXT NOT NULL,  -- lesson number, run id, 'run:task', or module path
+        edge       TEXT NOT NULL CHECK (edge IN ('supersedes', 'contradicts', 'applies-to')),
+        dst_type   TEXT NOT NULL CHECK (dst_type IN ('lesson', 'run', 'task', 'module')),
+        dst_id     TEXT NOT NULL,
+        origin     TEXT NOT NULL DEFAULT 'manual'
+                   CHECK (origin IN ('manual', 'learner', 'backfill')),
+        created_at TEXT NOT NULL,
+        UNIQUE (profile, src_type, src_id, edge, dst_type, dst_id)
+    );
+
+    CREATE INDEX lesson_edges_src ON lesson_edges (profile, src_type, src_id);
+    CREATE INDEX lesson_edges_dst ON lesson_edges (profile, dst_type, dst_id);
+
+    -- Full-text search over lesson text and tags, kept in sync by triggers. A plain
+    -- content table (its own copy): the triggers below maintain it completely, so no
+    -- external-content mapping to `lessons` is needed (which would also break MATCH-less
+    -- reads, since `lessons` has `tags_json`, not `tags`).
+    CREATE VIRTUAL TABLE lessons_fts USING fts5(text, tags);
+
+    CREATE TRIGGER lessons_fts_insert AFTER INSERT ON lessons BEGIN
+        INSERT INTO lessons_fts (rowid, text, tags)
+        VALUES (new.id, new.text,
+                replace(replace(replace(new.tags_json, '"', ' '), '[', ' '), ']', ' '));
+    END;
+
+    CREATE TRIGGER lessons_fts_delete AFTER DELETE ON lessons BEGIN
+        DELETE FROM lessons_fts WHERE rowid = old.id;
+    END;
+
+    CREATE TRIGGER lessons_fts_update AFTER UPDATE ON lessons BEGIN
+        DELETE FROM lessons_fts WHERE rowid = old.id;
+        INSERT INTO lessons_fts (rowid, text, tags)
+        VALUES (new.id, new.text,
+                replace(replace(replace(new.tags_json, '"', ' '), '[', ' '), ']', ' '));
+    END;
+
+    -- Backfill: every existing lesson into FTS, and an `applies-to` edge (marked
+    -- `backfill`) for every path-looking tag (`a/b` or `*.py`), normalized like the
+    -- live path in `core/learning.py` (`lower`, no leading/trailing slashes).
+    INSERT INTO lessons_fts (rowid, text, tags)
+        SELECT id, text, replace(replace(replace(tags_json, '"', ' '), '[', ' '), ']', ' ')
+        FROM lessons;
+
+    INSERT OR IGNORE INTO lesson_modules (profile, path, repo_slug, first_seen_at)
+        SELECT DISTINCT l.profile, lower(trim(j.value, '/')), NULL, l.created_at
+        FROM lessons AS l, json_each(l.tags_json) AS j
+        WHERE j.value LIKE '%/%' OR lower(j.value) LIKE '%.py';
+
+    INSERT OR IGNORE INTO lesson_edges
+        (profile, src_type, src_id, edge, dst_type, dst_id, origin, created_at)
+        SELECT DISTINCT l.profile, 'lesson', CAST(l.id AS TEXT), 'applies-to', 'module',
+               lower(trim(j.value, '/')), 'backfill', l.created_at
+        FROM lessons AS l, json_each(l.tags_json) AS j
+        WHERE j.value LIKE '%/%' OR lower(j.value) LIKE '%.py';
+
+    -- `derived-from` costs nothing stored: the lesson's source run, as a view.
+    CREATE VIEW lesson_run_edges AS
+        SELECT profile, 'lesson' AS src_type, CAST(id AS TEXT) AS src_id,
+               'derived-from' AS edge, 'run' AS dst_type, source_run AS dst_id
+        FROM lessons WHERE source_run IS NOT NULL;
+"""
+
 MIGRATIONS: list[str] = [
     # 1: initial schema
     """
@@ -382,6 +476,8 @@ SHARED_MIGRATIONS: list[str] = [
     LESSONS_AUTOINCREMENT_V2,
     # 3: tuned Laya weights on a learning profile (issue #69).
     PROFILE_LAYA_WEIGHTS,
+    # 4: the queryable lesson graph: module nodes, lesson edges, FTS over lessons.
+    LESSON_GRAPH_V1,
 ]
 
 
