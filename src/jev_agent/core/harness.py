@@ -7,6 +7,7 @@ no routing choices: those come from the dispatcher.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -14,6 +15,16 @@ from pathlib import Path
 from jev_agent.config.schema import JevConfig
 from jev_agent.core.assign import Assignment, fit_free, quota_fallback, reassign
 from jev_agent.core.budget import Budget
+from jev_agent.core.cache import (
+    CACHE_MARKER,
+    Cache,
+    CacheEntry,
+    decision_cache_key,
+    decision_normalized_text,
+    role_cache_key,
+    role_normalized_text,
+    tuned_laya_fingerprint,
+)
 from jev_agent.core.commands import CommandRunner
 from jev_agent.core.learning import (
     Learning,
@@ -32,12 +43,13 @@ from jev_agent.core.models import (
     TaskState,
     WorkerResult,
 )
-from jev_agent.core.store import AttemptRecord, Store
+from jev_agent.core.store import AttemptRecord, NotFoundError, Store
 from jev_agent.core.workspace import Workspace
 from jev_agent.dispatch.base import DispatchError
 from jev_agent.dispatch.consensus import ConsensusDispatcher
 from jev_agent.dispatch.guard import GuardedDispatcher
 from jev_agent.dispatch.requests import RoleOptions, role_options
+from jev_agent.dispatch.rules import RulesDispatcher
 from jev_agent.roles import ROLE_SCHEMAS, PromptError, load_template, render_prompt
 from jev_agent.runlog import append_log, log_path
 from jev_agent.servers.access import tools_for_run
@@ -78,6 +90,15 @@ class Harness:
     learning: Learning | None = field(default=None)
     # The cached OpenRouter model list, for free models (docs/config.md "Free models").
     catalog: ModelCatalog | None = field(default=None)
+    # Lazily-built exact-match cache over the repo's own state DB (issue #10).
+    _cache: Cache | None = field(default=None, init=False, repr=False)
+
+    @property
+    def cache(self) -> Cache:
+        """The decision/role cache, built on first use from store + config."""
+        if self._cache is None:
+            self._cache = Cache(self.store, self.config.cache, self.repo)
+        return self._cache
 
     @property
     def budget(self) -> Budget:
@@ -189,26 +210,113 @@ class Harness:
 
         Without a fallback (the consensus dispatcher) a missing decision stops the run for a
         human, resumably: `jev resume` asks again once the cause is fixed. With one, both
-        dispatchers failed, which only an internal error can cause, so the run fails."""
+        dispatchers failed, which only an internal error can cause, so the run fails.
+
+        Exact-match cache (issue #10, phase 1): a settled decision is served without
+        calling the dispatcher again. Only clean primary answers are stored — never
+        rules-fallback answers, never D6 unless `[cache] d6_decisions`. The Laya
+        constraint: caching happens here, on settled decisions, never inside the
+        dispatchers, so Jev's vote and Laya's vote are always evaluated together.
+        """
         dispatcher = self.dispatcher
+        laya_weights_fp: str | None = None
         if isinstance(dispatcher.primary, ConsensusDispatcher):
             weights = self.laya_weights(run_id)
             if weights is not None:
                 dispatcher = GuardedDispatcher(
                     dispatcher.primary.with_weights(weights), dispatcher.fallback
                 )
-        try:
-            guarded = await dispatcher.decide(req)
-        except DispatchError as exc:
-            reason = f"{req.point}: no valid decision: {exc}"
-            if self.dispatcher.fallback is None:
-                raise Halt(RunState.NEEDS_HUMAN, reason, resumable=True) from exc
-            raise Halt(RunState.FAILED, reason) from exc
-        decision = guarded.decision
-        self.store.record_decision(run_id, task_id, req, decision, guarded.fallback_reason)
+                # Tuned weights change the vote without changing jev.toml: fingerprint
+                # them separately so a retuned profile is a different cache key.
+                laya_weights_fp = tuned_laya_fingerprint(weights)
+        key = None
+        entry = None
+        if self._decisions_cached(dispatcher) and self._decision_cacheable(req):
+            key = decision_cache_key(
+                req,
+                dispatcher_name=dispatcher.primary.name,
+                config=self.config,
+                run_id=run_id,
+                laya_weights_fp=laya_weights_fp,
+            )
+            entry = self.cache.get(key)
+        shadow: list[tuple[CacheEntry, float]] = []
+        served_semantic = False
+        if entry is None and key is not None and self.cache.semantic_enabled:
+            candidates = self.cache.similar(
+                "decision",
+                decision_normalized_text(req),
+                self.config.cache.semantic.decision_threshold,
+            )
+            if self.cache.semantic_mode == "serve" and candidates:
+                entry, _ = candidates[0]  # explicitly opted in; exact match missed
+                served_semantic = True
+            elif self.cache.semantic_mode == "shadow":
+                shadow = candidates  # measure only, never serve
+        if entry is not None:
+            decision = self._served_decision(entry, semantic=served_semantic)
+            fallback_reason = None
+        else:
+            try:
+                guarded = await dispatcher.decide(req)
+            except DispatchError as exc:
+                reason = f"{req.point}: no valid decision: {exc}"
+                if self.dispatcher.fallback is None:
+                    raise Halt(RunState.NEEDS_HUMAN, reason, resumable=True) from exc
+                raise Halt(RunState.FAILED, reason) from exc
+            decision = guarded.decision
+            fallback_reason = guarded.fallback_reason
+        decision_id = self.store.record_decision(run_id, task_id, req, decision, fallback_reason)
+        if (
+            entry is None
+            and key is not None
+            and fallback_reason is None
+            and decision.dispatcher != "rules"
+        ):
+            self.cache.put(
+                key,
+                decision.model_dump_json(),
+                decision.cost_usd or 0.0,
+                run_id=run_id,
+                decision_id=decision_id,
+            )
+        for candidate, _ in shadow:
+            self._measure_shadow_decision(candidate, decision)
         if decision.cost_usd:
             self.store.add_spend(run_id, task_id, decision.cost_usd)
         return decision
+
+    def _decisions_cached(self, dispatcher: GuardedDispatcher) -> bool:
+        """Whether the decision cache applies to this dispatcher.
+
+        Rules answers are deterministic and free — nothing to save, and the failure
+        signal in `fallback_reason` must stay visible — so the cache skips them.
+        """
+        return self.cache.usable and not isinstance(dispatcher.primary, RulesDispatcher)
+
+    def _decision_cacheable(self, req: DecisionRequest) -> bool:
+        """Per-point policy: D6 (ship/fix) is excluded unless explicitly enabled."""
+        return not (req.point == "D6" and not self.config.cache.d6_decisions)
+
+    def _served_decision(self, entry: CacheEntry, *, semantic: bool = False) -> Decision:
+        """Rebuild a decision from a cache entry: $0 cost, provenance in `details`."""
+        decision = Decision.model_validate_json(entry.value_json)
+        provenance = json.loads(entry.key_json)
+        decision.cost_usd = 0.0
+        decision.latency_ms = 0
+        decision.details = {
+            **decision.details,
+            "cached_from": provenance.get("decision_id"),
+            "cache_hit": True,
+            **({"semantic_match": True} if semantic else {}),
+        }
+        return decision
+
+    def _measure_shadow_decision(self, candidate: CacheEntry, live: Decision) -> None:
+        """Shadow mode: compare a would-be semantic hit with the live answer (never serve)."""
+        cached = Decision.model_validate_json(candidate.value_json)
+        agreed = cached.answers == live.answers
+        self.cache.log_shadow(candidate.key_hash, "decision", agreed, 1.0 if agreed else 0.0)
 
     def laya_weights(self, run_id: str) -> dict[str, float] | None:
         """Tuned Laya weights from the run's learning profile (`jev laya tune --apply`), or
@@ -285,7 +393,13 @@ class Harness:
         lesson_ids: Sequence[str] = (),
     ) -> WorkerOutput:
         """Launch one worker job and record it as an attempt, with its cost and the ids of the
-        lessons injected into its prompt."""
+        lessons injected into its prompt.
+
+        Exact-match cache (issue #10, phase 2): a read-only role's successful output is
+        served without calling the worker again. `coder` and `learner` are hard-denied
+        in code; only `success` results are stored; CLI workers are excluded unless
+        `[cache] cli_workers`.
+        """
         path = log_path(self.state_dir, run_id, task_id, log_name)
         try:
             worker = self.workers.get(assignment.worker)
@@ -316,6 +430,44 @@ class Harness:
             attempt=attempt_no,
             tools=tools,
         )
+        role_key = None
+        role_entry = None
+        shadow: list[tuple[CacheEntry, float]] = []
+        if self._role_cacheable(role, assignment):
+            role_key = role_cache_key(
+                role=role,
+                worker=assignment.worker,
+                model=assignment.model,
+                effort=assignment.effort,
+                prompt=prompt,
+                workdir=workdir,
+                repo=self.repo,
+                template=self.prompt_file(role),
+                lesson_texts=self._lesson_texts(lesson_ids, run_id),
+                role_config_json=getattr(self.config.roles, role).model_dump_json(),
+                config=self.config,
+                run_id=run_id,
+            )
+            role_entry = self.cache.get(role_key)
+            if role_entry is None and self.cache.semantic_enabled:
+                # Roles are shadow-measured only: semantic serving for role outputs
+                # stays off until shadow data proves ≥ 0.99 agreement (issue #10 §6).
+                shadow = self.cache.similar(
+                    "role",
+                    role_normalized_text(role, prompt, self.repo),
+                    self.config.cache.semantic.role_threshold,
+                )
+        if role_entry is not None:
+            result = WorkerResult.model_validate_json(role_entry.value_json)
+            result = result.model_copy(
+                update={
+                    "cost_usd": 0.0,
+                    "summary": f"{result.summary} {CACHE_MARKER}",
+                }
+            )
+            output = WorkerOutput(result=result)
+            self.store.finish_attempt(attempt_id, output.result)
+            return output  # no add_spend: the hit costs $0
         try:
             output = await worker.run(job)
         except Exception as exc:  # a buggy adapter must not crash the run; record it instead
@@ -327,9 +479,58 @@ class Harness:
             output = WorkerOutput(result=result)
         output = _require_structured_output(role, output)
         self.store.finish_attempt(attempt_id, output.result)
+        for candidate, _ in shadow:
+            self._measure_shadow_role(candidate, output.result)
+        if role_key is not None and output.result.status == "success":
+            self.cache.put(
+                role_key,
+                output.result.model_dump_json(),
+                output.result.cost_usd or 0.0,
+                run_id=run_id,
+            )
         if output.result.cost_usd:
             self.store.add_spend(run_id, task_id, output.result.cost_usd)
         return output
+
+    def _role_cacheable(self, role: Role, assignment: Assignment) -> bool:
+        """Whether this role call may touch the cache.
+
+        Hard deny in code (not config): the coder edits files and runs commands, and
+        the learner distills *this* run's lessons — replaying either is wrong by
+        construction. CLI workers are excluded by default because a "read-only" role
+        on a CLI worker can still execute commands.
+        """
+        if not self.cache.usable:
+            return False
+        if role in ("coder", "learner"):
+            return False
+        if role not in self.config.cache.cache_roles:
+            return False
+        cli = assignment.worker in ("claude_code", "codex")
+        return not cli or self.config.cache.cli_workers
+
+    def _lesson_texts(self, lesson_ids: Sequence[str], run_id: str) -> list[str]:
+        """Lesson texts behind the ids, so lesson *edits* change the key (not just ids)."""
+        if not lesson_ids or self.learning is None:
+            return list(lesson_ids)
+        try:
+            run = self.store.get_run(run_id)
+            profile = run.learning_profile
+            if profile is None:
+                return list(lesson_ids)
+            by_id = {lesson.id: lesson.text for lesson in self.learning.lessons(profile)}
+        except (NotFoundError, LearningError):
+            return list(lesson_ids)
+        return [by_id.get(lesson_id, lesson_id) for lesson_id in lesson_ids]
+
+    def _measure_shadow_role(self, candidate: CacheEntry, live: WorkerResult) -> None:
+        """Shadow mode: compare a would-be semantic hit with the live result (never serve)."""
+        cached = WorkerResult.model_validate_json(candidate.value_json)
+        if cached.status == "success" and live.status == "success":
+            agreement = _token_overlap(cached.summary, live.summary)
+        else:
+            agreement = 0.0
+        self.cache.log_shadow(candidate.key_hash, "role", agreement >= 0.99, agreement)
 
     async def run_worker_with_fallback(
         self,
@@ -418,3 +619,12 @@ def _require_structured_output(role: Role, output: WorkerOutput) -> WorkerOutput
     summary = f"no valid {schema.__name__} output; {output.result.summary}"
     result = output.result.model_copy(update={"status": "error", "summary": summary})
     return WorkerOutput(result=result, parsed=None)
+
+
+def _token_overlap(a: str, b: str) -> float:
+    """Jaccard similarity over lowercased word tokens (shadow-mode role agreement)."""
+    ta = set(a.lower().split())
+    tb = set(b.lower().split())
+    if not ta and not tb:
+        return 1.0
+    return len(ta & tb) / len(ta | tb)

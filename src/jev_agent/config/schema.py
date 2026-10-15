@@ -1176,6 +1176,85 @@ BEGINNER_FIELDS: tuple[str, ...] = (
 )
 
 
+class CacheSemanticSettings(_Strict):
+    """`[cache.semantic]` (issue #10, phase 3): similarity matching for near-duplicate
+    calls. Ships default-off: the `Embedder` protocol and the stdlib SimHash backend are
+    available, but nothing is served semantically until shadow-mode data proves it safe."""
+
+    enabled: bool = Field(default=False, description="Serve near-duplicate calls from the cache.")
+    embedder: str = Field(
+        default="simhash",
+        description='Similarity backend: "simhash" (stdlib, default) or "openrouter".',
+    )
+    decision_threshold: float = Field(
+        default=0.98,
+        description="Similarity floor for decisions (see `jev cache calibrate`).",
+    )
+    role_threshold: float = Field(
+        default=0.98,
+        description="Similarity floor for role outputs (shadow-measured before serving).",
+    )
+    chat_threshold: float = Field(
+        default=0.98, description="Similarity floor for chat turns (phase 4)."
+    )
+    mode: str = Field(
+        default="off",
+        description='Serving mode: "off", "shadow" (measure only, never serve), or "serve".',
+    )
+    min_agreement: float = Field(
+        default=0.98,
+        description="Live-sampling floor: below it, semantic serving auto-disables.",
+    )
+
+
+class CacheTtlOverrides(_Strict):
+    """`[cache.ttl_hours_overrides]`: per-kind TTLs, in hours."""
+
+    roles: float = Field(default=24, description="Role-output entries expire after this long.")
+    chat: float = Field(default=1, description="Chat entries expire after this long.")
+
+
+class CacheSettings(_Strict):
+    """`[cache]` (issue #10): exact-match cache for dispatcher decisions (phase 1) and
+    read-only role calls (phase 2). Safe defaults: the coder and learner roles are
+    hard-denied in code (not config), CLI workers are excluded by default, D6
+    ship/fix decisions are excluded by default, and only `success` results are stored."""
+
+    enabled: bool = Field(
+        default=True, description="Master kill-switch; also `--no-cache` per run."
+    )
+    ttl_hours: float = Field(
+        default=168,
+        description="Default entry lifetime, hours (decisions); per-kind overrides below.",
+    )
+    max_entries: int = Field(
+        default=10_000, description="LRU eviction kicks in past this many entries."
+    )
+    max_mb: float = Field(
+        default=256, description="Evict least-recently-hit entries past this size."
+    )
+    cache_roles: list[str] = Field(
+        default_factory=lambda: ["planner", "validator", "reviewer", "code_reviewer"],
+        description="Roles whose outputs may be cached; coder/learner are denied in code.",
+    )
+    cli_workers: bool = Field(
+        default=False,
+        description="Also cache role calls made through CLI workers (claude_code, codex).",
+    )
+    chat: bool = Field(default=False, description="Opt-in exact-match caching for `jev chat`.")
+    d6_decisions: bool = Field(
+        default=False,
+        description="Cache D6 ship/fix decisions (default off: a wrong ship vote is costly).",
+    )
+    ttl_hours_overrides: CacheTtlOverrides = Field(
+        default_factory=CacheTtlOverrides, description="Per-kind TTL overrides."
+    )
+    semantic: CacheSemanticSettings = Field(
+        default_factory=CacheSemanticSettings,
+        description="Phase-3 similarity matching (default off).",
+    )
+
+
 class JevConfig(_Strict):
     dispatcher: DispatcherConfig = Field(
         default_factory=DispatcherConfig, description="Who makes the decisions."
@@ -1233,6 +1312,10 @@ class JevConfig(_Strict):
     )
     trust: TrustConfig = Field(
         default_factory=TrustConfig, description="Repos allowed to change guarded keys."
+    )
+    cache: CacheSettings = Field(
+        default_factory=CacheSettings,
+        description="Exact-match cache for decisions and role outputs (issue #10).",
     )
 
     @property

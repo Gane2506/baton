@@ -7,6 +7,25 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+
+- **Decision/role cache** ([#10](https://github.com/Gane2506/baton/issues/10)).
+  Exact-match caching for dispatcher decisions (phase 1) and read-only role calls (phase 2):
+  `Harness.decide` and `Harness.run_worker` serve settled answers from the repo's own
+  state DB (new `cache_entries` table, migration v16) without another model call. Volatile
+  state (round counters, spend, timestamps) is stripped so `jev resume` hits; the repo
+  fingerprint (HEAD + diff + untracked files) and the config fingerprint (`min_confidence`,
+  Laya weights, model, templates, lessons) invalidate automatically. Hard rules in code:
+  coder/learner never cached, only `success` results stored, rules-fallback answers never
+  stored, CLI workers and D6 excluded by default, `--no-cache` kill-switch. Hits are
+  recorded with `details.cached_from`/`cache_hit` provenance, a `[served from cache]` marker
+  on worker summaries, a `cached` badge in `jev log` and on the dashboard, and `saved_usd`
+  on the Spend page. Phase 3 ships default-off: the `Embedder` protocol with a stdlib
+  SimHash backend, `jev cache calibrate` for threshold picking, and shadow mode that
+  measures agreement without serving. `jev laya tune` dedupes on `cached_from` so a
+  replayed vote can't overweight the original. See [docs/config.md](docs/config.md)
+  "`[cache]`".
+
 ### Fixed
 
 - **Ship/merge path verified live** ([#68](https://github.com/Gane2506/baton/issues/68)).

@@ -48,7 +48,7 @@
   {% for d in v.decisions %}
     <tr>
       <td class="mono">{{ d.at | time }}</td>
-      <td>{{ d.point }}</td>
+      <td>{{ d.point }}{% if d.cached %} {{ badge("cached", "info") }}{% endif %}</td>
       <td>{{ d.scope }}</td>
       <td>{{ d.dispatcher }}{% if d.model %}<div class="muted small">{{ d.model }}</div>{% endif %}</td>
       <td class="wrap mono small">{{ d.answers }}</td>

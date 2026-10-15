@@ -170,8 +170,9 @@ def _decision_line(record: DecisionRecord) -> str:
     d = record.decision
     scope = record.task_id or "run"
     answers = format_answers(d.answers, d.details)
+    cached = " [cached]" if d.details.get("cache_hit") else ""
     line = (
-        f"decision {d.point} [{scope}] by {d.dispatcher}"
+        f"decision {d.point} [{scope}] by {d.dispatcher}{cached}"
         f"{f' ({d.model})' if d.model else ''}: {answers}"
         f"  cost {_usd(d.cost_usd)}  {d.latency_ms}ms"
     )

@@ -129,6 +129,8 @@ def run_samples(
     by_id = {t.id: t for t in tasks}
     samples: list[Sample] = []
     for record in decisions:
+        if record.decision.details.get("cached_from") is not None:
+            continue  # issue #10: a cached replay must not overweight the original vote
         laya = record.decision.details.get("laya")
         if record.decision.dispatcher != "consensus" or not isinstance(laya, dict):
             continue

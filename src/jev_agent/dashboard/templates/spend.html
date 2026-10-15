@@ -31,6 +31,13 @@
     <div class="stat-value">{{ s.avg_usd | usd }}</div>
     <div class="stat-note">{% if s.runs %}Across {{ s.runs | length }} run{{ "s" if s.runs | length != 1 }}{% else %}No runs yet{% endif %}</div>
   </div>
+  {% if s.saved_usd > 0 %}
+  <div class="stat">
+    <div class="stat-label">Saved by cache</div>
+    <div class="stat-value">{{ s.saved_usd | usd }}</div>
+    <div class="stat-note">Cache hits served at $0</div>
+  </div>
+  {% endif %}
 </div>
 
 <h2 class="section">Daily spend</h2>
@@ -46,7 +53,7 @@
 <h2 class="section">Costliest runs</h2>
 {% if s.costliest %}
 <div class="table-wrap"><table>
-  <thead><tr><th class="num">#</th><th>Run</th><th>Idea</th><th>State</th><th class="num">Spent</th></tr></thead>
+  <thead><tr><th class="num">#</th><th>Run</th><th>Idea</th><th>State</th><th class="num">Spent</th><th class="num">Saved</th></tr></thead>
   <tbody>
   {% for r in s.costliest %}
     <tr>
@@ -55,6 +62,7 @@
       <td class="wrap" title="{{ r.idea.text }}">{{ r.idea.text | truncate(64, end="…") }}</td>
       <td>{{ badge(r.state) }}</td>
       <td class="num">{{ r.spend_usd | usd }}</td>
+      <td class="num">{% if s.saved_by_run.get(r.id) %}{{ s.saved_by_run.get(r.id) | usd }}{% else %}<span class="muted">—</span>{% endif %}</td>
     </tr>
   {% endfor %}
   </tbody>

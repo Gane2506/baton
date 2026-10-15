@@ -53,6 +53,13 @@ LearningOption = Annotated[
 NoLearningOption = Annotated[
     bool, typer.Option("--no-learning", help="Run without learning: no lessons in, none out.")
 ]
+NoCacheOption = Annotated[
+    bool,
+    typer.Option(
+        "--no-cache",
+        help="Run without the decision/role cache: every dispatcher and role call goes live.",
+    ),
+]
 QualityOption = Annotated[
     str | None,
     typer.Option(
@@ -211,6 +218,7 @@ def run(
     auto_ship: AutoShipOption = False,
     ask_before_ship: AskBeforeShipOption = False,
     repo: RepoOption = Path("."),
+    no_cache: NoCacheOption = False,
 ) -> None:
     """Take an idea through planning, validation, approval, execution and integration.
 
@@ -226,6 +234,8 @@ def run(
     except JevError as exc:
         raise fail(str(exc)) from exc
     with cli_context(repo) as ctx:
+        if no_cache:
+            ctx.config.cache.enabled = False
         mode = ship_mode_flag(ctx.config, auto_ship, ask_before_ship)
         if not ctx.has_workers:
             raise fail(NO_WORKERS_MESSAGE)
@@ -298,6 +308,7 @@ def resume(
     quality: QualityOption = None,
     profile: ProfileOption = None,
     repo: RepoOption = Path("."),
+    no_cache: NoCacheOption = False,
 ) -> None:
     """Continue a run from its last saved state (with the learning profile and quality level
     it started with, unless --learning, --no-learning or --quality says otherwise).
@@ -313,6 +324,8 @@ def resume(
     except JevError as exc:
         raise fail(str(exc)) from exc
     with cli_context(repo) as ctx:
+        if no_cache:
+            ctx.config.cache.enabled = False
         if not ctx.has_workers:
             raise fail(NO_WORKERS_MESSAGE)
         print_warnings(ctx)
