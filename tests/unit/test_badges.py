@@ -74,11 +74,11 @@ def _split_args(argstr: str) -> list[str]:
             if ch == in_str:
                 in_str = None
         elif ch in "\"'":
-            in_str, cur = ch, cur + [ch]
+            in_str, cur = ch, [*cur, ch]
         elif ch == "(":
-            depth, cur = depth + 1, cur + [ch]
+            depth, cur = depth + 1, [*cur, ch]
         elif ch == ")":
-            depth, cur = depth - 1, cur + [ch]
+            depth, cur = depth - 1, [*cur, ch]
         elif ch == "," and depth == 0:
             args.append("".join(cur))
             cur = []
@@ -160,9 +160,8 @@ def test_every_badge_class_has_css_mapping() -> None:
         for name, uses in sorted(needed.items())
         if name not in CSS_BADGE_CLASSES
     }
-    assert not missing, (
-        "badge() texts with no .s-<name> rule in static/style.css:\n"
-        + "\n".join(f"  .s-{name}: {', '.join(uses)}" for name, uses in missing.items())
+    assert not missing, "badge() texts with no .s-<name> rule in static/style.css:\n" + "\n".join(
+        f"  .s-{name}: {', '.join(uses)}" for name, uses in missing.items()
     )
 
 

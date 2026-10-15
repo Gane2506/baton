@@ -153,9 +153,7 @@ def test_next_due_is_strictly_greater_than_after() -> None:
 
 
 def test_next_due_hourly() -> None:
-    due = next_due(
-        parse_schedule("hourly"), datetime(2026, 1, 5, 8, 20, tzinfo=TORONTO), TORONTO
-    )
+    due = next_due(parse_schedule("hourly"), datetime(2026, 1, 5, 8, 20, tzinfo=TORONTO), TORONTO)
     assert due == datetime(2026, 1, 5, 9, 0, tzinfo=TORONTO)
 
 
@@ -168,9 +166,7 @@ def test_next_due_weekly() -> None:
 
 
 def test_next_due_monthly() -> None:
-    due = next_due(
-        parse_schedule("monthly"), datetime(2026, 1, 15, 12, 0, tzinfo=TORONTO), TORONTO
-    )
+    due = next_due(parse_schedule("monthly"), datetime(2026, 1, 15, 12, 0, tzinfo=TORONTO), TORONTO)
     assert due == datetime(2026, 2, 1, 0, 0, tzinfo=TORONTO)
 
 

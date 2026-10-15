@@ -154,7 +154,9 @@ def test_no_inline_scripts_or_styles(client: TestClient) -> None:
 def planned_run(fixture_repo: Path) -> tuple[Path, str]:
     """A repo with one run awaiting approval (planned by the fake workers)."""
     (fixture_repo / "jev.toml").write_text('[dispatcher]\nprimary = "jev"\n')
-    result = _cli.invoke(cli_app, ["run", "add <b>search</b> & filters", "--repo", str(fixture_repo)])
+    result = _cli.invoke(
+        cli_app, ["run", "add <b>search</b> & filters", "--repo", str(fixture_repo)]
+    )
     assert result.exit_code == 0, result.output
     with Store.open(fixture_repo / ".jev" / "state.db") as store:
         run = store.list_runs()[0]
@@ -196,7 +198,7 @@ def test_quality_review_section_has_breadcrumb_inside_shell(
     html = page.text
     # Inside the app shell, not stranded: sidebar markup present.
     assert 'id="app-shell"' in html and 'class="sidebar"' in html
-    # Breadcrumb Board › run <id> › Quality review, directly above the section.
+    # Breadcrumb Board > run <id> > Quality review, directly above the section.
     crumb = re.search(
         r'<nav class="crumbs"[^>]*aria-label="Breadcrumb".*?</nav>\s*'
         r'<h2 class="section" id="quality-review">',

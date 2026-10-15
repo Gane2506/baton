@@ -330,8 +330,7 @@ class Scheduler:
             task.id, next_due_at=due, last_run_at=now, active_item_id=item.id
         )
         self.log(
-            f"recurring task {task.id}: enqueued queue item {item.id} "
-            f"(next due {due.isoformat()})"
+            f"recurring task {task.id}: enqueued queue item {item.id} (next due {due.isoformat()})"
         )
         return True
 

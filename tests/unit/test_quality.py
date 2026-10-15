@@ -497,7 +497,7 @@ def test_new_python_dependencies_single_and_multi_line_arrays(tmp_path: Path) ->
         '+    "gplthing>=1.0",\n     "kept",\n+    "nice[extra]~=2",\n ]\n'
         '+single = ["one", "two==2"]\n'
         "diff --git a/pyproject.toml b/other.toml\n--- a/other.toml\n+++ b/other.toml\n"
-        "@@ -0,0 +1 @@\n+dependencies = [\"ignored-file\"]\n"
+        '@@ -0,0 +1 @@\n+dependencies = ["ignored-file"]\n'
     )
     runner, _ = _runner(repo, diff=diff)
     assert new_python_dependencies(runner) == ["gplthing", "nice"]

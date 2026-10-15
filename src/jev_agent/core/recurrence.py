@@ -108,9 +108,7 @@ def _dow_name(field: str) -> str:
 
 
 def _ordinal(day: int) -> str:
-    suffix = (
-        "th" if 11 <= day % 100 <= 13 else {1: "st", 2: "nd", 3: "rd"}.get(day % 10, "th")
-    )
+    suffix = "th" if 11 <= day % 100 <= 13 else {1: "st", 2: "nd", 3: "rd"}.get(day % 10, "th")
     return f"{day}{suffix}"
 
 

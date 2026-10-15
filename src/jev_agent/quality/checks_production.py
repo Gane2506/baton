@@ -138,7 +138,7 @@ COPYLEFT = ("AGPL", "SSPL", "GPL")  # LGPL is reported, not flagged as major
 
 
 _DEP_ARRAY_START = re.compile(r"^\s*dependencies\s*=\s*\[")
-_QUOTED = re.compile(r'''"([^"\\]*)"|'([^'\\]*)''')
+_QUOTED = re.compile(r""""([^"\\]*)"|'([^'\\]*)""")
 
 
 def _quoted_values(line: str) -> list[str]:
@@ -164,7 +164,7 @@ def _toml_dependency_names(added: list[str]) -> list[str]:
                     values.extend(_quoted_values(line))
                 continue
             in_array = True
-            line = line[start.end():]
+            line = line[start.end() :]
         values.extend(_quoted_values(line))
         if "]" in line:
             in_array = False
