@@ -1263,9 +1263,7 @@ class Store:
 
     def cache_delete_expired(self) -> int:
         with self._tx() as db:
-            cur = db.execute(
-                "DELETE FROM cache_entries WHERE expires_at <= ?", (self._clock(),)
-            )
+            cur = db.execute("DELETE FROM cache_entries WHERE expires_at <= ?", (self._clock(),))
             return cur.rowcount
 
     def cache_evict_lru(self, keep: int) -> int:
@@ -1281,8 +1279,7 @@ class Store:
 
     def cache_size_bytes(self) -> int:
         row = self._conn.execute(
-            "SELECT COALESCE(SUM(LENGTH(key_json) + LENGTH(value_json)), 0)"
-            " FROM cache_entries"
+            "SELECT COALESCE(SUM(LENGTH(key_json) + LENGTH(value_json)), 0) FROM cache_entries"
         ).fetchone()
         return int(row[0])
 
@@ -1294,9 +1291,7 @@ class Store:
             " COALESCE(SUM(CASE WHEN kind = 'role' THEN 1 ELSE 0 END), 0)"
             " FROM cache_entries"
         ).fetchone()
-        shadow = self._conn.execute(
-            "SELECT COUNT(*), AVG(agreement) FROM cache_shadow"
-        ).fetchone()
+        shadow = self._conn.execute("SELECT COUNT(*), AVG(agreement) FROM cache_shadow").fetchone()
         return CacheStats(
             entries=int(row[0]),
             hits=int(row[1]),
@@ -1316,9 +1311,7 @@ class Store:
         ).fetchall()
         return {row[0]: float(row[1]) for row in rows if row[0]}
 
-    def cache_clear(
-        self, *, kind: str | None = None, older_than_hours: float | None = None
-    ) -> int:
+    def cache_clear(self, *, kind: str | None = None, older_than_hours: float | None = None) -> int:
         """Delete entries, optionally filtered by kind and/or age. Returns the count."""
         clauses: list[str] = []
         params: list[object] = []
@@ -1326,10 +1319,7 @@ class Store:
             clauses.append("kind = ?")
             params.append(kind)
         if older_than_hours is not None:
-            cutoff = _iso(
-                datetime.fromisoformat(self._clock())
-                - timedelta(hours=older_than_hours)
-            )
+            cutoff = _iso(datetime.fromisoformat(self._clock()) - timedelta(hours=older_than_hours))
             clauses.append("created_at <= ?")
             params.append(cutoff)
         where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
@@ -1337,9 +1327,7 @@ class Store:
             cur = db.execute(f"DELETE FROM cache_entries{where}", params)
             return cur.rowcount
 
-    def cache_shadow_log(
-        self, key_hash: str, kind: str, agreed: bool, agreement: float
-    ) -> None:
+    def cache_shadow_log(self, key_hash: str, kind: str, agreed: bool, agreement: float) -> None:
         """Record one shadow-mode measurement (phase-3 gate, issue #10 §6)."""
         with self._tx() as db:
             db.execute(

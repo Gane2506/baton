@@ -1182,10 +1182,12 @@ class CacheSemanticSettings(_Strict):
         description='Similarity backend: "simhash" (stdlib, default) or "openrouter".',
     )
     decision_threshold: float = Field(
-        default=0.98, description="Cosine-ish similarity floor for decisions (see `jev cache calibrate`)."
+        default=0.98,
+        description="Similarity floor for decisions (see `jev cache calibrate`).",
     )
     role_threshold: float = Field(
-        default=0.98, description="Similarity floor for role outputs (shadow-measured before any serving)."
+        default=0.98,
+        description="Similarity floor for role outputs (shadow-measured before serving).",
     )
     chat_threshold: float = Field(
         default=0.98, description="Similarity floor for chat turns (phase 4)."
@@ -1217,7 +1219,8 @@ class CacheSettings(_Strict):
         default=True, description="Master kill-switch; also `--no-cache` per run."
     )
     ttl_hours: float = Field(
-        default=168, description="Default entry lifetime in hours (decisions); per-kind overrides below."
+        default=168,
+        description="Default entry lifetime, hours (decisions); per-kind overrides below.",
     )
     max_entries: int = Field(
         default=10_000, description="LRU eviction kicks in past this many entries."
@@ -1235,13 +1238,15 @@ class CacheSettings(_Strict):
     )
     chat: bool = Field(default=False, description="Opt-in exact-match caching for `jev chat`.")
     d6_decisions: bool = Field(
-        default=False, description="Cache D6 ship/fix decisions (default off: a wrong ship vote is costly)."
+        default=False,
+        description="Cache D6 ship/fix decisions (default off: a wrong ship vote is costly).",
     )
     ttl_hours_overrides: CacheTtlOverrides = Field(
         default_factory=CacheTtlOverrides, description="Per-kind TTL overrides."
     )
     semantic: CacheSemanticSettings = Field(
-        default_factory=CacheSemanticSettings, description="Phase-3 similarity matching (default off)."
+        default_factory=CacheSemanticSettings,
+        description="Phase-3 similarity matching (default off).",
     )
 
 

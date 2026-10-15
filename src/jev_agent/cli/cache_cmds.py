@@ -18,6 +18,7 @@ from rich.table import Table
 from jev_agent.cli.repo import RepoOption
 from jev_agent.cli.wiring import cli_context
 from jev_agent.core.cache import Cache, SimHashEmbedder, decision_normalized_text
+from jev_agent.core.store import DecisionRecord
 
 console = Console()
 
@@ -102,7 +103,7 @@ def cache_calibrate(repo: RepoOption = Path(".")) -> None:
         for run in ctx.store.list_runs():
             decisions.extend(ctx.store.list_decisions(run.id))
     # Only real dispatcher answers at the same decision point are comparable.
-    by_point: dict[str, list] = {}
+    by_point: dict[str, list[DecisionRecord]] = {}
     for record in decisions:
         if record.decision.dispatcher == "rules":
             continue
@@ -137,17 +138,24 @@ def cache_calibrate(repo: RepoOption = Path(".")) -> None:
         prob_text = f"{prob:.3f}" if total else "n/a"
         table.add_row(f"{tau:.2f}", str(total), prob_text)
     console.print(table)
-    console.print(f"[dim]{pairs} comparable decision pairs across {len(by_point)} decision points.[/dim]")
+    console.print(
+        f"[dim]{pairs} comparable decision pairs across {len(by_point)} decision points.[/dim]"
+    )
     if pairs == 0:
         console.print("Not enough decision history to calibrate — run some runs first.")
         return
     best = max(
-        (tau for tau in _CALIBRATE_THRESHOLDS if total_at[tau] and agree_at[tau] / total_at[tau] >= 0.99),
+        (
+            tau
+            for tau in _CALIBRATE_THRESHOLDS
+            if total_at[tau] and agree_at[tau] / total_at[tau] >= 0.99
+        ),
         default=None,
     )
     if best is None:
         console.print(
-            "No threshold reaches ≥ 0.99 agreement: keep semantic serving off and rely on exact match."
+            "No threshold reaches ≥ 0.99 agreement: keep semantic serving off "
+            "and rely on exact match."
         )
     else:
         console.print(
