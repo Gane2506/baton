@@ -66,7 +66,7 @@
 {% endif %}
 
 <h2 class="section">Shipped PRs (last {{ k.rows | length }})</h2>
-<div class="table-wrap"><table>
+<div class="table-wrap table-scroll"><table>
   <thead><tr><th>PR</th><th>run</th><th>title</th><th>state</th><th class="num">cost</th><th class="num">run time</th><th class="num">attempts / task</th><th class="num">first pass</th><th class="num">findings</th><th>CI</th><th class="num">merged in</th></tr></thead>
   <tbody>
   {% for row in k.rows %}

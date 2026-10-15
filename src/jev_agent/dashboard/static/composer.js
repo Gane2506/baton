@@ -255,6 +255,10 @@
 
   var sidebarToggle = document.getElementById("sidebar-toggle");
   if (sidebarToggle) {
+    // Below ~1080px the app sidebar is an overlay drawer (see app.js); reuse
+    // this button as the drawer toggle there so the chat keeps a way to open
+    // the nav without a second top bar, and the fullscreen layout is untouched.
+    var narrow = window.matchMedia("(max-width: 1080px)");
     var fullscreen = store.get("jev-chat-fullscreen") === "1";
     if (fullscreen) {
       document.body.classList.add("chat-fullscreen");
@@ -264,9 +268,23 @@
       document.body.classList.contains("chat-fullscreen") ? "true" : "false"
     );
     sidebarToggle.addEventListener("click", function () {
+      if (narrow.matches && window.JevShell && window.JevShell.nav) {
+        window.JevShell.nav.toggle();
+        return;
+      }
       var on = document.body.classList.toggle("chat-fullscreen");
       store.set("jev-chat-fullscreen", on ? "1" : "0");
       sidebarToggle.setAttribute("aria-pressed", on ? "true" : "false");
+    });
+    // The drawer can also close via scrim or Escape: keep the button's state
+    // honest without stealing focus management from app.js.
+    document.addEventListener("jev:nav", function (event) {
+      var open = !!(event.detail && event.detail.open);
+      sidebarToggle.setAttribute("aria-expanded", open ? "true" : "false");
+      sidebarToggle.setAttribute(
+        "aria-label",
+        open ? "Close navigation" : "Open navigation"
+      );
     });
   }
 

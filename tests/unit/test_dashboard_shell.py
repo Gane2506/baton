@@ -14,10 +14,17 @@ from pathlib import Path
 import httpx
 import pytest
 from starlette.testclient import TestClient
+from typer.testing import CliRunner
 
+from jev_agent.cli.app import app as cli_app
 from jev_agent.cli.wiring import FAKE_WORKERS_ENV
+from jev_agent.core.models import RunState
+from jev_agent.core.store import Store
+from jev_agent.dashboard import app as dashboard_app_module
 from jev_agent.dashboard.app import create_app
 from jev_agent.dashboard.security import DashboardSettings
+
+_cli = CliRunner()
 
 
 @pytest.fixture(autouse=True)
@@ -138,3 +145,145 @@ def test_no_inline_scripts_or_styles(client: TestClient) -> None:
     tags = re.findall(r"<script[^>]*>", html)
     assert tags, "expected the vendored scripts"
     assert all("src=" in tag for tag in tags), tags
+
+
+# ---- WS-B: app shell, tables, mobile nav -------------------------------------------
+
+
+@pytest.fixture
+def planned_run(fixture_repo: Path) -> tuple[Path, str]:
+    """A repo with one run awaiting approval (planned by the fake workers)."""
+    (fixture_repo / "jev.toml").write_text('[dispatcher]\nprimary = "jev"\n')
+    result = _cli.invoke(cli_app, ["run", "add <b>search</b> & filters", "--repo", str(fixture_repo)])
+    assert result.exit_code == 0, result.output
+    with Store.open(fixture_repo / ".jev" / "state.db") as store:
+        run = store.list_runs()[0]
+    assert run.state is RunState.AWAITING_APPROVAL
+    return fixture_repo, run.id
+
+
+@pytest.fixture
+def run_client(planned_run: tuple[Path, str]) -> Iterator[TestClient]:
+    app = create_app(
+        DashboardSettings(root=planned_run[0], allowed_hosts=frozenset({"testserver"})),
+    )
+    with TestClient(app) as client:
+        yield client
+
+
+def test_all_full_page_templates_extend_base() -> None:
+    templates = Path(dashboard_app_module.__file__).parent / "templates"
+    full_pages = sorted(
+        p
+        for p in templates.glob("*.html")
+        if not p.name.startswith("_") and p.name not in ("base.html", "macros.html")
+    )
+    assert full_pages, "expected full-page templates"
+    for page in full_pages:
+        head = page.read_text(encoding="utf-8").splitlines()[:3]
+        assert any('{% extends "base.html" %}' in line for line in head), page.name
+    # The quality review is a section of the run page, not a standalone page.
+    assert not (templates / "quality.html").exists()
+    assert 'id="quality-review"' in (templates / "run.html").read_text(encoding="utf-8")
+
+
+def test_quality_review_section_has_breadcrumb_inside_shell(
+    run_client: TestClient, planned_run: tuple[Path, str]
+) -> None:
+    run_id = planned_run[1]
+    page = run_client.get(f"/runs/{run_id}")
+    assert page.status_code == 200
+    html = page.text
+    # Inside the app shell, not stranded: sidebar markup present.
+    assert 'id="app-shell"' in html and 'class="sidebar"' in html
+    # Breadcrumb Board › run <id> › Quality review, directly above the section.
+    crumb = re.search(
+        r'<nav class="crumbs"[^>]*aria-label="Breadcrumb".*?</nav>\s*'
+        r'<h2 class="section" id="quality-review">',
+        html,
+        re.S,
+    )
+    assert crumb, "quality review breadcrumb missing"
+    trail = crumb.group(0)
+    assert 'href="/"' in trail and f'href="/runs/{run_id}"' in trail
+    assert 'aria-current="page">Quality review' in trail
+
+
+def test_decisions_table_uses_table_scroll(
+    run_client: TestClient, planned_run: tuple[Path, str]
+) -> None:
+    html = run_client.get(f"/runs/{planned_run[1]}").text
+    assert "Decisions" in html and "D1" in html
+    assert '<div class="table-wrap table-scroll"><table>' in html
+    # The attempts table keeps the plain .table-wrap behavior.
+    assert '<div class="table-wrap"><table>' in html
+
+
+def test_kpis_shipped_prs_table_uses_table_scroll(
+    run_client: TestClient, planned_run: tuple[Path, str]
+) -> None:
+    repo, run_id = planned_run
+    with Store.open(repo / ".jev" / "state.db") as store:
+        store.add_shipped_pr(
+            run_id,
+            remote="origin",
+            repo="o/r",
+            branch="jev/x",
+            base="main",
+            number=1,
+            url=None,
+            title="test pr",
+            draft=False,
+        )
+    page = run_client.get("/kpis")
+    assert page.status_code == 200
+    assert "Shipped PRs" in page.text
+    assert '<div class="table-wrap table-scroll"><table>' in page.text
+
+
+def test_table_scroll_utility_css(client: TestClient) -> None:
+    css = client.get("/static/style.css")
+    assert css.status_code == 200
+    assert ".table-scroll" in css.text
+    assert "overflow-x: auto" in css.text
+    # Edge-fade hint: covers scroll with the content, shadows pin to the edges.
+    assert "background-attachment: local, local, scroll, scroll" in css.text
+
+
+def test_mobile_nav_drawer_markup(client: TestClient) -> None:
+    html = client.get("/").text
+    assert 'id="nav-toggle"' in html
+    assert 'aria-controls="app-sidebar"' in html
+    assert 'id="app-sidebar"' in html
+    assert 'id="nav-scrim"' in html
+    assert 'class="mobile-topbar"' in html
+    # Theme picker and live status stay reachable inside the drawer sidebar.
+    assert 'id="theme"' in html and 'id="conn-status"' in html
+
+
+def test_mobile_nav_drawer_css_and_js(client: TestClient) -> None:
+    css = client.get("/static/shell.css").text
+    assert "@media (max-width: 1080px)" in css
+    assert ".mobile-topbar" in css and ".nav-scrim" in css
+    assert "body.nav-open" in css
+    # Chat fullscreen keeps its own header: no second top bar there.
+    assert "chat-fullscreen .mobile-topbar" in css
+    js = client.get("/static/app.js").text
+    assert "nav-toggle" in js and "nav-scrim" in js
+    assert "Escape" in js and "jev:nav" in js and "JevShell.nav" in js
+    # Chat's own header button becomes the drawer toggle on narrow screens.
+    composer = client.get("/static/composer.js").text
+    assert "max-width: 1080px" in composer and "window.JevShell.nav" in composer
+
+
+def test_chat_fullscreen_survives_drawer_changes(client: TestClient) -> None:
+    chat_id = _new_chat(client)
+    page = client.get(f"/chats/{chat_id}")
+    assert page.status_code == 200
+    html = page.text
+    assert "chat-fullscreen" in html
+    assert 'id="sidebar-toggle"' in html and 'id="chat-rail"' in html
+    css = client.get("/static/chat.css").text
+    # Desktop fullscreen rail contract untouched.
+    assert ".chat-fullscreen .shell.app-shell" in css
+    assert "grid-template-columns: 56px minmax(0, 1fr)" in css

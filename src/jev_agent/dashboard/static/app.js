@@ -361,4 +361,66 @@
       }
     }).observe(history, { childList: true, subtree: true });
   }
+  /* ---- mobile nav drawer ----------------------------------------------------
+   * Below ~1080px the sidebar is an overlay drawer opened by #nav-toggle in
+   * the mobile top bar (or by the chat header's #sidebar-toggle, wired in
+   * composer.js). The scrim and Escape close it; focus moves into the drawer
+   * on open and returns to the opener on close. A "jev:nav" event announces
+   * state changes so other scripts can keep their own toggles in sync.
+   */
+
+  (function () {
+    var toggle = document.getElementById("nav-toggle");
+    var scrim = document.getElementById("nav-scrim");
+    var sidebar = document.getElementById("app-sidebar");
+    if (!toggle || !scrim || !sidebar) {
+      return;
+    }
+    var opener = null;
+
+    function isOpen() {
+      return document.body.classList.contains("nav-open");
+    }
+
+    function setNav(open, refocus) {
+      document.body.classList.toggle("nav-open", open);
+      toggle.setAttribute("aria-expanded", open ? "true" : "false");
+      if (open) {
+        opener = document.activeElement;
+        var first = sidebar.querySelector("nav a, .sidebar-new, select");
+        (first || sidebar).focus();
+      } else if (refocus !== false && opener && document.contains(opener)) {
+        opener.focus();
+      }
+      document.dispatchEvent(
+        new CustomEvent("jev:nav", { detail: { open: open } })
+      );
+    }
+
+    toggle.addEventListener("click", function () {
+      setNav(!isOpen());
+    });
+    scrim.addEventListener("click", function () {
+      setNav(false);
+    });
+    document.addEventListener("keydown", function (event) {
+      if (event.key === "Escape" && isOpen()) {
+        setNav(false);
+      }
+    });
+
+    window.JevShell = window.JevShell || {};
+    window.JevShell.nav = {
+      open: function () {
+        setNav(true);
+      },
+      close: function () {
+        setNav(false);
+      },
+      toggle: function () {
+        setNav(!isOpen());
+      },
+      isOpen: isOpen,
+    };
+  })();
 })();

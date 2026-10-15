@@ -412,6 +412,26 @@ label.check input { width: auto; height: auto; }
 
 .table-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); margin-bottom: var(--s4); }
 .panel .table-wrap { border: 0; border-radius: 0; margin-bottom: 0; background: none; }
+
+/* ---- .table-scroll: wide tables with an edge-fade scroll hint ------------------
+   Pair with .table-wrap on tables that can overflow horizontally (KPIs shipped
+   PRs, run decisions log). The cover gradients scroll with the content
+   (background-attachment: local) and hide the edge shadows when the table is
+   scrolled to an end; the shadows stay pinned to the wrapper edges (scroll),
+   so a fade is visible exactly where more content waits. */
+.table-scroll {
+  overflow-x: auto;
+  background-image:
+    linear-gradient(to right, var(--surface) 30%, transparent),
+    linear-gradient(to left, var(--surface) 30%, transparent),
+    radial-gradient(farthest-side at 0 50%, rgb(0 0 0 / 0.16), transparent),
+    radial-gradient(farthest-side at 100% 50%, rgb(0 0 0 / 0.16), transparent);
+  background-position: left center, right center, left center, right center;
+  background-size: 48px 100%, 48px 100%, 16px 100%, 16px 100%;
+  background-repeat: no-repeat;
+  background-attachment: local, local, scroll, scroll;
+}
+
 table { border-collapse: collapse; width: 100%; font-size: var(--fs-13); }
 th, td { text-align: left; padding: 7px 12px; border-bottom: 1px solid var(--border); vertical-align: top; }
 tr:last-child td { border-bottom: 0; }

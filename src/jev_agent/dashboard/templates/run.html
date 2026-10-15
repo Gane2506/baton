@@ -34,7 +34,7 @@
 
 <h2 class="section">Decisions</h2>
 {% if v.decisions %}
-<div class="table-wrap"><table>
+<div class="table-wrap table-scroll"><table>
   <thead><tr><th>time</th><th>point</th><th>scope</th><th>dispatcher</th><th>answers (Jev confidence, Laya margin)</th><th>fallback reason</th><th class="num">cost</th><th class="num">latency</th></tr></thead>
   <tbody>
   {% for d in v.decisions %}
@@ -81,6 +81,7 @@
 <div class="empty"><div class="title">No attempts yet</div><p>Worker calls appear here with their model, effort, cost and log.</p></div>
 {% endif %}
 
+<nav class="crumbs" aria-label="Breadcrumb"><a href="/">Board</a>{{ icon("i-right", "sm") }}<a href="/runs/{{ run.id }}">run {{ run.id[-4:] }}</a>{{ icon("i-right", "sm") }}<span aria-current="page">Quality review</span></nav>
 <h2 class="section" id="quality-review">Quality review</h2>
 {% if v.review_html %}
 <section class="card markdown">{{ v.review_html }}</section>

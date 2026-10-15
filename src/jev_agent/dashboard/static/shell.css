@@ -340,3 +340,109 @@
     max-height: 62vh;
   }
 }
+
+/* ---- mobile nav drawer -------------------------------------------------------
+   Below ~1080px the sidebar stops being a full-width wall above the content
+   and becomes a slim top bar with a hamburger; the nav opens as an overlay
+   drawer (body.nav-open). Without JS the drawer never opens and the top bar's
+   brand link still works, so every page degrades to plain content navigation.
+   Chat fullscreen keeps its own header (its #sidebar-toggle opens the drawer),
+   so the top bar hides there. */
+
+.mobile-topbar,
+.nav-scrim {
+  display: none;
+}
+
+@media (max-width: 1080px) {
+  .mobile-topbar {
+    display: flex;
+    align-items: center;
+    gap: var(--s3, 12px);
+    position: sticky;
+    top: 0;
+    z-index: 45;
+    min-height: 52px;
+    padding: var(--s2, 8px) var(--s4, 16px);
+    background: var(--surface, Canvas);
+    border-bottom: 1px solid var(--border, ButtonBorder);
+  }
+  .mobile-topbar .brand {
+    padding: 0;
+  }
+  .mobile-topbar .brand .name {
+    font-size: var(--fs-15, 15px);
+  }
+  /* The chat page owns its header; no second bar on top of the transcript. */
+  .chat-fullscreen .mobile-topbar {
+    display: none;
+  }
+
+  .nav-scrim {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: 55;
+    background: rgb(0 0 0 / 0.45);
+    opacity: 0;
+    visibility: hidden;
+    transition: opacity 160ms ease, visibility 0s linear 160ms;
+  }
+  body.nav-open {
+    overflow: hidden;
+  }
+  body.nav-open .nav-scrim {
+    opacity: 1;
+    visibility: visible;
+    transition: opacity 160ms ease;
+  }
+
+  /* The sidebar leaves the grid and becomes an off-canvas drawer. These rules
+     intentionally override style.css's narrow-screen "wall of links" styles
+     (shell.css loads after style.css). */
+  .shell.app-shell .sidebar {
+    position: fixed;
+    inset: 0 auto 0 0;
+    z-index: 60;
+    width: min(300px, 84vw);
+    height: 100dvh;
+    overflow-y: auto;
+    transform: translateX(-105%);
+    transition: transform 180ms ease;
+    border-right: 1px solid var(--border, ButtonBorder);
+    border-bottom: 0;
+    padding: var(--s4, 16px) var(--s3, 12px);
+    gap: var(--s4, 16px);
+  }
+  body.nav-open .shell.app-shell .sidebar {
+    transform: none;
+  }
+  .shell.app-shell .sidebar nav {
+    display: block;
+    overflow: visible;
+    padding-bottom: 0;
+  }
+  .shell.app-shell .nav-group {
+    display: block;
+    margin-bottom: var(--s4, 16px);
+  }
+  .shell.app-shell .nav-label {
+    display: block;
+  }
+  .shell.app-shell .sidebar nav a {
+    white-space: normal;
+  }
+  /* The drawer keeps the full footer: connection status and theme picker stay
+     reachable alongside the repo path. */
+  .shell.app-shell .sidebar-foot {
+    display: block;
+    border-top: 1px solid var(--border, ButtonBorder);
+    padding: var(--s3, 12px) var(--s2, 8px) 0;
+  }
+  .shell.app-shell .sidebar-foot > div {
+    display: block;
+  }
+  .shell.app-shell .theme-pick {
+    margin-bottom: var(--s2, 8px);
+  }
+}
