@@ -329,15 +329,33 @@ Laya weights, model, prompt template, lessons) is automatically a different key,
 answers can't be served after the code or settings moved. `jev cache clear` flushes
 entries (`--type decisions|roles`, `--older-than HOURS`).
 
-### `[cache.semantic]` (phase 3, default off)
+## `[cache.ttl_hours_overrides]`
+
+Per-kind entry lifetimes, in hours (overriding `[cache] ttl_hours`).
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `roles` | `24` | Role-output entries expire after this long. |
+| `chat` | `1` | Chat entries expire after this long (phase 4; not implemented yet). |
+
+## `[cache.semantic]` (phase 3, default off)
 
 Similarity matching for near-duplicate calls. Ships with the `Embedder` protocol and the
-stdlib SimHash backend (`embedder = "simhash"`; `"openrouter"` uses the embeddings API and
-needs `OPENROUTER_API_KEY`). Nothing is served semantically by default: `mode = "shadow"`
+stdlib SimHash backend. Nothing is served semantically by default: `mode = "shadow"`
 measures agreement against live calls without serving (`jev cache calibrate` picks the
 thresholds from stored history first; `mode = "serve"` turns serving on for decisions —
 role outputs stay exact-match until shadow data proves them safe). Live semantic serving is
 gated on sustained ≥ 0.99 agreement (`min_agreement`); below it, serving auto-disables.
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `enabled` | `false` | Serve near-duplicate calls from the cache. |
+| `embedder` | `"simhash"` | Similarity backend: `"simhash"` (stdlib) or `"openrouter"` (embeddings API; needs `OPENROUTER_API_KEY`). |
+| `decision_threshold` | `0.98` | Similarity floor for decisions (see `jev cache calibrate`). |
+| `role_threshold` | `0.98` | Similarity floor for role outputs (shadow-measured before any serving). |
+| `chat_threshold` | `0.98` | Similarity floor for chat turns (phase 4). |
+| `mode` | `"off"` | `"off"`, `"shadow"` (measure only, never serve), or `"serve"`. |
+| `min_agreement` | `0.98` | Live-sampling floor: below it, semantic serving auto-disables. |
 
 ## `[ship]`
 
