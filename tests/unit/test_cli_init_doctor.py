@@ -4,7 +4,7 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
-from jev_agent.cli import doctor_cmd
+from jev_agent.cli import doctor_cmd, init_cmd
 from jev_agent.cli.app import app
 from jev_agent.config import DEFAULT_CONFIG_TOML
 
@@ -240,3 +240,33 @@ def test_doctor_notes_codex_has_no_cost(git_repo: Path, monkeypatch: pytest.Monk
 
     (git_repo / "jev.toml").write_text("[workers.codex]\nenabled = false\n")
     assert "codex cost" not in {c.name for c in doctor_cmd.run_checks(git_repo)}
+
+
+def test_init_shows_welcome_on_interactive(git_repo: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(init_cmd, "is_interactive", lambda: True)
+    code, output = _init(git_repo)
+    assert code == 0, output
+    assert "Welcome to Baton!" in output
+    assert "Baton turns an idea into reviewed, tested code." in output
+    assert "jev doctor" in output
+    assert 'jev run "your idea"' in output
+    assert "jev dashboard" in output
+    assert "jev --help" in output
+
+
+def test_init_suppresses_welcome_when_not_a_tty(
+    git_repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(init_cmd, "is_interactive", lambda: False)
+    code, output = _init(git_repo)
+    assert code == 0, output
+    assert "Welcome" not in output
+    assert "Baton turns an idea" not in output
+    assert "Done." in output
+
+
+def test_init_welcome_not_shown_by_default_runner(git_repo: Path) -> None:
+    # CliRunner's stdin is not a tty: scripts and pipelines see only the init lines.
+    code, output = _init(git_repo)
+    assert code == 0, output
+    assert "Welcome" not in output

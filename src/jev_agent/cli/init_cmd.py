@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 from typing import Annotated
 
@@ -16,6 +17,23 @@ from jev_agent.config import CONFIG_FILENAME, DEFAULT_CONFIG_TOML, STATE_DIRNAME
 console = Console()
 
 _IGNORE_ENTRY = f"{STATE_DIRNAME}/"
+
+
+def is_interactive() -> bool:
+    """Whether to show the first-run welcome screen (tests patch this)."""
+    return sys.stdin.isatty()
+
+
+def print_welcome() -> None:
+    """Branded first-run orientation, shown only on interactive `jev init`."""
+    console.print()
+    console.print("[bold]Welcome to Baton![/bold]")
+    console.print("Baton turns an idea into reviewed, tested code.")
+    console.print("Happy path:")
+    console.print("  1. [bold]jev doctor[/bold] — check your setup")
+    console.print('  2. [bold]jev run "your idea"[/bold] — plan, build, review, test')
+    console.print("  3. [bold]jev dashboard[/bold] — watch it happen")
+    console.print("Need help? [bold]jev --help[/bold] or the docs at github.com/Gane2506/baton")
 
 
 def init(
@@ -59,6 +77,8 @@ def init(
         console.print(f"{_IGNORE_ENTRY} is already in {root / '.gitignore'}", markup=False)
 
     console.print("[green]Done.[/green] Run [bold]jev doctor[/bold] to check your setup.")
+    if is_interactive():
+        print_welcome()
 
 
 def add_to_gitignore(gitignore: Path, entry: str) -> bool:
