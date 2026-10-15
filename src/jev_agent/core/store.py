@@ -293,8 +293,9 @@ def new_run_id() -> str:
 class Store:
     """Persistent state for runs. Open with `Store.open(path)`; use as a context manager."""
 
-    def __init__(self, conn: sqlite3.Connection) -> None:
+    def __init__(self, conn: sqlite3.Connection, *, clock: Callable[[], str] | None = None) -> None:
         self._conn = conn
+        self._clock = _now if clock is None else clock
 
     @property
     def connection(self) -> sqlite3.Connection:
@@ -302,7 +303,7 @@ class Store:
         return self._conn
 
     @classmethod
-    def open(cls, path: Path) -> Store:
+    def open(cls, path: Path, *, clock: Callable[[], str] | None = None) -> Store:
         """Open (creating if needed) the database at `path` and apply pending migrations."""
         path.parent.mkdir(parents=True, exist_ok=True)
         # isolation_level=None: autocommit, transactions are managed explicitly by _tx().
@@ -314,7 +315,7 @@ class Store:
         except BaseException:
             conn.close()
             raise
-        return cls(conn)
+        return cls(conn, clock=clock)
 
     def close(self) -> None:
         self._conn.close()
@@ -354,10 +355,11 @@ class Store:
         autonomy_mode: str = "standard",
         autonomous_opt_in: bool = False,
         medium_folder: str | None = None,
+        run_id: str | None = None,
     ) -> RunRecord:
-        now = _now()
+        now = self._clock()
         for _ in range(5):  # retry on the (very unlikely) id collision within one second
-            run_id = new_run_id()
+            run_id = new_run_id() if run_id is None else run_id
             try:
                 with self._tx() as db:
                     db.execute(
@@ -421,7 +423,7 @@ class Store:
             cur = db.execute(
                 "UPDATE runs SET state = ?, reason = ?, resume_state = ?, updated_at = ?"
                 f" WHERE id = ?{guard}",
-                (state, reason, resume_state, _now(), run_id, *unless),
+                (state, reason, resume_state, self._clock(), run_id, *unless),
             )
             if cur.rowcount == 0:
                 self._require_run(run_id)
@@ -471,7 +473,7 @@ class Store:
         with self._tx() as db:
             cur = db.execute(
                 "UPDATE runs SET spend_usd = spend_usd + ?, updated_at = ? WHERE id = ?",
-                (usd, _now(), run_id),
+                (usd, self._clock(), run_id),
             )
             if cur.rowcount == 0:
                 raise NotFoundError(f"run {run_id!r} not found")
@@ -487,7 +489,7 @@ class Store:
         with self._tx() as db:
             cur = db.execute(
                 f"UPDATE runs SET {assignments}, updated_at = ? WHERE id = ?",
-                (*params, _now(), run_id),
+                (*params, self._clock(), run_id),
             )
             if cur.rowcount == 0:
                 raise NotFoundError(f"run {run_id!r} not found")
@@ -625,7 +627,7 @@ class Store:
                     model,
                     effort,
                     None if log_path is None else str(log_path),
-                    _now(),
+                    self._clock(),
                     json.dumps(list(lesson_ids)) if lesson_ids else None,
                 ),
             )
@@ -643,7 +645,7 @@ class Store:
                     result.model_dump_json(),
                     result.cost_usd,
                     str(result.raw_log_path),
-                    _now(),
+                    self._clock(),
                     attempt_id,
                 ),
             )
@@ -692,7 +694,7 @@ class Store:
                     decision.cost_usd,
                     decision.latency_ms,
                     fallback_reason,
-                    _now(),
+                    self._clock(),
                 ),
             )
             assert cur.lastrowid is not None
@@ -724,7 +726,7 @@ class Store:
                     int(result.blocked),
                     result.model_dump_json(),
                     None if report_path is None else str(report_path),
-                    _now(),
+                    self._clock(),
                 ),
             )
             assert cur.lastrowid is not None
@@ -776,7 +778,7 @@ class Store:
                     int(draft),
                     head_oid,
                     pushed_commits,
-                    _now(),
+                    self._clock(),
                     state,
                 ),
             )
@@ -838,7 +840,7 @@ class Store:
                     deletions,
                     changed_files,
                     None if reverted is None else int(reverted),
-                    _now(),
+                    self._clock(),
                     None if raw is None else json.dumps(raw),
                     pr_id,
                 ),
@@ -855,7 +857,7 @@ class Store:
                 "INSERT INTO run_kpis (run_id, computed_at, kpis_json) VALUES (?, ?, ?)"
                 " ON CONFLICT (run_id) DO UPDATE SET"
                 " computed_at = excluded.computed_at, kpis_json = excluded.kpis_json",
-                (run_id, _now(), kpis_json),
+                (run_id, self._clock(), kpis_json),
             )
 
     def get_run_kpis(self, run_id: str) -> tuple[datetime, str] | None:
@@ -888,7 +890,7 @@ class Store:
                 holder = _run_lease(row)
                 if not stale(holder):
                     return holder
-            now = _now()
+            now = self._clock()
             db.execute(
                 "INSERT INTO run_leases (run_id, token, pid, host, acquired_at, heartbeat_at)"
                 " VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT (run_id) DO UPDATE SET"
@@ -903,7 +905,7 @@ class Store:
         with self._tx() as db:
             cur = db.execute(
                 "UPDATE run_leases SET heartbeat_at = ? WHERE run_id = ? AND token = ?",
-                (_now(), run_id, token),
+                (self._clock(), run_id, token),
             )
         return cur.rowcount == 1
 
@@ -949,7 +951,7 @@ class Store:
             raise StoreError(f"unknown priority {priority!r}")
         if quality is not None:
             quality = parse_level(quality)
-        now = _now()
+        now = self._clock()
         with self._tx() as db:
             row = db.execute("SELECT COALESCE(MAX(position), -1) + 1 AS p FROM queue").fetchone()
             cur = db.execute(
@@ -1008,7 +1010,7 @@ class Store:
             cur = db.execute(
                 "UPDATE queue SET status = 'running', updated_at = ?"
                 " WHERE id = ? AND status = 'queued'",
-                (_now(), item_id),
+                (self._clock(), item_id),
             )
         return cur.rowcount == 1
 
@@ -1058,7 +1060,7 @@ class Store:
                     raise StoreError(f"unknown priority {priority!r}")
                 cur = db.execute(
                     "UPDATE queue SET priority = ?, position = ?, updated_at = ? WHERE id = ?",
-                    (priority, position, _now(), item_id),
+                    (priority, position, self._clock(), item_id),
                 )
                 if cur.rowcount == 0:
                     raise NotFoundError(f"queue item {item_id} not found")
@@ -1088,7 +1090,7 @@ class Store:
         with self._tx() as db:
             cur = db.execute(
                 f"UPDATE queue SET {assignments}, updated_at = ? WHERE id = ?",
-                (*params, _now(), item_id),
+                (*params, self._clock(), item_id),
             )
             if cur.rowcount == 0:
                 raise NotFoundError(f"queue item {item_id} not found")
@@ -1134,7 +1136,7 @@ class Store:
                     profile,
                     quality,
                     ship_mode,
-                    _now(),
+                    self._clock(),
                 ),
             )
             assert cur.lastrowid is not None

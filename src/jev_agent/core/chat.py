@@ -23,7 +23,7 @@ import json
 import os
 import re
 import secrets
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
@@ -712,9 +712,16 @@ class ChatSession:
     """One chat: its metadata, transcript and backend. Every change is saved at once."""
 
     def __init__(
-        self, root: Path, meta: ChatMeta, backend: ChatBackend, system_prompt: str
+        self,
+        root: Path,
+        meta: ChatMeta,
+        backend: ChatBackend,
+        system_prompt: str,
+        *,
+        clock: Callable[[], str] | None = None,
     ) -> None:
         self.root = root
+        self._clock = _now if clock is None else clock
         self.meta = meta
         self.backend = backend
         self.system_prompt = system_prompt
@@ -733,10 +740,14 @@ class ChatSession:
         learning: ChatLearning,
         profile: str | None,
         budget_usd: float,
+        *,
+        clock: Callable[[], str] | None = None,
+        chat_id: str | None = None,
     ) -> ChatSession:
-        now = _now()
+        clock = _now if clock is None else clock
+        now = clock()
         meta = ChatMeta(
-            chat_id=new_chat_id(),
+            chat_id=new_chat_id() if chat_id is None else chat_id,
             created_at=now,
             updated_at=now,
             learning=learning,
@@ -745,7 +756,7 @@ class ChatSession:
             model=backend.model,
             budget_usd=budget_usd,
         )
-        session = cls(root, meta, backend, system_prompt)
+        session = cls(root, meta, backend, system_prompt, clock=clock)
         session.dir.mkdir(parents=True, exist_ok=True)
         session.save()
         return session
@@ -785,14 +796,14 @@ class ChatSession:
         return self.dir / BACKEND_LOG_FILE
 
     def save(self) -> None:
-        self.meta.updated_at = _now()
+        self.meta.updated_at = self._clock()
         self.dir.mkdir(parents=True, exist_ok=True)
         text = json.dumps(self.meta.to_json(), indent=2)
         (self.dir / META_FILE).write_text(redact(text) + "\n", encoding="utf-8")
 
     def record(self, kind: str, text: str, **extra: Any) -> None:
         """Append one redacted entry to the transcript."""
-        entry = {"at": _now(), "kind": kind, "text": redact(text), **extra}
+        entry = {"at": self._clock(), "kind": kind, "text": redact(text), **extra}
         self.dir.mkdir(parents=True, exist_ok=True)
         with self.transcript_path.open("a", encoding="utf-8") as f:
             f.write(json.dumps(entry) + "\n")
@@ -888,12 +899,12 @@ class ChatSession:
         self.save()
 
     def add_run(self, run_id: str, kind: str) -> None:
-        self.meta.runs.append({"run_id": run_id, "kind": kind, "at": _now()})
+        self.meta.runs.append({"run_id": run_id, "kind": kind, "at": self._clock()})
         self.record("event", f"{kind} run {run_id} started", run_id=run_id)
         self.save()
 
     def add_queue_item(self, item_id: int, priority: str) -> None:
-        self.meta.queue_items.append({"id": item_id, "priority": priority, "at": _now()})
+        self.meta.queue_items.append({"id": item_id, "priority": priority, "at": self._clock()})
         self.record("event", f"queued item {item_id} ({priority})", queue_item=item_id)
         self.save()
 

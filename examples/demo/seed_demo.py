@@ -36,16 +36,12 @@ import json
 import re
 import sys
 import time
-from collections.abc import Callable, Iterator, Sequence
-from contextlib import contextmanager
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-import jev_agent.core.chat as chat_mod
-import jev_agent.core.learning as learning_mod
-import jev_agent.core.store as store_mod
 from jev_agent.config import STATE_DIRNAME, load_config
 from jev_agent.config.loader import default_user_config_path
 from jev_agent.core.chat import (
@@ -95,10 +91,10 @@ FIXTURE_MODELS = (
 
 
 class Clock:
-    """Stands in for the store's and the lesson database's `_now()`.
+    """A controllable clock, injected into `Store`, `Learning` and `ChatSession`.
 
-    Each call returns the current time and moves it forward by `step`, so records created one
-    after another get plausible, increasing timestamps.
+    Each call returns the current time and moves it forward by `step`, so records created
+    one after another get plausible, increasing timestamps.
     """
 
     def __init__(self) -> None:
@@ -113,29 +109,6 @@ class Clock:
         value = self.now
         self.now += self.step
         return value.isoformat(timespec="microseconds")
-
-
-@contextmanager
-def patched_clock(clock: Clock) -> Iterator[None]:
-    saved: tuple[Callable[[], str], ...] = (store_mod._now, learning_mod._now, chat_mod._now)
-    store_mod._now = clock
-    learning_mod._now = clock
-    chat_mod._now = clock
-    try:
-        yield
-    finally:
-        store_mod._now, learning_mod._now, chat_mod._now = saved
-
-
-@contextmanager
-def fixed_run_id(run_id: str) -> Iterator[None]:
-    """Give the next `Store.create_run` this id (ids encode the start time)."""
-    saved = store_mod.new_run_id
-    store_mod.new_run_id = lambda: run_id
-    try:
-        yield
-    finally:
-        store_mod.new_run_id = saved
 
 
 # ---- demo data description ---------------------------------------------------------------------
@@ -338,12 +311,12 @@ def seed_word_frequencies(store: Store, clock: Clock, root: Path, start: datetim
             "Apostrophes (don't) must stay inside words.",
         ],
     )
-    with fixed_run_id(run_id):
-        store.create_run(
-            Idea(text="Add word_frequencies() with tests", repo_path=root),
-            learning_profile=PROFILE,
-            quality_level="medium",
-        )
+    store.create_run(
+        Idea(text="Add word_frequencies() with tests", repo_path=root),
+        learning_profile=PROFILE,
+        quality_level="medium",
+        run_id=run_id,
+    )
     store.set_run_state(run_id, RunState.PLANNING)
     record_point(
         store,
@@ -715,12 +688,12 @@ def seed_simple(store: Store, clock: Clock, root: Path, now: datetime, spec: Sim
         for i, (title, _, _, file, _) in enumerate(spec.tasks, start=1)
     ]
     plan = Plan(summary=spec.idea + ".", tasks=cards)
-    with fixed_run_id(run_id):
-        store.create_run(
-            Idea(text=spec.idea, repo_path=root),
-            learning_profile=PROFILE,
-            quality_level=spec.quality,  # type: ignore[arg-type]
-        )
+    store.create_run(
+        Idea(text=spec.idea, repo_path=root),
+        learning_profile=PROFILE,
+        quality_level=spec.quality,  # type: ignore[arg-type]
+        run_id=run_id,
+    )
     store.set_run_state(run_id, RunState.PLANNING)
     record_point(
         store,
@@ -946,7 +919,7 @@ LESSONS: list[tuple[str, list[str], list[str], int, float]] = [
 
 def seed_learning(store: Store, clock: Clock, root: Path, start: datetime) -> None:
     config = load_config(root)
-    learning = Learning.for_store(store)
+    learning = Learning.for_store(store, clock=clock)
     try:
         clock.set(start, step_s=3600 * 7)
         learning.create(PROFILE)
@@ -980,7 +953,7 @@ QUEUE: list[tuple[str, str, bool, str | None, timedelta]] = [
 
 
 def seed_queue(store: Store, clock: Clock, now: datetime) -> None:
-    learning = Learning.for_store(store)
+    learning = Learning.for_store(store, clock=clock)
     try:
         for idea, priority, plan_only, quality, ago in QUEUE:
             clock.set(now - ago)
@@ -1142,19 +1115,16 @@ class DemoChatBackend:
 def seed_chat(root: Path, clock: Clock, start: datetime) -> str:
     """One saved chat that ends with a brief."""
     clock.set(start, step_s=50)
-    saved_id = chat_mod.new_chat_id
-    chat_mod.new_chat_id = lambda: f"c-{start:%Y%m%d-%H%M%S}-5e1d"
-    try:
-        session = ChatSession.create(
-            root,
-            DemoChatBackend(),
-            "(demo system prompt)",
-            ChatLearning(profile=PROFILE),
-            None,
-            1.00,
-        )
-    finally:
-        chat_mod.new_chat_id = saved_id
+    session = ChatSession.create(
+        root,
+        DemoChatBackend(),
+        "(demo system prompt)",
+        ChatLearning(profile=PROFILE),
+        None,
+        1.00,
+        clock=clock,
+        chat_id=f"c-{start:%Y%m%d-%H%M%S}-5e1d",
+    )
     for user, _ in CHAT_SCRIPT:
         asyncio.run(session.say(user))
     asyncio.run(session.make_brief())
@@ -1171,7 +1141,7 @@ def seed(root: Path) -> None:
     configure_demo(root)
     now = datetime.now(UTC).replace(microsecond=0)
     clock = Clock()
-    with patched_clock(clock), Store.open(root / STATE_DIRNAME / "state.db") as store:
+    with Store.open(root / STATE_DIRNAME / "state.db", clock=clock) as store:
         seed_learning(store, clock, root, now - timedelta(days=16))
         older = [
             SimpleRun(

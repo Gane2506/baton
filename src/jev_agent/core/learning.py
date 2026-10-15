@@ -21,7 +21,7 @@ import json
 import os
 import re
 import sqlite3
-from collections.abc import Iterable, Iterator, Sequence
+from collections.abc import Callable, Iterable, Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -161,12 +161,15 @@ def shared_db_path() -> Path:
 class LessonDB:
     """Profiles and lessons in one SQLite database (the repo's state.db, or the shared one)."""
 
-    def __init__(self, conn: sqlite3.Connection, scope: Scope) -> None:
+    def __init__(
+        self, conn: sqlite3.Connection, scope: Scope, *, clock: Callable[[], str] | None = None
+    ) -> None:
         self.conn = conn
         self.scope = scope
+        self._clock = _now if clock is None else clock
 
     @classmethod
-    def open_shared(cls, path: Path) -> LessonDB:
+    def open_shared(cls, path: Path, *, clock: Callable[[], str] | None = None) -> LessonDB:
         path.parent.mkdir(parents=True, exist_ok=True)
         conn = sqlite3.connect(path, isolation_level=None)
         try:
@@ -176,7 +179,7 @@ class LessonDB:
         except BaseException:
             conn.close()
             raise
-        return cls(conn, "shared")
+        return cls(conn, "shared", clock=clock)
 
     @contextmanager
     def _tx(self) -> Iterator[sqlite3.Connection]:
@@ -212,7 +215,7 @@ class LessonDB:
         with self._tx() as db:
             db.execute(
                 "INSERT INTO learning_profiles (name, enabled, created_at) VALUES (?, 1, ?)",
-                (name, _now()),
+                (name, self._clock()),
             )
         profile = self.get_profile(name)
         assert profile is not None
@@ -270,7 +273,7 @@ class LessonDB:
         source_run: str | None = None,
         source_task: str | None = None,
     ) -> Lesson:
-        now = _now()
+        now = self._clock()
         with self._tx() as db:
             cur = db.execute(
                 "INSERT INTO lessons (profile, text, roles_json, tags_json, source_run,"
@@ -311,14 +314,14 @@ class LessonDB:
         with self._tx() as db:
             db.execute(
                 "UPDATE lessons SET text = ?, updated_at = ? WHERE id = ? AND profile = ?",
-                (text, _now(), number, profile),
+                (text, self._clock(), number, profile),
             )
 
     def retire(self, profile: str, number: int) -> None:
         with self._tx() as db:
             db.execute(
                 "UPDATE lessons SET retired = 1, updated_at = ? WHERE id = ? AND profile = ?",
-                (_now(), number, profile),
+                (self._clock(), number, profile),
             )
 
     def record_use(self, profile: str, number: int, score_delta: float = 0.0) -> None:
@@ -340,7 +343,7 @@ class LessonDB:
             cur = db.execute(
                 "INSERT OR IGNORE INTO scored_tasks (run_id, task_id, profile, scored_at)"
                 " VALUES (?, ?, ?, ?)",
-                (run_id, task_id, profile, _now()),
+                (run_id, task_id, profile, self._clock()),
             )
             if cur.rowcount == 0:
                 return False
@@ -348,13 +351,12 @@ class LessonDB:
                 self._record_use(db, profile, number, score_delta)
         return True
 
-    @staticmethod
-    def _record_use(db: sqlite3.Connection, profile: str, number: int, delta: float) -> None:
+    def _record_use(self, db: sqlite3.Connection, profile: str, number: int, delta: float) -> None:
         db.execute(
             "UPDATE lessons SET uses = uses + 1, score = score + ?, updated_at = ?,"
             " retired = CASE WHEN score + ? <= ? THEN 1 ELSE retired END"
             " WHERE id = ? AND profile = ?",
-            (delta, _now(), delta, RETIRE_AT_SCORE, number, profile),
+            (delta, self._clock(), delta, RETIRE_AT_SCORE, number, profile),
         )
 
     def _lesson(self, row: sqlite3.Row) -> Lesson:
@@ -380,14 +382,27 @@ class Learning:
     it, so reading never leaves a file behind. Call `close()` when done.
     """
 
-    def __init__(self, repo: LessonDB, shared_path: Path | None = None) -> None:
+    def __init__(
+        self,
+        repo: LessonDB,
+        shared_path: Path | None = None,
+        *,
+        clock: Callable[[], str] | None = None,
+    ) -> None:
         self.repo = repo
         self.shared_path = shared_path or shared_db_path()
+        self._clock = _now if clock is None else clock
         self._shared: LessonDB | None = None
 
     @classmethod
-    def for_store(cls, store: Store, shared_path: Path | None = None) -> Learning:
-        return cls(LessonDB(store.connection, "repo"), shared_path)
+    def for_store(
+        cls,
+        store: Store,
+        shared_path: Path | None = None,
+        *,
+        clock: Callable[[], str] | None = None,
+    ) -> Learning:
+        return cls(LessonDB(store.connection, "repo", clock=clock), shared_path, clock=clock)
 
     def close(self) -> None:
         if self._shared is not None:
@@ -396,7 +411,7 @@ class Learning:
 
     def shared(self, create: bool = False) -> LessonDB | None:
         if self._shared is None and (create or self.shared_path.exists()):
-            self._shared = LessonDB.open_shared(self.shared_path)
+            self._shared = LessonDB.open_shared(self.shared_path, clock=self._clock)
         return self._shared
 
     def _dbs(self) -> list[LessonDB]:
@@ -481,7 +496,7 @@ class LearningStatus:
     """The repo's learning switch and active profile, with where each value came from."""
 
     enabled: bool
-    enabled_source: str  # "cli setting" | "config" | "default"
+    enabled_source: str  # "the switch" | "jev.toml" | "default"
     profile: str
     profile_source: str
 
@@ -497,13 +512,13 @@ def learning_status(store: Store | None, config: JevConfig) -> LearningStatus:
     profile = None if store is None else store.get_setting(SETTING_PROFILE)
     return LearningStatus(
         enabled=lc.enabled if enabled is None else enabled,
-        enabled_source="cli setting"
+        enabled_source="the switch"
         if enabled is not None
-        else ("config" if "enabled" in set_in_config else "default"),
+        else ("jev.toml" if "enabled" in set_in_config else "default"),
         profile=profile or lc.profile,
-        profile_source="cli setting"
+        profile_source="the switch"
         if profile
-        else ("config" if "profile" in set_in_config else "default"),
+        else ("jev.toml" if "profile" in set_in_config else "default"),
     )
 
 
