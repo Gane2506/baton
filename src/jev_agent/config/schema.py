@@ -1184,6 +1184,9 @@ class CacheSemanticSettings(_Strict):
     decision_threshold: float = Field(
         default=0.98, description="Cosine-ish similarity floor for decisions (see `jev cache calibrate`)."
     )
+    role_threshold: float = Field(
+        default=0.98, description="Similarity floor for role outputs (shadow-measured before any serving)."
+    )
     chat_threshold: float = Field(
         default=0.98, description="Similarity floor for chat turns (phase 4)."
     )

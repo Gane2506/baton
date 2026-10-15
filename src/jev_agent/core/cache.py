@@ -47,9 +47,11 @@ __all__ = [
     "SimHashEmbedder",
     "canonical_json",
     "decision_cache_key",
+    "decision_normalized_text",
     "normalize_prompt",
     "repo_fingerprint",
     "role_cache_key",
+    "role_normalized_text",
     "strip_volatile",
 ]
 
@@ -142,6 +144,13 @@ def _build(kind: str, components: dict[str, Any], text: str, ttl_hours: float) -
     )
 
 
+def decision_normalized_text(req: DecisionRequest) -> str:
+    """The normalized text a decision key (and its simhash) is built from."""
+    return canonical_json(
+        {"point": req.point, "questions": req.questions, "state": strip_volatile(req.state)}
+    )
+
+
 def decision_cache_key(
     req: DecisionRequest,
     *,
@@ -150,7 +159,7 @@ def decision_cache_key(
     run_id: str,
 ) -> CacheKey:
     """Exact-match key for a dispatcher decision (phase 1)."""
-    text = canonical_json({"point": req.point, "questions": req.questions, "state": strip_volatile(req.state)})
+    text = decision_normalized_text(req)
     components = {
         "v": 1,
         "kind": "decision",
@@ -177,6 +186,11 @@ def normalize_prompt(prompt: str, repo: Path) -> str:
     text = _UUID_RE.sub("<uuid>", text)
     text = _TS_RE.sub("<ts>", text)
     return _HEXID_RE.sub("<id>", text)
+
+
+def role_normalized_text(role: str, prompt: str, repo: Path) -> str:
+    """The normalized text a role key (and its simhash) is built from."""
+    return canonical_json({"role": role, "prompt": normalize_prompt(prompt, repo)})
 
 
 def repo_fingerprint(repo: Path) -> str:
