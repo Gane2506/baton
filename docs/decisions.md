@@ -6,7 +6,7 @@ Deviations from [PLAN.md](../PLAN.md) and choices it left open. Newest first.
 
 - Exact-match first, semantic second. Phase 1 caches settled dispatcher decisions in
   `Harness.decide`; phase 2 caches read-only role outputs in `Harness.run_worker`. The
-  cache lives in the repo's own `.jev/state.db` (`cache_entries`, migration v16), so it is
+  cache lives in the repo's own `.jev/state.db` (`cache_entries`, migration v17), so it is
   repo-scoped by construction.
 - Caching sits in the harness, never inside the dispatchers: a vote is not a decision,
   and Jev's vote and Laya's vote must always be evaluated together.

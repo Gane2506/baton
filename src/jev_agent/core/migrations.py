@@ -364,7 +364,7 @@ MIGRATIONS: list[str] = [
         created_at TEXT NOT NULL
     );
     """,
-    # 16: exact-match cache for dispatcher decisions and role outputs (issue #10).
+    # 17: exact-match cache for dispatcher decisions and role outputs (issue #10).
     # `key_hash` is sha256 over the canonical request record (core/cache.py); the repo
     # fingerprint and config fingerprint are part of the key, so repo or config changes
     # invalidate automatically. `cost_usd` is the *original* call cost: a hit serves at
