@@ -28,6 +28,14 @@ app = typer.Typer(
 )
 console = Console()
 
+# Panel names used to group the top-level commands in `jev --help`.
+# Panels print in order of first appearance, so the registrations below are
+# ordered by panel (Run lifecycle -> Observe -> Configure -> Learn).
+PANEL_RUN = "Run lifecycle"
+PANEL_OBSERVE = "Observe"
+PANEL_CONFIGURE = "Configure"
+PANEL_LEARN = "Learn"
+
 
 def _version_callback(value: bool) -> None:
     if value:
@@ -49,28 +57,35 @@ def root(
     """Baton Agent Orchestrator."""
 
 
-app.command("init")(init)
-app.command("doctor")(doctor)
-app.command("run")(run)
-app.command("approve")(approve)
-app.command("resume")(resume)
-app.command("status")(status)
-app.command("log")(log)
-app.command("cancel")(cancel)
-app.add_typer(learning_app, name="learning")
-app.add_typer(laya_app, name="laya")
-app.add_typer(models_app, name="models")
-app.add_typer(queue_app, name="queue")
-app.add_typer(quality_app, name="quality")
-app.add_typer(scheduler_app, name="scheduler")
-app.add_typer(profile_app, name="profile")
-app.add_typer(browser_app, name="browser")
-app.add_typer(mcp_app, name="mcp")
-app.command("board")(board)
-app.command("chat")(chat)
-app.command("dashboard")(dashboard)
-app.command("ship")(ship)
-app.command("kpi")(kpi)
+# --- Run lifecycle: take an idea through to shipped code ---
+app.command("init", rich_help_panel=PANEL_RUN)(init)
+app.command("run", rich_help_panel=PANEL_RUN)(run)
+app.command("approve", rich_help_panel=PANEL_RUN)(approve)
+app.command("resume", rich_help_panel=PANEL_RUN)(resume)
+app.command("cancel", rich_help_panel=PANEL_RUN)(cancel)
+app.add_typer(queue_app, name="queue", rich_help_panel=PANEL_RUN)
+app.add_typer(scheduler_app, name="scheduler", rich_help_panel=PANEL_RUN)
+app.command("ship", rich_help_panel=PANEL_RUN)(ship)
+
+# --- Observe: watch and inspect what is happening ---
+app.command("status", rich_help_panel=PANEL_OBSERVE)(status)
+app.command("log", rich_help_panel=PANEL_OBSERVE)(log)
+app.command("board", rich_help_panel=PANEL_OBSERVE)(board)
+app.command("dashboard", rich_help_panel=PANEL_OBSERVE)(dashboard)
+app.command("kpi", rich_help_panel=PANEL_OBSERVE)(kpi)
+app.add_typer(quality_app, name="quality", rich_help_panel=PANEL_OBSERVE)
+
+# --- Configure: set up the environment and tooling ---
+app.command("doctor", rich_help_panel=PANEL_CONFIGURE)(doctor)
+app.add_typer(profile_app, name="profile", rich_help_panel=PANEL_CONFIGURE)
+app.add_typer(browser_app, name="browser", rich_help_panel=PANEL_CONFIGURE)
+app.add_typer(mcp_app, name="mcp", rich_help_panel=PANEL_CONFIGURE)
+
+# --- Learn: lessons, the decision model, and the models themselves ---
+app.add_typer(learning_app, name="learning", rich_help_panel=PANEL_LEARN)
+app.add_typer(laya_app, name="laya", rich_help_panel=PANEL_LEARN)
+app.add_typer(models_app, name="models", rich_help_panel=PANEL_LEARN)
+app.command("chat", rich_help_panel=PANEL_LEARN)(chat)
 
 
 def main() -> None:
