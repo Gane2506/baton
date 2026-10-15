@@ -45,6 +45,7 @@ from typing import Any
 from jev_agent.config.schema import WORKER_EFFORTS
 from jev_agent.core.models import WorkerStatus
 from jev_agent.workers.base import WorkerJob, WorkerOutput
+from jev_agent.workers.structured import normalize_quotes, parse_json_lines
 from jev_agent.workers.subprocess_runner import (
     EXIT_NOT_EXECUTABLE,
     EXIT_NOT_FOUND,
@@ -316,7 +317,7 @@ def parse_result(stdout: str) -> dict[str, Any] | None:
     if isinstance(data, dict):
         obj: dict[str, Any] = data
         return obj if obj.get("type", "result") == "result" else None
-    for obj in reversed(_json_lines(text)):
+    for obj in reversed(parse_json_lines(text)):
         if obj.get("type") == "result":
             return obj
     return None
@@ -346,7 +347,7 @@ def classify_claude_code(result: CommandResult, payload: dict[str, Any] | None) 
     is_error = bool(payload.get("is_error")) if payload else True
     if result.exit_code == 0 and subtype == "success" and not is_error:
         return "success"
-    events = _json_lines(result.stdout)
+    events = parse_json_lines(result.stdout)
     detail = payload.get("result") if payload else None
     parts = [result.stdout, result.stderr, detail if isinstance(detail, str) else ""]
     text = normalize_quotes("\n".join(parts))
@@ -367,7 +368,7 @@ def _not_started(result: CommandResult, payload: dict[str, Any] | None) -> bool:
     """`claude` never ran: `run_command`'s exit code for a missing or non-executable binary,
     with no result and no JSON events on stdout."""
     missing = result.exit_code in (EXIT_NOT_FOUND, EXIT_NOT_EXECUTABLE)
-    return missing and payload is None and not _json_lines(result.stdout)
+    return missing and payload is None and not parse_json_lines(result.stdout)
 
 
 def usage_from(payload: dict[str, Any] | None) -> tuple[float | None, dict[str, int] | None]:
@@ -400,25 +401,6 @@ def _failure_summary(
 def _one_line(value: Any) -> str:
     text = value if isinstance(value, str) else json.dumps(value)
     return " ".join(text.split())[:300]
-
-
-def normalize_quotes(text: str) -> str:
-    return text.replace("\u2019", "'").replace("\u2018", "'")
-
-
-def _json_lines(text: str) -> list[dict[str, Any]]:
-    objs: list[dict[str, Any]] = []
-    for line in text.splitlines():
-        line = line.strip()
-        if not line.startswith("{"):
-            continue
-        try:
-            obj = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if isinstance(obj, dict):
-            objs.append(obj)
-    return objs
 
 
 def _is_quota_event(event: dict[str, Any]) -> bool:

@@ -38,8 +38,8 @@ from typing import Any
 
 from jev_agent.config.schema import WORKER_EFFORTS
 from jev_agent.core.models import WorkerStatus
-from jev_agent.workers.api import strict_json_schema
 from jev_agent.workers.base import WorkerJob, WorkerOutput
+from jev_agent.workers.structured import normalize_quotes, parse_json_lines, strict_json_schema
 from jev_agent.workers.subprocess_runner import (
     EXIT_NOT_EXECUTABLE,
     EXIT_NOT_FOUND,
@@ -212,19 +212,9 @@ def in_git_repo(path: Path) -> bool:
 
 
 def parse_events(stdout: str) -> list[dict[str, Any]]:
-    """The JSON objects on stdout, one per line; other lines are ignored."""
-    events: list[dict[str, Any]] = []
-    for line in stdout.splitlines():
-        line = line.strip()
-        if not line.startswith("{"):
-            continue
-        try:
-            obj = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if isinstance(obj, dict) and isinstance(obj.get("type"), str):
-            events.append(obj)
-    return events
+    """The JSON objects on stdout, one per line; other lines are ignored. Only events with
+    a string `type` are kept (callers index `event["type"]` directly)."""
+    return [e for e in parse_json_lines(stdout) if isinstance(e.get("type"), str)]
 
 
 def classify_codex(result: CommandResult, events: list[dict[str, Any]]) -> WorkerStatus:
@@ -297,10 +287,6 @@ def usage_from(events: list[dict[str, Any]]) -> dict[str, int] | None:
                 name = key.removesuffix("_tokens")
                 tokens[name] = tokens.get(name, 0) + value
     return tokens or None
-
-
-def normalize_quotes(text: str) -> str:
-    return text.replace("\u2019", "'").replace("\u2018", "'")
 
 
 def _failure_summary(

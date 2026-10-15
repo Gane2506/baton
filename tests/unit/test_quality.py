@@ -518,7 +518,7 @@ async def test_new_python_dependencies_replaced_single_line_array(tmp_path: Path
         repo,
         installed=("pip-licenses",),
         diff=diff,
-        outputs={f"pip-licenses --format=json --packages gplthing": [json.dumps(out)]},
+        outputs={"pip-licenses --format=json --packages gplthing": [json.dumps(out)]},
     )
     result = await LicenseCheck().run(repo, runner)
     assert result.status == "fail" and "copyleft" in result.findings[0].title

@@ -22,8 +22,8 @@ from pydantic import BaseModel, ValidationError
 
 from jev_agent.core.models import WorkerResult, WorkerStatus
 from jev_agent.roles.schemas import CODER_SUMMARY_MARKER, extract_coder_summary
-from jev_agent.workers.api import parse_json_content, structured_summary
 from jev_agent.workers.base import WorkerJob, WorkerOutput
+from jev_agent.workers.structured import parse_json_content, structured_summary
 from jev_agent.workers.subprocess_runner import CommandRunner, append_log_sections, redact
 
 SUMMARY_CHARS = 500

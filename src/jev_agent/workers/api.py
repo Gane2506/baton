@@ -19,13 +19,18 @@ from pathlib import Path
 from typing import Any
 
 import httpx
-from pydantic import BaseModel, ValidationError
+from pydantic import ValidationError
 
 from jev_agent.config.schema import WORKER_EFFORTS
 from jev_agent.core.models import WorkerResult, WorkerStatus
 from jev_agent.runlog.redact import REDACTED, redact
 from jev_agent.workers.base import WorkerJob, WorkerOutput
 from jev_agent.workers.openrouter_models import is_free_slug
+from jev_agent.workers.structured import (
+    parse_json_content,
+    strict_json_schema,
+    structured_summary,
+)
 
 PROJECT_TITLE = "Baton Agent Orchestrator"
 PROJECT_URL = "https://github.com/Gane2506/baton"
@@ -44,7 +49,6 @@ _QUOTA_WORDS = re.compile(
 _BUDGET_LIMIT_SOURCES = frozenset(
     {"openrouter_guardrail_budget", "openrouter_workspace_budget", "openrouter_key_limit"}
 )
-_FENCED_JSON = re.compile(r"```(?:json)?[ \t]*\n(?P<body>.*?)\n?```", re.DOTALL | re.I)
 
 Sleep = Callable[[float], Awaitable[None]]
 
@@ -86,44 +90,6 @@ def classify_api_error(status_code: int, body: str, *, free_model: bool = False)
     if status_code >= 500:
         return "failure"
     return "error"
-
-
-def strict_json_schema(model: type[BaseModel]) -> dict[str, Any]:
-    """`model.model_json_schema()` made acceptable to strict structured outputs.
-
-    Every object gets `additionalProperties: false` and lists all its properties as required,
-    and `default` keywords are dropped (strict mode rejects or ignores them). Fields with
-    defaults therefore become required in the wire schema; the model can still send the default
-    value, and pydantic validates the result against the real model afterwards.
-    """
-    schema = model.model_json_schema()
-    _make_strict(schema)
-    return schema
-
-
-def _make_strict(node: Any) -> None:
-    if isinstance(node, dict):
-        node.pop("default", None)
-        if node.get("type") == "object" or "properties" in node:
-            props = node.get("properties", {})
-            node["additionalProperties"] = False
-            node["required"] = list(props)
-        for value in node.values():
-            _make_strict(value)
-    elif isinstance(node, list):
-        for item in node:
-            _make_strict(item)
-
-
-def parse_json_content(content: str) -> Any:
-    """Parse a JSON reply, tolerating a ```json fenced block around it."""
-    try:
-        return json.loads(content)
-    except json.JSONDecodeError:
-        match = _FENCED_JSON.search(content)
-        if match is None:
-            raise
-        return json.loads(match.group("body"))
 
 
 class ApiWorker:
@@ -319,19 +285,6 @@ class ApiWorker:
             tokens=tokens,
             raw_log_path=job.log_path,
         )
-
-
-def structured_summary(parsed: BaseModel) -> str:
-    """A one-line summary of a structured reply, e.g. "plan with 4 tasks"."""
-    tasks = getattr(parsed, "tasks", None)
-    if isinstance(tasks, list):
-        return f"plan with {len(tasks)} task{'s' if len(tasks) != 1 else ''}"
-    verdict = getattr(parsed, "verdict", None)
-    if isinstance(verdict, str):
-        issues = getattr(parsed, "issues", None) or []
-        n = len(issues)
-        return f"verdict: {verdict} ({n} issue{'s' if n != 1 else ''})"
-    return f"{type(parsed).__name__} parsed"
 
 
 def _usage(data: dict[str, Any]) -> tuple[float | None, dict[str, int] | None]:

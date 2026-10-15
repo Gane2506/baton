@@ -51,7 +51,6 @@ _WORKER_VENDORS = {"claude_code": "anthropic", "codex": "openai"}
 API_WORKER = "api"
 # Free models run only on this worker (OpenRouter); see docs/config.md "Free models".
 FREE_WORKER = API_WORKER
-FREE_DESCRIPTION = "free (rate-limited)"
 
 
 def model_fits(worker: str, model: str | None) -> bool:
