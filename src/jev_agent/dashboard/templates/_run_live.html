@@ -19,32 +19,32 @@
         {% endif %}</p>
       {% endif %}
       <form class="inline" method="post" action="/runs/{{ run.id }}/approve" data-confirm="{{ v.approve_confirm }}">
-        {{ csrf_input() }}<button class="primary" type="submit"{% if busy %} disabled{% endif %}>{{ icon("i-run", "sm") }}Approve and run</button>
+        {{ csrf_input() }}<button class="btn btn-primary" type="submit"{% if busy %} disabled{% endif %}>{{ icon("i-run", "sm") }}Approve and run</button>
       </form>
       {% if v.estimate_verdict and v.estimate_verdict.level == "refuse" %}
       <form class="inline" method="post" action="/runs/{{ run.id }}/approve" data-confirm="The cost estimate reaches the run budget. Approve anyway and start executing it?">
-        {{ csrf_input() }}<input type="hidden" name="force" value="1"><button class="danger" type="submit"{% if busy %} disabled{% endif %}>Approve anyway (over budget)</button>
+        {{ csrf_input() }}<input type="hidden" name="force" value="1"><button class="btn btn-danger" type="submit"{% if busy %} disabled{% endif %}>Approve anyway (over budget)</button>
       </form>
       {% endif %}
       {% endif %}
       {% if v.can_resume and v.resume_risk %}
       <form class="inline" method="post" action="/runs/{{ run.id }}/resume" data-confirm="Another jev process may be running this run ({{ v.resume_risk }}); resuming starts a second one on the same worktrees and can double the spend. Resume anyway?">
-        {{ csrf_input() }}<input type="hidden" name="force" value="1"><button class="danger" type="submit"{% if busy %} disabled{% endif %}>Force resume</button>
+        {{ csrf_input() }}<input type="hidden" name="force" value="1"><button class="btn btn-danger" type="submit"{% if busy %} disabled{% endif %}>Force resume</button>
       </form>
       {% elif v.can_resume %}
       <form class="inline" method="post" action="/runs/{{ run.id }}/resume" data-confirm="Resume this run from its saved state?">
-        {{ csrf_input() }}<button type="submit"{% if busy %} disabled{% endif %}>{{ icon("i-resume", "sm") }}Resume</button>
+        {{ csrf_input() }}<button class="btn btn-secondary" type="submit"{% if busy %} disabled{% endif %}>{{ icon("i-resume", "sm") }}Resume</button>
       </form>
       {% endif %}
       {% if v.can_ship %}
       <form class="inline" method="post" action="/runs/{{ run.id }}/ship">
-        {{ csrf_input() }}<button type="submit"{% if busy %} disabled{% endif %}>{{ icon("i-ship", "sm") }}Ship as PR</button>
+        {{ csrf_input() }}<button class="btn btn-secondary" type="submit"{% if busy %} disabled{% endif %}>{{ icon("i-ship", "sm") }}Ship as PR</button>
       </form>
       {% endif %}
       {% if v.can_cancel %}
       <span class="sep"></span>
       <form class="inline" method="post" action="/runs/{{ run.id }}/cancel" data-confirm="Cancel this run? Its branches and worktrees are kept.">
-        {{ csrf_input() }}<button class="danger" type="submit">{{ icon("i-stop", "sm") }}Cancel</button>
+        {{ csrf_input() }}<button class="btn btn-danger" type="submit">{{ icon("i-stop", "sm") }}Cancel</button>
       </form>
       {% endif %}
       {% if busy %}<span class="muted small">working in the background…</span>{% endif %}
@@ -62,24 +62,24 @@
   {% if v.ship_preview %}{% set p = v.ship_preview %}
   <h3>Ready to ship: your call</h3>
   <dl class="facts small">
-    <dt>PR title</dt><dd>{{ p.title }}</dd>
-    <dt>branch</dt><dd><code>{{ p.branch }}</code></dd>
-    {% if p.diff %}<dt>diff</dt><dd>{{ p.diff.files }} files, +{{ p.diff.additions }} / -{{ p.diff.deletions }}</dd>{% endif %}
-    {% if v.ship_vote %}<dt>D6 vote</dt><dd class="mono">{{ v.ship_vote }}</dd>{% endif %}
+    <dt>PR Title</dt><dd>{{ p.title }}</dd>
+    <dt>Branch</dt><dd><code>{{ p.branch }}</code></dd>
+    {% if p.diff %}<dt>Diff</dt><dd>{{ p.diff.files }} files, +{{ p.diff.additions }} / -{{ p.diff.deletions }}</dd>{% endif %}
+    {% if v.ship_vote %}<dt>D6 Vote</dt><dd class="mono">{{ v.ship_vote }}</dd>{% endif %}
   </dl>
   <div class="actions">
     <form class="inline" method="post" action="/runs/{{ run.id }}/approve" data-confirm="Push this branch, open the PR, wait for its checks and merge it?">
-      {{ csrf_input() }}<button class="primary" type="submit"{% if busy %} disabled{% endif %}>Approve: ship and merge</button>
+      {{ csrf_input() }}<button class="btn btn-primary" type="submit"{% if busy %} disabled{% endif %}>Approve: ship and merge</button>
     </form>
     <form class="inline" method="post" action="/runs/{{ run.id }}/stop" data-confirm="End this run without shipping it? Its result branch is kept.">
-      {{ csrf_input() }}<button class="danger" type="submit"{% if busy %} disabled{% endif %}>Stop: do not ship</button>
+      {{ csrf_input() }}<button class="btn btn-danger" type="submit"{% if busy %} disabled{% endif %}>Stop: do not ship</button>
     </form>
   </div>
   <form method="post" action="/runs/{{ run.id }}/modify">
     {{ csrf_input() }}
     <label for="notes">Ask for changes (a new task for the coder; the votes run again)</label>
     <textarea id="notes" name="notes" rows="3" maxlength="4000" required></textarea>
-    <div class="actions"><button type="submit"{% if busy %} disabled{% endif %}>{{ icon("i-modify", "sm") }}Modify</button></div>
+    <div class="actions"><button class="btn btn-secondary" type="submit"{% if busy %} disabled{% endif %}>{{ icon("i-modify", "sm") }}Modify</button></div>
   </form>
   {% endif %}
 
@@ -102,7 +102,7 @@
 <h2 class="section">Tasks</h2>
 {% if v.tasks %}
 <div class="table-wrap"><table>
-  <thead><tr><th>task</th><th>title</th><th>state</th><th class="num">tries</th><th>worker</th><th>model</th><th>effort</th><th class="num">spent</th><th>note</th></tr></thead>
+  <thead><tr><th>Task</th><th>Title</th><th>State</th><th class="num">Tries</th><th>Worker</th><th>Model</th><th>Effort</th><th class="num">Spent</th><th>Note</th></tr></thead>
   <tbody>
   {% for t in v.tasks %}
     <tr>

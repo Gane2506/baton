@@ -16,9 +16,9 @@
       <span class="muted">({{ lv.status.profile_source }})</span>.</p>
     <div class="actions">
       {% if lv.status.enabled %}
-      <form class="inline" method="post" action="/learning/disable">{{ csrf_input() }}<button type="submit">Turn learning off</button></form>
+      <form class="inline" method="post" action="/learning/disable">{{ csrf_input() }}<button class="btn btn-secondary" type="submit">Turn learning off</button></form>
       {% else %}
-      <form class="inline" method="post" action="/learning/enable">{{ csrf_input() }}<button type="submit">Turn learning on</button></form>
+      <form class="inline" method="post" action="/learning/enable">{{ csrf_input() }}<button class="btn btn-secondary" type="submit">Turn learning on</button></form>
       {% endif %}
     </div>
   </div>
@@ -27,7 +27,7 @@
 <h2 class="section">Profiles</h2>
 {% if lv.profiles %}
 <div class="table-wrap"><table>
-  <thead><tr><th>profile</th><th>scope</th><th>enabled</th><th class="num">lessons</th><th>active</th><th>actions</th></tr></thead>
+  <thead><tr><th>Profile</th><th>Scope</th><th>Enabled</th><th class="num">Lessons</th><th>Active</th><th>Actions</th></tr></thead>
   <tbody>
   {% for p in lv.profiles %}
     <tr>
@@ -38,14 +38,14 @@
       <td>{% if p.name == lv.status.profile %}{{ badge("active", "ok") }}{% endif %}</td>
       <td><div class="actions">
         {% if p.name != lv.status.profile %}
-        <form class="inline" method="post" action="/learning/use">{{ csrf_input() }}<input type="hidden" name="profile" value="{{ p.name }}"><button class="small" type="submit">Use</button></form>
+        <form class="inline" method="post" action="/learning/use">{{ csrf_input() }}<input type="hidden" name="profile" value="{{ p.name }}"><button class="btn btn-sm btn-secondary" type="submit">Use</button></form>
         {% endif %}
         {% if p.enabled %}
-        <form class="inline" method="post" action="/learning/disable">{{ csrf_input() }}<input type="hidden" name="profile" value="{{ p.name }}"><button class="small" type="submit">Disable</button></form>
+        <form class="inline" method="post" action="/learning/disable">{{ csrf_input() }}<input type="hidden" name="profile" value="{{ p.name }}"><button class="btn btn-sm btn-secondary" type="submit">Disable</button></form>
         {% else %}
-        <form class="inline" method="post" action="/learning/enable">{{ csrf_input() }}<input type="hidden" name="profile" value="{{ p.name }}"><button class="small" type="submit">Enable</button></form>
+        <form class="inline" method="post" action="/learning/enable">{{ csrf_input() }}<input type="hidden" name="profile" value="{{ p.name }}"><button class="btn btn-sm btn-secondary" type="submit">Enable</button></form>
         {% endif %}
-        <form class="inline" method="post" action="/learning/flush">{{ csrf_input() }}<input type="hidden" name="profile" value="{{ p.name }}"><button class="small danger" type="submit">Delete lessons…</button></form>
+        <form class="inline" method="post" action="/learning/flush">{{ csrf_input() }}<input type="hidden" name="profile" value="{{ p.name }}"><button class="btn btn-sm btn-danger" type="submit">Delete lessons…</button></form>
       </div></td>
     </tr>
   {% endfor %}
@@ -61,7 +61,7 @@
     {{ csrf_input() }}
     <input type="text" name="name" required maxlength="40" pattern="[A-Za-z0-9][A-Za-z0-9_-]*" placeholder="name" aria-label="Profile name">
     <label class="check small"><input type="checkbox" name="shared"> shared (usable from any repo)</label>
-    <button type="submit">{{ icon("i-plus", "sm") }}Create</button>
+    <button class="btn btn-primary" type="submit">{{ icon("i-plus", "sm") }}Create</button>
   </form>
   <p class="hint">Shared profiles live in <span class="mono">{{ lv.shared_path }}</span>.</p>
 </section>
@@ -69,11 +69,11 @@
 {% if lv.selected %}
 <div class="panel-head">
   <h2 class="section">Lessons in {{ lv.selected }}</h2>
-  <p class="small muted">{% if include_retired %}<a href="/learning?profile={{ lv.selected | urlencode }}">Hide retired lessons</a>{% else %}<a href="/learning?profile={{ lv.selected | urlencode }}&amp;all=1">Include retired lessons</a>{% endif %}</p>
+  <p class="small muted">{% if include_retired %}<a class="btn btn-sm btn-ghost" href="/learning?profile={{ lv.selected | urlencode }}">Hide retired lessons</a>{% else %}<a class="btn btn-sm btn-ghost" href="/learning?profile={{ lv.selected | urlencode }}&amp;all=1">Include retired lessons</a>{% endif %}</p>
 </div>
 {% if lv.lessons %}
 <div class="table-wrap"><table>
-  <thead><tr><th>id</th>{% if include_retired %}<th>retired</th>{% endif %}<th>roles</th><th>tags</th><th class="num">score</th><th class="num">uses</th><th>lesson</th><th>source</th><th><span class="sr-only">actions</span></th></tr></thead>
+  <thead><tr><th>ID</th>{% if include_retired %}<th>Retired</th>{% endif %}<th>Roles</th><th>Tags</th><th class="num">Score</th><th class="num">Uses</th><th>Lesson</th><th>Source</th><th><span class="sr-only">actions</span></th></tr></thead>
   <tbody>
   {% for l in lv.lessons %}
     <tr>
@@ -85,7 +85,7 @@
       <td class="num">{{ l.uses }}</td>
       <td class="wrap">{{ l.text }}</td>
       <td class="small mono">{% if l.source_run %}<a href="/runs/{{ l.source_run }}">{{ l.source_run }}</a>{% if l.source_task %} {{ l.source_task }}{% endif %}{% endif %}</td>
-      <td>{% if not l.retired %}<form class="inline" method="post" action="/learning/forget" data-confirm="Retire lesson {{ l.id }}? It will never be used again.">{{ csrf_input() }}<input type="hidden" name="lesson" value="{{ l.id }}"><button class="small" type="submit">Forget</button></form>{% endif %}</td>
+      <td>{% if not l.retired %}<form class="inline" method="post" action="/learning/forget" data-confirm="Retire lesson {{ l.id }}? It will never be used again.">{{ csrf_input() }}<input type="hidden" name="lesson" value="{{ l.id }}"><button class="btn btn-sm btn-secondary" type="submit">Forget</button></form>{% endif %}</td>
     </tr>
   {% endfor %}
   </tbody>

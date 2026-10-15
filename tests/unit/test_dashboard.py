@@ -1323,7 +1323,7 @@ def test_run_waiting_to_ship_offers_approve_modify_and_stop(
     for client in _client(repo, calls):
         page = client.get(f"/runs/{run_id}").text
         assert "Ready to ship: your call" in page and "add search" in page
-        assert "D6 vote" in page and "action=ship" in page
+        assert "D6 Vote" in page and "action=ship" in page
         for action in ("approve", "modify", "stop"):
             assert f'action="/runs/{run_id}/{action}"' in page
 

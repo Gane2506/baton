@@ -23,7 +23,7 @@
 <p class="hint">{% for name, count in rk.by_state %}{{ count }} {{ name }}{% if not loop.last %} / {% endif %}{% else %}No runs yet.{% endfor %}</p>
 {% if rk.latest %}
 <section class="panel">
-  <div class="panel-head"><h2>Latest finished run</h2><a class="small" href="/runs/{{ rk.latest.run.id }}">Open run</a></div>
+  <div class="panel-head"><h2>Latest finished run</h2><a class="btn btn-sm btn-ghost" href="/runs/{{ rk.latest.run.id }}">Open run</a></div>
   <dl class="facts">
     <dt>Idea</dt><dd>{{ rk.latest.run.idea.text }}</dd>
     <dt>Tasks</dt><dd>{{ rk.latest.tasks_done }} of {{ rk.latest.tasks }} done</dd>
@@ -67,7 +67,7 @@
 
 <h2 class="section">Shipped PRs (last {{ k.rows | length }})</h2>
 <div class="table-wrap table-scroll"><table>
-  <thead><tr><th>PR</th><th>run</th><th>title</th><th>state</th><th class="num">cost</th><th class="num">run time</th><th class="num">attempts / task</th><th class="num">first pass</th><th class="num">findings</th><th>CI</th><th class="num">merged in</th></tr></thead>
+  <thead><tr><th>PR</th><th>Run</th><th>Title</th><th>State</th><th class="num">Cost</th><th class="num">Run time</th><th class="num">Attempts / task</th><th class="num">First pass</th><th class="num">Findings</th><th>CI</th><th class="num">Merged in</th></tr></thead>
   <tbody>
   {% for row in k.rows %}
     {% set pr = row.pr %}

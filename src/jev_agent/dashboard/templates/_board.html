@@ -16,7 +16,7 @@
         {% if not c.run_id and c.item_id %}
         <div class="card-actions">
           <form class="inline" method="post" action="/queue/{{ c.item_id }}/remove" data-confirm="Remove item {{ c.item_id }} from the queue?">
-            {{ csrf_input() }}<button class="small danger" type="submit">Remove</button>
+            {{ csrf_input() }}<button class="btn btn-sm btn-danger" type="submit">Remove</button>
           </form>
         </div>
         {% endif %}

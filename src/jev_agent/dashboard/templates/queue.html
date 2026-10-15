@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "macros.html" import badge, icon, csrf_input with context %}
+{% from "macros.html" import badge, field_label, icon, csrf_input with context %}
 {% block title %}Queue{% endblock %}
 {% block content %}
 <div class="page-head">
@@ -29,7 +29,7 @@
   <h2>Add an idea</h2>
   <form method="post" action="/queue/add">
     {{ csrf_input() }}
-    <label class="muted" for="idea">Idea</label>
+    {{ field_label("idea", "idea") }}
     <textarea id="idea" name="idea" required placeholder="What to build, in plain words"></textarea>
     <div class="form-grid">
       <div>
@@ -67,7 +67,7 @@
         <label class="check"><input type="checkbox" name="plan_only"> Plan only</label>
       </div>
     </div>
-    <button class="primary" type="submit">{{ icon("i-plus", "sm") }}Add to queue</button>
+    <button class="btn btn-primary" type="submit">{{ icon("i-plus", "sm") }}Add to queue</button>
   </form>
 </section>
 
@@ -76,7 +76,7 @@
   <p class="lede">Tasks the scheduler runs on a schedule (<code>jev queue add --repeat</code>).</p>
   {% if q.recurring %}
   <div class="table-wrap"><table>
-    <thead><tr><th>brief</th><th>schedule</th><th>next run</th><th>status</th><th>actions</th></tr></thead>
+    <thead><tr><th>Brief</th><th>Schedule</th><th>Next run</th><th>Status</th><th>Actions</th></tr></thead>
     <tbody>
     {% for r in q.recurring %}
       <tr>
@@ -88,15 +88,15 @@
           <div class="actions">
           {% if r.task.enabled %}
             <form class="inline" method="post" action="/queue/recurring/{{ r.task.id }}/pause">
-              {{ csrf_input() }}<button class="small" type="submit">Pause</button>
+              {{ csrf_input() }}<button class="btn btn-sm btn-secondary" type="submit">Pause</button>
             </form>
           {% else %}
             <form class="inline" method="post" action="/queue/recurring/{{ r.task.id }}/resume">
-              {{ csrf_input() }}<button class="small" type="submit">Resume</button>
+              {{ csrf_input() }}<button class="btn btn-sm btn-secondary" type="submit">Resume</button>
             </form>
           {% endif %}
             <form class="inline" method="post" action="/queue/recurring/{{ r.task.id }}/remove" data-confirm="Remove recurring task {{ r.task.id }}? Its queue items and runs are kept.">
-              {{ csrf_input() }}<button class="small danger" type="submit">Remove</button>
+              {{ csrf_input() }}<button class="btn btn-sm btn-danger" type="submit">Remove</button>
             </form>
           </div>
         </td>
@@ -112,11 +112,11 @@
 <div class="panel-head">
   <h2 class="section">Items</h2>
   <p class="small muted">
-  {% if show_all %}<a href="/queue">Hide finished items</a>{% else %}{% if q.hidden %}{{ q.hidden }} finished item(s) hidden; {% endif %}<a href="/queue?all=1">show all</a>{% endif %}</p>
+  {% if show_all %}<a class="btn btn-sm btn-ghost" href="/queue">Hide finished items</a>{% else %}{% if q.hidden %}{{ q.hidden }} finished item(s) hidden; {% endif %}<a class="btn btn-sm btn-ghost" href="/queue?all=1">Show all</a>{% endif %}</p>
 </div>
 {% if q.rows %}
 <div class="table-wrap"><table>
-  <thead><tr><th>id</th><th>priority</th><th>status</th><th>run</th><th>idea</th><th>flags</th><th>note</th><th>actions</th></tr></thead>
+  <thead><tr><th>ID</th><th>Priority</th><th>Status</th><th>Run</th><th>Idea</th><th>Flags</th><th>Note</th><th>Actions</th></tr></thead>
   <tbody>
   {% for r in q.rows %}
     <tr>
@@ -132,13 +132,13 @@
         {% if r.movable %}
           {% for direction, label in (("top", "Top"), ("up", "Up"), ("down", "Down")) %}
           <form class="inline" method="post" action="/queue/{{ r.item.id }}/move">
-            {{ csrf_input() }}<input type="hidden" name="direction" value="{{ direction }}"><button class="small" type="submit">{{ label }}</button>
+            {{ csrf_input() }}<input type="hidden" name="direction" value="{{ direction }}"><button class="btn btn-sm btn-secondary" type="submit">{{ label }}</button>
           </form>
           {% endfor %}
         {% endif %}
         {% if r.item.status != "running" %}
           <form class="inline" method="post" action="/queue/{{ r.item.id }}/remove" data-confirm="Remove item {{ r.item.id }} from the queue? Its run, if any, is kept.">
-            {{ csrf_input() }}<button class="small danger" type="submit">Remove</button>
+            {{ csrf_input() }}<button class="btn btn-sm btn-danger" type="submit">Remove</button>
           </form>
         {% endif %}
         </div>

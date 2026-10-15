@@ -25,14 +25,14 @@
     </select>
     <label class="muted" for="q">Search</label>
     <input type="search" id="q" name="q" value="{{ q }}" placeholder="title, run, chat" maxlength="80">
-    <button type="submit">Filter</button>
+    <button class="btn btn-secondary" type="submit">Filter</button>
     {% if kind or chat_id or q %}<a href="/artifacts">Clear</a>{% endif %}
   </form>
 </section>
 
 {% if artifacts %}
 <div class="table-wrap"><table>
-  <thead><tr><th>artifact</th><th>type</th><th>run</th><th>chat</th><th>created</th></tr></thead>
+  <thead><tr><th>Artifact</th><th>Type</th><th>Run</th><th>Chat</th><th>Created</th></tr></thead>
   <tbody>
   {% for a in artifacts %}
     <tr>

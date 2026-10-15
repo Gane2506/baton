@@ -18,9 +18,9 @@
       <form class="inline" method="post" action="/runs/{{ plan.run_id }}/ship">
         {{ csrf_input() }}
         <input type="hidden" name="confirm" value="yes">
-        <button class="primary" type="submit">{{ icon("i-ship", "sm") }}Push and open the PR</button>
+        <button class="btn btn-primary" type="submit">{{ icon("i-ship", "sm") }}Push and open the PR</button>
       </form>
-      <a class="button" href="/runs/{{ plan.run_id }}">Not now</a>
+      <a class="btn btn-secondary" href="/runs/{{ plan.run_id }}">Not now</a>
     </div>
   </section>
   <h2 class="section">Pull request body</h2>

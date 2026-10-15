@@ -11,9 +11,9 @@
         {{ csrf_input() }}
         <input type="hidden" name="profile" value="{{ profile }}">
         <input type="hidden" name="confirm" value="yes">
-        <button class="danger" type="submit">{{ icon("i-remove", "sm") }}Delete {{ lessons }} lesson{{ "s" if lessons != 1 }}</button>
+        <button class="btn btn-danger" type="submit">{{ icon("i-remove", "sm") }}Delete {{ lessons }} lesson{{ "s" if lessons != 1 }}</button>
       </form>
-      <a class="button" href="/learning?profile={{ profile | urlencode }}">Keep them</a>
+      <a class="btn btn-secondary" href="/learning?profile={{ profile | urlencode }}">Keep them</a>
     </div>
   </section>
 </div>

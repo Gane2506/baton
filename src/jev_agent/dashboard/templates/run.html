@@ -36,7 +36,7 @@
 <h2 class="section">Decisions</h2>
 {% if v.decisions %}
 <div class="table-wrap table-scroll"><table>
-  <thead><tr><th>time</th><th>point</th><th>scope</th><th>dispatcher</th><th>answers (Jev confidence, Laya margin)</th><th>fallback reason</th><th class="num">cost</th><th class="num">latency</th></tr></thead>
+  <thead><tr><th>Time</th><th>Point</th><th>Scope</th><th>Dispatcher</th><th>Answers (Jev confidence, Laya margin)</th><th>Fallback reason</th><th class="num">Cost</th><th class="num">Latency</th></tr></thead>
   <tbody>
   {% for d in v.decisions %}
     <tr>
@@ -59,7 +59,7 @@
 <h2 class="section">Attempts</h2>
 {% if v.attempts %}
 <div class="table-wrap"><table>
-  <thead><tr><th>time</th><th>role</th><th>scope</th><th>#</th><th>worker</th><th>model</th><th>effort</th><th>status</th><th class="num">cost</th><th>lessons</th><th>log</th></tr></thead>
+  <thead><tr><th>Time</th><th>Role</th><th>Scope</th><th>#</th><th>Worker</th><th>Model</th><th>Effort</th><th>Status</th><th class="num">Cost</th><th>Lessons</th><th>Log</th></tr></thead>
   <tbody>
   {% for a in v.attempts %}
     <tr>

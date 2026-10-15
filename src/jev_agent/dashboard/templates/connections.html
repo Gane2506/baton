@@ -16,7 +16,7 @@
   <h2>Servers <span class="muted">·</span> <span id="conn-summary" data-conn="{{ agg_state }}">{{ agg_label }}</span></h2>
   {% if servers %}
   <div class="table-wrap"><table id="conn-panel">
-    <thead><tr><th>server</th><th>host</th><th>access</th><th>status</th><th>last check</th></tr></thead>
+    <thead><tr><th>Server</th><th>Host</th><th>Access</th><th>Status</th><th>Last check</th></tr></thead>
     <tbody>
     {% for s in servers %}
       <tr data-conn-row="{{ s.name }}">
@@ -31,7 +31,7 @@
   </table></div>
   <form method="post" action="/connections/refresh">
     {{ csrf_input() }}
-    <button type="submit">Check now</button>
+    <button type="submit" class="btn btn-secondary">Check now</button>
     <span class="hint">Opens one SSH connection per server (<code>ssh HOST true</code>, like
     <code>jev doctor --connect</code>) and records the result in the audit log.</span>
   </form>
@@ -60,7 +60,7 @@
 <section class="panel" aria-label="Key health">
   <h2>Keys <span class="muted">·</span> names only, never values</h2>
   <div class="table-wrap"><table>
-    <thead><tr><th>variable</th><th>used for</th><th>status</th><th></th></tr></thead>
+    <thead><tr><th>Variable</th><th>Used for</th><th>Status</th><th><span class="sr-only">actions</span></th></tr></thead>
     <tbody>
     {% for v in env_vars %}
       <tr><td class="mono">{{ v.name }}</td><td class="small">{{ v.used_for }}</td>
@@ -69,12 +69,12 @@
         <form method="post" action="/connections/keys/remove" class="inline">
           {{ csrf_input() }}
           <input type="hidden" name="name" value="{{ v.name }}">
-          <button type="submit" class="small danger">Remove</button>
+          <button type="submit" class="btn btn-sm btn-danger">Remove</button>
         </form>{% endif %}</td></tr>
     {% endfor %}
     </tbody>
   </table></div>
-  <details class="add-key">
+  <details class="disclosure">
     <summary>Add key</summary>
     <form method="post" action="/connections/keys/add">
       {{ csrf_input() }}
@@ -98,7 +98,7 @@
         <div class="field-control">
           <input type="password" id="key-value" name="value" required autocomplete="new-password">
         </div>
-        <div class="field-actions"><button type="submit">Save</button></div>
+        <div class="field-actions"><button type="submit" class="btn btn-primary">Save</button></div>
       </div>
     </form>
     <p class="hint">Saved to <code>~/.jev/secrets.env</code> (mode 600) and in effect
@@ -112,8 +112,8 @@
 <h2 class="section">Configuration</h2>
 <nav class="panel tight" aria-label="Settings sections">
   <div class="actions">
-  {% for s in sections %}<a class="button small" href="#s-{{ s.path | replace('.', '-') }}">{{ s.title }}</a>{% endfor %}
-  {% for e in entities %}<a class="button small" href="#s-{{ e.path | replace('.', '-') }}">{{ e.title }}</a>{% endfor %}
+  {% for s in sections %}<a class="btn btn-sm btn-ghost" href="#s-{{ s.path | replace('.', '-') }}">{{ s.title }}</a>{% endfor %}
+  {% for e in entities %}<a class="btn btn-sm btn-ghost" href="#s-{{ e.path | replace('.', '-') }}">{{ e.title }}</a>{% endfor %}
   </div>
 </nav>
 

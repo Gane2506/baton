@@ -20,7 +20,7 @@
       <form class="rail-new-form" method="post" action="/chats/new">
         {{ csrf_input() }}
         <input type="hidden" name="worker" value="{{ _nw.worker or 'api' }}">
-        <button type="submit" class="button primary rail-new">{{ icon("i-plus", "sm") }}<span>New chat</span></button>
+        <button type="submit" class="btn btn-primary rail-new">{{ icon("i-plus", "sm") }}<span>New chat</span></button>
       </form>
       <button id="rail-toggle" type="button" class="icon-btn" aria-expanded="true" aria-controls="chat-rail" aria-label="Collapse conversation list">{{ icon("i-left", "sm") }}</button>
     </div>
@@ -45,7 +45,7 @@
         {% if chat_title is defined and chat_title %}{{ chat_title }}{% else %}Chat <span class="mono">{{ chat_id }}</span>{% endif %}
         {{ copy_button(chat_id, "Copy chat id") }}
       </h1>
-      <a id="exit-fullscreen" class="button ghost small" href="/chats">{{ icon("i-x", "sm") }}<span>Chats</span></a>
+      <a id="exit-fullscreen" class="btn btn-sm btn-ghost" href="/chats">{{ icon("i-x", "sm") }}<span>Chats</span></a>
     </header>
 
     <div id="chat-transcript" data-live="/chats/{{ chat_id }}/live" data-live-every="{{ refresh_ms }}" aria-label="Chat transcript" role="log" aria-live="polite">
@@ -61,10 +61,10 @@
     {% endif %}
 
     <div id="action-bar" role="group" aria-label="Turn this chat into work">
-      <form class="inline" method="post" action="/chats/{{ chat_id }}/brief">{{ csrf_input() }}<button type="submit" class="small"{% if busy %} disabled{% endif %}>Write brief</button></form>
-      <form class="inline" method="post" action="/chats/{{ chat_id }}/start">{{ csrf_input() }}<input type="hidden" name="action" value="plan"><button type="submit" class="small"{% if busy %} disabled{% endif %}>{{ icon("i-log", "sm") }}Plan it</button></form>
-      <form class="inline" method="post" action="/chats/{{ chat_id }}/start">{{ csrf_input() }}<input type="hidden" name="action" value="run"><button type="submit" class="small primary"{% if busy %} disabled{% endif %}>{{ icon("i-run", "sm") }}Run it</button></form>
-      <form class="inline" method="post" action="/chats/{{ chat_id }}/queue">{{ csrf_input() }}<button type="submit" class="small"{% if busy %} disabled{% endif %}>Queue it</button></form>
+      <form class="inline" method="post" action="/chats/{{ chat_id }}/brief">{{ csrf_input() }}<button type="submit" class="btn btn-sm btn-secondary"{% if busy %} disabled{% endif %}>Write brief</button></form>
+      <form class="inline" method="post" action="/chats/{{ chat_id }}/start">{{ csrf_input() }}<input type="hidden" name="action" value="plan"><button type="submit" class="btn btn-sm btn-secondary"{% if busy %} disabled{% endif %}>{{ icon("i-log", "sm") }}Plan it</button></form>
+      <form class="inline" method="post" action="/chats/{{ chat_id }}/start">{{ csrf_input() }}<input type="hidden" name="action" value="run"><button type="submit" class="btn btn-sm btn-primary"{% if busy %} disabled{% endif %}>{{ icon("i-run", "sm") }}Run it</button></form>
+      <form class="inline" method="post" action="/chats/{{ chat_id }}/queue">{{ csrf_input() }}<button type="submit" class="btn btn-sm btn-secondary"{% if busy %} disabled{% endif %}>Queue it</button></form>
     </div>
 
     <form id="chat-composer" method="post" action="/chats/{{ chat_id }}/send">
@@ -85,8 +85,8 @@
         {% endif %}
         <label class="sr-only" for="composer-text">Message</label>
         <textarea id="composer-text" name="text" rows="2" required placeholder="Message Baton…" aria-label="Message Baton"></textarea>
-        <button id="composer-stop" type="button"{% if not busy %} hidden{% endif %}>{{ icon("i-stop", "sm") }}<span>Stop</span></button>
-        <button id="composer-send" class="primary" type="submit"{% if busy %} disabled{% endif %}>{{ icon("i-up", "sm") }}<span>Send</span></button>
+        <button id="composer-stop" class="btn btn-secondary" type="button"{% if not busy %} hidden{% endif %}>{{ icon("i-stop", "sm") }}<span>Stop</span></button>
+        <button id="composer-send" class="btn btn-primary" type="submit"{% if busy %} disabled{% endif %}>{{ icon("i-up", "sm") }}<span>Send</span></button>
       </div>
       {% if busy %}<p class="muted small composer-status"><span class="pulse" aria-hidden="true"></span>waiting for the model…</p>{% endif %}
     </form>

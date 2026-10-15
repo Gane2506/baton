@@ -32,13 +32,13 @@
   {% endif %}
   <div class="preview-controls">
     {% if preview.driver == 'agent' %}
-      <button type="button" class="primary" data-preview-action="takeover">Take over</button>
+      <button type="button" class="btn btn-primary" data-preview-action="takeover">Take over</button>
       <span class="preview-hint">Take control to type into the page (e.g. a password the agent is stuck on).</span>
     {% else %}
       <input type="password" class="preview-type" data-preview-type placeholder="Type into the page&hellip;"
              autocomplete="off" autocapitalize="off" spellcheck="false" aria-label="Type into the agent's browser">
-      <button type="button" class="primary" data-preview-action="send">Send</button>
-      <button type="button" data-preview-action="handback">Hand back</button>
+      <button type="button" class="btn btn-primary" data-preview-action="send">Send</button>
+      <button type="button" class="btn btn-secondary" data-preview-action="handback">Hand back</button>
       <span class="preview-hint">Enter sends &middot; Esc/Tab are forwarded &middot; or click the screenshot.</span>
     {% endif %}
   </div>

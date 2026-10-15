@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "macros.html" import csrf_input, icon with context %}
+{% from "macros.html" import csrf_input, field_label, icon with context %}
 {% block title %}Board{% endblock %}
 {% block content %}
 <div class="page-head">
@@ -22,11 +22,11 @@
   </div>
 </div>
 
-<details class="panel">
+<details class="disclosure">
   <summary>Add an idea</summary>
   <form method="post" action="/queue/add">
     {{ csrf_input() }}
-    <label class="muted" for="idea">Idea</label>
+    {{ field_label("idea", "idea") }}
     <textarea id="idea" name="idea" required placeholder="What to build, in plain words"></textarea>
     <div class="form-grid">
       <div>
@@ -65,8 +65,8 @@
       </div>
     </div>
     <div class="actions">
-      <button type="submit" formaction="/runs/new">{{ icon("i-run", "sm") }}Run now</button>
-      <button class="primary" type="submit" formaction="/queue/add">{{ icon("i-plus", "sm") }}Add to queue</button>
+      <button class="btn btn-secondary" type="submit" formaction="/runs/new">{{ icon("i-run", "sm") }}Run now</button>
+      <button class="btn btn-primary" type="submit" formaction="/queue/add">{{ icon("i-plus", "sm") }}Add to queue</button>
     </div>
   </form>
 </details>

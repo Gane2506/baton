@@ -68,9 +68,9 @@
       {% if c.diff_stat %}<dt>Diff</dt><dd>{{ c.diff_stat }}</dd>{% endif %}
     </dl>
     <div class="approval-actions">
-      <form class="inline" method="post" action="/runs/{{ c.run_id }}/approve">{{ csrf_input() }}<button type="submit" class="small primary">Approve</button></form>
-      <form class="inline approval-modify" method="post" action="/runs/{{ c.run_id }}/modify">{{ csrf_input() }}<input type="text" name="notes" placeholder="What should change?" aria-label="Requested changes" maxlength="500"><button type="submit" class="small">Request changes</button></form>
-      <form class="inline" method="post" action="/runs/{{ c.run_id }}/stop">{{ csrf_input() }}<button type="submit" class="small danger">Stop</button></form>
+      <form class="inline" method="post" action="/runs/{{ c.run_id }}/approve">{{ csrf_input() }}<button type="submit" class="btn btn-sm btn-primary">Approve</button></form>
+      <form class="inline approval-modify" method="post" action="/runs/{{ c.run_id }}/modify">{{ csrf_input() }}<input type="text" name="notes" placeholder="What should change?" aria-label="Requested changes" maxlength="500"><button type="submit" class="btn btn-sm btn-secondary">Request changes</button></form>
+      <form class="inline" method="post" action="/runs/{{ c.run_id }}/stop">{{ csrf_input() }}<button type="submit" class="btn btn-sm btn-danger">Stop</button></form>
     </div>
   </div>
   {% endfor %}
@@ -87,7 +87,7 @@
       <span class="turn-actions">
         {{ copy_button(e.text, "Copy message") }}
         {% if loop.last and e.kind == "assistant" %}
-        <form class="inline" method="post" action="/chats/{{ chat_id }}/retry">{{ csrf_input() }}<button type="submit" class="small" title="Regenerate this reply">{{ icon("i-resume", "sm") }}<span>Retry</span></button></form>
+        <form class="inline" method="post" action="/chats/{{ chat_id }}/retry">{{ csrf_input() }}<button type="submit" class="btn btn-sm btn-ghost" title="Regenerate this reply">{{ icon("i-resume", "sm") }}<span>Retry</span></button></form>
         {% endif %}
       </span>
     </div>

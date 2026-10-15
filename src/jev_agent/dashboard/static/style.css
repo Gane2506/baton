@@ -563,7 +563,7 @@ table { border-collapse: collapse; width: 100%; font-size: var(--fs-13); }
 th, td { text-align: left; padding: 7px 12px; border-bottom: 1px solid var(--border); vertical-align: top; }
 tr:last-child td { border-bottom: 0; }
 th {
-  font-size: var(--fs-11); font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em;
+  font-size: var(--text-xs); font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em;
   color: var(--muted); white-space: nowrap;
   background: var(--surface);
   position: sticky; top: 0;
@@ -874,6 +874,16 @@ details.panel[open] > summary { margin-bottom: var(--s3); }
 .weights input { width: 84px; }
 
 details.entity { border-bottom: 1px solid var(--border); padding: var(--s2) 0; }
+/* ---- settings editor: mode picker + tier warning --------------------------------
+   Moved here from an inline <style> block in templates/settings.html (2026-10-15):
+   the dashboard CSP forbids inline styles, so the inline block never applied and
+   the mode picker rendered as a raw fieldset. Kept byte-identical. */
+.mode-picker { border: 0; padding: 0; margin: 0; display: grid; gap: 8px; }
+.mode-picker legend { margin-bottom: 2px; }
+.mode-picker .check { align-items: flex-start; }
+.tier-warning { border: 1px solid color-mix(in srgb, var(--warn) 55%, transparent);
+  background: color-mix(in srgb, var(--warn) 10%, transparent);
+  border-radius: 8px; padding: 8px 10px; margin: 8px 0 0; }
 details.entity > summary { cursor: pointer; font-size: var(--fs-13); }
 /* ---- disclosure buttons -----------------------------------------------------
    "Add to …" expanders are REAL buttons that keep the native <details> /

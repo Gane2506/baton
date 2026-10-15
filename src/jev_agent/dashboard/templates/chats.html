@@ -49,7 +49,7 @@
         <input type="number" id="budget_usd" name="budget_usd" min="0.01" step="0.01" value="1.00">
       </div>
     </div>
-    <button class="primary" type="submit">{{ icon("i-plus", "sm") }}Create chat</button>
+    <button class="btn btn-primary" type="submit">{{ icon("i-plus", "sm") }}Create chat</button>
     <p class="hint">The chat's spend is its own: it is capped by this budget and counts toward no run.</p>
   </form>
 </section>
@@ -58,12 +58,12 @@
 <form class="inline" method="get" action="/chats">
   <label class="muted" for="q">Search</label>
   <input type="search" id="q" name="q" value="{{ q }}" placeholder="title, chat id, backend" maxlength="80">
-  <button type="submit">Search</button>
+  <button class="btn btn-secondary" type="submit">Search</button>
   {% if q %}<a href="/chats">Clear</a>{% endif %}
 </form>
 {% if chats %}
 <div class="table-wrap"><table>
-  <thead><tr><th>chat</th><th>updated</th><th>backend</th><th class="num">turns</th><th class="num">runs</th><th class="num">spent</th><th>actions</th></tr></thead>
+  <thead><tr><th>Chat</th><th>Updated</th><th>Backend</th><th class="num">Turns</th><th class="num">Runs</th><th class="num">Spent</th><th>Actions</th></tr></thead>
   <tbody>
   {% for meta, title in chats %}
     <tr>
@@ -78,9 +78,9 @@
       <td class="num">{{ meta.runs | length }}</td>
       <td class="num">{{ meta.spent_usd | usd }}<div class="muted small">of {{ meta.budget_usd | usd }}</div></td>
       <td>
-        <a class="button small" href="/chats/{{ meta.chat_id }}">Continue</a>
+        <a class="btn btn-sm btn-secondary" href="/chats/{{ meta.chat_id }}">Continue</a>
         <form class="inline" method="post" action="/chats/{{ meta.chat_id }}/delete" data-confirm="Delete chat {{ meta.chat_id }}? Its transcript and brief go away; runs it started are kept.">
-          {{ csrf_input() }}<button class="small danger" type="submit">Delete</button>
+          {{ csrf_input() }}<button class="btn btn-sm btn-danger" type="submit">Delete</button>
         </form>
       </td>
     </tr>
