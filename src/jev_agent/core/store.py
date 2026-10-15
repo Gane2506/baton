@@ -19,8 +19,35 @@ from pathlib import Path
 from types import TracebackType
 from typing import Literal, get_args
 
+from pydantic import BaseModel
+
 from jev_agent.config.schema import ShipMode
 from jev_agent.core.cache import CacheEntry, CacheStats
+from jev_agent.core.events import (
+    ACTOR_PIPELINE,
+    EVENT_SCHEMA_V,
+    AttemptFinishedPayload,
+    AttemptStartedPayload,
+    AttemptTestedPayload,
+    DecisionRecordedPayload,
+    DesignSetPayload,
+    Event,
+    EventType,
+    GateCheckedPayload,
+    LeaseClaimedPayload,
+    LeaseReleasedPayload,
+    LeaseTakenOverPayload,
+    PlanSetPayload,
+    RunCreatedPayload,
+    RunStateChangedPayload,
+    ShipRecordedPayload,
+    SpendAddedPayload,
+    TaskAssignedPayload,
+    TaskStateChangedPayload,
+    TasksUpsertedPayload,
+    ValidationRecordedPayload,
+    event_from_row,
+)
 from jev_agent.core.migrations import SchemaVersionError, apply_migrations, configure_connection
 from jev_agent.core.models import (
     Decision,
@@ -298,17 +325,37 @@ def new_run_id() -> str:
 class Store:
     """Persistent state for runs. Open with `Store.open(path)`; use as a context manager."""
 
-    def __init__(self, conn: sqlite3.Connection, *, clock: Callable[[], str] | None = None) -> None:
+    def __init__(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        clock: Callable[[], str] | None = None,
+        events_enabled: bool = True,
+    ) -> None:
         self._conn = conn
         self._clock = _now if clock is None else clock
+        # Kill switch (`[events] enabled = false`): no event is emitted and the event
+        # commands report the log as disabled. The snapshot tables are unaffected.
+        self._events_enabled = events_enabled
 
     @property
     def connection(self) -> sqlite3.Connection:
         """The underlying connection, for the repo-scope lesson tables (`core/learning.py`)."""
         return self._conn
 
+    @property
+    def events_enabled(self) -> bool:
+        """Whether the event log is being written (`[events] enabled`)."""
+        return self._events_enabled
+
     @classmethod
-    def open(cls, path: Path, *, clock: Callable[[], str] | None = None) -> Store:
+    def open(
+        cls,
+        path: Path,
+        *,
+        clock: Callable[[], str] | None = None,
+        events_enabled: bool = True,
+    ) -> Store:
         """Open (creating if needed) the database at `path` and apply pending migrations."""
         path.parent.mkdir(parents=True, exist_ok=True)
         # isolation_level=None: autocommit, transactions are managed explicitly by _tx().
@@ -320,7 +367,7 @@ class Store:
         except BaseException:
             conn.close()
             raise
-        return cls(conn, clock=clock)
+        return cls(conn, clock=clock, events_enabled=events_enabled)
 
     def close(self) -> None:
         self._conn.close()
@@ -346,6 +393,143 @@ class Store:
             self._conn.rollback()
             raise
         self._conn.commit()
+
+    # ---- event log (docs/events.md) --------------------------------------------------------
+
+    def _emit(
+        self,
+        db: sqlite3.Connection,
+        run_id: str,
+        event_type: EventType,
+        payload: BaseModel,
+        *,
+        actor: str = ACTOR_PIPELINE,
+        parent_run_seq: int | None = None,
+        synthetic: bool = False,
+    ) -> int | None:
+        """Append one event to the run's log. Call only from inside the caller's `_tx()`
+        block: the event and the state change it describes commit atomically, and
+        `run_seq = MAX(run_seq)+1` in the same transaction keeps per-run ordering
+        gapless under the single-writer invariant (the lease allows one driver per run;
+        `jev cancel` serializes on the write lock). Returns the event's `run_seq`, or
+        None when the log is disabled. If the insert fails the whole transaction rolls
+        back, so the state write and the event never diverge."""
+        if not self._events_enabled:
+            return None
+        row = db.execute(
+            "SELECT COALESCE(MAX(run_seq), 0) AS tip FROM run_events WHERE run_id = ?",
+            (run_id,),
+        ).fetchone()
+        run_seq = int(row["tip"]) + 1
+        db.execute(
+            "INSERT INTO run_events (run_id, run_seq, type, schema_v, ts, actor,"
+            " parent_run_seq, synthetic, payload_json)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                run_id,
+                run_seq,
+                event_type.value,
+                EVENT_SCHEMA_V,
+                self._clock(),
+                actor,
+                parent_run_seq,
+                int(synthetic),
+                payload.model_dump_json(),
+            ),
+        )
+        return run_seq
+
+    def emit(
+        self,
+        run_id: str,
+        event_type: EventType,
+        payload: BaseModel,
+        *,
+        actor: str = ACTOR_PIPELINE,
+        parent_run_seq: int | None = None,
+        synthetic: bool = False,
+    ) -> int | None:
+        """Append an event in its own transaction, for events with no snapshot mutation
+        (`decision.requested`, `run.resumed`, backfill). Events paired with a state
+        change are emitted via `_emit` inside that change's `_tx()` instead."""
+        if not self._events_enabled:
+            return None
+        with self._tx() as db:
+            return self._emit(
+                db,
+                run_id,
+                event_type,
+                payload,
+                actor=actor,
+                parent_run_seq=parent_run_seq,
+                synthetic=synthetic,
+            )
+
+    def list_events(
+        self,
+        run_id: str,
+        *,
+        event_types: Collection[EventType] | None = None,
+        after_seq: int = 0,
+        limit: int | None = None,
+    ) -> list[Event]:
+        """The run's events in `run_seq` order. Raises NotFoundError for an unknown run."""
+        self._require_run(run_id)
+        query = "SELECT * FROM run_events WHERE run_id = ? AND run_seq > ?"
+        params: list[object] = [run_id, after_seq]
+        if event_types:
+            marks = ", ".join("?" for _ in event_types)
+            query += f" AND type IN ({marks})"
+            params.extend(t.value for t in event_types)
+        query += " ORDER BY run_seq"
+        if limit is not None:
+            query += " LIMIT ?"
+            params.append(limit)
+        rows = self._conn.execute(query, params).fetchall()
+        return [event_from_row(row) for row in rows]
+
+    def latest_event_seq(
+        self,
+        run_id: str,
+        event_type: EventType,
+        *,
+        task_id: str | None = None,
+        attempt_id: int | None = None,
+    ) -> int | None:
+        """Newest `run_seq` of `event_type`, optionally filtered by the payload's
+        `task_id`/`attempt_id`. Used to link causal parents (`parent_run_seq`)."""
+        return self._latest_event_seq_locked(
+            self._conn, run_id, event_type, task_id=task_id, attempt_id=attempt_id
+        )
+
+    @staticmethod
+    def _latest_event_seq_locked(
+        db: sqlite3.Connection,
+        run_id: str,
+        event_type: EventType,
+        *,
+        task_id: str | None = None,
+        attempt_id: int | None = None,
+    ) -> int | None:
+        """`latest_event_seq` on an explicit connection (inside a `_tx()` block)."""
+        query = "SELECT MAX(run_seq) AS tip FROM run_events WHERE run_id = ? AND type = ?"
+        params: list[object] = [run_id, event_type.value]
+        if task_id is not None:
+            query += " AND json_extract(payload_json, '$.task_id') = ?"
+            params.append(task_id)
+        if attempt_id is not None:
+            query += " AND json_extract(payload_json, '$.attempt_id') = ?"
+            params.append(attempt_id)
+        row = db.execute(query, params).fetchone()
+        return None if row is None or row["tip"] is None else int(row["tip"])
+
+    def event_tip(self, run_id: str) -> int:
+        """Highest `run_seq` in the run's log (0 when the log is empty)."""
+        row = self._conn.execute(
+            "SELECT COALESCE(MAX(run_seq), 0) AS tip FROM run_events WHERE run_id = ?",
+            (run_id,),
+        ).fetchone()
+        return int(row["tip"])
 
     # ---- runs ----------------------------------------------------------------------------
 
@@ -387,6 +571,18 @@ class Store:
                             medium_folder,
                         ),
                     )
+                    self._emit(
+                        db,
+                        run_id,
+                        EventType.RUN_CREATED,
+                        RunCreatedPayload(
+                            idea_text=idea.text,
+                            quality_level=str(quality_level),
+                            plan_only=plan_only,
+                            ship_mode=None if ship_mode is None else str(ship_mode),
+                            autonomy_mode=autonomy_mode,
+                        ),
+                    )
             except sqlite3.IntegrityError:
                 continue
             return self.get_run(run_id)
@@ -411,6 +607,7 @@ class Store:
         resume_state: RunState | None = None,
         *,
         unless: Collection[RunState] = (),
+        actor: str = ACTOR_PIPELINE,
     ) -> bool:
         """Set the run's state. `reason` (why it stopped) replaces any previous reason.
 
@@ -420,32 +617,89 @@ class Store:
         With `unless`, the change happens only if the run is not in one of those states, in the
         same statement, so a concurrent write (`jev cancel` from another shell, the dashboard)
         cannot be overwritten between a check and the update. Returns whether it changed.
+
+        `actor` records who made the change in the event log (`jev cancel` passes "human").
         """
         guard = ""
         if unless:
             guard = f" AND state NOT IN ({', '.join('?' for _ in unless)})"
         with self._tx() as db:
+            row = db.execute("SELECT state FROM runs WHERE id = ?", (run_id,)).fetchone()
+            if row is None:
+                raise NotFoundError(f"run {run_id!r} not found")
+            from_state = str(row["state"])
             cur = db.execute(
                 "UPDATE runs SET state = ?, reason = ?, resume_state = ?, updated_at = ?"
                 f" WHERE id = ?{guard}",
                 (state, reason, resume_state, self._clock(), run_id, *unless),
             )
             if cur.rowcount == 0:
-                self._require_run(run_id)
-        return cur.rowcount == 1
+                return False
+            self._emit(
+                db,
+                run_id,
+                EventType.RUN_STATE_CHANGED,
+                RunStateChangedPayload(
+                    from_state=from_state,
+                    to_state=str(state),
+                    reason=reason,
+                    resume_state=None if resume_state is None else str(resume_state),
+                ),
+                actor=actor,
+            )
+        return True
 
     def set_run_validation(self, run_id: str, validation: ValidationResult | None) -> None:
         value = None if validation is None else validation.model_dump_json()
-        self._update_run(run_id, "validation_json = ?", (value,))
+        with self._tx() as db:
+            cur = db.execute(
+                "UPDATE runs SET validation_json = ?, updated_at = ? WHERE id = ?",
+                (value, self._clock(), run_id),
+            )
+            if cur.rowcount == 0:
+                raise NotFoundError(f"run {run_id!r} not found")
+            if validation is not None:
+                self._emit(
+                    db,
+                    run_id,
+                    EventType.VALIDATION_RECORDED,
+                    ValidationRecordedPayload(
+                        verdict=str(validation.verdict),
+                        issues=list(validation.issues),
+                        validation=validation.model_dump(mode="json"),
+                    ),
+                )
 
     def set_run_plan(self, run_id: str, plan: Plan, plan_round: int) -> None:
-        self._update_run(
-            run_id, "plan_json = ?, plan_round = ?", (plan.model_dump_json(), plan_round)
-        )
+        with self._tx() as db:
+            cur = db.execute(
+                "UPDATE runs SET plan_json = ?, plan_round = ?, updated_at = ? WHERE id = ?",
+                (plan.model_dump_json(), plan_round, self._clock(), run_id),
+            )
+            if cur.rowcount == 0:
+                raise NotFoundError(f"run {run_id!r} not found")
+            self._emit(
+                db,
+                run_id,
+                EventType.PLAN_SET,
+                PlanSetPayload(round=plan_round, plan=plan.model_dump(mode="json")),
+            )
 
     def set_run_design(self, run_id: str, design: DesignDoc) -> None:
         """Persist the designer's design doc for the run (the DESIGNING pipeline stage)."""
-        self._update_run(run_id, "design_json = ?", (design.model_dump_json(),))
+        with self._tx() as db:
+            cur = db.execute(
+                "UPDATE runs SET design_json = ?, updated_at = ? WHERE id = ?",
+                (design.model_dump_json(), self._clock(), run_id),
+            )
+            if cur.rowcount == 0:
+                raise NotFoundError(f"run {run_id!r} not found")
+            self._emit(
+                db,
+                run_id,
+                EventType.DESIGN_SET,
+                DesignSetPayload(design=design.model_dump(mode="json")),
+            )
 
     def set_run_learning(self, run_id: str, profile: str | None) -> None:
         """Change the learning profile the run uses from now on (None: learning off)."""
@@ -478,7 +732,12 @@ class Store:
         self._update_run(run_id, "spend_usd = spend_usd + ?", (usd,))
 
     def add_spend(self, run_id: str, task_id: str | None, usd: float) -> None:
-        """Add `usd` to the run total and, if `task_id` is given, to that task, atomically."""
+        """Add `usd` to the run total and, if `task_id` is given, to that task, atomically.
+
+        Emits `spend.added` with the running total. Spend is the noisiest event source,
+        so only this method emits: per-attempt and per-decision costs, never streaming
+        updates (`add_run_spend` stays snapshot-only).
+        """
         with self._tx() as db:
             cur = db.execute(
                 "UPDATE runs SET spend_usd = spend_usd + ?, updated_at = ? WHERE id = ?",
@@ -493,6 +752,15 @@ class Store:
                 )
                 if cur.rowcount == 0:
                     raise NotFoundError(f"task {task_id!r} not found in run {run_id!r}")
+            total = db.execute(
+                "SELECT spend_usd FROM runs WHERE id = ?", (run_id,)
+            ).fetchone()["spend_usd"]
+            self._emit(
+                db,
+                run_id,
+                EventType.SPEND_ADDED,
+                SpendAddedPayload(usd=usd, task_id=task_id, running_total=float(total)),
+            )
 
     def _update_run(self, run_id: str, assignments: str, params: tuple[object, ...]) -> None:
         with self._tx() as db:
@@ -528,6 +796,16 @@ class Store:
                     " position = excluded.position, card_json = excluded.card_json",
                     (run_id, card.id, position, card.model_dump_json(), TaskState.PENDING),
                 )
+            plan_round = db.execute(
+                "SELECT plan_round FROM runs WHERE id = ?", (run_id,)
+            ).fetchone()["plan_round"]
+            self._emit(
+                db,
+                run_id,
+                EventType.TASKS_UPSERTED,
+                TasksUpsertedPayload(task_ids=ids, from_plan_round=int(plan_round or 0)),
+                parent_run_seq=self._latest_event_seq_locked(db, run_id, EventType.PLAN_SET),
+            )
 
     def get_task(self, run_id: str, task_id: str) -> TaskRecord:
         row = self._conn.execute(
@@ -546,13 +824,49 @@ class Store:
         return [_task_record(row) for row in rows]
 
     def set_task_state(
-        self, run_id: str, task_id: str, state: TaskState, note: str | None = None
+        self,
+        run_id: str,
+        task_id: str,
+        state: TaskState,
+        note: str | None = None,
+        *,
+        parent_run_seq: int | None = None,
     ) -> None:
-        """Set the task's state. A non-None `note` replaces the task's note."""
-        if note is None:
-            self._update_task(run_id, task_id, "state = ?", (state,))
-        else:
-            self._update_task(run_id, task_id, "state = ?, note = ?", (state, note))
+        """Set the task's state. A non-None `note` replaces the task's note.
+
+        `parent_run_seq` links the causal parent event (the attempt or decision that
+        caused this transition) when the caller knows it; the bisect blame walk falls
+        back to the task's previous event otherwise.
+        """
+        with self._tx() as db:
+            row = db.execute(
+                "SELECT state FROM tasks WHERE run_id = ? AND id = ?", (run_id, task_id)
+            ).fetchone()
+            if row is None:
+                raise NotFoundError(f"task {task_id!r} not found in run {run_id!r}")
+            from_state = str(row["state"])
+            if note is None:
+                db.execute(
+                    "UPDATE tasks SET state = ? WHERE run_id = ? AND id = ?",
+                    (state, run_id, task_id),
+                )
+            else:
+                db.execute(
+                    "UPDATE tasks SET state = ?, note = ? WHERE run_id = ? AND id = ?",
+                    (state, note, run_id, task_id),
+                )
+            self._emit(
+                db,
+                run_id,
+                EventType.TASK_STATE_CHANGED,
+                TaskStateChangedPayload(
+                    task_id=task_id,
+                    from_state=from_state,
+                    to_state=str(state),
+                    note=note,
+                ),
+                parent_run_seq=parent_run_seq,
+            )
 
     def set_task_assignment(
         self,
@@ -569,7 +883,38 @@ class Store:
         params: tuple[object, ...] = (state, worker, model, effort)
         if note is not None:
             assignments, params = assignments + ", note = ?", (*params, note)
-        self._update_task(run_id, task_id, assignments, params)
+        with self._tx() as db:
+            cur = db.execute(
+                f"UPDATE tasks SET {assignments} WHERE run_id = ? AND id = ?",
+                (*params, run_id, task_id),
+            )
+            if cur.rowcount == 0:
+                raise NotFoundError(f"task {task_id!r} not found in run {run_id!r}")
+            decision_id: int | None = None
+            parent = self._latest_event_seq_locked(
+                db, run_id, EventType.DECISION_RECORDED, task_id=task_id
+            )
+            if parent is not None:
+                row = db.execute(
+                    "SELECT payload_json FROM run_events WHERE run_id = ? AND run_seq = ?",
+                    (run_id, parent),
+                ).fetchone()
+                if row is not None:
+                    decision_id = json.loads(row["payload_json"]).get("decision_id")
+            self._emit(
+                db,
+                run_id,
+                EventType.TASK_ASSIGNED,
+                TaskAssignedPayload(
+                    task_id=task_id,
+                    state=str(state),
+                    worker=worker,
+                    model=model,
+                    effort=effort,
+                    decision_id=decision_id,
+                ),
+                parent_run_seq=parent,
+            )
 
     def increment_task_attempts(self, run_id: str, task_id: str) -> int:
         """Add one to the task's attempt counter and return the new value."""
@@ -641,11 +986,32 @@ class Store:
                 ),
             )
             assert cur.lastrowid is not None
+            self._emit(
+                db,
+                run_id,
+                EventType.ATTEMPT_STARTED,
+                AttemptStartedPayload(
+                    attempt_id=cur.lastrowid,
+                    task_id=task_id,
+                    attempt_no=attempt_no,
+                    role=str(role),
+                    worker=worker,
+                    model=model,
+                    lesson_ids=list(lesson_ids),
+                    log_path=None if log_path is None else str(log_path),
+                ),
+            )
             return cur.lastrowid
 
     def finish_attempt(self, attempt_id: int, result: WorkerResult) -> None:
         """Store the worker's result. The log path is taken from `result.raw_log_path`."""
         with self._tx() as db:
+            row = db.execute(
+                "SELECT run_id, task_id, started_at FROM attempts WHERE id = ?", (attempt_id,)
+            ).fetchone()
+            if row is None:
+                raise NotFoundError(f"attempt {attempt_id} not found")
+            now = self._clock()
             cur = db.execute(
                 "UPDATE attempts SET status = ?, result_json = ?, cost_usd = ?, log_path = ?,"
                 " finished_at = ? WHERE id = ?",
@@ -654,12 +1020,60 @@ class Store:
                     result.model_dump_json(),
                     result.cost_usd,
                     str(result.raw_log_path),
-                    self._clock(),
+                    now,
                     attempt_id,
                 ),
             )
             if cur.rowcount == 0:
                 raise NotFoundError(f"attempt {attempt_id} not found")
+            duration_s: float | None = None
+            if row["started_at"]:
+                try:
+                    duration_s = (
+                        datetime.fromisoformat(now) - datetime.fromisoformat(row["started_at"])
+                    ).total_seconds()
+                except ValueError:
+                    duration_s = None
+            parent = self._latest_event_seq_locked(
+                db, str(row["run_id"]), EventType.ATTEMPT_STARTED, attempt_id=attempt_id
+            )
+            self._emit(
+                db,
+                str(row["run_id"]),
+                EventType.ATTEMPT_FINISHED,
+                AttemptFinishedPayload(
+                    attempt_id=attempt_id,
+                    task_id=row["task_id"],
+                    status=str(result.status),
+                    summary=result.summary,
+                    cost_usd=result.cost_usd,
+                    duration_s=duration_s,
+                ),
+                parent_run_seq=parent,
+            )
+
+    def emit_attempt_tests(
+        self, run_id: str, task_id: str | None, attempt_no: int, tests: str
+    ) -> int | None:
+        """Record a coder attempt's test outcome (`attempt.tested`: "passed" | "failed" |
+        "skipped"). The attempt row already exists (`finish_attempt` ran first); this is a
+        standalone annotation event, and what `jev bisect --test` scans for."""
+        row = self._conn.execute(
+            "SELECT id FROM attempts WHERE run_id = ? AND IFNULL(task_id, '') = IFNULL(?, '')"
+            " AND attempt_no = ? ORDER BY id DESC LIMIT 1",
+            (run_id, task_id, attempt_no),
+        ).fetchone()
+        if row is None:
+            return None
+        attempt_id = int(row["id"])
+        return self.emit(
+            run_id,
+            EventType.ATTEMPT_TESTED,
+            AttemptTestedPayload(attempt_id=attempt_id, task_id=task_id, tests=tests),
+            parent_run_seq=self.latest_event_seq(
+                run_id, EventType.ATTEMPT_FINISHED, attempt_id=attempt_id
+            ),
+        )
 
     def get_attempt(self, attempt_id: int) -> AttemptRecord:
         row = self._conn.execute("SELECT * FROM attempts WHERE id = ?", (attempt_id,)).fetchone()
@@ -682,8 +1096,14 @@ class Store:
         request: DecisionRequest,
         decision: Decision,
         fallback_reason: str | None = None,
+        *,
+        parent_run_seq: int | None = None,
     ) -> int:
-        """Store one dispatcher call; returns the decision id."""
+        """Store one dispatcher call; returns the decision id.
+
+        `parent_run_seq` links the causal parent — normally the `decision.requested`
+        event for this same decision, passed by the caller (`harness.decide`).
+        """
         with self._tx() as db:
             self._require_run(run_id)
             if task_id is not None:
@@ -707,6 +1127,21 @@ class Store:
                 ),
             )
             assert cur.lastrowid is not None
+            self._emit(
+                db,
+                run_id,
+                EventType.DECISION_RECORDED,
+                DecisionRecordedPayload(
+                    decision_id=cur.lastrowid,
+                    point=str(request.point),
+                    task_id=task_id,
+                    answers=dict(decision.answers),
+                    dispatcher=decision.dispatcher,
+                    model=decision.model,
+                    fallback_reason=fallback_reason,
+                ),
+                parent_run_seq=parent_run_seq,
+            )
             return cur.lastrowid
 
     def list_decisions(self, run_id: str) -> list[DecisionRecord]:
@@ -739,6 +1174,22 @@ class Store:
                 ),
             )
             assert cur.lastrowid is not None
+            self._emit(
+                db,
+                run_id,
+                EventType.GATE_CHECKED,
+                GateCheckedPayload(
+                    report_id=cur.lastrowid,
+                    task_id=result.task_id,
+                    scope=str(result.scope),
+                    level=str(result.level),
+                    blocked=result.blocked,
+                    top_findings=result.top_findings(),
+                ),
+                parent_run_seq=self._latest_event_seq_locked(
+                    db, run_id, EventType.ATTEMPT_FINISHED, task_id=result.task_id
+                ),
+            )
             return cur.lastrowid
 
     def list_quality_reports(self, run_id: str) -> list[QualityReportRecord]:
@@ -793,6 +1244,12 @@ class Store:
             )
             assert cur.lastrowid is not None
             pr_id = cur.lastrowid
+            self._emit(
+                db,
+                run_id,
+                EventType.SHIP_RECORDED,
+                ShipRecordedPayload(pr_id=pr_id, number=number, state=str(state), ci_status=None),
+            )
         return self.get_shipped_pr(pr_id)
 
     def get_shipped_pr(self, pr_id: int) -> ShippedPrRecord:
@@ -856,6 +1313,18 @@ class Store:
             )
             if cur.rowcount == 0:
                 raise NotFoundError(f"shipped PR {pr_id} not found")
+            row = db.execute(
+                "SELECT run_id, number FROM shipped_prs WHERE id = ?", (pr_id,)
+            ).fetchone()
+            assert row is not None
+            self._emit(
+                db,
+                str(row["run_id"]),
+                EventType.SHIP_RECORDED,
+                ShipRecordedPayload(
+                    pr_id=pr_id, number=row["number"], state=str(state), ci_status=ci_status
+                ),
+            )
         return self.get_shipped_pr(pr_id)
 
     def set_run_kpis(self, run_id: str, kpis_json: str) -> None:
@@ -885,12 +1354,22 @@ class Store:
         return None if row is None else _run_lease(row)
 
     def claim_run_lease(
-        self, run_id: str, token: str, pid: int, host: str, stale: Callable[[RunLease], bool]
+        self,
+        run_id: str,
+        token: str,
+        pid: int,
+        host: str,
+        stale: Callable[[RunLease], bool],
+        *,
+        reason: str = "drive",
     ) -> RunLease | None:
         """Take the run's lease unless a holder that `stale` calls live has it.
 
         The check and the write are one transaction, so two claimers never both win. Returns
         None when the lease was taken (a stale holder's lease is replaced), else the holder.
+        Emits `lease.claimed` for a fresh claim, `lease.taken_over` when a stale holder's
+        lease is replaced. `reason` says why the claim was made ("start" | "approve" |
+        "resume" | "recovery" | "drive").
         """
         with self._tx() as db:
             self._require_run(run_id)
@@ -907,6 +1386,23 @@ class Store:
                 " acquired_at = excluded.acquired_at, heartbeat_at = excluded.heartbeat_at",
                 (run_id, token, pid, host, now, now),
             )
+            if row is None:
+                self._emit(
+                    db,
+                    run_id,
+                    EventType.LEASE_CLAIMED,
+                    LeaseClaimedPayload(pid=pid, host=host, reason=reason),
+                )
+            else:
+                old = _run_lease(row)
+                self._emit(
+                    db,
+                    run_id,
+                    EventType.LEASE_TAKEN_OVER,
+                    LeaseTakenOverPayload(
+                        old_pid=old.pid, old_host=old.host, new_pid=pid, new_host=host
+                    ),
+                )
         return None
 
     def renew_run_lease(self, run_id: str, token: str) -> bool:
@@ -921,7 +1417,25 @@ class Store:
     def release_run_lease(self, run_id: str, token: str) -> None:
         """Drop the lease if it is still held with `token` (a new holder's lease stays)."""
         with self._tx() as db:
+            row = db.execute(
+                "SELECT acquired_at FROM run_leases WHERE run_id = ? AND token = ?",
+                (run_id, token),
+            ).fetchone()
             db.execute("DELETE FROM run_leases WHERE run_id = ? AND token = ?", (run_id, token))
+            if row is not None and row["acquired_at"]:
+                try:
+                    held_s = (
+                        datetime.fromisoformat(self._clock())
+                        - datetime.fromisoformat(row["acquired_at"])
+                    ).total_seconds()
+                except ValueError:
+                    held_s = None
+                self._emit(
+                    db,
+                    run_id,
+                    EventType.LEASE_RELEASED,
+                    LeaseReleasedPayload(held_s=held_s),
+                )
 
     # ---- settings (set by `jev learning`) --------------------------------------------------
 

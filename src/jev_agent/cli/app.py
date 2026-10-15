@@ -12,12 +12,14 @@ from jev_agent.cli.dashboard_cmd import dashboard
 from jev_agent.cli.demo_cmds import demo_app
 from jev_agent.cli.design_cmds import design_app
 from jev_agent.cli.doctor_cmd import doctor
+from jev_agent.cli.events_cmds import events_app
 from jev_agent.cli.init_cmd import init
 from jev_agent.cli.laya_cmds import laya_app
 from jev_agent.cli.learning_cmds import learning_app
 from jev_agent.cli.models_cmds import models_app
 from jev_agent.cli.quality_cmds import quality_app
 from jev_agent.cli.queue_cmds import queue_app
+from jev_agent.cli.replay_cmds import bisect, replay
 from jev_agent.cli.run_cmds import approve, cancel, resume, run
 from jev_agent.cli.scheduler_cmds import scheduler_app
 from jev_agent.cli.server_cmds import browser_app, mcp_app, profile_app
@@ -81,6 +83,9 @@ app.command("kpi", rich_help_panel=PANEL_OBSERVE)(kpi)
 app.add_typer(capbench_app, name="capbench", rich_help_panel=PANEL_OBSERVE)
 app.add_typer(cache_app, name="cache", rich_help_panel=PANEL_OBSERVE)
 app.add_typer(quality_app, name="quality", rich_help_panel=PANEL_OBSERVE)
+app.add_typer(events_app, name="events", rich_help_panel=PANEL_OBSERVE)
+app.command("replay", rich_help_panel=PANEL_OBSERVE)(replay)
+app.command("bisect", rich_help_panel=PANEL_OBSERVE)(bisect)
 
 # --- Configure: set up the environment and tooling ---
 app.command("doctor", rich_help_panel=PANEL_CONFIGURE)(doctor)

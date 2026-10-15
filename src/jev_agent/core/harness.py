@@ -26,6 +26,10 @@ from jev_agent.core.cache import (
     tuned_laya_fingerprint,
 )
 from jev_agent.core.commands import CommandRunner
+from jev_agent.core.events import (
+    DecisionRequestedPayload,
+    EventType,
+)
 from jev_agent.core.learning import (
     Learning,
     LearningError,
@@ -253,6 +257,20 @@ class Harness:
                 served_semantic = True
             elif self.cache.semantic_mode == "shadow":
                 shadow = candidates  # measure only, never serve
+        # The request goes on the event log first (its own transaction: no snapshot
+        # row is written for it); the recorded event below names it as its causal
+        # parent. This happens on cache hits too — the log records what happened.
+        motivated_by = self.store.latest_event_seq(
+            run_id, EventType.ATTEMPT_FINISHED, task_id=task_id
+        )
+        requested_seq = self.store.emit(
+            run_id,
+            EventType.DECISION_REQUESTED,
+            DecisionRequestedPayload(
+                point=str(req.point), task_id=task_id, questions=req.questions
+            ),
+            parent_run_seq=motivated_by,
+        )
         if entry is not None:
             decision = self._served_decision(entry, semantic=served_semantic)
             fallback_reason = None
@@ -266,7 +284,10 @@ class Harness:
                 raise Halt(RunState.FAILED, reason) from exc
             decision = guarded.decision
             fallback_reason = guarded.fallback_reason
-        decision_id = self.store.record_decision(run_id, task_id, req, decision, fallback_reason)
+        decision_id = self.store.record_decision(
+            run_id, task_id, req, decision, fallback_reason,
+            parent_run_seq=requested_seq,
+        )
         if (
             entry is None
             and key is not None

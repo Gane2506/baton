@@ -220,6 +220,7 @@ class TaskRunner:
                 card.test_command, workdir, path, self.test_timeout_s
             )
             tests = "passed" if test_result.ok else "failed"
+        h.store.emit_attempt_tests(run_id, task.id, attempt, tests)
         if tests == "failed":
             return AttemptOutcome(output, tests, test_result)
 

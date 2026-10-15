@@ -496,6 +496,29 @@ MIGRATIONS: list[str] = [
         created_at TEXT NOT NULL
     );
     """,
+    # 18: event-sourced execution state (docs/events.md): the append-only `run_events`
+    # log every run mutation is dual-written to, plus `run_leases.event_seq` so a
+    # driver can record how far its event log has got (used by `jev status` in Phase 3).
+    # The single-writer invariant (one lease holder per run; `run_seq = MAX(run_seq)+1`
+    # inside the same transaction as the state write) keeps per-run ordering gapless.
+    """
+    CREATE TABLE run_events (
+        seq            INTEGER PRIMARY KEY AUTOINCREMENT,  -- global insertion order
+        run_id         TEXT NOT NULL REFERENCES runs (id) ON DELETE CASCADE,
+        run_seq        INTEGER NOT NULL,                   -- per-run ordering
+        type           TEXT NOT NULL,
+        schema_v       INTEGER NOT NULL DEFAULT 1,
+        ts             TEXT NOT NULL,
+        actor          TEXT NOT NULL,
+        parent_run_seq INTEGER,                            -- causal parent in this run
+        synthetic      INTEGER NOT NULL DEFAULT 0,
+        payload_json   TEXT NOT NULL,
+        UNIQUE (run_id, run_seq)
+    );
+    CREATE INDEX run_events_run ON run_events (run_id, run_seq);
+    CREATE INDEX run_events_type ON run_events (run_id, type);
+    ALTER TABLE run_leases ADD COLUMN event_seq INTEGER;
+    """,
 ]
 
 SCHEMA_VERSION = len(MIGRATIONS)

@@ -357,6 +357,17 @@ gated on sustained ≥ 0.99 agreement (`min_agreement`); below it, serving auto-
 | `mode` | `"off"` | `"off"`, `"shadow"` (measure only, never serve), or `"serve"`. |
 | `min_agreement` | `0.98` | Live-sampling floor: below it, semantic serving auto-disables. |
 
+## `[events]`
+
+The event-sourced execution log: every run mutation is dual-written as an append-only event
+in `run_events`, which powers `jev events`, `jev replay` and `jev bisect`. See
+[events.md](events.md). On by default; the snapshot tables the pipeline reads are unaffected
+either way.
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `enabled` | `true` | Write the event log. Turn off if the log ever misbehaves; `jev replay` / `jev bisect` then report the log as disabled. |
+
 ## `[ship]`
 
 `jev ship RUN` pushes a DONE run's result branch to a new branch on your remote and opens a

@@ -98,12 +98,14 @@ async def hold_run_lease(
     pid: int | None = None,
     host: str | None = None,
     alive: Callable[[int], bool] = pid_alive,
+    reason: str = "drive",
     clock: Callable[[], datetime] = lambda: datetime.now(UTC),
 ) -> AsyncIterator[None]:
     """Hold `run_id`'s lease for the block, renewing it; release it at the end.
 
     Raises `RunInUseError` up front when a live holder has it. If the lease is taken over
     meanwhile, the block is cancelled and `RunLeaseLostError` is raised in its place.
+    `reason` is recorded in the `lease.claimed`/`lease.taken_over` event.
     """
     pid = os.getpid() if pid is None else pid
     host = socket.gethostname() if host is None else host
@@ -112,7 +114,7 @@ async def hold_run_lease(
     def stale(lease: RunLease) -> bool:
         return is_stale(lease, now=clock(), host=host, alive=alive, ttl_s=ttl_s)
 
-    holder = store.claim_run_lease(run_id, token, pid, host, stale)
+    holder = store.claim_run_lease(run_id, token, pid, host, stale, reason=reason)
     if holder is not None:
         raise RunInUseError(
             f"run {run_id} is in use by another jev process, {describe_holder(holder)}; "

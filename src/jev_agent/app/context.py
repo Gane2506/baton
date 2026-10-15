@@ -347,14 +347,20 @@ def state_db_path(root: Path) -> Path:
 
 
 @contextmanager
-def open_store(root: Path, *, create: bool = True) -> Iterator[Store]:
+def open_store(root: Path, *, create: bool = True, events_enabled: bool = True) -> Iterator[Store]:
     """The repo's state database. With `create=False` (read-only commands) a missing database
     is not created: the store is an empty in-memory one with the current schema, so the
     command shows its usual "nothing yet" output and leaves no `.jev/` behind (issue #26).
-    A database written by a newer jev is a `JevError`, not a traceback (issue #25)."""
+    A database written by a newer jev is a `JevError`, not a traceback (issue #25).
+
+    `events_enabled` is the `[events] enabled` kill switch: with False no event is
+    emitted to `run_events`."""
     path = state_db_path(root)
     try:
-        store = Store.open(path if create or path.exists() else Path(":memory:"))
+        store = Store.open(
+            path if create or path.exists() else Path(":memory:"),
+            events_enabled=events_enabled,
+        )
     except SchemaVersionError as exc:
         raise JevError(str(exc)) from exc
     with store:
@@ -377,7 +383,7 @@ def open_repo(repo: Path, *, create: bool = True) -> Iterator[RepoContext]:
     dispatcher or model list are built, and nothing is fetched."""
     root = repo_root(repo)
     config = repo_config(root)
-    with open_store(root, create=create) as store:
+    with open_store(root, create=create, events_enabled=config.events.enabled) as store:
         learning = Learning.for_store(store)
         try:
             yield RepoContext(root, config, store, learning)
@@ -396,7 +402,7 @@ def open_context(repo: Path) -> Iterator[AppContext]:
     registry, worker_warnings = build_registry(config, catalog)
     dispatcher, warnings = build_dispatcher(config)
     warnings += worker_warnings + free_warnings
-    with open_store(root) as store:
+    with open_store(root, events_enabled=config.events.enabled) as store:
         learning = Learning.for_store(store)
         try:
             pipeline = build_pipeline(
