@@ -40,6 +40,11 @@ Scope = Literal["repo", "shared"]
 MAX_LESSON_CHARS = 300
 RETIRE_AT_SCORE = -2.0  # a lesson whose score falls to this is retired automatically
 
+# Edge types stored in `lesson_edges` (shared migration 4). `derived-from` is a view over
+# `lessons.source_run` and `co-occurs-with` is computed on demand: neither is stored.
+GRAPH_EDGE_TYPES = ("supersedes", "contradicts", "applies-to")
+_EDGE_ORIGINS = ("manual", "learner", "backfill")
+
 # Repo settings written by `jev learning` (table `settings` in state.db).
 SETTING_ENABLED = "learning.enabled"  # "true" | "false"
 SETTING_PROFILE = "learning.profile"  # the active profile's name
@@ -120,7 +125,121 @@ class Lesson:
         return int(self.id[1:])
 
 
+@dataclass(frozen=True)
+class LessonEdge:
+    """One recorded graph edge. Lesson endpoints are display ids (`L12`/`S3`); module
+    endpoints are paths, qualified with the repo slug for shared profiles
+    (`baton:src/auth/login.py`). `derived-from` edges are never stored (see `EdgeView`)."""
+
+    src: str
+    edge: str  # one of GRAPH_EDGE_TYPES
+    dst: str
+    origin: str  # "manual" | "learner" | "backfill"
+
+
+@dataclass(frozen=True)
+class EdgeView:
+    """One edge touching a lesson, from the lesson's point of view. `contradicts` is
+    symmetric in display (one stored row shows up on both sides); `derived-from` is
+    computed from `lessons.source_run`, never stored."""
+
+    direction: str  # "out" | "in"
+    edge: str
+    other_type: str  # "lesson" | "run" | "task" | "module"
+    other: str  # display id, run id, or module path
+    origin: str  # "manual" | "learner" | "backfill" | "derived"
+
+
+@dataclass(frozen=True)
+class GraphStats:
+    """What `jev learning graph stats` shows."""
+
+    lessons: int
+    retired: int
+    edges: dict[str, int]  # by edge type, including derived-from
+    contradictions_open: int  # contradicts pairs with both sides active
+    top_modules: list[tuple[str, int]]  # module path, applies-to count
+
+
+@dataclass(frozen=True)
+class Suppression:
+    """One lesson dropped from injection by the contradiction rule."""
+
+    lesson: str  # the suppressed lesson's display id
+    kept: str  # the contradicting lesson that won
+    reason: str
+
+
+def normalize_module_path(tag: str) -> str | None:
+    """`tag` as a normalized module path, or None when it is not path-looking.
+
+    Path-looking means containing `/` or ending in `.py` (the design's rule). The path is
+    lowercased with leading `./` and surrounding slashes stripped, mirroring how
+    `context_terms` lowercases and prefix-matches paths. Used for deriving modules from
+    tags, where a strict rule keeps keyword tags from becoming module nodes.
+    """
+    path = tag.strip().removeprefix("./").strip("/")
+    if not path or ("/" not in path and not path.lower().endswith(".py")):
+        return None
+    return path.lower()
+
+
+def normalize_module_ref(ref: str) -> str | None:
+    """Lenient module normalization for explicit input (CLI args, the learner's
+    `applies_to`, `--module` filters): lowercased with `./` and slashes stripped. Bare
+    directory names (`src`) are allowed; empty or whitespace-containing refs are not."""
+    path = ref.strip().removeprefix("./").strip("/")
+    if not path or any(ch.isspace() for ch in path):
+        return None
+    return path.lower()
+
+
+def qualify_module(path: str, repo_slug: str | None) -> str:
+    """A module path as stored on edges: `slug:path` for shared profiles, plain otherwise."""
+    return f"{repo_slug}:{path}" if repo_slug else path
+
+
+def split_module_ref(ref: str) -> tuple[str | None, str]:
+    """A module reference (`path` or `slug:path`) into its slug and path parts."""
+    ref = ref.strip()
+    if ":" in ref:
+        head, tail = ref.split(":", 1)
+        if "/" in tail or tail.lower().endswith(".py"):
+            return head.strip().lower() or None, tail
+    return None, ref
+
+
+def repo_slug_for(repo: Path | str) -> str:
+    """Stable, human-meaningful repo slug from a directory name (design risk 4).
+
+    `…/code/baton` → `baton`. Derived from the directory name, not the remote URL: it is
+    visible without git, stable across clones that keep the checkout name, and readable in
+    qualified module paths like `baton:src/auth/login.py`. Non-alphanumerics collapse to
+    one `-`; an empty name falls back to `repo`.
+    """
+    slug = re.sub(r"[^a-z0-9]+", "-", Path(repo).name.strip().lower()).strip("-")
+    return slug or "repo"
+
+
+def _like_escape(text: str) -> str:
+    return text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+def co_injected(conn: sqlite3.Connection, a: str, b: str) -> bool:
+    """Have lessons `a` and `b` (display ids, e.g. `L12`) ever been injected into the same
+    attempt's prompt? Evidence for the contradiction rule, from `attempts.lesson_ids`."""
+    row = conn.execute(
+        "SELECT 1 FROM attempts WHERE lesson_ids IS NOT NULL AND json_valid(lesson_ids)"
+        " AND EXISTS (SELECT 1 FROM json_each(lesson_ids) AS j WHERE j.value = ?)"
+        " AND EXISTS (SELECT 1 FROM json_each(lesson_ids) AS j WHERE j.value = ?)"
+        " LIMIT 1",
+        (a, b),
+    ).fetchone()
+    return row is not None
+
+
 def _now() -> str:
+    return datetime.now(UTC).isoformat(timespec="microseconds")
     return datetime.now(UTC).isoformat(timespec="microseconds")
 
 
@@ -246,10 +365,17 @@ class LessonDB:
     def flush(self, name: str) -> int:
         """Delete every lesson of the profile (retired ones too); return how many."""
         with self._tx() as db:
+            if self.graph_ready():
+                # The FTS triggers clean `lessons_fts` as the lesson rows go.
+                db.execute("DELETE FROM lesson_edges WHERE profile = ?", (name,))
+                db.execute("DELETE FROM lesson_modules WHERE profile = ?", (name,))
             return db.execute("DELETE FROM lessons WHERE profile = ?", (name,)).rowcount
 
     def delete_profile(self, name: str) -> None:
         with self._tx() as db:
+            if self.graph_ready():
+                db.execute("DELETE FROM lesson_edges WHERE profile = ?", (name,))
+                db.execute("DELETE FROM lesson_modules WHERE profile = ?", (name,))
             db.execute("DELETE FROM lessons WHERE profile = ?", (name,))
             db.execute("DELETE FROM learning_profiles WHERE name = ?", (name,))
 
@@ -272,6 +398,7 @@ class LessonDB:
         tags: Sequence[str],
         source_run: str | None = None,
         source_task: str | None = None,
+        repo_slug: str | None = None,
     ) -> Lesson:
         now = self._clock()
         with self._tx() as db:
@@ -293,6 +420,27 @@ class LessonDB:
             number = cur.lastrowid
         lesson = self.get_lesson(number)
         assert lesson is not None
+        if self.graph_ready():
+            # Path-looking tags become `applies-to` module nodes; for shared profiles the
+            # run's repo slug qualifies them (`slug:path`).
+            seen: set[str] = set()
+            with self._tx() as db:
+                for tag in tags:
+                    path = normalize_module_path(tag)
+                    if path is None or path in seen:
+                        continue
+                    seen.add(path)
+                    db.execute(
+                        "INSERT OR IGNORE INTO lesson_modules"
+                        " (profile, path, repo_slug, first_seen_at) VALUES (?, ?, ?, ?)",
+                        (profile, path, repo_slug, now),
+                    )
+                    db.execute(
+                        "INSERT OR IGNORE INTO lesson_edges (profile, src_type, src_id, edge,"
+                        " dst_type, dst_id, origin, created_at)"
+                        " VALUES (?, 'lesson', ?, 'applies-to', 'module', ?, 'manual', ?)",
+                        (profile, str(number), qualify_module(path, repo_slug), now),
+                    )
         return lesson
 
     def get_lesson(self, number: int) -> Lesson | None:
@@ -357,6 +505,310 @@ class LessonDB:
             " retired = CASE WHEN score + ? <= ? THEN 1 ELSE retired END"
             " WHERE id = ? AND profile = ?",
             (delta, self._clock(), delta, RETIRE_AT_SCORE, number, profile),
+        )
+
+    # ---- the lesson graph (shared migration 4) ---------------------------------------------
+
+    def graph_ready(self) -> bool:
+        """Whether this database has the lesson-graph tables.
+
+        The graph migration ships in `SHARED_MIGRATIONS` first; repo databases get it with
+        their own migration later. Graph writes degrade gracefully until then (no edges are
+        recorded), while explicit graph reads raise `LearningError`.
+        """
+        row = self.conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'lesson_edges'"
+        ).fetchone()
+        return row is not None
+
+    def _require_graph(self) -> None:
+        if not self.graph_ready():
+            raise LearningError(
+                "the lesson graph is not available in this database yet: repo-scope profiles "
+                "need the repo database's graph migration, which has not been applied"
+            )
+
+    def _lesson_number(self, profile: str, ref: str) -> int:
+        """A lesson display id (`L12`) → its row number, validated: right scope for this
+        database, exists, and belongs to `profile`."""
+        match = _LESSON_ID.match(ref.strip())
+        if match is None or match.group(1).upper() != _PREFIX[self.scope]:
+            raise LearningError(
+                f"{ref!r} is not a {self.scope}-scope lesson id "
+                f"(ids look like {self.lesson_id(1)})"
+            )
+        number = int(match.group(2))
+        lesson = self.get_lesson(number)
+        if lesson is None or lesson.profile != profile:
+            raise LearningError(f"no lesson {ref.strip()!r} in profile {profile!r}")
+        return number
+
+    def _module_node(self, db: sqlite3.Connection, profile: str, ref: str) -> str:
+        """Ensure the module node for a `path` / `slug:path` reference; return the stored
+        (qualified) path."""
+        slug, tail = split_module_ref(ref)
+        path = normalize_module_ref(tail)
+        if path is None:
+            raise LearningError(
+                f"{ref!r} is not a module path: use `a`, `a/b`, `a/b.py` or `slug:a/b`"
+            )
+        qualified = qualify_module(path, slug)
+        db.execute(
+            "INSERT OR IGNORE INTO lesson_modules (profile, path, repo_slug, first_seen_at)"
+            " VALUES (?, ?, ?, ?)",
+            (profile, path, slug, self._clock()),
+        )
+        return qualified
+
+    def add_edge(
+        self, profile: str, src: str, edge: str, dst: str, *, origin: str = "manual"
+    ) -> bool:
+        """Record one graph edge; True when it was new, False when it already existed.
+
+        `src`/`dst` are lesson ids for `supersedes` and `contradicts`, and a lesson id
+        plus a module path for `applies-to`. `supersedes` is advisory only: it never
+        retires the old lesson — the old lesson stays active until a human retires it.
+        """
+        self._require_graph()
+        if edge not in GRAPH_EDGE_TYPES:
+            raise LearningError(
+                f"unknown edge {edge!r} (use: {', '.join(GRAPH_EDGE_TYPES)})"
+            )
+        if origin not in _EDGE_ORIGINS:
+            raise LearningError(f"unknown edge origin {origin!r}")
+        with self._tx() as db:
+            if edge == "applies-to":
+                src_type, src_id = "lesson", str(self._lesson_number(profile, src))
+                dst_type, dst_id = "module", self._module_node(db, profile, dst)
+            else:
+                src_type, src_id = "lesson", str(self._lesson_number(profile, src))
+                dst_type, dst_id = "lesson", str(self._lesson_number(profile, dst))
+                if src_id == dst_id:
+                    raise LearningError("a lesson cannot relate to itself")
+            cur = db.execute(
+                "INSERT OR IGNORE INTO lesson_edges (profile, src_type, src_id, edge,"
+                " dst_type, dst_id, origin, created_at)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (profile, src_type, src_id, edge, dst_type, dst_id, origin, self._clock()),
+            )
+            return cur.rowcount == 1
+
+    def remove_edge(self, profile: str, src: str, edge: str, dst: str) -> bool:
+        """Remove a recorded edge; True when one was removed. `contradicts` matches in
+        either direction (the edge is symmetric)."""
+        self._require_graph()
+        if edge not in GRAPH_EDGE_TYPES:
+            raise LearningError(
+                f"unknown edge {edge!r} (use: {', '.join(GRAPH_EDGE_TYPES)})"
+            )
+        with self._tx() as db:
+            if edge == "applies-to":
+                src_id = str(self._lesson_number(profile, src))
+                slug, tail = split_module_ref(dst)
+                path = normalize_module_ref(tail)
+                if path is None:
+                    raise LearningError(f"{dst!r} is not a module path")
+                dst_id = qualify_module(path, slug)
+                cur = db.execute(
+                    "DELETE FROM lesson_edges WHERE profile = ? AND edge = 'applies-to'"
+                    " AND src_type = 'lesson' AND src_id = ?"
+                    " AND dst_type = 'module' AND dst_id = ?",
+                    (profile, src_id, dst_id),
+                )
+            else:
+                a = str(self._lesson_number(profile, src))
+                b = str(self._lesson_number(profile, dst))
+                cur = db.execute(
+                    "DELETE FROM lesson_edges WHERE profile = ? AND edge = ?"
+                    " AND src_type = 'lesson' AND dst_type = 'lesson'"
+                    " AND ((src_id = ? AND dst_id = ?) OR (src_id = ? AND dst_id = ?))",
+                    (profile, edge, a, b, b, a),
+                )
+            return cur.rowcount > 0
+
+    def edges_for_lesson(self, profile: str, number: int) -> list[EdgeView]:
+        """Every stored edge touching the lesson, both directions, plus the `derived-from`
+        edge to its source run (computed from `lessons.source_run`, never stored)."""
+        self._require_graph()
+        key = str(number)
+        rows = self.conn.execute(
+            "SELECT src_type, src_id, edge, dst_type, dst_id, origin FROM lesson_edges"
+            " WHERE profile = ? AND ((src_type = 'lesson' AND src_id = ?)"
+            " OR (dst_type = 'lesson' AND dst_id = ?))",
+            (profile, key, key),
+        ).fetchall()
+        views: list[EdgeView] = []
+        for row in rows:
+            if row["src_type"] == "lesson" and row["src_id"] == key:
+                other = self._display_endpoint(row["dst_type"], row["dst_id"])
+                views.append(EdgeView("out", row["edge"], row["dst_type"], other, row["origin"]))
+            else:
+                other = self._display_endpoint(row["src_type"], row["src_id"])
+                views.append(EdgeView("in", row["edge"], row["src_type"], other, row["origin"]))
+        lesson = self.get_lesson(number)
+        if lesson is not None and lesson.source_run:
+            views.append(EdgeView("out", "derived-from", "run", lesson.source_run, "derived"))
+        return views
+
+    def _display_endpoint(self, endpoint_type: str, endpoint_id: str) -> str:
+        if endpoint_type == "lesson":
+            return self.lesson_id(int(endpoint_id))
+        return endpoint_id
+
+    def lesson_edges(self, profile: str) -> list[LessonEdge]:
+        """Every stored edge of the profile (lesson endpoints as display ids)."""
+        self._require_graph()
+        rows = self.conn.execute(
+            "SELECT src_type, src_id, edge, dst_type, dst_id, origin FROM lesson_edges"
+            " WHERE profile = ? ORDER BY id",
+            (profile,),
+        ).fetchall()
+        return [
+            LessonEdge(
+                self._display_endpoint(row["src_type"], row["src_id"]),
+                row["edge"],
+                self._display_endpoint(row["dst_type"], row["dst_id"]),
+                row["origin"],
+            )
+            for row in rows
+        ]
+
+    def co_occurs(
+        self,
+        attempts_conn: sqlite3.Connection,
+        profile: str,
+        number: int,
+        min_times: int = 2,
+        limit: int = 10,
+    ) -> list[tuple[str, int]]:
+        """Lessons injected together with this one in at least `min_times` attempts.
+
+        Computed on demand from `attempts.lesson_ids` (design: never materialized).
+        `attempts_conn` is the repo database's connection; only ids of this database's
+        scope are considered.
+        """
+        rows = attempts_conn.execute(
+            "SELECT j2.value AS other, COUNT(*) AS n FROM attempts AS a,"
+            " json_each(a.lesson_ids) AS j1, json_each(a.lesson_ids) AS j2"
+            " WHERE a.lesson_ids IS NOT NULL AND json_valid(a.lesson_ids)"
+            " AND j1.value = ? AND j2.value != j1.value"
+            " AND substr(j2.value, 1, 1) = ?"
+            " GROUP BY j2.value HAVING n >= ? ORDER BY n DESC LIMIT ?",
+            (self.lesson_id(number), _PREFIX[self.scope], min_times, limit),
+        ).fetchall()
+        # Index access: the attempts connection may not use sqlite3.Row.
+        return [(row[0], row[1]) for row in rows]
+
+    def graph_query(
+        self,
+        profile: str,
+        text: str,
+        *,
+        module: str | None = None,
+        run_state: str | None = None,
+        since: str | None = None,
+        limit: int = 20,
+    ) -> list[Lesson]:
+        """Full-text search over lesson text and tags (all quoted terms must match), ranked
+        by score then newest — the same score/recency signal selection uses.
+
+        `module` filters to lessons with an `applies-to` edge on the module, with
+        directory-prefix semantics (`src/auth` also matches `src/auth/login.py`, qualified
+        or not). `run_state` and `since` (YYYY-MM-DD) filter on the source runs' state and
+        date: they need a repo-scope profile, because shared databases hold no runs.
+        """
+        self._require_graph()
+        tokens = [word for word in _WORD.findall(text.lower()) if len(word) >= 2]
+        if not tokens:
+            raise LearningError("a graph query needs at least one searchable word")
+        match = " AND ".join('"' + token.replace('"', '""') + '"' for token in tokens)
+        if (run_state is not None or since is not None) and self.scope != "repo":
+            raise LearningError(
+                "--from-runs/--since need a repo-scope profile: shared databases hold no runs"
+            )
+        if since is not None and not re.fullmatch(r"\d{4}-\d{2}-\d{2}", since):
+            raise LearningError(f"{since!r} is not a date (use YYYY-MM-DD)")
+        sql = (
+            "SELECT l.* FROM lessons AS l JOIN lessons_fts ON lessons_fts.rowid = l.id"
+            " WHERE l.profile = ? AND lessons_fts MATCH ?"
+        )
+        params: list[object] = [profile, match]
+        if module is not None:
+            slug, tail = split_module_ref(module)
+            path = normalize_module_ref(tail)
+            if path is None:
+                raise LearningError(f"{module!r} is not a module path")
+            exact = qualify_module(path, slug)
+            like = _like_escape(exact)
+            sql += (
+                " AND EXISTS (SELECT 1 FROM lesson_edges AS e WHERE e.profile = l.profile"
+                " AND e.edge = 'applies-to' AND e.src_type = 'lesson'"
+                " AND e.src_id = CAST(l.id AS TEXT) AND e.dst_type = 'module'"
+                " AND (e.dst_id = ? OR e.dst_id LIKE ? ESCAPE '\\'"
+                " OR e.dst_id LIKE ? ESCAPE '\\' OR e.dst_id LIKE ? ESCAPE '\\'))"
+            )
+            params += [exact, like + "/%", "%:" + like, "%:" + like + "/%"]
+        if run_state is not None or since is not None:
+            sql += " AND l.source_run IN (SELECT id FROM runs WHERE 1 = 1"
+            if run_state is not None:
+                sql += " AND state = ?"
+                params.append(run_state)
+            if since is not None:
+                sql += " AND created_at >= ?"
+                params.append(since)
+            sql += ")"
+        sql += " ORDER BY l.score DESC, l.id DESC LIMIT ?"
+        params.append(limit)
+        return [self._lesson(row) for row in self.conn.execute(sql, params)]
+
+    def graph_stats(self, profile: str) -> GraphStats:
+        """Lesson/edge counts, open contradictions, and the most-applied-to modules."""
+        self._require_graph()
+        row = self.conn.execute(
+            "SELECT COUNT(*) AS n, SUM(retired) AS r FROM lessons WHERE profile = ?",
+            (profile,),
+        ).fetchone()
+        edges = {
+            r["edge"]: r["n"]
+            for r in self.conn.execute(
+                "SELECT edge, COUNT(*) AS n FROM lesson_edges WHERE profile = ? GROUP BY edge",
+                (profile,),
+            )
+        }
+        edges["derived-from"] = self.conn.execute(
+            "SELECT COUNT(*) FROM lessons WHERE profile = ? AND source_run IS NOT NULL",
+            (profile,),
+        ).fetchone()[0]
+        contradictions_open = self.conn.execute(
+            """SELECT COUNT(*) FROM (
+                   SELECT DISTINCT
+                       CASE WHEN CAST(src_id AS INTEGER) < CAST(dst_id AS INTEGER)
+                            THEN src_id ELSE dst_id END AS a,
+                       CASE WHEN CAST(src_id AS INTEGER) < CAST(dst_id AS INTEGER)
+                            THEN dst_id ELSE src_id END AS b
+                   FROM lesson_edges
+                   WHERE profile = ? AND edge = 'contradicts'
+                     AND src_type = 'lesson' AND dst_type = 'lesson'
+               ) AS p
+               JOIN lessons AS l1 ON l1.id = CAST(p.a AS INTEGER) AND l1.profile = ?
+               JOIN lessons AS l2 ON l2.id = CAST(p.b AS INTEGER) AND l2.profile = ?
+               WHERE l1.retired = 0 AND l2.retired = 0""",
+            (profile, profile, profile),
+        ).fetchone()[0]
+        top_modules = [
+            (r["dst_id"], r["n"])
+            for r in self.conn.execute(
+                "SELECT dst_id, COUNT(*) AS n FROM lesson_edges WHERE profile = ?"
+                " AND edge = 'applies-to' GROUP BY dst_id ORDER BY n DESC, dst_id LIMIT 10",
+                (profile,),
+            )
+        ]
+        return GraphStats(
+            lessons=row["n"],
+            retired=row["r"] or 0,
+            edges=edges,
+            contradictions_open=contradictions_open,
+            top_modules=top_modules,
         )
 
     def _lesson(self, row: sqlite3.Row) -> Lesson:
@@ -674,25 +1126,89 @@ def select_lessons(
     return chosen
 
 
+def suppress_contradictions(
+    db: LessonDB,
+    attempts: sqlite3.Connection,
+    profile: str,
+    chosen: list[Lesson],
+) -> tuple[list[Lesson], list[Suppression]]:
+    """Drop the lower-scored side of unresolved `contradicts` pairs from `chosen`.
+
+    Advisory edges, evidence-gated suppression (the safe default): a pair is only
+    suppressed when both lessons were selected AND the pair has actually been injected
+    together before (`co_injected` over `attempts.lesson_ids`) — never on the edge's
+    assertion alone. Deterministic: the higher score wins; ties keep the older lesson.
+    Without the graph tables (a repo database before its graph migration) nothing is
+    suppressed.
+    """
+    if not db.graph_ready():
+        return chosen, []
+    ids = {lesson.id for lesson in chosen}
+    pairs: set[tuple[str, str]] = set()
+    for lesson in chosen:
+        for view in db.edges_for_lesson(profile, lesson.number):
+            if (
+                view.edge == "contradicts"
+                and view.other_type == "lesson"
+                and view.other in ids
+                and view.other != lesson.id
+            ):
+                first, second = sorted((lesson.id, view.other))
+                pairs.add((first, second))
+    by_id = {lesson.id: lesson for lesson in chosen}
+    dropped: set[str] = set()
+    suppressions: list[Suppression] = []
+    for first, second in sorted(pairs):
+        if first in dropped or second in dropped:
+            continue
+        one, two = by_id[first], by_id[second]
+        winner, loser = (
+            (one, two)
+            if (one.score, -one.number) >= (two.score, -two.number)
+            else (two, one)
+        )
+        if not co_injected(attempts, first, second):
+            continue  # asserted but never observed together: leave both in
+        dropped.add(loser.id)
+        suppressions.append(
+            Suppression(
+                loser.id, winner.id, f"contradicts {winner.id}; the pair co-injected before"
+            )
+        )
+    return [lesson for lesson in chosen if lesson.id not in dropped], suppressions
+
+
 __all__ = [
+    "GRAPH_EDGE_TYPES",
     "LESSON_ROLES",
     "MAX_LESSON_CHARS",
     "RETIRE_AT_SCORE",
     "SETTING_ENABLED",
     "SETTING_PROFILE",
+    "EdgeView",
+    "GraphStats",
     "Learning",
     "LearningError",
     "LearningStatus",
     "Lesson",
     "LessonDB",
+    "LessonEdge",
     "Profile",
     "Scope",
+    "Suppression",
     "check_profile_name",
+    "co_injected",
     "context_terms",
     "learning_status",
+    "normalize_module_path",
+    "normalize_module_ref",
+    "qualify_module",
+    "repo_slug_for",
     "resolve_learning",
     "select_lessons",
     "set_active_profile",
     "set_repo_learning",
     "shared_db_path",
+    "split_module_ref",
+    "suppress_contradictions",
 ]
