@@ -601,7 +601,7 @@ td .mono, td.mono { font-size: var(--fs-12); }
 }
 .s-EXECUTING, .s-INTEGRATING, .s-SHIPPING, .s-RUNNING, .s-running, .s-REVIEWING, .s-note, .s-info,
 .s-queued, .s-INTAKE, .s-PLANNING, .s-VALIDATING, .s-DESIGNING, .s-TESTING, .s-repo, .s-user,
-.s-plan, .s-diff {
+.s-plan, .s-diff, .s-design {
   color: var(--info); border-color: color-mix(in srgb, var(--info) 50%, transparent);
   background: color-mix(in srgb, var(--info) 10%, transparent);
 }
