@@ -752,9 +752,9 @@ class Store:
                 )
                 if cur.rowcount == 0:
                     raise NotFoundError(f"task {task_id!r} not found in run {run_id!r}")
-            total = db.execute(
-                "SELECT spend_usd FROM runs WHERE id = ?", (run_id,)
-            ).fetchone()["spend_usd"]
+            total = db.execute("SELECT spend_usd FROM runs WHERE id = ?", (run_id,)).fetchone()[
+                "spend_usd"
+            ]
             self._emit(
                 db,
                 run_id,

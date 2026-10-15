@@ -145,7 +145,12 @@ def bisect_run(
     event matches (the run looks fine by the given criteria)."""
     events = store.list_events(run_id)
     bad, criterion = find_first_bad(
-        events, gate=gate, test=test, task=task, task_any=task_any, mark=mark,
+        events,
+        gate=gate,
+        test=test,
+        task=task,
+        task_any=task_any,
+        mark=mark,
         good_seq=good_seq,
     )
     if bad is None:
@@ -234,9 +239,7 @@ def render_timeline_html(run_id: str, events: list[Event], generated_at: datetim
                 f"<td style='color:{color}'>{html.escape(event.actor)}</td>"
                 "</tr>"
             )
-        sections.append(
-            f"<h2>{html.escape(name)}</h2><table>{''.join(rows)}</table>"
-        )
+        sections.append(f"<h2>{html.escape(name)}</h2><table>{''.join(rows)}</table>")
     return f"""<!DOCTYPE html>
 <html lang="en"><head><meta charset="utf-8">
 <title>jev timeline: {html.escape(run_id)}</title>
@@ -250,7 +253,7 @@ td {{ border-bottom: 1px solid #e4e4e7; padding: 0.3rem 0.5rem; vertical-align: 
 .type {{ color: #2563eb; font-family: monospace; }}
 </style></head><body>
 <h1>jev timeline: {html.escape(run_id)}</h1>
-<p>{len(events)} events, generated {html.escape(generated_at.isoformat(timespec='seconds'))}.</p>
-{''.join(sections)}
+<p>{len(events)} events, generated {html.escape(generated_at.isoformat(timespec="seconds"))}.</p>
+{"".join(sections)}
 </body></html>
 """

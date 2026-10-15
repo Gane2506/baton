@@ -246,9 +246,7 @@ def _candidates(store: Store, run_id: str) -> list[tuple[datetime, int, EventTyp
                     from_state=str(RunState.INTAKE),
                     to_state=str(run.state),
                     reason=run.reason,
-                    resume_state=None
-                    if run.resume_state is None
-                    else str(run.resume_state),
+                    resume_state=None if run.resume_state is None else str(run.resume_state),
                 ),
             )
         )

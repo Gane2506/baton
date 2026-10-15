@@ -225,9 +225,7 @@ def test_bisect_cli_clean_run(fixture_repo: Path, tmp_path: Path) -> None:
     with Store.open(state_db_path(fixture_repo)) as store:
         run = store.create_run(_idea(tmp_path))
         run_id = run.id
-    result = runner.invoke(
-        app, ["bisect", run_id, "--repo", str(fixture_repo), "--gate", "--test"]
-    )
+    result = runner.invoke(app, ["bisect", run_id, "--repo", str(fixture_repo), "--gate", "--test"])
     assert result.exit_code == 0, result.output
     assert "looks fine" in result.output
 

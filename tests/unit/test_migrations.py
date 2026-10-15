@@ -70,14 +70,24 @@ def test_migration_17_adds_run_events_and_lease_event_seq(tmp_path: Path) -> Non
     assert "run_events" in _tables(conn)
     event_cols = {row[1] for row in conn.execute("PRAGMA table_info(run_events)")}
     assert event_cols == {
-        "seq", "run_id", "run_seq", "type", "schema_v", "ts", "actor",
-        "parent_run_seq", "synthetic", "payload_json",
+        "seq",
+        "run_id",
+        "run_seq",
+        "type",
+        "schema_v",
+        "ts",
+        "actor",
+        "parent_run_seq",
+        "synthetic",
+        "payload_json",
     }
     lease_cols = {row[1] for row in conn.execute("PRAGMA table_info(run_leases)")}
     assert "event_seq" in lease_cols
     # An old database (v16) upgrades to v17 without losing rows.
-    conn.execute("INSERT INTO run_events (run_id, run_seq, type, ts, actor, payload_json)"
-                 " VALUES ('r', 1, 'run.created', 't', 'pipeline', '{}')")
+    conn.execute(
+        "INSERT INTO run_events (run_id, run_seq, type, ts, actor, payload_json)"
+        " VALUES ('r', 1, 'run.created', 't', 'pipeline', '{}')"
+    )
     assert conn.execute("SELECT COUNT(*) FROM run_events").fetchone()[0] == 1
     # Deleting a run cascades to its events, like its lease row (FK enforcement is on
     # in the app via configure_connection).
@@ -86,8 +96,10 @@ def test_migration_17_adds_run_events_and_lease_event_seq(tmp_path: Path) -> Non
         "INSERT INTO runs (id, idea_json, state, created_at, updated_at)"
         " VALUES ('r2', '{}', 'INTAKE', 't', 't')"
     )
-    conn.execute("INSERT INTO run_events (run_id, run_seq, type, ts, actor, payload_json)"
-                 " VALUES ('r2', 1, 'run.created', 't', 'pipeline', '{}')")
+    conn.execute(
+        "INSERT INTO run_events (run_id, run_seq, type, ts, actor, payload_json)"
+        " VALUES ('r2', 1, 'run.created', 't', 'pipeline', '{}')"
+    )
     conn.execute("DELETE FROM runs WHERE id = 'r2'")
     assert conn.execute("SELECT COUNT(*) FROM run_events WHERE run_id = 'r2'").fetchone()[0] == 0
     conn.close()

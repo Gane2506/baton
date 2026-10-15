@@ -133,8 +133,9 @@ def _stepper(store: Store, run_id: str, to: int | None) -> None:
             )
             pos = min(max(nxt - 1, 0), len(events) - 1)
         elif cmd == "state":
-            _print_state(verify_run(store, run_id, to_seq=events[pos].run_seq).state,
-                         events[pos].run_seq)
+            _print_state(
+                verify_run(store, run_id, to_seq=events[pos].run_seq).state, events[pos].run_seq
+            )
         elif cmd == "verify":
             prefix = verify_run(store, run_id, to_seq=events[pos].run_seq)
             console.print(

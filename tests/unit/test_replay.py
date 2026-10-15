@@ -77,7 +77,10 @@ def _scripted_run(store: Store, tmp_path: Path) -> str:
     store.set_run_plan(run_id, _plan("T1", "T2"), 1)
     store.upsert_tasks(run_id, _plan("T1", "T2"))
     _decide(
-        store, run_id, "T1", "D4",
+        store,
+        run_id,
+        "T1",
+        "D4",
         {"complexity": "yes", "worker": "yes", "model": "yes", "effort": "yes"},
     )
     store.set_task_assignment(run_id, "T1", TaskState.DISPATCHED, "w", "m", "high")

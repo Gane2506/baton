@@ -159,9 +159,7 @@ def timeline(
         if not rctx.store.events_enabled:
             raise fail("event log disabled for this repo ([events] enabled = false)")
         try:
-            events = rctx.store.list_events(
-                run_id, event_types=types, after_seq=after, limit=limit
-            )
+            events = rctx.store.list_events(run_id, event_types=types, after_seq=after, limit=limit)
         except NotFoundError as exc:
             raise fail(str(exc)) from exc
     if not events:

@@ -127,7 +127,10 @@ def _verify_event(
             state.run_state = str(RunState.INTAKE)
         case EventType.RUN_STATE_CHANGED:
             _check_from(
-                event, divergences, what="run", current=state.run_state,
+                event,
+                divergences,
+                what="run",
+                current=state.run_state,
                 from_state=str(p.get("from_state")),
             )
             state.run_state = str(p.get("to_state"))
@@ -137,7 +140,9 @@ def _verify_event(
         case EventType.TASK_STATE_CHANGED:
             task_id = str(p.get("task_id"))
             _check_from(
-                event, divergences, what=f"task {task_id}",
+                event,
+                divergences,
+                what=f"task {task_id}",
                 current=state.task_states.get(task_id, str(TaskState.PENDING)),
                 from_state=str(p.get("from_state")),
             )

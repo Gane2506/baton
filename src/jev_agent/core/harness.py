@@ -285,7 +285,11 @@ class Harness:
             decision = guarded.decision
             fallback_reason = guarded.fallback_reason
         decision_id = self.store.record_decision(
-            run_id, task_id, req, decision, fallback_reason,
+            run_id,
+            task_id,
+            req,
+            decision,
+            fallback_reason,
             parent_run_seq=requested_seq,
         )
         if (

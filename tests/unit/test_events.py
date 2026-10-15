@@ -43,9 +43,7 @@ def _plan(*ids: str) -> Plan:
 
 
 def _decision_request() -> DecisionRequest:
-    return DecisionRequest(
-        point="D4", state={"task": "T1"}, questions={"effort": ["low", "high"]}
-    )
+    return DecisionRequest(point="D4", state={"task": "T1"}, questions={"effort": ["low", "high"]})
 
 
 def _decision() -> Decision:
@@ -159,11 +157,14 @@ def test_kill_switch_stops_emission_but_not_state_writes(tmp_path: Path) -> None
         store.set_run_state(run.id, RunState.PLANNING)
         assert store.get_run(run.id).state == RunState.PLANNING  # snapshots keep working
         assert store.list_events(run.id) == []
-        assert store.emit(
-            run.id,
-            EventType.RUN_RESUMED,
-            RunResumedPayload(from_state="PLANNING", via="resume command"),
-        ) is None
+        assert (
+            store.emit(
+                run.id,
+                EventType.RUN_RESUMED,
+                RunResumedPayload(from_state="PLANNING", via="resume command"),
+            )
+            is None
+        )
 
 
 def test_event_payloads_carry_no_secrets() -> None:
@@ -316,9 +317,7 @@ def test_quality_report_emission_links_attempt(store: Store, tmp_path: Path) -> 
     assert gate["report_id"] == report_id
     assert gate["blocked"] is True
     assert gate["top_findings"] == ["r1"]
-    finished_seq = store.latest_event_seq(
-        run.id, EventType.ATTEMPT_FINISHED, attempt_id=attempt_id
-    )
+    finished_seq = store.latest_event_seq(run.id, EventType.ATTEMPT_FINISHED, attempt_id=attempt_id)
     gate_event = store.list_events(run.id, event_types={EventType.GATE_CHECKED})[0]
     assert gate_event.parent_run_seq == finished_seq
 
@@ -678,16 +677,34 @@ def _scripted_run_calls(store: Store, tmp_path: Path, run_id: str) -> dict[str, 
 
     def _add_pr() -> None:
         pr = store.add_shipped_pr(
-            run_id, remote="o", repo="o/r", branch="b", base="main",
-            number=1, url=None, title="t", draft=False,
+            run_id,
+            remote="o",
+            repo="o/r",
+            branch="b",
+            base="main",
+            number=1,
+            url=None,
+            title="t",
+            draft=False,
         )
         pr_id.append(pr.id)
 
     def _sync_pr() -> None:
         store.update_shipped_pr(
-            pr_id[0], state="merged", draft=False, merged_at=None, closed_at=None,
-            review_comments=0, reviews=0, ci_status="success", commits_after_open=0,
-            additions=0, deletions=0, changed_files=0, reverted=False, raw=None,
+            pr_id[0],
+            state="merged",
+            draft=False,
+            merged_at=None,
+            closed_at=None,
+            review_comments=0,
+            reviews=0,
+            ci_status="success",
+            commits_after_open=0,
+            additions=0,
+            deletions=0,
+            changed_files=0,
+            reverted=False,
+            raw=None,
         )
 
     step("set_run_plan", lambda: store.set_run_plan(run_id, plan, 1))
