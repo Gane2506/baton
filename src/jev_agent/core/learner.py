@@ -357,9 +357,7 @@ def _apply_declared_edges(
                     other = by_id.get(target.strip().upper())
                     if other is None or other.id == lesson_id:
                         continue
-                    created = db.add_edge(
-                        profile, lesson_id, kind, other.id, origin="learner"
-                    )
+                    created = db.add_edge(profile, lesson_id, kind, other.id, origin="learner")
             except LearningError:
                 continue
             if created:

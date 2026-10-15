@@ -534,8 +534,7 @@ class LessonDB:
         match = _LESSON_ID.match(ref.strip())
         if match is None or match.group(1).upper() != _PREFIX[self.scope]:
             raise LearningError(
-                f"{ref!r} is not a {self.scope}-scope lesson id "
-                f"(ids look like {self.lesson_id(1)})"
+                f"{ref!r} is not a {self.scope}-scope lesson id (ids look like {self.lesson_id(1)})"
             )
         number = int(match.group(2))
         lesson = self.get_lesson(number)
@@ -571,9 +570,7 @@ class LessonDB:
         """
         self._require_graph()
         if edge not in GRAPH_EDGE_TYPES:
-            raise LearningError(
-                f"unknown edge {edge!r} (use: {', '.join(GRAPH_EDGE_TYPES)})"
-            )
+            raise LearningError(f"unknown edge {edge!r} (use: {', '.join(GRAPH_EDGE_TYPES)})")
         if origin not in _EDGE_ORIGINS:
             raise LearningError(f"unknown edge origin {origin!r}")
         with self._tx() as db:
@@ -598,9 +595,7 @@ class LessonDB:
         either direction (the edge is symmetric)."""
         self._require_graph()
         if edge not in GRAPH_EDGE_TYPES:
-            raise LearningError(
-                f"unknown edge {edge!r} (use: {', '.join(GRAPH_EDGE_TYPES)})"
-            )
+            raise LearningError(f"unknown edge {edge!r} (use: {', '.join(GRAPH_EDGE_TYPES)})")
         with self._tx() as db:
             if edge == "applies-to":
                 src_id = str(self._lesson_number(profile, src))
@@ -1163,9 +1158,7 @@ def suppress_contradictions(
             continue
         one, two = by_id[first], by_id[second]
         winner, loser = (
-            (one, two)
-            if (one.score, -one.number) >= (two.score, -two.number)
-            else (two, one)
+            (one, two) if (one.score, -one.number) >= (two.score, -two.number) else (two, one)
         )
         if not co_injected(attempts, first, second):
             continue  # asserted but never observed together: leave both in

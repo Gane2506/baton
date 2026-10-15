@@ -70,9 +70,7 @@ def test_shared_migration_is_v4_and_backfills(tmp_path: Path) -> None:
     path = tmp_path / "learning.db"
     with sqlite3.connect(path) as conn:
         conn.executescript(SHARED_MIGRATIONS[0] + "\nPRAGMA user_version = 1;")
-        conn.execute(
-            "INSERT INTO learning_profiles VALUES ('a', 1, '2026-10-01T00:00:00+00:00')"
-        )
+        conn.execute("INSERT INTO learning_profiles VALUES ('a', 1, '2026-10-01T00:00:00+00:00')")
         conn.execute(
             "INSERT INTO lessons (id, profile, text, roles_json, tags_json, source_run,"
             " created_at, updated_at, uses, score) VALUES"
@@ -94,9 +92,7 @@ def test_shared_migration_is_v4_and_backfills(tmp_path: Path) -> None:
         edges = [(e.src, e.edge, e.dst, e.origin) for e in db.lesson_edges("a")]
         assert ("S1", "applies-to", "src/api/batch.py", "backfill") in edges
         # derived-from is a view over source_run.
-        assert [row[0] for row in db.conn.execute("SELECT dst_id FROM lesson_run_edges")] == [
-            "r1"
-        ]
+        assert [row[0] for row in db.conn.execute("SELECT dst_id FROM lesson_run_edges")] == ["r1"]
         # module node exists.
         assert [row[0] for row in db.conn.execute("SELECT path FROM lesson_modules")] == [
             "src/api/batch.py"
@@ -127,9 +123,7 @@ def test_fts_stays_in_sync(shared_db: LessonDB) -> None:
         )
     ] == [lesson.number]
     shared_db.flush("work")
-    assert (
-        shared_db.conn.execute("SELECT COUNT(*) FROM lessons_fts").fetchone()[0] == 0
-    )
+    assert shared_db.conn.execute("SELECT COUNT(*) FROM lessons_fts").fetchone()[0] == 0
 
 
 # ---- module helpers -----------------------------------------------------------------------------
@@ -180,8 +174,7 @@ def test_edge_crud(shared_db: LessonDB) -> None:
     assert (b.id, "in", "supersedes") in views
     # contradicts is symmetric in display: one stored row shows on both sides.
     assert (b.id, "out", "contradicts") in {
-        (v.other, v.direction, v.edge)
-        for v in shared_db.edges_for_lesson("work", a.number)
+        (v.other, v.direction, v.edge) for v in shared_db.edges_for_lesson("work", a.number)
     } | {(v.other, v.direction, v.edge) for v in shared_db.edges_for_lesson("work", b.number)}
 
     with pytest.raises(LearningError):
@@ -205,9 +198,7 @@ def test_supersede_is_advisory_only_no_auto_retire(shared_db: LessonDB) -> None:
     assert shared_db.add_edge("work", new.id, "supersedes", old.id)
     assert not shared_db.get_lesson(old.number).retired  # still active
     assert old.id in [lesson.id for lesson in shared_db.list_lessons("work")]
-    kinds = {
-        (v.direction, v.edge) for v in shared_db.edges_for_lesson("work", old.number)
-    }
+    kinds = {(v.direction, v.edge) for v in shared_db.edges_for_lesson("work", old.number)}
     assert ("in", "supersedes") in kinds  # the lineage is visible
 
 
@@ -264,8 +255,9 @@ def graphed(shared_db: LessonDB) -> LessonDB:
     s2 = shared_db.add_lesson(
         "work", "Mark network tests as integration tests", ["coder"], ["tests/test_net.py"], "r2"
     )
-    shared_db.add_lesson("work", "Batch API calls to stay under rate limits",
-                             ["coder"], ["src/api/batch.py"], "r1")
+    shared_db.add_lesson(
+        "work", "Batch API calls to stay under rate limits", ["coder"], ["src/api/batch.py"], "r1"
+    )
     shared_db.add_edge("work", s1.id, "contradicts", s2.id)
     return shared_db
 
@@ -319,9 +311,12 @@ def test_co_occurs_computed_on_demand(tmp_path: Path, graphed: LessonDB) -> None
     assert "co-occurs-with" not in [
         row[0] for row in attempts.execute("SELECT name FROM sqlite_master")
     ]
-    assert graphed.conn.execute(
-        "SELECT COUNT(*) FROM lesson_edges WHERE edge = 'co-occurs-with'"
-    ).fetchone()[0] == 0
+    assert (
+        graphed.conn.execute(
+            "SELECT COUNT(*) FROM lesson_edges WHERE edge = 'co-occurs-with'"
+        ).fetchone()[0]
+        == 0
+    )
 
 
 # ---- the contradiction rule ---------------------------------------------------------------------
@@ -331,9 +326,7 @@ def _attempts_with(*lesson_id_lists: list[str]) -> sqlite3.Connection:
     conn = sqlite3.connect(":memory:")
     conn.execute("CREATE TABLE attempts (lesson_ids TEXT)")
     for ids in lesson_id_lists:
-        conn.execute(
-            "INSERT INTO attempts VALUES (?)", ('["' + '", "'.join(ids) + '"]',)
-        )
+        conn.execute("INSERT INTO attempts VALUES (?)", ('["' + '", "'.join(ids) + '"]',))
     return conn
 
 
@@ -341,9 +334,7 @@ def test_suppression_needs_co_injection_evidence(graphed: LessonDB) -> None:
     graphed.record_use("work", 1, 2.0)  # S1 outscores S2
     chosen = list(reversed(graphed.list_lessons("work")))  # S3, S2, S1
     # Asserted but never observed together: both stay.
-    kept, suppressed = suppress_contradictions(
-        graphed, _attempts_with(["S1"]), "work", chosen
-    )
+    kept, suppressed = suppress_contradictions(graphed, _attempts_with(["S1"]), "work", chosen)
     assert [lesson.id for lesson in kept] == ["S3", "S2", "S1"] and suppressed == []
     # Observed together before: the lower-scored side goes.
     kept, suppressed = suppress_contradictions(
@@ -485,8 +476,9 @@ def test_graph_cli_round_trip(repo: Path) -> None:
     assert code == 0, out
     code, out = _jev(repo, "learning", "graph", "query", "batch api", "--profile", "team")
     assert code == 0 and a in out and "contradicts" in out, out
-    code, out = _jev(repo, "learning", "graph", "query", "batch", "--module", "src/api",
-                      "--profile", "team")
+    code, out = _jev(
+        repo, "learning", "graph", "query", "batch", "--module", "src/api", "--profile", "team"
+    )
     assert code == 0 and a in out, out
 
     code, out = _jev(repo, "learning", "graph", "stats", "--profile", "team")
@@ -511,16 +503,18 @@ def test_graph_link_validates(repo: Path) -> None:
     assert code != 0 and "no lesson" in out
     code, out = _jev(repo, "learning", "graph", "link", "S1", "applies-to", "src/auth/")
     assert code == 0 and "Recorded" in out, out
-    code, out = _jev(repo, "learning", "graph", "query", "batch", "--module", "src",
-                      "--profile", "team")
+    code, out = _jev(
+        repo, "learning", "graph", "query", "batch", "--module", "src", "--profile", "team"
+    )
     assert code == 0 and "S1" in out, out
 
 
 def test_graph_query_from_runs_needs_repo_profile(repo: Path, tmp_path: Path) -> None:
     _shared_profile(repo)
     _add_shared_lessons(repo)
-    code, out = _jev(repo, "learning", "graph", "query", "batch", "--from-runs", "failed",
-                      "--profile", "team")
+    code, out = _jev(
+        repo, "learning", "graph", "query", "batch", "--from-runs", "failed", "--profile", "team"
+    )
     assert code != 0 and "repo-scope" in out
 
 
@@ -563,9 +557,7 @@ def test_dashboard_graph_tab(repo: Path) -> None:
         db.add_edge("team", b, "contradicts", a)
     finally:
         db.conn.close()
-    (repo / "jev.toml").write_text(
-        CONFIG + '[learning]\nenabled = true\nprofile = "team"\n'
-    )
+    (repo / "jev.toml").write_text(CONFIG + '[learning]\nenabled = true\nprofile = "team"\n')
     with _dashboard_client(repo) as client:
         page = client.get("/learning", params={"profile": "team", "tab": "graph"})
         assert page.status_code == 200, page.text[:500]
@@ -579,9 +571,7 @@ def test_dashboard_graph_tab(repo: Path) -> None:
         )
         assert filtered.status_code == 200 and b in filtered.text
         # Focusing a lesson renders its neighborhood.
-        focused = client.get(
-            "/learning", params={"profile": "team", "tab": "graph", "lesson": b}
-        )
+        focused = client.get("/learning", params={"profile": "team", "tab": "graph", "lesson": b})
         assert focused.status_code == 200
         assert "One-hop neighborhood" in focused.text and "contradicts" in focused.text
         # Unknown lesson id: no crash, no neighborhood.

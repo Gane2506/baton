@@ -280,9 +280,7 @@ def graph_query(
     ] = None,
     from_runs: Annotated[
         str | None,
-        typer.Option(
-            "--from-runs", help="Only lessons from runs in this state, e.g. failed."
-        ),
+        typer.Option("--from-runs", help="Only lessons from runs in this state, e.g. failed."),
     ] = None,
     since: Annotated[
         str | None,
@@ -316,9 +314,7 @@ def graph_query(
             cell = escape(lesson.text)
             if notes:
                 cell += "\n[dim]" + escape(" · ".join(n for n in notes if n)) + "[/dim]"
-            table.add_row(
-                lesson.id, f"{lesson.score:g}", str(lesson.uses), cell
-            )
+            table.add_row(lesson.id, f"{lesson.score:g}", str(lesson.uses), cell)
         console.print(table)
 
 
@@ -354,8 +350,7 @@ def graph_show(
             if edge.edge == "contradicts":
                 key = "contradicts"  # symmetric in display
             by_kind.setdefault(key, []).append(label)
-        for kind in ("derived-from", "applies-to", "supersedes", "supersedes-by",
-                     "contradicts"):
+        for kind in ("derived-from", "applies-to", "supersedes", "supersedes-by", "contradicts"):
             for label in by_kind.get(kind, []):
                 console.print(f"  [dim]{kind:13}[/dim] {label}")
         for other_id, times in view.co_occurs:
@@ -366,9 +361,7 @@ def graph_show(
 def graph_link(
     src: Annotated[str, typer.Argument(help="Lesson id, e.g. L31.")],
     edge: Annotated[str, typer.Argument(help=f"Edge type: {', '.join(GRAPH_EDGE_TYPES)}.")],
-    dst: Annotated[
-        str, typer.Argument(help="Lesson id, or a module path for `applies-to`.")
-    ],
+    dst: Annotated[str, typer.Argument(help="Lesson id, or a module path for `applies-to`.")],
     repo: RepoOption = Path("."),
 ) -> None:
     """Record a graph edge by hand: `link L31 supersedes L12`, `link L4 contradicts L9`,
@@ -391,9 +384,7 @@ def graph_link(
 def graph_unlink(
     src: Annotated[str, typer.Argument(help="Lesson id, e.g. L31.")],
     edge: Annotated[str, typer.Argument(help=f"Edge type: {', '.join(GRAPH_EDGE_TYPES)}.")],
-    dst: Annotated[
-        str, typer.Argument(help="Lesson id, or a module path for `applies-to`.")
-    ],
+    dst: Annotated[str, typer.Argument(help="Lesson id, or a module path for `applies-to`.")],
     repo: RepoOption = Path("."),
 ) -> None:
     """Remove a recorded graph edge (`contradicts` matches in either direction)."""
@@ -413,9 +404,7 @@ def graph_stats(
     with _context(repo, create=False) as (ctx, learning):
         name = profile or _active(ctx)
         stats = lesson_graph_stats(learning, name)
-        edges = ", ".join(
-            f"{kind} {count}" for kind, count in sorted(stats.edges.items())
-        )
+        edges = ", ".join(f"{kind} {count}" for kind, count in sorted(stats.edges.items()))
         retired = f" ({stats.retired} retired)" if stats.retired else ""
         console.print(f"lessons {stats.lessons}{retired} · edges {edges or 'none'}")
         console.print(f"open contradictions: {stats.contradictions_open}")
