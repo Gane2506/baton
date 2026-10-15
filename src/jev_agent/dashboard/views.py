@@ -167,6 +167,7 @@ class DecisionRow:
     fallback_reason: str | None
     cost_usd: float | None
     latency_ms: int
+    cached: bool = False  # served from the decision cache (issue #10)
 
 
 @dataclass(frozen=True)
@@ -318,6 +319,7 @@ def run_view(repo: Repo, run_id: str) -> RunView:
             d.fallback_reason,
             d.decision.cost_usd,
             d.decision.latency_ms,
+            cached=bool(d.decision.details.get("cache_hit")),
         )
         for d in store.list_decisions(run_id)
     ]
@@ -775,6 +777,8 @@ class SpendView:
     costliest: list[RunRecord]  # top runs by spend, for the leaderboard table
     day_totals: list[tuple[date, float]]  # (day, usd) oldest first, one per day
     days: int
+    saved_usd: float = 0.0  # dollars the decision/role cache saved (issue #10)
+    saved_by_run: dict[str, float] = field(default_factory=dict)
 
     @property
     def has_spend(self) -> bool:
@@ -785,11 +789,23 @@ def spend_view(
     repo: Repo, days: int = 30, top_runs: int = 25, today: date | None = None
 ) -> SpendView:
     runs = repo.store.list_runs()
-    return spend_view_for_runs(runs, days=days, top_runs=top_runs, today=today)
+    saved_by_run = repo.store.cache_saved_by_run()
+    return spend_view_for_runs(
+        runs,
+        days=days,
+        top_runs=top_runs,
+        today=today,
+        saved_by_run=saved_by_run,
+    )
 
 
 def spend_view_for_runs(
-    runs: list[RunRecord], *, days: int = 30, top_runs: int = 25, today: date | None = None
+    runs: list[RunRecord],
+    *,
+    days: int = 30,
+    top_runs: int = 25,
+    today: date | None = None,
+    saved_by_run: dict[str, float] | None = None,
 ) -> SpendView:
     """The spend page's numbers from a run list (pure; `spend_view` reads the store).
 
@@ -801,6 +817,7 @@ def spend_view_for_runs(
     week_usd = sum(usd for _, usd in spend_by_day(runs, 7, today))
     total = sum(r.spend_usd for r in runs)
     costly = sorted(runs, key=lambda r: r.spend_usd, reverse=True)[:top_runs]
+    saved = saved_by_run or {}
     return SpendView(
         runs=runs,
         total=total,
@@ -810,6 +827,8 @@ def spend_view_for_runs(
         costliest=costly,
         day_totals=day_totals,
         days=days,
+        saved_usd=sum(saved.values()),
+        saved_by_run=saved,
     )
 
 
