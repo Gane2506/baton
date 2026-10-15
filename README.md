@@ -226,6 +226,15 @@ uv tool install 'baton-agent-orchestrator[dashboard] @ git+https://github.com/Ga
 # once on PyPI: uv tool install 'baton-agent-orchestrator[dashboard]'
 ```
 
+**Docker** — run the dashboard as a container (see [docs/packaging.md](docs/packaging.md#docker)):
+
+```bash
+docker run -d --name jev -p 127.0.0.1:8765:8765 -v jev-state:/data ghcr.io/gane2506/baton:latest
+docker logs jev   # the dashboard URL and access token
+```
+
+Or build it yourself: `docker build -t jev-dashboard .` (see [docs/packaging.md](docs/packaging.md)).
+
 **Upgrading to v0.2.0.** The project was renamed to Baton Agent Orchestrator: the PyPI name is
 now `baton-agent-orchestrator` and the long alias `jev-agent-orchestrator` is now
 `baton-agent-orchestrator`. `jev`, its config and its state are unchanged. A uv tool installed
