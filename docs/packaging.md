@@ -72,6 +72,19 @@ API keys — see [docs/config.md](config.md)).
 ## Docker
 
 The image serves `jev dashboard` for the repo mounted at `/data`.
+Published images live on GitHub Container Registry:
+
+```bash
+docker pull ghcr.io/gane2506/baton:latest
+docker run --rm -p 127.0.0.1:8765:8765 -v ./my-project:/data ghcr.io/gane2506/baton:latest
+```
+
+Tags: `:latest` tracks the newest release; `:0.4.0`-style tags pin a version.
+Images are published automatically for every `v*` tag (see
+`.github/workflows/docker.yml`); you can also trigger a build manually from
+the Actions tab (workflow *Docker* → *Run workflow*).
+
+To build it yourself instead:
 
 ```bash
 docker build -t jev-dashboard .
@@ -119,11 +132,14 @@ available.
 ### Upgrade / uninstall
 
 ```bash
-docker compose pull   # if you publish the image; otherwise:
+docker compose pull          # pulls ghcr.io/gane2506/baton:latest; or build locally:
 docker compose up --build -d
 docker compose down          # stop; keeps the jev-state volume
 docker compose down -v       # also removes the named state volume
 ```
+
+To use the published image with compose, set `image: ghcr.io/gane2506/baton:latest`
+in `docker-compose.yml` (or `docker compose pull` before `up`).
 
 ## Config
 
