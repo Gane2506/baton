@@ -364,6 +364,39 @@ MIGRATIONS: list[str] = [
         created_at TEXT NOT NULL
     );
     """,
+    # 16: exact-match cache for dispatcher decisions and role outputs (issue #10).
+    # `key_hash` is sha256 over the canonical request record (core/cache.py); the repo
+    # fingerprint and config fingerprint are part of the key, so repo or config changes
+    # invalidate automatically. `cost_usd` is the *original* call cost: a hit serves at
+    # $0 and `cost_usd * hit_count` is the saved amount shown on the Spend page.
+    # `key_json` carries provenance (`decision_id` / `run_id`, simhash for phase 3).
+    """
+    CREATE TABLE cache_entries (
+        key_hash   TEXT PRIMARY KEY,
+        kind       TEXT NOT NULL CHECK (kind IN ('decision', 'role')),
+        key_json   TEXT NOT NULL,
+        value_json TEXT NOT NULL,
+        cost_usd   REAL NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL,
+        expires_at TEXT NOT NULL,
+        hit_count  INTEGER NOT NULL DEFAULT 0,
+        last_hit_at TEXT
+    );
+    CREATE INDEX idx_cache_entries_expires ON cache_entries (expires_at);
+    CREATE INDEX idx_cache_entries_kind ON cache_entries (kind);
+    """,
+    # 16 (cont.): shadow-mode measurements for semantic serving (issue #10 §6): one
+    # row per would-be semantic hit, comparing the cached answer with the live one.
+    """
+    CREATE TABLE cache_shadow (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        key_hash TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        agreed INTEGER NOT NULL,  -- the cached answer matched the live one
+        agreement REAL,           -- 0..1 similarity score, kind-dependent
+        created_at TEXT NOT NULL
+    );
+    """,
 ]
 
 SCHEMA_VERSION = len(MIGRATIONS)
