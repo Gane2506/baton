@@ -34,6 +34,10 @@ EXPECTED_PANELS: dict[str, str] = {
     "dashboard": PANEL_OBSERVE,
     "kpi": PANEL_OBSERVE,
     "quality": PANEL_OBSERVE,
+    "capbench": PANEL_OBSERVE,
+    "events": PANEL_OBSERVE,
+    "replay": PANEL_OBSERVE,
+    "bisect": PANEL_OBSERVE,
     # Configure
     "doctor": PANEL_CONFIGURE,
     "profile": PANEL_CONFIGURE,

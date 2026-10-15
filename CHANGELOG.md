@@ -7,6 +7,26 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+
+- **Event-sourced execution state** ([docs/events.md](docs/events.md), schema v17).
+  Every run mutation is dual-written as an append-only event in the new `run_events`
+  table — same transaction as the state change (`run_seq = MAX(run_seq)+1`), so the
+  log and the snapshots never diverge; the single-writer invariant (one lease holder
+  per run) is documented in `Store._emit`. 22 typed event kinds with causal
+  `parent_run_seq` links; payloads carry ids and summaries only (prompts and
+  transcripts stay in the redacted log files). `[events] enabled = true` (default)
+  is the kill switch. New commands: `jev events RUN` (timeline, `--type/--after/
+  --limit/--json`), `jev events backfill RUN` (synthetic history for pre-log runs),
+  `jev replay RUN [--to SEQ] [--step] [--diff]` (verify mode: envelope integrity,
+  transition consistency, decision contracts, snapshot agreement — exit 0/2, no LLM
+  calls), and `jev bisect RUN --gate/--test/--task/--mark` (first-bad-event scan +
+  causal-chain blame walk, `--export timeline.html`). Cassette re-execution and
+  checkpoints are deliberately out of scope; the dashboard timeline view is deferred
+  (the dashboard keeps reading the snapshot tables). A drift test classifies every
+  mutating `Store` method as emitting or snapshot-only, so future mutations cannot
+  silently skip the log.
+
 ### Fixed
 
 - **Ship/merge path verified live** ([#68](https://github.com/Gane2506/baton/issues/68)).
