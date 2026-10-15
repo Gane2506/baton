@@ -81,9 +81,55 @@ Selection is simple and deterministic, no embeddings:
 3. Then by score (highest first), then newest first.
 4. Capped at `[learning] max_lessons` (default 8) and `max_chars` (default 2000 characters of
    lesson text); a lesson that does not fit is skipped and smaller ones may still fit.
+5. After ranking, the contradiction rule: the lower-scored side of a `contradicts` pair is
+   dropped, but only when the pair has actually been injected together before — never on
+   assertion alone (see "The lesson graph"). Suppressions are logged to the run's
+   `learning.log`.
 
 The planner's context is the idea; the validator's adds the plan's task titles and files; the
 coder's and reviewer's add their task card.
+
+## The lesson graph
+
+Beyond the flat list, lessons form a queryable graph: full-text search over text and tags
+(FTS5, no embeddings), edges between lessons, and module nodes. The storage lives in the
+learning database (shared migration 4; repo databases gain it with their own migration):
+`lesson_modules`, `lesson_edges`, the `lessons_fts` index (kept in sync by triggers), and a
+`lesson_run_edges` view. Edge types:
+
+- `derived-from` — the lesson came from this run. Not stored: it is the view over
+  `lessons.source_run`.
+- `applies-to` — the lesson is about this module (`src/auth/login.py`, `src/auth/`).
+  Derived automatically from path-looking tags on `add_lesson`, or declared by the learner
+  (`applies_to`), or linked by hand. For shared profiles the path is qualified with a repo
+  slug derived from the repo directory name (`baton:src/auth/`); queries match with
+  directory-prefix semantics (`--module src/auth` also finds `src/auth/login.py`).
+- `supersedes` — a newer lesson replaces an older one. **Advisory only**: recording it
+  never retires the old lesson; the old lesson stays active until a human retires it, and
+  `graph show` displays the chain.
+- `contradicts` — two lessons disagree. **Advisory only**: both stay active. Selection
+  suppresses the lower-scored side of a pair, but only when the pair has actually been
+  injected together before (evidence in `attempts.lesson_ids`) — never on assertion alone.
+  Suppressions are logged to the run's `learning.log`. Ties keep the older lesson.
+- `co-occurs-with` — lessons injected into the same prompt often. Computed on demand from
+  `attempts.lesson_ids`, never stored.
+
+The learner declares relations on each added draft (`supersedes`, `contradicts`,
+`applies_to`); at most 8 edges are recorded per run. The learner prompt shows the existing
+lessons' ids so it can name them.
+
+```
+jev learning graph query "flaky tests" --module src/api --from-runs failed --since 2026-09-15
+jev learning graph show L12            # the lesson + its 1-hop neighborhood
+jev learning graph link L31 supersedes L12
+jev learning graph link L12 applies-to src/auth/
+jev learning graph unlink L31 contradicts L12
+jev learning graph stats
+```
+
+The dashboard's learning page has a Graph tab: a faceted browser (module and relation
+facets, full-text search) over the same table, and a radial SVG neighborhood when a lesson
+is focused. Editing stays in the CLI; the dashboard is read-only here.
 
 ## When jev learns
 

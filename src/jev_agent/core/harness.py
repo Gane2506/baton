@@ -15,7 +15,14 @@ from jev_agent.config.schema import JevConfig
 from jev_agent.core.assign import Assignment, fit_free, quota_fallback, reassign
 from jev_agent.core.budget import Budget
 from jev_agent.core.commands import CommandRunner
-from jev_agent.core.learning import Learning, LearningError, Lesson, context_terms, select_lessons
+from jev_agent.core.learning import (
+    Learning,
+    LearningError,
+    Lesson,
+    context_terms,
+    select_lessons,
+    suppress_contradictions,
+)
 from jev_agent.core.models import (
     Decision,
     DecisionRequest,
@@ -32,7 +39,7 @@ from jev_agent.dispatch.consensus import ConsensusDispatcher
 from jev_agent.dispatch.guard import GuardedDispatcher
 from jev_agent.dispatch.requests import RoleOptions, role_options
 from jev_agent.roles import ROLE_SCHEMAS, PromptError, load_template, render_prompt
-from jev_agent.runlog import log_path
+from jev_agent.runlog import append_log, log_path
 from jev_agent.servers.access import tools_for_run
 from jev_agent.servers.profiles import ProfileError
 from jev_agent.workers.base import WorkerJob, WorkerOutput
@@ -137,7 +144,13 @@ class Harness:
         cards: Iterable[TaskCard] = (),
     ) -> list[Lesson]:
         """The lessons to inject into `role`'s prompt for this run: none when the run does not
-        learn, else the best matches for the idea, `texts` and the `cards`' titles and files."""
+        learn, else the best matches for the idea, `texts` and the `cards`' titles and files.
+
+        The contradiction rule applies after ranking: the lower-scored side of a `contradicts`
+        pair is dropped, but only when the pair has actually co-injected before (evidence in
+        `attempts.lesson_ids`) — never on the edge's assertion alone. Suppressions are logged
+        to the run's `learning.log`, next to the injected lesson ids the attempts record.
+        """
         run = self.store.get_run(run_id)
         if self.learning is None or run.learning_profile is None:
             return []
@@ -151,7 +164,20 @@ class Harness:
             [path for c in cards for path in c.files_hint],
         )
         settings = self.config.learning
-        return select_lessons(lessons, role, terms, settings.max_lessons, settings.max_chars)
+        chosen = select_lessons(lessons, role, terms, settings.max_lessons, settings.max_chars)
+        try:
+            db = self.learning.db_for(run.learning_profile)
+        except LearningError:  # the profile was deleted after the run started
+            return chosen
+        kept, suppressions = suppress_contradictions(
+            db, self.store.connection, run.learning_profile, chosen
+        )
+        for suppression in suppressions:
+            append_log(
+                log_path(self.state_dir, run_id, "run", "learning.log"),
+                f"suppressed {suppression.lesson} ({suppression.reason})\n",
+            )
+        return kept
 
     def has_tests(self) -> bool:
         return any((self.repo / name).is_dir() for name in ("tests", "test"))

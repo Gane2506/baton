@@ -46,6 +46,7 @@
         <form class="inline" method="post" action="/learning/enable">{{ csrf_input() }}<input type="hidden" name="profile" value="{{ p.name }}"><button class="btn btn-sm btn-secondary" type="submit">Enable</button></form>
         {% endif %}
         <form class="inline" method="post" action="/learning/flush">{{ csrf_input() }}<input type="hidden" name="profile" value="{{ p.name }}"><button class="btn btn-sm btn-danger" type="submit">Delete lessons…</button></form>
+        <form class="inline" method="post" action="/learning/delete">{{ csrf_input() }}<input type="hidden" name="profile" value="{{ p.name }}"><button class="btn btn-sm btn-danger" type="submit">Delete profile…</button></form>
       </div></td>
     </tr>
   {% endfor %}
@@ -66,11 +67,143 @@
   <p class="hint">Shared profiles live in <span class="mono">{{ lv.shared_path }}</span>.</p>
 </section>
 
+<h2 class="section" id="laya">Laya tuning</h2>
+<section class="panel">
+  <p class="hint">Suggestions from <code>jev laya tune</code>: weight changes learned from how past
+  decisions turned out. Review suggestion by suggestion, then apply.</p>
+  <form method="get" action="/learning" class="actions">
+    <input type="hidden" name="profile" value="{{ lv.selected or '' }}">
+    <label for="laya-profile">Profile</label>
+    <select id="laya-profile" name="laya_profile">
+      {% for pname in laya.profiles %}<option value="{{ pname }}"{% if pname == laya.profile %} selected{% endif %}>{{ pname }}</option>{% endfor %}
+    </select>
+    <button class="btn btn-sm btn-secondary" type="submit">Show suggestions</button>
+  </form>
+  {% if laya.profile %}
+  <p class="small">Current weights: <span class="mono">{{ laya.source }}</span>; outcomes:
+  {{ laya.passed }} passed, {{ laya.failed }} failed.</p>
+  {% if laya.configured %}
+  <p class="flash warn small" role="note">{{ icon("i-alert", "sm") }}<span><code>jev.toml</code> sets
+  <code>[dispatcher.laya] weights</code>, which always win — tune suggestions cannot be applied
+  to this profile. Edit the weights in <code>jev.toml</code> instead.</span></p>
+  {% elif laya.suggestion %}
+  <form method="post" action="/learning/laya/apply">
+    {{ csrf_input() }}
+    <input type="hidden" name="profile" value="{{ laya.profile }}">
+    <div class="table-wrap"><table>
+      <thead><tr><th>Criterion</th><th class="num">Passed avg</th><th class="num">Failed avg</th><th class="num">Current</th><th class="num">Suggested</th><th>Apply</th></tr></thead>
+      <tbody>
+      {% for e in laya.suggestion.evidence %}
+        <tr>
+          <td>{{ e.criterion }}</td>
+          <td class="num">{{ "%.2f" % e.passed_mean }}</td>
+          <td class="num">{{ "%.2f" % e.failed_mean }}</td>
+          <td class="num">{{ "%.3f" % e.current }}</td>
+          <td class="num">{{ "%.3f" % e.suggested }}</td>
+          <td><label class="check"><input type="checkbox" name="accept_{{ e.criterion }}" checked><span class="sr-only">Apply {{ e.criterion }}</span></label></td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table></div>
+    <div class="actions">
+      <button class="btn btn-primary" type="submit">Apply selected</button>
+    </div>
+  </form>
+  {% if laya.tuned %}
+  <form method="post" action="/learning/laya/reset" data-confirm="Remove the tuned weights from {{ laya.profile }}? Its runs go back to the configured weights.">
+    {{ csrf_input() }}
+    <input type="hidden" name="profile" value="{{ laya.profile }}">
+    <button class="btn btn-secondary" type="submit">Reset tuned weights</button>
+  </form>
+  {% endif %}
+  {% else %}
+  <p class="muted">{{ laya.reason }}</p>
+  {% endif %}
+  {% else %}
+  <p class="muted">No profiles yet — turn learning on to create one.</p>
+  {% endif %}
+</section>
+
 {% if lv.selected %}
 <div class="panel-head">
   <h2 class="section">Lessons in {{ lv.selected }}</h2>
   <p class="small muted">{% if include_retired %}<a class="btn btn-sm btn-ghost" href="/learning?profile={{ lv.selected | urlencode }}">Hide retired lessons</a>{% else %}<a class="btn btn-sm btn-ghost" href="/learning?profile={{ lv.selected | urlencode }}&amp;all=1">Include retired lessons</a>{% endif %}</p>
 </div>
+<div class="actions" style="margin-bottom: var(--s3)">
+  <a class="btn btn-sm {% if tab != 'graph' %}btn-primary{% else %}btn-ghost{% endif %}" href="/learning?profile={{ lv.selected | urlencode }}{% if include_retired %}&amp;all=1{% endif %}">List</a>
+  <a class="btn btn-sm {% if tab == 'graph' %}btn-primary{% else %}btn-ghost{% endif %}" href="/learning?profile={{ lv.selected | urlencode }}&amp;tab=graph">Graph</a>
+</div>
+{% if tab == "graph" and graph %}
+{% set edges = graph.stats.edges %}
+<p class="small muted">{{ graph.stats.lessons }} lessons{% if graph.stats.retired %} ({{ graph.stats.retired }} retired){% endif %} ·
+  edges: {% for kind in ["applies-to", "supersedes", "contradicts", "derived-from"] %}{% if edges.get(kind) %}{{ kind }} {{ edges[kind] }}{% if not loop.last %} · {% endif %}{% endif %}{% endfor %} ·
+  {{ graph.stats.contradictions_open }} open contradiction{{ "s" if graph.stats.contradictions_open != 1 }}</p>
+<section class="panel">
+  <form method="get" action="/learning" class="actions">
+    <input type="hidden" name="profile" value="{{ lv.selected }}">
+    <input type="hidden" name="tab" value="graph">
+    <input type="search" name="q" value="{{ graph.q }}" placeholder="Search lessons…" aria-label="Search lessons">
+    <button class="btn btn-secondary" type="submit">Search</button>
+    {% if graph.q or graph.module or graph.relation %}<a class="btn btn-ghost" href="/learning?profile={{ lv.selected | urlencode }}&amp;tab=graph">Clear</a>{% endif %}
+  </form>
+  {% if graph.modules %}
+  <div class="actions">
+    <span class="small muted">Modules:</span>
+    {% for path, n in graph.modules %}
+    <a class="btn btn-sm {% if graph.module == path %}btn-primary{% else %}btn-ghost{% endif %}" href="/learning?profile={{ lv.selected | urlencode }}&amp;tab=graph{% if graph.q %}&amp;q={{ graph.q | urlencode }}{% endif %}{% if graph.relation %}&amp;rel={{ graph.relation }}{% endif %}&amp;module={{ path | urlencode }}">{{ path }} ({{ n }})</a>
+    {% endfor %}
+  </div>
+  {% endif %}
+  <div class="actions">
+    <span class="small muted">Relations:</span>
+    {% for key, label in relation_facets %}
+    <a class="btn btn-sm {% if graph.relation == key %}btn-primary{% else %}btn-ghost{% endif %}" href="/learning?profile={{ lv.selected | urlencode }}&amp;tab=graph{% if graph.q %}&amp;q={{ graph.q | urlencode }}{% endif %}{% if graph.module %}&amp;module={{ graph.module | urlencode }}{% endif %}{% if graph.relation != key %}&amp;rel={{ key }}{% endif %}">{{ label }}</a>
+    {% endfor %}
+  </div>
+</section>
+{% if graph.focus %}
+<section class="panel">
+  <h3>Neighborhood of {{ graph.focus.id }}</h3>
+  <p class="wrap">{{ graph.focus.text }}</p>
+  <svg viewBox="0 0 320 320" width="320" height="320" role="img" aria-label="One-hop neighborhood of {{ graph.focus.id }}">
+    {% for link in graph.links %}
+    <line x1="{{ "%.1f" % link.x1 }}" y1="{{ "%.1f" % link.y1 }}" x2="{{ "%.1f" % link.x2 }}" y2="{{ "%.1f" % link.y2 }}" stroke="{{ link.color }}" stroke-width="1.5"/>
+    <text x="{{ "%.1f" % ((link.x1 + link.x2) / 2) }}" y="{{ "%.1f" % ((link.y1 + link.y2) / 2 - 4) }}" font-size="9" fill="{{ link.color }}" text-anchor="middle">{{ link.label }}</text>
+    {% endfor %}
+    {% for node in graph.nodes %}
+    <circle cx="{{ "%.1f" % node.x }}" cy="{{ "%.1f" % node.y }}" r="{{ 15 if node.kind == "focus" else 11 }}" fill="var(--surface-2)" stroke="var(--border-strong)" stroke-width="1.5"/>
+    <text x="{{ "%.1f" % node.x }}" y="{{ "%.1f" % (node.y + 3) }}" font-size="9" fill="var(--fg)" text-anchor="middle">{{ node.label }}</text>
+    {% endfor %}
+  </svg>
+  <ul class="small">
+    {% for edge in graph.focus_edges %}
+    <li><span class="mono">{{ edge.direction }}</span> {{ edge.edge }} <span class="mono">{{ edge.other }}</span> <span class="muted">({{ edge.origin }})</span></li>
+    {% endfor %}
+    {% for other, times in graph.focus_co_occurs %}
+    <li>co-occurs-with <span class="mono">{{ other }}</span> <span class="muted">(injected together {{ times }}×)</span></li>
+    {% endfor %}
+  </ul>
+</section>
+{% endif %}
+{% if graph.rows %}
+<div class="table-wrap"><table>
+  <thead><tr><th>ID</th><th class="num">Score</th><th class="num">Uses</th><th>Relations</th><th>Lesson</th></tr></thead>
+  <tbody>
+  {% for row in graph.rows %}
+    <tr>
+      <td class="mono"><a href="/learning?profile={{ lv.selected | urlencode }}&amp;tab=graph{% if graph.q %}&amp;q={{ graph.q | urlencode }}{% endif %}{% if graph.module %}&amp;module={{ graph.module | urlencode }}{% endif %}{% if graph.relation %}&amp;rel={{ graph.relation }}{% endif %}&amp;lesson={{ row.lesson.id }}">{{ row.lesson.id }}</a></td>
+      <td class="num">{{ "%g" % row.lesson.score }}</td>
+      <td class="num">{{ row.lesson.uses }}</td>
+      <td class="small">{% if row.relations["contradicts"] %}<span title="contradictions">⚠{{ row.relations["contradicts"] }}</span> {% endif %}{% if row.relations["supersedes"] %}<span title="supersedes">⇢{{ row.relations["supersedes"] }}</span> {% endif %}{% if row.relations["superseded-by"] %}<span title="superseded by">⇠{{ row.relations["superseded-by"] }}</span> {% endif %}{% if row.relations["applies-to"] %}<span title="modules">{{ row.relations["applies-to"] }}▤</span>{% endif %}</td>
+      <td class="wrap">{{ row.lesson.text }}{% if row.modules %}<br><span class="small muted">{{ row.modules | join(", ") }}</span>{% endif %}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table></div>
+{% else %}
+<div class="empty"><div class="title">No lessons match</div><p>Clear the search or the facets to see the whole graph.</p></div>
+{% endif %}
+{% else %}
 {% if lv.lessons %}
 <div class="table-wrap"><table>
   <thead><tr><th>ID</th>{% if include_retired %}<th>Retired</th>{% endif %}<th>Roles</th><th>Tags</th><th class="num">Score</th><th class="num">Uses</th><th>Lesson</th><th>Source</th><th><span class="sr-only">actions</span></th></tr></thead>
@@ -92,6 +225,7 @@
 </table></div>
 {% else %}
 <div class="empty"><div class="title">No lessons</div><p>This profile has not learned anything yet.</p></div>
+{% endif %}
 {% endif %}
 {% endif %}
 {% endblock %}
