@@ -458,3 +458,110 @@ async def test_pipeline_resume_emits_run_resumed(store: Store, tmp_path: Path) -
     assert resumed["from_state"] == "NEEDS_HUMAN"
     assert resumed["via"] == "resume command"
     assert advanced == [run.id]
+
+
+# ---- Phase 1: backfill ---------------------------------------------------------------
+
+
+def _old_run_without_events(tmp_path: Path) -> tuple[Path, str]:
+    """A run built with the log disabled, as if it predates the event log."""
+    from jev_agent.core.models import ValidationResult
+    from jev_agent.quality.models import GateResult
+
+    db = tmp_path / "old.db"
+    with Store.open(db, events_enabled=False) as store:
+        run = store.create_run(_idea(tmp_path))
+        store.set_run_plan(run.id, _plan("T1", "T2"), 1)
+        store.upsert_tasks(run.id, _plan("T1", "T2"))
+        store.set_task_state(run.id, "T1", TaskState.DONE)
+        store.set_run_validation(
+            run.id, ValidationResult(verdict="approve", issues=[], challenges=[])
+        )
+        attempt_id = store.start_attempt(run.id, "T1", 1, "coder", "w")
+        store.finish_attempt(
+            attempt_id,
+            WorkerResult(status="success", summary="ok", raw_log_path=tmp_path / "l"),
+        )
+        store.record_decision(run.id, "T1", _decision_request(), _decision())
+        store.add_quality_report(
+            run.id, GateResult(level="basic", scope="task", task_id="T1", blocked=False)
+        )
+        store.set_run_state(run.id, RunState.EXECUTING)
+        assert store.list_events(run.id) == []
+        return db, run.id
+
+
+def test_backfill_synthesizes_a_timeline(tmp_path: Path) -> None:
+    from jev_agent.core.backfill import backfill_run
+
+    db, run_id = _old_run_without_events(tmp_path)
+    with Store.open(db) as store:  # log enabled now
+        count = backfill_run(store, run_id)
+        assert count > 0
+        events = store.list_events(run_id)
+        assert len(events) == count
+        assert all(e.synthetic for e in events)
+        assert all(e.parent_run_seq is None for e in events)  # no causal links
+        types = [e.type for e in events]
+        assert types[0] == EventType.RUN_CREATED
+        for wanted in (
+            EventType.PLAN_SET,
+            EventType.TASKS_UPSERTED,
+            EventType.TASK_STATE_CHANGED,
+            EventType.VALIDATION_RECORDED,
+            EventType.ATTEMPT_STARTED,
+            EventType.ATTEMPT_FINISHED,
+            EventType.DECISION_REQUESTED,
+            EventType.DECISION_RECORDED,
+            EventType.GATE_CHECKED,
+            EventType.RUN_STATE_CHANGED,
+        ):
+            assert wanted in types, f"missing {wanted}"
+        # gapless ordering, every payload validates
+        assert [e.run_seq for e in events] == list(range(1, count + 1))
+        for e in events:
+            e.typed_payload()
+        # the finished event recovered its duration and cost-less summary
+        finished = next(e for e in events if e.type == EventType.ATTEMPT_FINISHED)
+        assert finished.payload["status"] == "success"
+        assert finished.payload["duration_s"] is not None
+
+
+def test_backfill_refuses_runs_with_events(tmp_path: Path) -> None:
+    from jev_agent.core.backfill import BackfillError, backfill_run
+
+    db, run_id = _old_run_without_events(tmp_path)
+    with Store.open(db) as store:
+        assert backfill_run(store, run_id) > 0
+        with pytest.raises(BackfillError, match="already has events"):
+            backfill_run(store, run_id)  # second run: no duplicates
+        with pytest.raises(NotFoundError):
+            backfill_run(store, "nope")
+
+
+def test_backfill_refuses_live_runs(tmp_path: Path) -> None:
+    """A run written with the log on already has real events: backfill says no."""
+    from jev_agent.core.backfill import BackfillError, backfill_run
+
+    with Store.open(tmp_path / "live.db") as store:
+        run = store.create_run(_idea(tmp_path))
+        with pytest.raises(BackfillError, match="already has events"):
+            backfill_run(store, run.id)
+
+
+def test_backfill_cli(fixture_repo: Path, tmp_path: Path) -> None:
+    from typer.testing import CliRunner
+
+    from jev_agent.app.context import state_db_path
+    from jev_agent.cli.app import app
+
+    db, run_id = _old_run_without_events(tmp_path)
+    target = state_db_path(fixture_repo)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(db.read_bytes())
+    result = CliRunner().invoke(app, ["events", "backfill", run_id, "--repo", str(fixture_repo)])
+    assert result.exit_code == 0, result.output
+    assert "backfilled" in result.output
+    timeline = CliRunner().invoke(app, ["events", run_id, "--repo", str(fixture_repo)])
+    assert timeline.exit_code == 0, timeline.output
+    assert "~" in timeline.output  # synthetic markers

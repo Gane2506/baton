@@ -185,3 +185,28 @@ def timeline(
         return
     for event in events:
         console.print(_event_line(event))
+
+
+@events_app.command("backfill")
+def backfill(
+    run_id: RunIdArg,
+    repo: RepoOption = Path("."),
+) -> None:
+    """Synthesize events for a run that predates the event log.
+
+    Reads the snapshot tables (runs, tasks, attempts, decisions, quality reports)
+    and writes one synthetic event per recorded fact, ordered by timestamp. Synthetic
+    events are marked `~` in the timeline and carry no causal links: snapshots record
+    what is, not what happened. Runs once per run; refuses runs that already have
+    events.
+    """
+    from jev_agent.core.backfill import BackfillError, backfill_run
+
+    with repo_context(repo, create=False) as rctx:
+        try:
+            count = backfill_run(rctx.store, run_id)
+        except NotFoundError as exc:
+            raise fail(str(exc)) from exc
+        except BackfillError as exc:
+            raise fail(str(exc)) from exc
+    console.print(f"[green]backfilled {count} synthetic events for run {escape(run_id)}[/green]")
