@@ -33,7 +33,7 @@ console = Console()
 
 learning_app = typer.Typer(
     name="learning",
-    help="Lessons from past runs that feed future runs: profiles, on/off, flush.",
+    help="Lessons from past runs that feed future runs: profiles, on/off, delete.",
     no_args_is_help=True,
 )
 

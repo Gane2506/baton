@@ -5,8 +5,20 @@
 <div class="page-head">
   <div class="titles">
     <h1>Board</h1>
-    <p class="lede">Queued ideas and every run by stage; updates every few seconds.
-    {% if show_all %}<a href="/">Show the last 10 done runs</a>{% else %}<a href="/?all=1">Show every done run</a>{% endif %}</p>
+    <p class="lede">Queued ideas and every run by stage; updates every few seconds.</p>
+  </div>
+  <div class="actions">
+    <form class="inline" method="get" action="/" title="The Done column shows the last {{ done_limit }} runs unless this is on.">
+      <label class="check"><input type="checkbox" name="all" value="1"{% if show_all %} checked{% endif %} onchange="this.form.submit()"> Show every done run</label>
+    </form>
+    <details class="legend">
+      <summary>States legend</summary>
+      <dl>
+        {% for column, states in legend %}
+        <div><dt>{{ column }}</dt><dd>{{ states }}</dd></div>
+        {% endfor %}
+      </dl>
+    </details>
   </div>
 </div>
 
@@ -41,7 +53,7 @@
         <input type="text" id="profile" name="profile" placeholder="(optional)" maxlength="80">
       </div>
       <div>
-        <label for="ship_mode">After both votes approve</label>
+        <label for="ship_mode">After the plan passes review</label>
         <select id="ship_mode" name="ship_mode">
           <option value="" title="from jev.toml">Use default</option>
           <option value="merge">ship and merge (--auto-ship)</option>

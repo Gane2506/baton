@@ -44,7 +44,7 @@ from starlette.staticfiles import StaticFiles
 from jev_agent import __version__
 from jev_agent.app import chat, settings
 from jev_agent.app.errors import JevError
-from jev_agent.cli.board_cmds import format_age
+from jev_agent.cli.board_cmds import DONE_LIMIT, format_age, state_legend
 from jev_agent.cli.quality_cmds import review_text
 from jev_agent.cli.status_cmds import format_answers, format_time
 from jev_agent.config import STATE_DIRNAME, ConfigError
@@ -548,6 +548,8 @@ class Dashboard:
             lambda repo: {
                 "columns": views.board(repo, show_all),
                 "show_all": show_all,
+                "done_limit": DONE_LIMIT,
+                "legend": state_legend(),
                 "priorities": QUEUE_PRIORITIES,
                 "levels": LEVELS,
                 "profiles": repo.learning.profiles(),
@@ -1630,7 +1632,7 @@ def _chat_learning(value: str | None) -> ChatLearning:
 
 
 def _ship_mode(repo: views.Repo, value: str | None) -> str | None:
-    """The queue form's "after both votes approve" choice; it needs shipping on."""
+    """The queue form's "after review passes" ship choice; it needs shipping on."""
     if not value:
         return None
     if not repo.config.ship.enabled:

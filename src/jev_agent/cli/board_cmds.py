@@ -43,6 +43,11 @@ COLUMN_FOR_STATE: dict[RunState, str] = {
     RunState.PLANNING: "Planning",
     RunState.VALIDATING: "Planning",
     RunState.AWAITING_APPROVAL: "Awaiting approval",
+    # ASK_EVERY_STEP's per-step gates: each one waits on the user, like AWAITING_APPROVAL.
+    RunState.AWAITING_PLANNING: "Awaiting approval",
+    RunState.AWAITING_VALIDATING: "Awaiting approval",
+    RunState.AWAITING_INTEGRATING: "Awaiting approval",
+    RunState.AWAITING_SHIPPING: "Awaiting approval",
     RunState.EXECUTING: "Running",
     RunState.INTEGRATING: "Running",
     RunState.AWAITING_SHIP: "Awaiting approval",
@@ -56,6 +61,56 @@ COLUMN_FOR_STATE: dict[RunState, str] = {
 DONE_LIMIT = 10  # Done shows the most recent runs only, unless --all
 WIDE_MIN_WIDTH = 140  # below this, columns are stacked vertically
 _STYLE = {"Done": "green", "Awaiting approval": "yellow", "Blocked": "red", "Running": "cyan"}
+
+# Plain-language phrases for run states, used on board cards instead of the
+# enum names (no state-enum shouting). Every RunState must appear here.
+RUN_STATE_PHRASE: dict[RunState, str] = {
+    RunState.INTAKE: "intake",
+    RunState.PLANNING: "planning",
+    RunState.VALIDATING: "validating the plan",
+    RunState.AWAITING_APPROVAL: "waiting for your approval",
+    RunState.AWAITING_PLANNING: "waiting for your approval to plan",
+    RunState.AWAITING_VALIDATING: "waiting for your approval to validate",
+    RunState.AWAITING_INTEGRATING: "waiting for your approval to integrate",
+    RunState.AWAITING_SHIPPING: "waiting for your approval to ship",
+    RunState.EXECUTING: "executing",
+    RunState.INTEGRATING: "integrating",
+    RunState.AWAITING_SHIP: "waiting for your approval to ship",
+    RunState.SHIPPING: "shipping",
+    RunState.DONE: "done",
+    RunState.NEEDS_HUMAN: "waiting on you",
+    RunState.FAILED: "failed",
+    RunState.BUDGET_EXCEEDED: "over budget",
+    RunState.CANCELLED: "cancelled",
+}
+
+# Plain-language phrases for task states, for the same reason.
+TASK_STATE_PHRASE: dict[TaskState, str] = {
+    TaskState.PENDING: "pending",
+    TaskState.READY: "ready",
+    TaskState.DISPATCHED: "dispatched",
+    TaskState.RUNNING: "running",
+    TaskState.TESTING: "testing",
+    TaskState.REVIEWING: "in review",
+    TaskState.RETRY: "retrying",
+    TaskState.ESCALATE: "escalated",
+    TaskState.REASSIGN: "reassigning",
+    TaskState.DONE: "done",
+    TaskState.FAILED: "failed",
+    TaskState.NEEDS_HUMAN: "needs you",
+}
+
+
+def state_legend() -> list[tuple[str, str]]:
+    """One line per board column for the dashboard's states legend popover:
+
+    `(column, "plain phrases of the run states that land in it")`.
+    """
+    lines: list[tuple[str, str]] = [("Backlog", "queued ideas, not started yet")]
+    for column in COLUMNS[1:]:
+        phrases = [RUN_STATE_PHRASE[s] for s, c in COLUMN_FOR_STATE.items() if c == column]
+        lines.append((column, ", ".join(phrases)))
+    return lines
 
 
 @dataclass(frozen=True)
@@ -77,10 +132,10 @@ def format_age(since: datetime, now: datetime) -> str:
 
 
 def current_task(tasks: Sequence[TaskRecord]) -> str:
-    """`T2 RUNNING`: the first task (in plan order) that is not done, or ``."""
+    """`T2 running`: the first task (in plan order) that is not done, or ``."""
     for task in tasks:
         if task.state is not TaskState.DONE:
-            return f"{task.id} {task.state}"
+            return f"{task.id} {TASK_STATE_PHRASE[task.state]}"
     return ""
 
 
@@ -116,11 +171,11 @@ def build_board(
         if column == "Done" and not show_all and len(board["Done"]) >= DONE_LIMIT:
             continue
         if column == "Blocked":
-            detail = str(run.state)
+            detail = RUN_STATE_PHRASE[run.state]
         elif column == "Done":
             detail = ""
         else:
-            detail = current_task(tasks.get(run.id, ())) or str(run.state)
+            detail = current_task(tasks.get(run.id, ())) or RUN_STATE_PHRASE[run.state]
         board[column].append(
             Card(
                 short(run.idea.text, title_width),

@@ -53,23 +53,25 @@ QualityOption = Annotated[
     typer.Option(
         "--quality",
         metavar="LEVEL",
-        help=f"Quality gate level for the run ({' | '.join(LEVELS)}); overrides [quality] level.",
+        help=f"Quality gate level for this run ({' | '.join(LEVELS)}); "
+        "overrides the jev.toml \\[quality] level.",
     ),
 ]
 AutoShipOption = Annotated[
     bool,
     typer.Option(
         "--auto-ship",
-        help="Once both votes approve at D6, ship and merge without asking "
-        "(overrides [ship] after_approval).",
+        help="After the plan passes both review votes, ship and merge without asking "
+        "(overrides the jev.toml \\[ship] setting; see docs/decisions.md).",
     ),
 ]
 AskBeforeShipOption = Annotated[
     bool,
     typer.Option(
         "--ask-before-ship",
-        help="Once both votes approve at D6, wait for `jev ship approve|modify|stop` "
-        "(overrides [ship] after_approval).",
+        help="After the plan passes both review votes, wait for your ship decision "
+        "(`jev ship approve|modify|stop`; overrides the jev.toml \\[ship] setting; "
+        "see docs/decisions.md).",
     ),
 ]
 ProfileOption = Annotated[
@@ -260,8 +262,8 @@ def approve(
     ] = False,
     repo: RepoOption = Path("."),
 ) -> None:
-    """Approve a validated plan and execute it, or a run waiting to ship (as
-    `jev ship approve`): ship and merge it.
+    """Approve a validated plan and execute it — or approve a run waiting to ship
+    (`jev ship approve`), which ships and merges it.
 
     Exit codes: 0 done or awaiting approval, 3 stopped short of DONE, 1 error."""
     with cli_context(repo) as ctx:

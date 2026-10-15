@@ -60,7 +60,8 @@ def _print_runs(runs: list[RunRecord]) -> None:
         return
     table = Table(title="runs")
     table.add_column("run", no_wrap=True)
-    for column in ("state", "spent", "updated", "idea"):
+    table.add_column("state", no_wrap=True, overflow="ellipsis")
+    for column in ("spent", "updated", "idea"):
         table.add_column(column, overflow="fold")
     for r in runs:
         idea = r.idea.text if len(r.idea.text) <= 60 else r.idea.text[:57] + "..."

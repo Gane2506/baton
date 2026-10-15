@@ -544,6 +544,51 @@ def test_learning_page_and_actions(client: TestClient, planned: tuple[Path, str]
     assert "learning is off for this repo" in client.get("/learning").text
 
 
+def _repo_toggle_buttons(page_text: str) -> tuple[int, int]:
+    """`(on buttons, off buttons)` for the repo-level learning switch."""
+    return page_text.count(">Turn learning on</button>"), page_text.count(
+        ">Turn learning off</button>"
+    )
+
+
+def test_learning_toggle_is_one_button_reflecting_state(
+    client: TestClient, planned: tuple[Path, str]
+) -> None:
+    page = client.get("/learning").text
+    assert _repo_toggle_buttons(page) == (1, 0)  # off: only "Turn learning on"
+
+    _post(client, "/learning/enable")
+    page = client.get("/learning").text
+    assert _repo_toggle_buttons(page) == (0, 1)  # on: only "Turn learning off"
+
+    _post(client, "/learning/disable")
+    page = client.get("/learning").text
+    assert _repo_toggle_buttons(page) == (1, 0)
+
+
+def test_kpis_labels_unfinished_runs(client: TestClient, planned: tuple[Path, str]) -> None:
+    repo, run_id = planned
+    with _store(repo) as store:
+        store.set_run_state(run_id, RunState.FAILED)
+    page = client.get("/kpis").text
+    assert "Unfinished" in page
+    assert "Stopped" not in page
+    assert '<div class="stat-value">1</div>' in page  # one unfinished run
+
+
+def test_board_has_legend_and_labeled_done_control(
+    client: TestClient, planned: tuple[Path, str]
+) -> None:
+    page = client.get("/").text
+    assert "States legend" in page
+    for column in ("Backlog", "Planning", "Awaiting approval", "Running", "Done", "Blocked"):
+        assert column in page
+    # the done-runs switch is a labeled control, not a bare link
+    assert 'name="all"' in page and "Show every done run" in page
+    assert "Show the last 10 done runs" not in page
+    assert "/?all=1" not in page
+
+
 def test_learning_flush_requires_confirmation(
     client: TestClient, planned: tuple[Path, str]
 ) -> None:

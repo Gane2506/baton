@@ -13,7 +13,7 @@
 <div class="stats">
   <div class="stat"><div class="stat-label">Runs</div><div class="stat-value">{{ rk.total }}</div></div>
   <div class="stat"><div class="stat-label">Done</div><div class="stat-value">{{ rk.done }}</div></div>
-  <div class="stat"><div class="stat-label">Stopped</div><div class="stat-value">{{ rk.stopped }}</div></div>
+  <div class="stat"><div class="stat-label">Unfinished</div><div class="stat-value">{{ rk.unfinished }}</div></div>
   <div class="stat"><div class="stat-label">Median cost / run</div><div class="stat-value">{{ rk.median_cost_usd | usd }}</div></div>
   <div class="stat"><div class="stat-label">Median run time</div><div class="stat-value">{{ fmt(rk.median_wall_clock_h, "hours") }}</div></div>
   <div class="stat"><div class="stat-label">First-pass rate</div><div class="stat-value">{{ fmt(rk.median_first_pass, "percent") }}</div></div>

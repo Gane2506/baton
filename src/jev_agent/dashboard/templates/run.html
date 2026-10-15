@@ -1,12 +1,13 @@
 {% extends "base.html" %}
 {% from "macros.html" import badge, state_badge, icon, copy_button with context %}
 {% set run = v.run %}
-{% block title %}Run {{ run.id }}{% endblock %}
+{% block title %}{{ run.idea.text }}{% endblock %}
 {% block content %}
 <div class="crumbs"><a href="/">Board</a>{{ icon("i-right", "sm") }}<span class="mono crumb-id" title="{{ run.id }}">{{ run.id }}</span></div>
 <div class="page-head">
   <div class="titles">
-    <h1 class="run-head"><span class="id">{{ run.id }}</span>{{ copy_button(run.id, "Copy run id") }}</h1>
+    <h1 class="run-head"><span class="idea-title">{{ run.idea.text }}</span></h1>
+    <p class="muted small">run <span class="mono">{{ run.id }}</span>{{ copy_button(run.id, "Copy run id") }}</p>
   </div>
 </div>
 

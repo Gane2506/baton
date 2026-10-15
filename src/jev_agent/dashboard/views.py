@@ -530,7 +530,7 @@ class RepoKpis:
 
     total: int
     done: int
-    stopped: int
+    unfinished: int  # runs that ended without reaching DONE (not a RunState)
     by_state: list[tuple[str, int]]
     median_cost_usd: float | None
     median_wall_clock_h: float | None
@@ -544,7 +544,7 @@ def product_kpis(repo: Repo) -> RepoKpis:
     """Aggregates over all of the repo's runs; the PR KPIs (`jev kpi`) are a separate view."""
     runs = repo.store.list_runs()
     done = [r for r in runs if r.state is RunState.DONE]
-    stopped_states = {
+    unfinished_states = {
         RunState.NEEDS_HUMAN,
         RunState.FAILED,
         RunState.BUDGET_EXCEEDED,
@@ -585,7 +585,7 @@ def product_kpis(repo: Repo) -> RepoKpis:
     return RepoKpis(
         total=len(runs),
         done=len(done),
-        stopped=sum(1 for r in runs if r.state in stopped_states),
+        unfinished=sum(1 for r in runs if r.state in unfinished_states),
         by_state=sorted(counts.items(), key=lambda item: (-item[1], item[0])),
         median_cost_usd=median([r.spend_usd for r in runs]),
         median_wall_clock_h=median(

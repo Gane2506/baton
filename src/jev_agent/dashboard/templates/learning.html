@@ -15,8 +15,11 @@
       <span class="muted">({{ lv.status.enabled_source }})</span>; active profile <strong>{{ lv.status.profile }}</strong>
       <span class="muted">({{ lv.status.profile_source }})</span>.</p>
     <div class="actions">
-      <form class="inline" method="post" action="/learning/enable">{{ csrf_input() }}<button type="submit">Turn learning on</button></form>
+      {% if lv.status.enabled %}
       <form class="inline" method="post" action="/learning/disable">{{ csrf_input() }}<button type="submit">Turn learning off</button></form>
+      {% else %}
+      <form class="inline" method="post" action="/learning/enable">{{ csrf_input() }}<button type="submit">Turn learning on</button></form>
+      {% endif %}
     </div>
   </div>
 </section>

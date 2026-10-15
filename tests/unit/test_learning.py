@@ -158,14 +158,14 @@ def test_precedence_flag_over_setting_over_config(store: Store, learning: Learni
     # jev.toml turns learning on; its profile is created on first use.
     assert resolve_learning(store, learning, config) == "cfg"
     assert learning.get("cfg") is not None
-    assert learning_status(store, config).enabled_source == "config"
+    assert learning_status(store, config).enabled_source == "jev.toml"
     # A CLI setting beats jev.toml...
     learning.create("cli")
     set_active_profile(store, "cli")
     assert resolve_learning(store, learning, config) == "cli"
     set_repo_learning(store, False)
     assert resolve_learning(store, learning, config) is None
-    assert learning_status(store, config).enabled_source == "cli setting"
+    assert learning_status(store, config).enabled_source == "the switch"
     # ...and run flags beat both.
     learning.create("flag")
     assert resolve_learning(store, learning, config, flag_profile="flag") == "flag"

@@ -236,10 +236,10 @@ def test_build_board_groups_runs_and_queue(tmp_path: Path) -> None:
         "Blocked": ["budget", "cancelled", "human"],
     }
     running = next(c for c in board["Running"] if c.title == "running")
-    assert running.detail == "T2 RUNNING" and running.spend_usd == 0.5
+    assert running.detail == "T2 running" and running.spend_usd == 0.5
     assert board["Backlog"][0].detail == "high plan-only" and board["Backlog"][0].ref == "queue #1"
-    assert board["Blocked"][2].detail == "NEEDS_HUMAN"
-    assert board["Running"][0].detail == "INTEGRATING"  # no tasks: show the run state
+    assert board["Blocked"][2].detail == "waiting on you"
+    assert board["Running"][0].detail == "integrating"  # no tasks: show the run state
 
 
 def test_board_limits_done_unless_all(tmp_path: Path) -> None:

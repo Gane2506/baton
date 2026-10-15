@@ -66,7 +66,7 @@ def test_profile_commands(repo: Path, tmp_path: Path) -> None:
     assert code == 1 and "no learning profile named 'nope'" in out
     code, out = _jev(repo, "learning", "list")
     assert code == 0
-    assert "learning is on for this repo (cli setting); active profile: work (cli setting)" in out
+    assert "learning is on for this repo (the switch); active profile: work (the switch)" in out
     for row in ("default repo yes 0", "team shared yes 0", "work repo yes 0 *"):
         assert row in out, row
 
@@ -104,7 +104,7 @@ def test_profile_commands(repo: Path, tmp_path: Path) -> None:
     code, out = _jev(repo, "learning", "disable")
     assert code == 0 and "Learning is off for this repo" in out
     code, out = _jev(repo, "learning", "list")
-    assert "learning is off for this repo (cli setting)" in out
+    assert "learning is off for this repo (the switch)" in out
 
 
 def test_run_with_learning_flags(repo: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -172,7 +172,7 @@ def test_doctor_learning_rows(repo: Path, monkeypatch: pytest.MonkeyPatch) -> No
     checks = {c.name: c for c in doctor_cmd.run_checks(repo)}
     assert checks["learning"].status == "ok"
     assert checks["learning"].detail.startswith(
-        "on (cli setting); profile default (repo, 1 lesson(s))"
+        "on (the switch); profile default (repo, 1 lesson(s))"
     )
 
     (repo / "jev.toml").write_text(CONFIG + "[roles.learner]\nworkers = []\n")
