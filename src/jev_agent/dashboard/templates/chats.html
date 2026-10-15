@@ -24,8 +24,8 @@
       <div>
         <label for="worker">Backend</label>
         <select id="worker" name="worker">
-          <option value="api"{% if not api_ok %} disabled{% endif %}{% if api_ok %} selected{% endif %}>api (OpenRouter) - {{ api_note }}</option>
-          <option value="claude_code"{% if not cc_ok %} disabled{% endif %}{% if not api_ok and cc_ok %} selected{% endif %}>claude_code - {{ cc_note }}</option>
+          <option value="api"{% if not api_ok %} disabled{% endif %}{% if api_ok %} selected{% endif %}>OpenRouter API · {{ api_note }}</option>
+          <option value="claude_code"{% if not cc_ok %} disabled{% endif %}{% if not api_ok and cc_ok %} selected{% endif %}>Claude Code · {{ cc_note }}</option>
         </select>
       </div>
       <div>
@@ -35,7 +35,7 @@
       <div>
         <label for="learning">Learning</label>
         <select id="learning" name="learning">
-          <option value="">repo default</option>
+          <option value="" title="from jev.toml">Use default</option>
           <option value="none">none</option>
           {% for p in profiles %}<option value="{{ p.name }}">{{ p.name }} ({{ p.scope }})</option>{% endfor %}
         </select>
@@ -70,7 +70,7 @@
       <td>
         <a href="/chats/{{ meta.chat_id }}">{{ title or "Untitled chat" }}</a>
         <div class="muted small mono">{{ meta.chat_id }}</div>
-        {% if meta.chat_id in busy_ids %}<div class="muted small">replying...</div>{% endif %}
+        {% if meta.chat_id in busy_ids %}<div class="muted small">replying…</div>{% endif %}
       </td>
       <td class="small">{{ meta.updated_at | time }}</td>
       <td>{{ meta.backend }}{% if meta.model %}<div class="muted small">{{ meta.model }}</div>{% endif %}</td>
@@ -78,7 +78,7 @@
       <td class="num">{{ meta.runs | length }}</td>
       <td class="num">{{ meta.spent_usd | usd }}<div class="muted small">of {{ meta.budget_usd | usd }}</div></td>
       <td>
-        <a href="/chats/{{ meta.chat_id }}">Continue</a>
+        <a class="button small" href="/chats/{{ meta.chat_id }}">Continue</a>
         <form class="inline" method="post" action="/chats/{{ meta.chat_id }}/delete" data-confirm="Delete chat {{ meta.chat_id }}? Its transcript and brief go away; runs it started are kept.">
           {{ csrf_input() }}<button class="small danger" type="submit">Delete</button>
         </form>

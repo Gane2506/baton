@@ -1,17 +1,17 @@
 {% extends "base.html" %}
 {% from "macros.html" import csrf_input, icon with context %}
-{% block title %}Flush {{ profile }}{% endblock %}
+{% block title %}Delete lessons from {{ profile }}{% endblock %}
 {% block content %}
 <div class="focus-page">
   <section class="panel">
-    <h1>Flush profile {{ profile }}?</h1>
-    <p>This deletes all {{ lessons }} lesson(s) of profile <strong>{{ profile }}</strong>. The profile itself stays. This cannot be undone.</p>
+    <h1>Delete lessons from {{ profile }}?</h1>
+    <p>This deletes all {{ lessons }} lesson{{ "s" if lessons != 1 }} of profile <strong>{{ profile }}</strong>. The profile itself stays. This cannot be undone.</p>
     <div class="actions">
       <form class="inline" method="post" action="/learning/flush">
         {{ csrf_input() }}
         <input type="hidden" name="profile" value="{{ profile }}">
         <input type="hidden" name="confirm" value="yes">
-        <button class="danger" type="submit">{{ icon("i-remove", "sm") }}Delete {{ lessons }} lesson(s)</button>
+        <button class="danger" type="submit">{{ icon("i-remove", "sm") }}Delete {{ lessons }} lesson{{ "s" if lessons != 1 }}</button>
       </form>
       <a class="button" href="/learning?profile={{ profile | urlencode }}">Keep them</a>
     </div>

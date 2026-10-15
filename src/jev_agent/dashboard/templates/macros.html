@@ -1,8 +1,9 @@
 {% macro csrf_input() %}<input type="hidden" name="{{ csrf_field }}" value="{{ csrf }}">{% endmacro %}
 
-{% macro badge(text, cls=none, live=false) %}<span class="badge{{ ' live' if live }} s-{{ cls if cls is not none else text }}">{{ text }}</span>{% endmacro %}
+{% macro badge(text, cls=none, live=false) %}{# Pulse means "active right now": the macro decides from the
+  status value, so callers never pass live for a mere state (E2/E3). #}{% set _live = live or (text|string|lower in ("running", "executing", "integrating", "shipping")) %}<span class="badge{{ ' live' if _live }} s-{{ cls if cls is not none else text }}">{{ text }}</span>{% endmacro %}
 
-{% macro state_badge(text) %}{{ badge(text, live=(text in ("RUNNING", "EXECUTING", "INTEGRATING", "SHIPPING"))) }}{% endmacro %}
+{% macro state_badge(text) %}{{ badge(text) }}{% endmacro %}
 
 {% macro icon(name, cls="") %}<svg class="icon {{ cls }}" aria-hidden="true"><use href="#{{ name }}"></use></svg>{% endmacro %}
 

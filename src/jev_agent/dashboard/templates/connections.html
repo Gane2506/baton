@@ -31,7 +31,7 @@
   </table></div>
   <form method="post" action="/connections/refresh">
     {{ csrf_input() }}
-    <button class="button" type="submit">Check now</button>
+    <button type="submit">Check now</button>
     <span class="hint">Opens one SSH connection per server (<code>ssh HOST true</code>, like
     <code>jev doctor --connect</code>) and records the result in the audit log.</span>
   </form>
@@ -53,7 +53,7 @@
   </ol>
   <p>Final step: {{ route.final }}</p>
   {% if route.warning %}
-  <div class="flash" role="note">{{ icon("i-alert", "sm") }}<span>{{ route.warning }}</span></div>
+  <div class="flash warn" role="note">{{ icon("i-alert", "sm") }}<span>{{ route.warning }}</span></div>
   {% endif %}
 </section>
 

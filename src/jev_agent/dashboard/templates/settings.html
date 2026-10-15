@@ -21,7 +21,7 @@
   </fieldset>
   {% elif f.path == "autonomy.access_tier" %}
   <select id="{{ field_id }}" name="value" data-tier-select>
-    <option value="unset">default (unset)</option>
+    <option value="unset" title="from jev.toml">Use default</option>
     {% for c in f.choices %}<option value="{{ c }}"{% if f.text == c %} selected{% endif %}>{{ c }}</option>{% endfor %}
   </select>
   <p class="hint tier-warning" data-tier-warning{% if f.text != "unrestricted" %} hidden{% endif %}>
@@ -44,18 +44,18 @@
   </div>
   {% elif f.kind == "bool" %}
   <select id="{{ field_id }}" name="value">
-    <option value="true"{% if f.text == "true" %} selected{% endif %}>true</option>
-    <option value="false"{% if f.text != "true" %} selected{% endif %}>false</option>
+    <option value="true"{% if f.text == "true" %} selected{% endif %}>On</option>
+    <option value="false"{% if f.text != "true" %} selected{% endif %}>Off</option>
   </select>
   {% elif f.kind == "tristate" %}
   <select id="{{ field_id }}" name="value">
-    <option value="unset"{% if not f.text %} selected{% endif %}>default (unset)</option>
-    <option value="true"{% if f.text == "true" %} selected{% endif %}>true</option>
-    <option value="false"{% if f.text == "false" %} selected{% endif %}>false</option>
+    <option value="unset"{% if not f.text %} selected{% endif %} title="from jev.toml">Use default</option>
+    <option value="true"{% if f.text == "true" %} selected{% endif %}>On</option>
+    <option value="false"{% if f.text == "false" %} selected{% endif %}>Off</option>
   </select>
   {% elif f.kind == "enum" %}
   <select id="{{ field_id }}" name="value">
-    <option value="unset">default (unset)</option>
+    <option value="unset" title="from jev.toml">Use default</option>
     {% for c in f.choices %}<option value="{{ c }}"{% if f.text == c %} selected{% endif %}>{{ c }}</option>{% endfor %}
   </select>
   {% elif f.kind == "list" %}
@@ -86,7 +86,7 @@
     <div class="field-actions">
       {% if f.source %}{{ badge(f.source, "note") }}{% endif %}
       <button class="small" type="submit">Save</button>
-      {% if f.source %}<button class="small" type="submit" formaction="/settings/unset" formnovalidate>Reset</button>{% endif %}
+      {% if f.source %}<button class="small" type="submit" formaction="/settings/unset" formnovalidate>Reset to default</button>{% endif %}
     </div>
   </form>
 {% endmacro %}
@@ -128,7 +128,7 @@
           <option value="user">user</option>
         </select>
         <button class="small" type="submit">Save</button>
-        <button class="small" type="submit" formaction="/settings/unset" formnovalidate>Unset</button>
+        <button class="small" type="submit" formaction="/settings/unset" formnovalidate>Reset to default</button>
       </div>
     </form>
     {% endfor %}
@@ -172,9 +172,9 @@
           <textarea id="a-{{ e.path | replace('.', '-') }}-{{ f.key }}" name="f_{{ f.key }}" rows="2" placeholder="one per line"></textarea>
           {% elif f.kind == "enum" or f.kind == "bool" %}
           <select id="a-{{ e.path | replace('.', '-') }}-{{ f.key }}" name="f_{{ f.key }}">
-            <option value="">(default)</option>
+            <option value="">Use default</option>
             {% for c in f.choices %}<option value="{{ c }}">{{ c }}</option>{% endfor %}
-            {% if f.kind == "bool" %}<option value="true">true</option><option value="false">false</option>{% endif %}
+            {% if f.kind == "bool" %}<option value="true">On</option><option value="false">Off</option>{% endif %}
           </select>
           {% else %}
           <input id="a-{{ e.path | replace('.', '-') }}-{{ f.key }}" type="text" name="f_{{ f.key }}" placeholder="{{ f.text }}">

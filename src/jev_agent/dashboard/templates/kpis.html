@@ -23,7 +23,7 @@
 <p class="hint">{% for name, count in rk.by_state %}{{ count }} {{ name }}{% if not loop.last %} / {% endif %}{% else %}No runs yet.{% endfor %}</p>
 {% if rk.latest %}
 <section class="panel">
-  <div class="panel-head"><h2>Latest finished run</h2><a class="small" href="/runs/{{ rk.latest.run.id }}">open run</a></div>
+  <div class="panel-head"><h2>Latest finished run</h2><a class="small" href="/runs/{{ rk.latest.run.id }}">Open run</a></div>
   <dl class="facts">
     <dt>Idea</dt><dd>{{ rk.latest.run.idea.text }}</dd>
     <dt>Tasks</dt><dd>{{ rk.latest.tasks_done }} of {{ rk.latest.tasks }} done</dd>

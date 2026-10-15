@@ -39,7 +39,7 @@
       <div>
         <label for="learning">Learning</label>
         <select id="learning" name="learning">
-          <option value="">repo setting</option>
+          <option value="" title="from jev.toml">Use default</option>
           <option value="none">none (--no-learning)</option>
           {% for p in q.profiles %}<option value="{{ p.name }}">{{ p.name }} ({{ p.scope }})</option>{% endfor %}
         </select>
@@ -47,7 +47,7 @@
       <div>
         <label for="quality">Quality</label>
         <select id="quality" name="quality">
-          <option value="">config level</option>
+          <option value="" title="from jev.toml">Use default</option>
           {% for level in levels %}<option value="{{ level }}">{{ level }}</option>{% endfor %}
         </select>
       </div>
@@ -58,13 +58,13 @@
       <div>
         <label for="ship_mode">After both votes approve</label>
         <select id="ship_mode" name="ship_mode">
-          <option value="">config setting</option>
+          <option value="" title="from jev.toml">Use default</option>
           <option value="merge">ship and merge (--auto-ship)</option>
           <option value="ask">ask me first (--ask-before-ship)</option>
         </select>
       </div>
       <div>
-        <label class="check"><input type="checkbox" name="plan_only"> plan only</label>
+        <label class="check"><input type="checkbox" name="plan_only"> Plan only</label>
       </div>
     </div>
     <button class="primary" type="submit">{{ icon("i-plus", "sm") }}Add to queue</button>
@@ -83,7 +83,7 @@
         <td class="wrap">{{ r.task.brief }}</td>
         <td class="small">{{ r.schedule_plain }}</td>
         <td class="mono">{{ r.next_due_local.strftime("%Y-%m-%d %H:%M %Z") }}</td>
-        <td>{% if r.task.enabled %}{{ badge("enabled", live=true) }}{% else %}{{ badge("paused", "pending") }}{% endif %}</td>
+        <td>{% if r.task.enabled %}{{ badge("enabled") }}{% else %}{{ badge("paused", "pending") }}{% endif %}</td>
         <td>
           <div class="actions">
           {% if r.task.enabled %}

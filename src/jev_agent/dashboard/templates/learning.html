@@ -30,7 +30,7 @@
     <tr>
       <td><a href="/learning?profile={{ p.name | urlencode }}">{{ p.name }}</a></td>
       <td>{{ p.scope }}</td>
-      <td>{{ "yes" if p.enabled else "no" }}</td>
+      <td>{{ badge("on", "ok") if p.enabled else badge("off", "pending") }}</td>
       <td class="num">{{ p.lessons }}</td>
       <td>{% if p.name == lv.status.profile %}{{ badge("active", "ok") }}{% endif %}</td>
       <td><div class="actions">
@@ -42,7 +42,7 @@
         {% else %}
         <form class="inline" method="post" action="/learning/enable">{{ csrf_input() }}<input type="hidden" name="profile" value="{{ p.name }}"><button class="small" type="submit">Enable</button></form>
         {% endif %}
-        <form class="inline" method="post" action="/learning/flush">{{ csrf_input() }}<input type="hidden" name="profile" value="{{ p.name }}"><button class="small danger" type="submit">Flush...</button></form>
+        <form class="inline" method="post" action="/learning/flush">{{ csrf_input() }}<input type="hidden" name="profile" value="{{ p.name }}"><button class="small danger" type="submit">Delete lessons…</button></form>
       </div></td>
     </tr>
   {% endfor %}
@@ -70,12 +70,12 @@
 </div>
 {% if lv.lessons %}
 <div class="table-wrap"><table>
-  <thead><tr><th>id</th>{% if include_retired %}<th>retired</th>{% endif %}<th>roles</th><th>tags</th><th class="num">score</th><th class="num">uses</th><th>lesson</th><th>source</th><th></th></tr></thead>
+  <thead><tr><th>id</th>{% if include_retired %}<th>retired</th>{% endif %}<th>roles</th><th>tags</th><th class="num">score</th><th class="num">uses</th><th>lesson</th><th>source</th><th><span class="sr-only">actions</span></th></tr></thead>
   <tbody>
   {% for l in lv.lessons %}
     <tr>
       <td class="mono">{{ l.id }}</td>
-      {% if include_retired %}<td>{{ "yes" if l.retired else "" }}</td>{% endif %}
+      {% if include_retired %}<td>{{ badge("on", "ok") if l.retired else badge("off", "pending") }}</td>{% endif %}
       <td class="small">{{ l.roles | join(", ") }}</td>
       <td class="small">{{ l.tags | join(", ") }}</td>
       <td class="num">{{ "%g" % l.score }}</td>

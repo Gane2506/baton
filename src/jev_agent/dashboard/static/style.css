@@ -323,6 +323,13 @@ pre code { background: none; padding: 0; }
 .crumbs { font-size: var(--fs-12); color: var(--muted); margin: 0 0 var(--s2); display: flex; gap: 6px; align-items: center; }
 .crumbs a { color: var(--muted); text-decoration: none; }
 .crumbs a:hover { color: var(--accent); }
+.crumbs .crumb-id { min-width: 0; max-width: 30ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Visually hidden but still announced to assistive tech (matches chat.css). */
+.sr-only {
+  position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0;
+  overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+}
 
 /* ---- panels -------------------------------------------------------------- */
 
@@ -457,11 +464,13 @@ td .mono, td.mono { font-size: var(--fs-12); }
 }
 .badge::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
 
-.s-DONE, .s-done, .s-ok, .s-passed, .s-approve, .s-finished, .s-merged, .s-success {
+.s-DONE, .s-done, .s-ok, .s-passed, .s-approve, .s-finished, .s-merged, .s-success, .s-enabled {
   color: var(--ok); border-color: color-mix(in srgb, var(--ok) 50%, transparent);
   background: color-mix(in srgb, var(--ok) 10%, transparent);
 }
-.s-AWAITING_APPROVAL, .s-AWAITING_SHIP, .s-NEEDS_HUMAN, .s-waiting, .s-warn, .s-pending, .s-revise {
+.s-AWAITING_APPROVAL, .s-AWAITING_SHIP, .s-NEEDS_HUMAN, .s-waiting, .s-warn, .s-pending, .s-revise,
+.s-paused, .s-PENDING, .s-READY, .s-DISPATCHED, .s-RETRY, .s-ESCALATE, .s-REASSIGN,
+.s-AWAITING_PLANNING, .s-AWAITING_VALIDATING, .s-AWAITING_INTEGRATING, .s-AWAITING_SHIPPING {
   color: var(--warn); border-color: color-mix(in srgb, var(--warn) 50%, transparent);
   background: color-mix(in srgb, var(--warn) 12%, transparent);
 }
@@ -469,7 +478,8 @@ td .mono, td.mono { font-size: var(--fs-12); }
   color: var(--bad); border-color: color-mix(in srgb, var(--bad) 50%, transparent);
   background: color-mix(in srgb, var(--bad) 10%, transparent);
 }
-.s-EXECUTING, .s-INTEGRATING, .s-SHIPPING, .s-RUNNING, .s-running, .s-REVIEWING, .s-note, .s-info {
+.s-EXECUTING, .s-INTEGRATING, .s-SHIPPING, .s-RUNNING, .s-running, .s-REVIEWING, .s-note, .s-info,
+.s-queued, .s-INTAKE, .s-PLANNING, .s-VALIDATING, .s-TESTING, .s-repo, .s-user {
   color: var(--info); border-color: color-mix(in srgb, var(--info) 50%, transparent);
   background: color-mix(in srgb, var(--info) 10%, transparent);
 }
@@ -486,6 +496,7 @@ td .mono, td.mono { font-size: var(--fs-12); }
 }
 .flash .icon { margin-top: 2px; }
 .flash.ok { border-color: color-mix(in srgb, var(--ok) 50%, transparent); background: color-mix(in srgb, var(--ok) 8%, transparent); }
+.flash.warn { border-color: color-mix(in srgb, var(--warn) 50%, transparent); background: color-mix(in srgb, var(--warn) 12%, transparent); }
 .flash.error { border-color: color-mix(in srgb, var(--bad) 50%, transparent); background: color-mix(in srgb, var(--bad) 8%, transparent); color: var(--bad); }
 
 /* ---- empty states -------------------------------------------------------- */

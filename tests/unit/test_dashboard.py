@@ -565,7 +565,7 @@ def test_learning_flush_requires_confirmation(
 
     confirm = _post(client, "/learning/flush", {"profile": "web"})
     assert confirm.status_code == 200
-    assert "Delete 2 lesson(s)" in confirm.text
+    assert "Delete 2 lessons" in confirm.text
     assert 'name="confirm" value="yes"' in confirm.text
     assert count() == 2
     _post(client, "/learning/flush", {"profile": "web", "confirm": "no"})

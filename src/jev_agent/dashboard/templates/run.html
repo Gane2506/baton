@@ -3,7 +3,7 @@
 {% set run = v.run %}
 {% block title %}Run {{ run.id }}{% endblock %}
 {% block content %}
-<div class="crumbs"><a href="/">Board</a>{{ icon("i-right", "sm") }}<span>run</span></div>
+<div class="crumbs"><a href="/">Board</a>{{ icon("i-right", "sm") }}<span class="mono crumb-id" title="{{ run.id }}">{{ run.id }}</span></div>
 <div class="page-head">
   <div class="titles">
     <h1 class="run-head"><span class="id">{{ run.id }}</span>{{ copy_button(run.id, "Copy run id") }}</h1>

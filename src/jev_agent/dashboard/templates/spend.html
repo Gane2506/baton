@@ -5,7 +5,7 @@
 <div class="page-head">
   <div class="titles">
     <h1>Spend</h1>
-    <p class="lede">Total reported spend over {{ s.runs | length }} run(s): <strong>{{ s.total | usd }}</strong>.
+    <p class="lede">Total reported spend over {{ s.runs | length }} run{{ "s" if s.runs | length != 1 }}: <strong>{{ s.total | usd }}</strong>.
     <span class="muted">Codex reports no cost, so its attempts count $0.</span></p>
   </div>
 </div>
