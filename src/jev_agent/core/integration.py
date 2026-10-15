@@ -6,8 +6,8 @@ suite), stopping at the first failure. When the tests pass and the run's quality
 "none", the quality gate runs on the result branch (docs/quality.md). When D6 answers
 `fix_task`, `fix_task_card` (failing tests) or `quality_fix_task_card` (a blocked gate) turns
 the failure into a new task that depends on every earlier task, so its worktree starts from all
-of their merged changes. Fix tasks are recognised by their title, which is how rounds are
-counted.
+of their merged changes. Fix tasks carry `kind="fix"`, which is how rounds are counted
+(`is_fix_task`); cards written before kinds existed fall back to the title prefix.
 """
 
 from __future__ import annotations
@@ -94,9 +94,19 @@ async def run_integration(
     return IntegrationOutcome(result, tests, quality=gate)
 
 
+def is_fix_task(card: TaskCard) -> bool:
+    """Whether the card is an integration fix task.
+
+    Fix tasks are marked explicitly with `kind="fix"`, so counting no longer depends on the
+    title. Cards written before kinds existed (`kind` is None) fall back to the legacy title
+    prefix; a planner task explicitly marked `kind="plan"` never counts, whatever its title.
+    """
+    return card.kind == "fix" or (card.kind is None and card.title.startswith(FIX_TITLE))
+
+
 def fix_rounds(cards: list[TaskCard]) -> int:
     """How many fix tasks the plan already has."""
-    return sum(1 for card in cards if card.title.startswith(FIX_TITLE))
+    return sum(1 for card in cards if is_fix_task(card))
 
 
 def fix_task_card(cards: list[TaskCard], failure: FailedCommand) -> TaskCard:
@@ -113,6 +123,7 @@ def fix_task_card(cards: list[TaskCard], failure: FailedCommand) -> TaskCard:
         id=f"T{next_no}",
         title=f"{FIX_TITLE} (round {fix_rounds(cards) + 1})",
         description=description,
+        kind="fix",
         depends_on=[card.id for card in cards],
         acceptance_criteria=[f"`{command}` passes"],
         test_command=failure.command,
@@ -132,6 +143,7 @@ def quality_fix_task_card(cards: list[TaskCard], gate: GateResult) -> TaskCard:
         id=f"T{next_no}",
         title=f"{FIX_TITLE} (round {fix_rounds(cards) + 1}: quality gate)",
         description=description,
+        kind="fix",
         depends_on=[card.id for card in cards],
         acceptance_criteria=[f"the quality gate at level {gate.level} passes"],
         test_command=None,

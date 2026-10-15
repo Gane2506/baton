@@ -404,6 +404,14 @@ class Pipeline:
         plan = output.parsed
         if not isinstance(plan, Plan):
             raise Halt(RunState.NEEDS_HUMAN, f"planner gave no plan: {_describe(output.result)}")
+        # Every card the planner produces is a plan task: mark them explicitly so fix rounds
+        # are counted by kind, not by title prefix (#58). Cards from runs written before
+        # kinds existed keep `kind=None` and fall back to the title check.
+        plan = Plan(
+            summary=plan.summary,
+            risks=plan.risks,
+            tasks=[card.model_copy(update={"kind": "plan"}) for card in plan.tasks],
+        )
         try:
             topological_order(plan.tasks)
         except CycleError as exc:

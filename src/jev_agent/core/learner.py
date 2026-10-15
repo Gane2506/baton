@@ -25,7 +25,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from jev_agent.core.harness import Halt, Harness
-from jev_agent.core.integration import FIX_TITLE
+from jev_agent.core.integration import is_fix_task
 from jev_agent.core.learning import (
     MAX_LESSON_CHARS,
     LearningError,
@@ -188,7 +188,7 @@ def learning_signals(store: Store, run: RunRecord) -> list[str]:
         found.append("revision")
     d5 = Counter(d.decision.answers.get("action") for d in decisions if d.request.point == "D5")
     found += [action for action in ("retry", "escalate", "reassign", "human") if d5[action]]
-    if any(t.card.title.startswith(FIX_TITLE) for t in store.list_tasks(run.id)):
+    if any(is_fix_task(t.card) for t in store.list_tasks(run.id)):
         found.append("fix_task")
     state_signal = {
         RunState.FAILED: "failed",

@@ -122,6 +122,12 @@ class TaskCard(BaseModel):
     id: str = Field(pattern=r"^T\d+$")  # "T1", "T2", ...
     title: str
     description: str
+    kind: Literal["plan", "fix"] | None = Field(
+        default=None,
+        description="Task kind: 'plan' for planner tasks, 'fix' for integration fix tasks. "
+        "None for cards written before kinds existed; those fall back to the legacy title "
+        "check (core.integration.is_fix_task).",
+    )
     files_hint: list[str] = Field(default_factory=list)  # files/dirs likely touched
     depends_on: list[str] = Field(default_factory=list)
     acceptance_criteria: list[str] = Field(default_factory=list)
