@@ -39,6 +39,7 @@ EXPECTED_PANELS: dict[str, str] = {
     "profile": PANEL_CONFIGURE,
     "browser": PANEL_CONFIGURE,
     "mcp": PANEL_CONFIGURE,
+    "design": PANEL_CONFIGURE,
     # Learn
     "learning": PANEL_LEARN,
     "laya": PANEL_LEARN,

@@ -2,7 +2,10 @@
 
 INTAKE -(D1)-> PLANNING -> VALIDATING -(D2, D3)-> PLANNING again (revise) or
 AWAITING_APPROVAL -> EXECUTING -> INTEGRATING -(D6)-> DONE, or back to EXECUTING with a fix
-task (at most `max_fix_rounds` times). With shipping on (`[ship] enabled`, issue #68), a D6
+task (at most `max_fix_rounds` times). When the plan needs one (`Plan.needs_design`), a
+DESIGNING step runs after validation: the designer turns the plan's UI work into a design
+doc, approved together with the plan at the approval gate. With shipping on
+(`[ship] enabled`, issue #68), a D6
 "ship" goes to SHIPPING (push, PR, checks, merge; then DONE) or, when the run asks first, to
 AWAITING_SHIP, where a person approves (SHIPPING), modifies (a task with their notes, then
 EXECUTING) or stops (DONE, not shipped). Any step may stop the run in NEEDS_HUMAN, FAILED,
@@ -39,6 +42,7 @@ from jev_agent.config.defaults import STATE_DIRNAME
 from jev_agent.config.schema import JevConfig, ShipMode
 from jev_agent.core.assign import Assignment
 from jev_agent.core.commands import CommandRunner, ShellCommandRunner
+from jev_agent.core.design_system import get_design_system, render_for_prompt
 from jev_agent.core.harness import DEFAULT_TIMEOUT_S, Halt, Harness
 from jev_agent.core.integration import (
     IntegrationOutcome,
@@ -53,6 +57,7 @@ from jev_agent.core.lease import hold_run_lease
 from jev_agent.core.models import (
     AutonomyConfig,
     AutonomyMode,
+    DesignDoc,
     Idea,
     Plan,
     Role,
@@ -105,6 +110,7 @@ KEEP_CANCELLED = frozenset({RunState.CANCELLED})
 STEP_GATES: dict[RunState, RunState] = {
     RunState.PLANNING: RunState.AWAITING_PLANNING,
     RunState.VALIDATING: RunState.AWAITING_VALIDATING,
+    RunState.DESIGNING: RunState.AWAITING_DESIGNING,
     RunState.EXECUTING: RunState.AWAITING_APPROVAL,
     RunState.INTEGRATING: RunState.AWAITING_INTEGRATING,
     RunState.SHIPPING: RunState.AWAITING_SHIPPING,
@@ -330,6 +336,7 @@ class Pipeline:
             RunState.INTAKE: self._intake,
             RunState.PLANNING: self._plan,
             RunState.VALIDATING: self._validate,
+            RunState.DESIGNING: self._design,
             RunState.EXECUTING: self._execute,
             RunState.INTEGRATING: self._integrate,
             RunState.SHIPPING: self._ship,
@@ -465,6 +472,47 @@ class Pipeline:
             self._move(run.id, step_gate_target(run_autonomy_mode(run), RunState.PLANNING))
             return
         self.store.upsert_tasks(run.id, plan)
+        gate = run.plan_only or h.config.plan_approval_required
+        if plan.needs_design:
+            # The design is approved together with the plan at the approval gate below,
+            # so the run first passes through DESIGNING (or its ASK_EVERY_STEP gate).
+            self._move(run.id, step_gate_target(run_autonomy_mode(run), RunState.DESIGNING))
+        else:
+            self._move(run.id, execution_gate_target(run_autonomy_mode(run), gate))
+
+    async def _design(self, run: RunRecord) -> None:
+        """Turn the approved plan's UI work into a design doc, for the coders to follow.
+
+        Runs only when the plan says it needs one (`Plan.needs_design`, set by the
+        planner and challenged by the validator). Like `_plan`, the designer has no
+        decision of its own, so it reuses the D1 answers for its worker assignment. The
+        design is approved together with the plan at the approval gate `_validate`
+        moved to, so this step ends at the same target `_validate` would have used.
+        """
+        h, plan = self.h, run.plan
+        assert plan is not None
+        h.require_options("designer")
+        h.check_budget(run.id)
+        lessons = h.lessons_for(run.id, "designer")
+        design_system = render_for_prompt(get_design_system(h.repo))
+        prompt = h.prompt(
+            "designer",
+            lessons,
+            idea=run.idea.text,
+            plan_json=plan.model_dump_json(indent=2),
+            design_system=design_system,
+        )
+        output = await self._run_level_worker(
+            run,
+            "designer",
+            h.assignment("designer", h.last_answers(run.id, "D1")),
+            prompt,
+            [lesson.id for lesson in lessons],
+        )
+        design = output.parsed
+        if not isinstance(design, DesignDoc):
+            raise Halt(RunState.NEEDS_HUMAN, f"designer gave no design: {_describe(output.result)}")
+        self.store.set_run_design(run.id, design)
         gate = run.plan_only or h.config.plan_approval_required
         self._move(run.id, execution_gate_target(run_autonomy_mode(run), gate))
 

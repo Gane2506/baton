@@ -134,7 +134,7 @@ async def test_unknown_effort_is_not_sent(tmp_path: Path) -> None:
 def test_strict_schema_closes_every_object() -> None:
     schema = strict_json_schema(Plan)
     assert schema["additionalProperties"] is False
-    assert set(schema["required"]) == {"summary", "tasks", "risks"}
+    assert set(schema["required"]) == {"summary", "tasks", "risks", "needs_design"}
     task = schema["$defs"]["TaskCard"]
     assert task["additionalProperties"] is False
     assert set(task["required"]) == set(task["properties"])

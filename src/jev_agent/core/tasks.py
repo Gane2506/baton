@@ -21,8 +21,9 @@ from typing import TypeVar
 
 from jev_agent.core.assign import Assignment, can_reassign, escalate, quota_fallback, reassign
 from jev_agent.core.commands import CommandResult
+from jev_agent.core.design_system import design_context_for_coder
 from jev_agent.core.harness import DEFAULT_TIMEOUT_S, Halt, Harness
-from jev_agent.core.models import RunState, TaskState
+from jev_agent.core.models import RunState, TaskCard, TaskState
 from jev_agent.core.store import AttemptRecord, TaskRecord
 from jev_agent.core.taskgraph import topological_order
 from jev_agent.core.workspace import MergeConflict, WorkspaceError
@@ -48,6 +49,20 @@ _REDISPATCH = {
     TaskState.TESTING,
     TaskState.REVIEWING,
 }
+
+# UI-work heuristic for design injection (`TaskRunner._coder_prompt`): a task counts as UI
+# work when the title or `files_hint` mentions UI words, case-insensitively. Deliberately
+# simple and durable rather than clever: a false positive only prepends the design doc to
+# a non-UI task's prompt, which is harmless, while a false negative would leave a UI task
+# without its design. ("ui" is a substring of words like "build", so titles heavy on such
+# words may match; that is accepted noise.)
+_UI_KEYWORDS = ("ui", "frontend", "design", "screen", "component", "style", "css")
+
+
+def _is_ui_task(card: TaskCard) -> bool:
+    """Whether `card` is UI work, by the `_UI_KEYWORDS` heuristic above."""
+    haystacks = [card.title, *card.files_hint]
+    return any(keyword in text.lower() for text in haystacks for keyword in _UI_KEYWORDS)
 
 
 @dataclass(frozen=True)
@@ -154,6 +169,9 @@ class TaskRunner:
             feedback=task.note if attempt > 1 else None,
             quality_findings=self._quality_findings(run_id, task.id, attempt),
         )
+        if run.design is not None and _is_ui_task(task.card):
+            # UI work follows the designer's design doc: prepend it so it reads first.
+            prompt = f"{design_context_for_coder(run.design)}\n\n{prompt}"
         return prompt, [lesson.id for lesson in lessons]
 
     def _quality_findings(self, run_id: str, task_id: str, attempt: int) -> list[str]:

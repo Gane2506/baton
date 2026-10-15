@@ -6,7 +6,7 @@ from typing import Any
 import pytest
 
 from jev_agent.core.learning import Lesson
-from jev_agent.core.models import Plan, TaskCard, ValidationResult
+from jev_agent.core.models import DesignDoc, Plan, TaskCard, ValidationResult
 from jev_agent.roles import (
     CODER_SUMMARY_MARKER,
     ROLE_SCHEMAS,
@@ -184,6 +184,7 @@ def test_role_schemas() -> None:
         "reviewer": ReviewResult,
         "code_reviewer": QualityReview,
         "learner": LearnerOutput,
+        "designer": DesignDoc,
     } == ROLE_SCHEMAS
 
 

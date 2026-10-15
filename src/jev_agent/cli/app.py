@@ -4,10 +4,12 @@ import typer
 from rich.console import Console
 
 from jev_agent import __version__
+from jev_agent.capbench.cli import capbench_app
 from jev_agent.cli.board_cmds import board
 from jev_agent.cli.chat_cmds import chat
 from jev_agent.cli.dashboard_cmd import dashboard
 from jev_agent.cli.demo_cmds import demo_app
+from jev_agent.cli.design_cmds import design_app
 from jev_agent.cli.doctor_cmd import doctor
 from jev_agent.cli.init_cmd import init
 from jev_agent.cli.laya_cmds import laya_app
@@ -75,6 +77,7 @@ app.command("log", rich_help_panel=PANEL_OBSERVE)(log)
 app.command("board", rich_help_panel=PANEL_OBSERVE)(board)
 app.command("dashboard", rich_help_panel=PANEL_OBSERVE)(dashboard)
 app.command("kpi", rich_help_panel=PANEL_OBSERVE)(kpi)
+app.add_typer(capbench_app, name="capbench", rich_help_panel=PANEL_OBSERVE)
 app.add_typer(quality_app, name="quality", rich_help_panel=PANEL_OBSERVE)
 
 # --- Configure: set up the environment and tooling ---
@@ -82,6 +85,7 @@ app.command("doctor", rich_help_panel=PANEL_CONFIGURE)(doctor)
 app.add_typer(profile_app, name="profile", rich_help_panel=PANEL_CONFIGURE)
 app.add_typer(browser_app, name="browser", rich_help_panel=PANEL_CONFIGURE)
 app.add_typer(mcp_app, name="mcp", rich_help_panel=PANEL_CONFIGURE)
+app.add_typer(design_app, name="design", rich_help_panel=PANEL_CONFIGURE)
 
 # --- Learn: lessons, the decision model, and the models themselves ---
 app.add_typer(learning_app, name="learning", rich_help_panel=PANEL_LEARN)

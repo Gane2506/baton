@@ -73,9 +73,11 @@ def test_api_is_offered_only_to_roles_with_a_model(monkeypatch: pytest.MonkeyPat
     assert "api" not in registry.names("learner")
     assert "api" not in registry.names("reviewer")
     assert "api" not in registry.names("code_reviewer")
+    assert "api" not in registry.names("designer")
     assert len(warnings) == 1
     assert warnings[0].startswith(
-        "worker api is not offered to validator, reviewer, code_reviewer, learner: no model"
+        "worker api is not offered to validator, reviewer, code_reviewer, learner, designer:"
+        " no model"
     )
 
 

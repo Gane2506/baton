@@ -415,7 +415,9 @@ def test_doctor_free_model_rows(fixture_repo: Path, monkeypatch: pytest.MonkeyPa
     main = checks[0]
     assert main.status == "warn"  # roles want free models but nothing is cached
     assert "role overrides: reviewer=off" in main.detail
-    assert "roles using free models: planner, validator, code_reviewer, learner" in main.detail
+    assert "roles using free models: planner, validator, code_reviewer, learner, designer" in (
+        main.detail
+    )
     notes = {c.name: c for c in checks[1:]}
     assert "coder" in notes["free models"].detail and notes["free models"].status == "note"
     assert "train" in notes["free models privacy"].detail
@@ -440,6 +442,7 @@ def test_cli_run_loads_catalog_only_when_needed(
         "reviewer",
         "code_reviewer",
         "learner",
+        "designer",
     ]
     offline, warnings = wiring.load_free_catalog(cfg, fixture_repo / "elsewhere", allow_fetch=False)
     assert offline is None and "no model list is cached" in warnings[0]

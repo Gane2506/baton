@@ -1078,6 +1078,7 @@ _ROLE_DEFAULTS: dict[str, dict[str, Any]] = {
     "reviewer": {"workers": ["api", "codex"]},
     "code_reviewer": {"workers": ["api", "codex", "claude_code"]},
     "learner": {"workers": ["claude_code", "api", "codex"]},
+    "designer": {"workers": ["api", "claude_code"]},
 }
 
 
@@ -1105,6 +1106,10 @@ class RolesConfig(_Strict):
     learner: RoleConfig = Field(
         default_factory=lambda: RoleConfig(**_ROLE_DEFAULTS["learner"]),
         description="Distills lessons at the end of a run, when learning is on.",
+    )
+    designer: RoleConfig = Field(
+        default_factory=lambda: RoleConfig(**_ROLE_DEFAULTS["designer"]),
+        description="Designs the UI before it is approved.",
     )
 
     @model_validator(mode="before")

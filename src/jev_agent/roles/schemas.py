@@ -1,8 +1,8 @@
 """Output schemas per role (PLAN.md section 7) and extraction of the coder's summary block.
 
-Planner, validator, reviewer, code reviewer and learner answer with one JSON object. The coder
-works free-form and ends with a fenced block tagged `CODER_SUMMARY_MARKER` holding a
-`CoderSummary` JSON object.
+Planner, validator, reviewer, code reviewer, learner and designer answer with one JSON
+object. The coder works free-form and ends with a fenced block tagged
+`CODER_SUMMARY_MARKER` holding a `CoderSummary` JSON object.
 """
 
 from __future__ import annotations
@@ -12,7 +12,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field, ValidationError
 
-from jev_agent.core.models import Plan, Role, ValidationResult
+from jev_agent.core.models import DesignDoc, Plan, Role, ValidationResult
 
 CODER_SUMMARY_MARKER = "jev-summary"
 
@@ -33,11 +33,21 @@ class CoderSummary(BaseModel):
 
 class LessonDraft(BaseModel):
     """A new lesson proposed by the learner. Limits (length, roles, tags) are enforced when
-    the lesson is stored (`core/learner.py`), so one sloppy field does not void the reply."""
+    the lesson is stored (`core/learner.py`), so one sloppy field does not void the reply.
+
+    `supersedes` / `contradicts` name lessons (by the ids shown to the learner) this draft
+    replaces or disagrees with; both are advisory — neither retires the old lesson, and
+    contradictions only affect selection after the pair has co-injected before.
+    `applies_to` names module paths the lesson is about (`src/auth/`, or `slug:src/auth/`
+    for shared profiles); path-looking tags do this automatically.
+    """
 
     text: str
     roles: list[str] = Field(default_factory=list)  # planner, validator, coder, reviewer
     tags: list[str] = Field(default_factory=list)  # file paths, areas, keywords
+    supersedes: list[str] = Field(default_factory=list)  # lesson ids this draft replaces
+    contradicts: list[str] = Field(default_factory=list)  # lesson ids this draft disagrees with
+    applies_to: list[str] = Field(default_factory=list)  # module paths this draft is about
 
 
 class LessonEdit(BaseModel):
@@ -113,6 +123,7 @@ ROLE_SCHEMAS: dict[Role, type[BaseModel]] = {
     "reviewer": ReviewResult,
     "code_reviewer": QualityReview,
     "learner": LearnerOutput,
+    "designer": DesignDoc,
 }
 
 _SUMMARY_BLOCK = re.compile(

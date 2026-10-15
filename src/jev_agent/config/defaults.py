@@ -191,6 +191,10 @@ DEFAULT_CONFIG_TOML = """\
 # workers = ["claude_code", "api", "codex"]
 # models = []
 
+[roles.designer]                    # designs the UI before it is approved (jev design)
+# workers = ["api", "claude_code"]
+# models = []
+
 # Agent tools (docs/config.md "Agent tools"): define MCP servers, skills and Claude Code plugins
 # once, then give them to roles by name, e.g. `mcp = ["github"]` under [roles.planner].
 # Secrets stay in environment variables: `env_from` lists variable NAMES, never values.

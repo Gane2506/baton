@@ -10,8 +10,9 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 DecisionPoint = Literal["D1", "D2", "D3", "D4", "D5", "D6", "D7", "D8"]
 # `learner` distills lessons at the end of a run (docs/learning.md); `code_reviewer` reviews
-# diffs for the quality gate (docs/quality.md); the others build the code.
-Role = Literal["planner", "validator", "coder", "reviewer", "code_reviewer", "learner"]
+# diffs for the quality gate (docs/quality.md); `designer` designs the UI before it is approved
+# (core/design_system.py); the others build the code.
+Role = Literal["planner", "validator", "coder", "reviewer", "code_reviewer", "learner", "designer"]
 # The roles a learned lesson can apply to (every role except the learner itself).
 LESSON_ROLES: tuple[Role, ...] = ("planner", "validator", "coder", "reviewer")
 WorkerStatus = Literal["success", "failure", "error", "quota_exhausted", "timeout"]
@@ -28,6 +29,10 @@ class RunState(StrEnum):
     # `jev approve` like AWAITING_APPROVAL (AWAITING_SHIP stays the ship gate).
     AWAITING_PLANNING = "AWAITING_PLANNING"  # INTAKE done; approve before PLANNING
     AWAITING_VALIDATING = "AWAITING_VALIDATING"  # plan drafted; approve before VALIDATING
+    DESIGNING = "DESIGNING"  # producing the run's UI design
+    # ASK_EVERY_STEP autonomy mode: the design gate, approved with `jev approve` like the
+    # other step gates (AWAITING_SHIP stays the ship gate).
+    AWAITING_DESIGNING = "AWAITING_DESIGNING"  # UI work approved; approve before DESIGNING
     AWAITING_INTEGRATING = "AWAITING_INTEGRATING"  # tasks executed; approve before INTEGRATING
     AWAITING_SHIPPING = "AWAITING_SHIPPING"  # D6 voted ship; approve before SHIPPING
     EXECUTING = "EXECUTING"
@@ -138,6 +143,9 @@ class Plan(BaseModel):
     summary: str
     tasks: list[TaskCard] = Field(min_length=1)
     risks: list[str] = Field(default_factory=list)
+    # True when the work involves UI or frontend: the planner flags it so the pipeline can
+    # design the UI (the `designer` role, core/design_system.py) before the design is approved.
+    needs_design: bool = False
 
     @model_validator(mode="after")
     def _check_task_graph(self) -> Plan:
@@ -152,6 +160,29 @@ class Plan(BaseModel):
             if task.id in task.depends_on:
                 raise ValueError(f"task {task.id} depends on itself")
         return self
+
+
+class ScreenSpec(BaseModel):
+    """One screen of a UI design: what it shows and which components it is built from."""
+
+    name: str
+    description: str = ""
+    components: list[str] = Field(default_factory=list)
+
+
+class DesignDoc(BaseModel):
+    """The designer's output: the run's UI design, grounded in the repo's design system.
+
+    `tokens_ref` is the design-system version the design was built against (None when the
+    repo has no system yet); `notes` may propose updates to the system itself.
+    """
+
+    title: str
+    summary: str = ""
+    screens: list[ScreenSpec] = Field(default_factory=list)
+    tokens_ref: str | None = None
+    notes: list[str] = Field(default_factory=list)
+    version: int = 1
 
 
 class ChoiceChallenge(BaseModel):
