@@ -46,6 +46,4 @@ def reset(
     shutil.rmtree(state_dir)
     state_dir.mkdir(parents=True, exist_ok=True)
     console.print(f"Removed demo data from {state_dir}/", markup=False)
-    console.print(
-        "The repo is clean again. Re-seed with [bold]jev init --demo --force[/bold]."
-    )
+    console.print("The repo is clean again. Re-seed with [bold]jev init --demo --force[/bold].")

@@ -26,6 +26,7 @@ EXPECTED_PANELS: dict[str, str] = {
     "queue": PANEL_RUN,
     "scheduler": PANEL_RUN,
     "ship": PANEL_RUN,
+    "demo": PANEL_RUN,
     # Observe
     "status": PANEL_OBSERVE,
     "log": PANEL_OBSERVE,
