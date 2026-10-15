@@ -1,0 +1,158 @@
+{% extends "base.html" %}
+{% from "macros.html" import badge, icon, csrf_input, field_label, pretty with context %}
+{% block title %}{{ page_title }}{% endblock %}
+
+{# Section titles (without the "Tools: " prefix) and plain-language blurbs under
+   each header — the ChatGPT row pattern: section header + description, then
+   the form/table. Keyed by entity path. #}
+{% set _SECTION_TITLES = {
+  "tools.mcp": "MCP servers",
+  "tools.skills": "Skills",
+  "tools.plugins": "Plugins (Claude Code only)",
+} %}
+{% set _SECTION_BLURBS = {
+  "tools.mcp": "Servers your agents can call as tools — a database, a search API, an
+    issue tracker. Point each one at a command to run or a URL to reach, then
+    roles pick servers by name on the Agents page.",
+  "tools.skills": "Reusable skill bundles — a folder with a SKILL.md — that agents
+    load when a task matches. Roles pick them by name on the Agents page.",
+  "tools.plugins": "Marketplace plugins loaded with --plugin-dir. Only the Claude
+    Code worker uses these.",
+} %}
+
+{% macro entity_input(f, field_id) %}
+  {% if f.kind == "bool" %}
+  <select id="{{ field_id }}" name="value">
+    <option value="true"{% if f.text == "true" %} selected{% endif %}>On</option>
+    <option value="false"{% if f.text != "true" %} selected{% endif %}>Off</option>
+  </select>
+  {% elif f.kind == "tristate" %}
+  <select id="{{ field_id }}" name="value">
+    <option value="unset"{% if not f.text %} selected{% endif %} title="from jev.toml">Use default</option>
+    <option value="true"{% if f.text == "true" %} selected{% endif %}>On</option>
+    <option value="false"{% if f.text == "false" %} selected{% endif %}>Off</option>
+  </select>
+  {% elif f.kind == "enum" %}
+  <select id="{{ field_id }}" name="value">
+    <option value="unset"{% if not f.text %} selected{% endif %} title="from jev.toml">Use default</option>
+    {% for c in f.choices %}<option value="{{ c }}"{% if f.text == c %} selected{% endif %}>{{ c }}</option>{% endfor %}
+  </select>
+  {% elif f.kind == "list" %}
+  <textarea id="{{ field_id }}" name="value" rows="3" placeholder="one per line">{{ f.text }}</textarea>
+  {% elif f.kind in ("int", "float") %}
+  <input id="{{ field_id }}" type="number"{% if f.kind == "float" %} step="any"{% endif %} name="value" value="{{ f.text }}">
+  {% else %}
+  <input id="{{ field_id }}" type="text" name="value" value="{{ f.text }}">
+  {% endif %}
+{% endmacro %}
+
+{% macro render_entities(entities) %}
+{% for e in entities %}
+{% set slug = e.path | replace(".", "-") %}
+<h2 class="section" id="s-{{ slug }}">{{ _SECTION_TITLES.get(e.path, e.title) }}</h2>
+<section class="panel">
+  <p class="hint">{{ _SECTION_BLURBS.get(e.path, "") }}</p>
+  {% for en in e.entities %}
+  <details class="entity">
+    <summary><span class="mono">{{ en.name }}</span> {{ badge(en.source) }}</summary>
+    {% for f in en.fields %}
+    {% set field_id = "e-" ~ slug ~ "-" ~ en.name ~ "-" ~ f.key %}
+    <form class="field-row" method="post" action="/settings/set">
+      {{ csrf_input() }}
+      <input type="hidden" name="path" value="{{ e.path }}.{{ en.name }}.{{ f.key }}">
+      <input type="hidden" name="kind" value="{{ f.kind }}">
+      {% if f.choices %}<input type="hidden" name="choices" value="{{ f.choices | join('|') }}">{% endif %}
+      <label for="{{ field_id }}">{{ pretty(f.key) }}{% if f.help %}<span class="hint">{{ f.help }}</span>{% endif %}</label>
+      <div class="field-control">{{ entity_input(f, field_id) }}</div>
+      <div class="field-actions">
+        <select name="target" aria-label="Save to">
+          <option value="repo">repo</option>
+          <option value="user">user</option>
+        </select>
+        <button class="btn btn-sm btn-secondary" type="submit">Save</button>
+        <button class="btn btn-sm btn-ghost" type="submit" formaction="/settings/unset" formnovalidate>Reset to default</button>
+      </div>
+    </form>
+    {% endfor %}
+    <form class="inline" method="post" action="/settings/entity" data-confirm="Remove {{ e.path }}.{{ en.name }}?">
+      {{ csrf_input() }}
+      <input type="hidden" name="section" value="{{ e.path }}">
+      <input type="hidden" name="action" value="remove">
+      <input type="hidden" name="name" value="{{ en.name }}">
+      <select name="target" aria-label="Remove from"><option value="repo">repo</option><option value="user">user</option></select>
+      <button class="btn btn-sm btn-danger" type="submit">Remove {{ en.name }}</button>
+    </form>
+  </details>
+  {% else %}
+  <div class="empty-inline">No entries yet.</div>
+  {% endfor %}
+
+  <details class="disclosure">
+    <summary>{{ icon("i-plus", "sm") }} Add to {{ e.title }}</summary>
+    <form method="post" action="/settings/entity">
+      {{ csrf_input() }}
+      <input type="hidden" name="section" value="{{ e.path }}">
+      <input type="hidden" name="action" value="add">
+      <input type="hidden" name="keys" value="{{ e.add_fields | map(attribute='key') | join(',') }}">
+      <input type="hidden" name="kinds" value="{{ e.add_fields | map(attribute='kind') | join(',') }}">
+      <div class="form-grid">
+        <div>
+          {{ field_label("name", "n-" ~ slug) }}
+          <input type="text" id="n-{{ slug }}" name="name" required pattern="[A-Za-z0-9][A-Za-z0-9_-]*">
+        </div>
+        <div>
+          {{ field_label("save_to", "t-" ~ slug) }}
+          <select id="t-{{ slug }}" name="target">
+            <option value="repo">repo jev.toml</option>
+            <option value="user">user config</option>
+          </select>
+        </div>
+        {% for f in e.add_fields %}
+        <div>
+          {{ field_label(f.key, "a-" ~ slug ~ "-" ~ f.key) }}
+          {% if f.kind == "list" %}
+          <textarea id="a-{{ slug }}-{{ f.key }}" name="f_{{ f.key }}" rows="2" placeholder="one per line"></textarea>
+          {% elif f.kind == "enum" or f.kind == "bool" %}
+          <select id="a-{{ slug }}-{{ f.key }}" name="f_{{ f.key }}">
+            <option value="">Use default</option>
+            {% for c in f.choices %}<option value="{{ c }}">{{ c }}</option>{% endfor %}
+            {% if f.kind == "bool" %}<option value="true">On</option><option value="false">Off</option>{% endif %}
+          </select>
+          {% else %}
+          <input id="a-{{ slug }}-{{ f.key }}" type="text" name="f_{{ f.key }}" placeholder="{{ f.text }}">
+          {% endif %}
+        </div>
+        {% endfor %}
+      </div>
+      <button class="btn btn-primary" type="submit">Add</button>
+    </form>
+  </details>
+  <p class="hint">Saved to the repo by default. When the repo isn't trusted, save to the user
+  config instead. Roles pick entries by name:
+  <code>mcp = [...]</code>, <code>skills = [...]</code>, <code>plugins = [...]</code>
+  under <code>[roles.*]</code>.</p>
+</section>
+{% endfor %}
+{% endmacro %}
+
+{% block content %}
+<div class="page-head">
+  <div class="titles">
+    <h1>{{ page_title }}</h1>
+    <p class="lede">{{ page_lede }}</p>
+    <p class="hint">Everything here comes from <code>jev.toml</code> and your user config, and
+    edits save in place — to the repo, unless the row says otherwise.</p>
+    <p class="hint">Entries that decide where API keys go, which commands run, or which tools
+    agents get only take effect from a trusted repo (see Connections) — otherwise save them
+    to your user config (<span class="mono">{{ user_file }}</span>).</p>
+  </div>
+</div>
+
+<nav class="panel tight" aria-label="Tools sections">
+  <div class="actions">
+  {% for e in entities %}<a class="btn btn-sm btn-ghost" href="#s-{{ e.path | replace('.', '-') }}">{{ _SECTION_TITLES.get(e.path, e.title) }}</a>{% endfor %}
+  </div>
+</nav>
+
+{{ render_entities(entities) }}
+{% endblock %}
