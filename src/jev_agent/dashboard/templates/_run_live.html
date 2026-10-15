@@ -12,9 +12,20 @@
     </div>
     <div class="run-actions">
       {% if v.can_approve %}
-      <form class="inline" method="post" action="/runs/{{ run.id }}/approve" data-confirm="Approve this plan and start executing it?">
+      {% if v.estimate %}
+      <p class="small"><strong>{{ v.estimate_line }}</strong>
+        {% if v.estimate_verdict.level in ("warn", "refuse") and v.estimate_verdict.message %}
+        <span class="flash warn">{{ v.estimate_verdict.message }}</span>
+        {% endif %}</p>
+      {% endif %}
+      <form class="inline" method="post" action="/runs/{{ run.id }}/approve" data-confirm="{{ v.approve_confirm }}">
         {{ csrf_input() }}<button class="primary" type="submit"{% if busy %} disabled{% endif %}>{{ icon("i-run", "sm") }}Approve and run</button>
       </form>
+      {% if v.estimate_verdict and v.estimate_verdict.level == "refuse" %}
+      <form class="inline" method="post" action="/runs/{{ run.id }}/approve" data-confirm="The cost estimate reaches the run budget. Approve anyway and start executing it?">
+        {{ csrf_input() }}<input type="hidden" name="force" value="1"><button class="danger" type="submit"{% if busy %} disabled{% endif %}>Approve anyway (over budget)</button>
+      </form>
+      {% endif %}
       {% endif %}
       {% if v.can_resume and v.resume_risk %}
       <form class="inline" method="post" action="/runs/{{ run.id }}/resume" data-confirm="Another jev process may be running this run ({{ v.resume_risk }}); resuming starts a second one on the same worktrees and can double the spend. Resume anyway?">

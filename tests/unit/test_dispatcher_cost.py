@@ -26,6 +26,7 @@ from jev_agent.core.budget import (
     ESTIMATE_STATES,
     Budget,
     CostEstimate,
+    approval_budget_block,
     estimate_run_cost,
     format_estimate,
 )
@@ -629,3 +630,60 @@ def test_approve_warns_but_proceeds_below_refusal(
     assert code == 0, output
     assert "warning" in output
     assert _cli_run_state(fixture_repo, run_id) is not RunState.AWAITING_APPROVAL
+
+
+# ---- the shared approve-time budget gate --------------------------------------
+
+
+def _gate_config(cap: float) -> tuple[BudgetConfig, CostSettings]:
+    return BudgetConfig(per_run_usd=cap, per_task_usd=cap), CostSettings()
+
+
+def test_approval_budget_block_ok(store: Store, tmp_path: Path) -> None:
+    run = _awaiting_run(store, tmp_path, "T1")
+    estimate, verdict, block = approval_budget_block(store, *_gate_config(1000.0), run)
+    assert block is None
+    assert estimate is not None
+    assert verdict is not None and verdict.level == "ok" and verdict.message is None
+
+
+def test_approval_budget_block_warn(store: Store, tmp_path: Path) -> None:
+    run = _awaiting_run(store, tmp_path, "T1")
+    estimate, _, _ = approval_budget_block(store, *_gate_config(1000.0), run)
+    assert estimate is not None
+    # Cap just above the high end: warn fires (0.8 * cap < high), refuse does not.
+    cap = estimate.high_usd / 0.9
+    _, verdict, block = approval_budget_block(store, *_gate_config(cap), run)
+    assert block is None
+    assert verdict is not None and verdict.level == "warn"
+    assert verdict.message is not None
+
+
+def test_approval_budget_block_refuse(store: Store, tmp_path: Path) -> None:
+    run = _awaiting_run(store, tmp_path, "T1")
+    _, verdict, block = approval_budget_block(store, *_gate_config(0.0001), run)
+    assert verdict is not None and verdict.level == "refuse"
+    assert block is not None and block.startswith("not approving:")
+
+
+def test_approval_budget_block_force_overrides_refuse(store: Store, tmp_path: Path) -> None:
+    run = _awaiting_run(store, tmp_path, "T1")
+    _, verdict, block = approval_budget_block(store, *_gate_config(0.0001), run, force=True)
+    assert block is None
+    assert verdict is not None and verdict.level == "refuse"
+
+
+def test_approval_budget_block_ignores_other_states(store: Store, tmp_path: Path) -> None:
+    run = store.create_run(_idea(tmp_path))
+    store.set_run_plan(run.id, _plan("T1"), 1)
+    store.set_run_state(run.id, RunState.EXECUTING)
+    run = store.get_run(run.id)
+    assert approval_budget_block(store, *_gate_config(0.0001), run) == (None, None, None)
+
+
+def test_approval_budget_block_defers_to_the_hard_cap(store: Store, tmp_path: Path) -> None:
+    """When the cap is already hit, the hard check owns the outcome, not the estimate."""
+    run = _awaiting_run(store, tmp_path, "T1")
+    store.add_spend(run.id, None, 5.0)
+    run = store.get_run(run.id)
+    assert approval_budget_block(store, *_gate_config(5.0), run) == (None, None, None)

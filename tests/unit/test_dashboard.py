@@ -1232,3 +1232,77 @@ def test_queue_form_ship_choice(client: TestClient, planned: tuple[Path, str]) -
         assert [(i.idea, i.ship_mode) for i in store.list_queue()] == [("auto idea", "merge")]
     settings = client.get("/settings").text
     assert "ship.after_approval" in settings and "ask" in settings
+
+
+# ---- approval card cost estimate and budget gate (issue #106) -----------------
+
+
+def _tiny_budget(repo: Path) -> None:
+    """A run budget no estimate can fit under: the gate must refuse approval."""
+    with open(repo / "jev.toml", "a") as handle:
+        handle.write("[budget]\nper_run_usd = 0.0001\nper_task_usd = 0.0001\n")
+
+
+def test_approval_card_shows_cost_estimate(planned: tuple[Path, str]) -> None:
+    repo, run_id = planned
+    for client in _client(repo):
+        text = client.get(f"/runs/{run_id}").text
+    assert "Estimated cost:" in text
+    assert "of $5.00 run budget" in text  # the default `[budget] per_run_usd`
+    assert "Approve and run" in text
+
+
+def test_approve_refuses_when_estimate_exceeds_budget(
+    planned: tuple[Path, str],
+) -> None:
+    repo, run_id = planned
+    calls = Calls()
+    _tiny_budget(repo)
+    for client in _client(repo, calls):
+        response = _post(client, f"/runs/{run_id}/approve")
+        assert response.status_code == 303
+        text = client.get(f"/runs/{run_id}").text
+    assert "not approving" in text
+    assert "Approve anyway (over budget)" in text
+    # Nothing launched: the refusal is advisory, the approval gate still stands.
+    assert calls.calls == []
+    with _store(repo) as store:
+        assert store.get_run(run_id).state is RunState.AWAITING_APPROVAL
+
+
+def test_approve_force_overrides_the_budget_refusal(
+    planned: tuple[Path, str],
+) -> None:
+    repo, run_id = planned
+    calls = Calls()
+    _tiny_budget(repo)
+    for client in _client(repo, calls):
+        _post(client, f"/runs/{run_id}/approve", data={"force": "1"})
+    assert calls.calls == [(repo, run_id, "approve")]
+
+
+def test_approve_warn_carries_the_warning_into_confirmation(
+    planned: tuple[Path, str],
+) -> None:
+    """High end between warn and refuse fractions: the card warns, the confirm dialog
+    carries the warning, and approving proceeds."""
+    import re
+
+    from jev_agent.config import load_config
+    from jev_agent.core.budget import estimate_run_cost
+
+    repo, run_id = planned
+    with _store(repo) as store:
+        run = store.get_run(run_id)
+        estimate = estimate_run_cost(store, run, load_config(repo).dispatcher.cost)
+    cap = estimate.high_usd / 0.9  # warn fires (0.8 * cap < high), refuse does not
+    with open(repo / "jev.toml", "a") as handle:
+        handle.write(f"[budget]\nper_run_usd = {cap:.4f}\nper_task_usd = {cap:.4f}\n")
+    calls = Calls()
+    for client in _client(repo, calls):
+        text = client.get(f"/runs/{run_id}").text
+        match = re.search(rf'action="/runs/{run_id}/approve" data-confirm="([^{chr(34)}]+)"', text)
+        assert match is not None, text
+        assert "is over 80% of the run budget" in match.group(1)
+        _post(client, f"/runs/{run_id}/approve")
+    assert calls.calls == [(repo, run_id, "approve")]

@@ -164,6 +164,52 @@ def format_estimate(estimate: CostEstimate) -> str:
     return f"${estimate.low_usd:.2f}\u2013${estimate.high_usd:.2f} ({estimate.basis})"
 
 
+def estimate_verdict_for(
+    store: Store, budget: BudgetConfig, cost: CostSettings, run: RunRecord
+) -> tuple[CostEstimate, EstimateVerdict] | None:
+    """The pre-approval estimate and its budget verdict; None outside the approval gates."""
+    if run.state not in ESTIMATE_STATES:
+        return None
+    estimate = estimate_run_cost(store, run, cost)
+    verdict = Budget.from_config(budget).estimate_verdict(
+        estimate,
+        warn_fraction=cost.warn_fraction,
+        refuse_fraction=cost.refuse_fraction,
+    )
+    return estimate, verdict
+
+
+def approval_budget_block(
+    store: Store,
+    budget: BudgetConfig,
+    cost: CostSettings,
+    run: RunRecord,
+    *,
+    force: bool = False,
+) -> tuple[CostEstimate | None, EstimateVerdict | None, str | None]:
+    """The approve-time budget gate, shared by `jev approve` and the dashboard approval.
+
+    Returns `(estimate, verdict, block_message)`: `block_message` is None when the
+    approval may proceed -- on "warn" the estimate is shown and the person confirms it
+    explicitly; on "refuse" the approval is blocked unless `force` is set.
+
+    The estimate is advisory about future spend: when the cap is already hit, the hard
+    budget check owns the outcome (BUDGET_EXCEEDED), not the estimate, so the gate
+    stays out of the way.
+    """
+    if run.state is not RunState.AWAITING_APPROVAL or Budget.from_config(budget).run_exhausted(
+        run.spend_usd
+    ):
+        return None, None, None
+    pair = estimate_verdict_for(store, budget, cost, run)
+    if pair is None:  # unreachable: AWAITING_APPROVAL is in ESTIMATE_STATES
+        return None, None, None
+    estimate, verdict = pair
+    if verdict.level == "refuse" and not force:
+        return estimate, verdict, f"not approving: {verdict.message}"
+    return estimate, verdict, None
+
+
 def _remaining_tasks(store: Store, run: RunRecord) -> int:
     """Tasks still to pay for: unfinished stored tasks, else the plan's task count."""
     tasks = store.list_tasks(run.id)

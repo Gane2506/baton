@@ -51,6 +51,7 @@ from jev_agent.config import STATE_DIRNAME, ConfigError
 from jev_agent.config.schema import BEGINNER_FIELDS, JevConfig, JevSettings, ShipMode
 from jev_agent.config.servers_schema import ServerConfig
 from jev_agent.core.benchmarks import DEFAULT_LAST, format_value
+from jev_agent.core.budget import approval_budget_block
 from jev_agent.core.chat import (
     BACKENDS,
     DEFAULT_BUDGET_USD,
@@ -1074,6 +1075,18 @@ class Dashboard:
                     return (
                         f"run {run_id} is {run.state}; only a run awaiting approval can be approved"
                     )
+                if kind == "approve" and run.state is RunState.AWAITING_APPROVAL:
+                    # The same budget gate as `jev approve`: refuse an over-budget
+                    # estimate unless the "Approve anyway" form sent force=1.
+                    _, _, block = approval_budget_block(
+                        repo.store,
+                        repo.config.budget,
+                        repo.config.dispatcher.cost,
+                        run,
+                        force=force,
+                    )
+                    if block is not None:
+                        return block
                 if kind == "stop" and run.state is not RunState.AWAITING_SHIP:
                     return f"run {run_id} is {run.state}; only a run waiting to ship can be stopped"
                 if kind == "resume" and not views.can_resume(run):

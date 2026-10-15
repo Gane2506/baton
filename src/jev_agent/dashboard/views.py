@@ -30,6 +30,12 @@ from jev_agent.cli.queue_cmds import item_flags
 from jev_agent.cli.status_cmds import format_answers, learning_line, quality_line
 from jev_agent.config import STATE_DIRNAME, JevConfig, load_config
 from jev_agent.core.benchmarks import DEFAULT_LAST, Summary, Trend, summarize, trends
+from jev_agent.core.budget import (
+    CostEstimate,
+    EstimateVerdict,
+    estimate_verdict_for,
+    format_estimate,
+)
 from jev_agent.core.chat import ChatMeta, list_chats, read_transcript
 from jev_agent.core.harness import DEFAULT_TIMEOUT_S
 from jev_agent.core.kpi import PrKpis, compute_run_kpis, load_pr_kpis
@@ -205,6 +211,12 @@ class RunView:
     # AWAITING_SHIP: the PR it would open, the D6 votes and the diff, for approve/modify/stop.
     ship_preview: ShipPreview | None = None
     ship_vote: str = ""  # the D6 answers with Jev's confidence and Laya's margin
+    # AWAITING_APPROVAL: the pre-approval cost estimate and its budget verdict, shown on
+    # the approval card and enforced when approving (the same gate as `jev approve`).
+    estimate: CostEstimate | None = None
+    estimate_verdict: EstimateVerdict | None = None
+    estimate_line: str = ""  # "Estimated cost: $1.20-$3.40 (basis) of $5.00 run budget"
+    approve_confirm: str = "Approve this plan and start executing it?"
 
 
 def run_dir(repo: Repo, run_id: str) -> Path:
@@ -329,6 +341,17 @@ def run_view(repo: Repo, run_id: str) -> RunView:
     integrated = run.state in (RunState.INTEGRATING, RunState.DONE) or any(
         d.point == "D6" for d in decisions
     )
+    pair = estimate_verdict_for(store, repo.config.budget, repo.config.dispatcher.cost, run)
+    estimate, verdict = pair if pair is not None else (None, None)
+    if estimate is not None:
+        cap = repo.config.budget.per_run_usd
+        estimate_line = f"Estimated cost: {format_estimate(estimate)} of ${cap:.2f} run budget"
+    else:
+        estimate_line = ""
+    if verdict is not None and verdict.level == "warn" and verdict.message:
+        approve_confirm = f"{verdict.message} Approve this plan and start executing it?"
+    else:
+        approve_confirm = "Approve this plan and start executing it?"
     return RunView(
         run=run,
         tasks=store.list_tasks(run_id),
@@ -345,6 +368,10 @@ def run_view(repo: Repo, run_id: str) -> RunView:
         can_cancel=run.state not in STOPPED,
         column=COLUMN_FOR_STATE[run.state],
         reports=reports,
+        estimate=estimate,
+        estimate_verdict=verdict,
+        estimate_line=estimate_line,
+        approve_confirm=approve_confirm,
         **ship_state(repo, run, reports),
     )
 

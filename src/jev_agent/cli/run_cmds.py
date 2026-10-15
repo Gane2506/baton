@@ -19,10 +19,8 @@ from jev_agent.cli.wiring import cli_context, fail
 from jev_agent.config import STATE_DIRNAME
 from jev_agent.config.schema import JevConfig, ShipMode
 from jev_agent.core.budget import (
-    ESTIMATE_STATES,
-    Budget,
-    EstimateVerdict,
-    estimate_run_cost,
+    approval_budget_block,
+    estimate_verdict_for,
     format_estimate,
 )
 from jev_agent.core.learning import LearningError
@@ -156,26 +154,14 @@ def print_ship_preview(preview: ShipPreview) -> None:
         console.print(f"  D6 vote ({vote.dispatcher}): {escape(line)}")
 
 
-def estimate_verdict_for(store: Store, config: JevConfig, run: RunRecord) -> EstimateVerdict | None:
-    """The budget verdict on the run's cost estimate; None outside the approval gates."""
-    if run.state not in ESTIMATE_STATES:
-        return None
-    estimate = estimate_run_cost(store, run, config.dispatcher.cost)
-    return Budget.from_config(config.budget).estimate_verdict(
-        estimate,
-        warn_fraction=config.dispatcher.cost.warn_fraction,
-        refuse_fraction=config.dispatcher.cost.refuse_fraction,
-    )
-
-
 def print_estimate(store: Store, config: JevConfig, run: RunRecord) -> None:
     """The pre-approval cost estimate: a range with its basis, plus any budget warning."""
-    if run.state not in ESTIMATE_STATES:
+    pair = estimate_verdict_for(store, config.budget, config.dispatcher.cost, run)
+    if pair is None:
         return
-    estimate = estimate_run_cost(store, run, config.dispatcher.cost)
+    estimate, verdict = pair
     console.print(f"  estimated total cost: {format_estimate(estimate)}")
-    verdict = estimate_verdict_for(store, config, run)
-    if verdict is not None and verdict.message is not None:
+    if verdict.message is not None:
         console.print(f"  [yellow]budget: {escape(verdict.message)}[/yellow]")
 
 
@@ -275,14 +261,13 @@ def approve(
             raise fail(str(exc)) from exc
         # The estimate is advisory about future spend: when the cap is already hit,
         # the hard budget check owns the outcome (BUDGET_EXCEEDED), not the estimate.
-        if pending.state is RunState.AWAITING_APPROVAL and not Budget.from_config(
-            ctx.config.budget
-        ).run_exhausted(pending.spend_usd):
-            verdict = estimate_verdict_for(ctx.store, ctx.config, pending)
-            if verdict is not None and verdict.level == "refuse" and not force:
-                raise fail(f"not approving: {verdict.message} (pass --force to approve anyway)")
-            if verdict is not None and verdict.level == "warn" and verdict.message:
-                console.print(f"[yellow]warning: {escape(verdict.message)}[/yellow]")
+        _, verdict, block = approval_budget_block(
+            ctx.store, ctx.config.budget, ctx.config.dispatcher.cost, pending, force=force
+        )
+        if block is not None:
+            raise fail(f"{block} (pass --force to approve anyway)")
+        if verdict is not None and verdict.level == "warn" and verdict.message:
+            console.print(f"[yellow]warning: {escape(verdict.message)}[/yellow]")
         try:
             record = asyncio.run(approve_run(ctx, run_id))
         except (NotFoundError, PipelineError, RunInUseError) as exc:
