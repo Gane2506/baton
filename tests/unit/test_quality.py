@@ -489,6 +489,41 @@ async def test_licences_of_new_dependencies(tmp_path: Path) -> None:
     assert (await LicenseCheck().run(repo, runner)).detail == "no new dependencies"
 
 
+def test_new_python_dependencies_single_and_multi_line_arrays(tmp_path: Path) -> None:
+    repo = _repo(tmp_path, {"pyproject.toml": "", "requirements.txt": ""})
+    diff = (
+        "diff --git a/pyproject.toml b/pyproject.toml\n--- a/pyproject.toml\n"
+        "+++ b/pyproject.toml\n@@ -1,5 +1,7 @@\n dependencies = [\n"
+        '+    "gplthing>=1.0",\n     "kept",\n+    "nice[extra]~=2",\n ]\n'
+        '+single = ["one", "two==2"]\n'
+        "diff --git a/pyproject.toml b/other.toml\n--- a/other.toml\n+++ b/other.toml\n"
+        "@@ -0,0 +1 @@\n+dependencies = [\"ignored-file\"]\n"
+    )
+    runner, _ = _runner(repo, diff=diff)
+    assert new_python_dependencies(runner) == ["gplthing", "nice"]
+
+
+async def test_new_python_dependencies_replaced_single_line_array(tmp_path: Path) -> None:
+    # A copyleft dependency added on a single-line array must not pass as "no new
+    # dependencies" (issue #50).
+    repo = _repo(tmp_path, {"pyproject.toml": "", "requirements.txt": ""})
+    diff = (
+        "diff --git a/pyproject.toml b/pyproject.toml\n--- a/pyproject.toml\n"
+        "+++ b/pyproject.toml\n@@ -1 +1 @@\n-dependencies = []\n"
+        '+dependencies = ["gplthing>=1.0"]\n'
+    )
+    runner, _ = _runner(repo, installed=("pip-licenses",), diff=diff)
+    out = [{"Name": "gplthing", "License": "GNU General Public License v3 (GPLv3)"}]
+    runner, _ = _runner(
+        repo,
+        installed=("pip-licenses",),
+        diff=diff,
+        outputs={f"pip-licenses --format=json --packages gplthing": [json.dumps(out)]},
+    )
+    result = await LicenseCheck().run(repo, runner)
+    assert result.status == "fail" and "copyleft" in result.findings[0].title
+
+
 # ---- scalable --------------------------------------------------------------------------------
 
 

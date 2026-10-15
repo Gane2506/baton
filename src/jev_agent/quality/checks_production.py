@@ -137,24 +137,65 @@ _REQ_LINE = re.compile(r"^(?P<name>[A-Za-z0-9][A-Za-z0-9._-]*)")
 COPYLEFT = ("AGPL", "SSPL", "GPL")  # LGPL is reported, not flagged as major
 
 
-def new_python_dependencies(runner: ToolRunner) -> list[str]:
-    """Package names on lines the diff adds to `requirements*.txt`, or quoted entries it adds
-    to `pyproject.toml` (dependency arrays). A heuristic: pins and extras are stripped."""
+_DEP_ARRAY_START = re.compile(r"^\s*dependencies\s*=\s*\[")
+_QUOTED = re.compile(r'''"([^"\\]*)"|'([^'\\]*)''')
+
+
+def _quoted_values(line: str) -> list[str]:
+    """The inner text of every single- or double-quoted string on the line."""
+    return [
+        match.group(1) if match.group(1) is not None else match.group(2)
+        for match in _QUOTED.finditer(line)
+    ]
+
+
+def _toml_dependency_names(added: list[str]) -> list[str]:
+    """Names from `dependencies = [...]` arrays in added pyproject.toml lines, whether the
+    array sits on a single line or is split across lines. A bare quoted line is treated as
+    an element of a multi-line array whose opening bracket is outside the diff."""
+    values: list[str] = []
+    in_array = False
+    for text in added:
+        line = text
+        if not in_array:
+            start = _DEP_ARRAY_START.match(line)
+            if start is None:
+                if line.strip()[:1] in ("'", '"'):
+                    values.extend(_quoted_values(line))
+                continue
+            in_array = True
+            line = line[start.end():]
+        values.extend(_quoted_values(line))
+        if "]" in line:
+            in_array = False
     names: list[str] = []
-    for file, _, text in added_lines(runner.diff):
-        base, line = Path(file).name, text.strip()
-        if base.startswith("requirements") and base.endswith(".txt"):
-            if not line or line.startswith(("#", "-")):
-                continue
-        elif base == "pyproject.toml":
-            if not line.startswith(("'", '"')):
-                continue
-            line = line.strip("'\",")
-        else:
-            continue
-        match = _REQ_LINE.match(line)
+    for value in values:
+        match = _REQ_LINE.match(value)
         if match and match.group("name").lower() != "python":
             names.append(match.group("name"))
+    return names
+
+
+def new_python_dependencies(runner: ToolRunner) -> list[str]:
+    """Package names on lines the diff adds to `requirements*.txt`, or entries it adds to
+    `pyproject.toml` dependency arrays (single-line or multi-line). A heuristic: pins and
+    extras are stripped."""
+    names: list[str] = []
+    by_file: dict[str, list[str]] = {}
+    for file, _, text in added_lines(runner.diff):
+        by_file.setdefault(file, []).append(text)
+    for file, texts in by_file.items():
+        base = Path(file).name
+        if base.startswith("requirements") and base.endswith(".txt"):
+            for text in texts:
+                line = text.strip()
+                if not line or line.startswith(("#", "-")):
+                    continue
+                match = _REQ_LINE.match(line)
+                if match and match.group("name").lower() != "python":
+                    names.append(match.group("name"))
+        elif base == "pyproject.toml":
+            names.extend(_toml_dependency_names(texts))
     return list(dict.fromkeys(names))
 
 
