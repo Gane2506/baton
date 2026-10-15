@@ -591,7 +591,7 @@ td .mono, td.mono { font-size: var(--fs-12); }
 }
 .s-AWAITING_APPROVAL, .s-AWAITING_SHIP, .s-NEEDS_HUMAN, .s-waiting, .s-warn, .s-pending, .s-revise,
 .s-paused, .s-PENDING, .s-READY, .s-DISPATCHED, .s-RETRY, .s-ESCALATE, .s-REASSIGN,
-.s-AWAITING_PLANNING, .s-AWAITING_VALIDATING, .s-AWAITING_INTEGRATING, .s-AWAITING_SHIPPING {
+.s-AWAITING_PLANNING, .s-AWAITING_VALIDATING, .s-AWAITING_DESIGNING, .s-AWAITING_INTEGRATING, .s-AWAITING_SHIPPING {
   color: var(--warn); border-color: color-mix(in srgb, var(--warn) 50%, transparent);
   background: color-mix(in srgb, var(--warn) 12%, transparent);
 }
@@ -600,7 +600,7 @@ td .mono, td.mono { font-size: var(--fs-12); }
   background: color-mix(in srgb, var(--bad) 10%, transparent);
 }
 .s-EXECUTING, .s-INTEGRATING, .s-SHIPPING, .s-RUNNING, .s-running, .s-REVIEWING, .s-note, .s-info,
-.s-queued, .s-INTAKE, .s-PLANNING, .s-VALIDATING, .s-TESTING, .s-repo, .s-user,
+.s-queued, .s-INTAKE, .s-PLANNING, .s-VALIDATING, .s-DESIGNING, .s-TESTING, .s-repo, .s-user,
 .s-plan, .s-diff {
   color: var(--info); border-color: color-mix(in srgb, var(--info) 50%, transparent);
   background: color-mix(in srgb, var(--info) 10%, transparent);

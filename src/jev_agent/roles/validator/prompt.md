@@ -19,6 +19,10 @@ the idea that follows. Decide whether it is good enough to hand to coding agents
 - Are acceptance criteria concrete and testable?
 {% if has_tests %}- Does every task have a `test_command` that actually checks it?
 {% endif %}- Are there risks the plan ignores?
+- Is the `needs_design` flag right? If the work involves UI/frontend/screens, the plan
+  must set it `true` so a designer drafts the screens first; if it does set it, a design
+  step must actually be warranted (not for backend-only work). Challenge it like any
+  other plan choice below.
 
 ## Challenge every choice
 

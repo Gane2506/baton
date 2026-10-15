@@ -24,6 +24,7 @@ from jev_agent.core.migrations import SchemaVersionError, apply_migrations, conf
 from jev_agent.core.models import (
     Decision,
     DecisionRequest,
+    DesignDoc,
     Idea,
     Plan,
     Role,
@@ -113,6 +114,9 @@ class RunRecord:
     autonomous_opt_in: bool = False
     # Folder the medium mode is scoped to; None: no folder scoping.
     medium_folder: str | None = None
+    # The designer's design doc (migration 16, the DESIGNING pipeline stage); None: the
+    # run never needed a design (its plan had `needs_design` false).
+    design: DesignDoc | None = None
 
 
 @dataclass(frozen=True)
@@ -437,6 +441,10 @@ class Store:
         self._update_run(
             run_id, "plan_json = ?, plan_round = ?", (plan.model_dump_json(), plan_round)
         )
+
+    def set_run_design(self, run_id: str, design: DesignDoc) -> None:
+        """Persist the designer's design doc for the run (the DESIGNING pipeline stage)."""
+        self._update_run(run_id, "design_json = ?", (design.model_dump_json(),))
 
     def set_run_learning(self, run_id: str, profile: str | None) -> None:
         """Change the learning profile the run uses from now on (None: learning off)."""
@@ -1287,6 +1295,7 @@ def _learning_counts(text: str | None) -> LearningCounts | None:
 def _run_record(row: sqlite3.Row) -> RunRecord:
     plan_json = row["plan_json"]
     validation_json = row["validation_json"]
+    design_json = row["design_json"]
     return RunRecord(
         id=row["id"],
         idea=Idea.model_validate_json(row["idea_json"]),
@@ -1310,6 +1319,7 @@ def _run_record(row: sqlite3.Row) -> RunRecord:
         autonomy_mode=row["autonomy_mode"] or "standard",
         autonomous_opt_in=bool(row["autonomous_opt_in"]),
         medium_folder=row["medium_folder"],
+        design=None if design_json is None else DesignDoc.model_validate_json(design_json),
     )
 
 

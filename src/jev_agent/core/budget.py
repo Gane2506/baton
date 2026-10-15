@@ -111,6 +111,8 @@ _REMAINING_PHASES: dict[RunState, tuple[str, ...]] = {
     RunState.VALIDATING: ("planning", "executing", "integrating", "learning"),
     RunState.AWAITING_PLANNING: ("planning", "executing", "integrating", "learning"),
     RunState.AWAITING_VALIDATING: ("planning", "executing", "integrating", "learning"),
+    RunState.DESIGNING: ("planning", "executing", "integrating", "learning"),
+    RunState.AWAITING_DESIGNING: ("planning", "executing", "integrating", "learning"),
     RunState.AWAITING_APPROVAL: ("executing", "integrating", "learning"),
     RunState.EXECUTING: ("executing", "integrating", "learning"),
     RunState.AWAITING_INTEGRATING: ("integrating", "learning"),

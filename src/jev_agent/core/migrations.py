@@ -364,6 +364,13 @@ MIGRATIONS: list[str] = [
         created_at TEXT NOT NULL
     );
     """,
+    # 16: the DESIGNING pipeline stage: the designer's `DesignDoc` for the run, as JSON.
+    # NULL: the run never needed a design (its plan had `needs_design` false, or the run
+    # predates the stage). The initial CREATE TABLE (migration 1) has no such column, so
+    # old databases get it here.
+    """
+    ALTER TABLE runs ADD COLUMN design_json TEXT;
+    """,
 ]
 
 SCHEMA_VERSION = len(MIGRATIONS)

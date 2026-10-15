@@ -70,6 +70,7 @@ def test_step_gates_are_explicit_states() -> None:
     assert STEP_GATES == {
         RunState.PLANNING: RunState.AWAITING_PLANNING,
         RunState.VALIDATING: RunState.AWAITING_VALIDATING,
+        RunState.DESIGNING: RunState.AWAITING_DESIGNING,
         RunState.EXECUTING: RunState.AWAITING_APPROVAL,
         RunState.INTEGRATING: RunState.AWAITING_INTEGRATING,
         RunState.SHIPPING: RunState.AWAITING_SHIPPING,

@@ -49,6 +49,10 @@ Learned from earlier runs. Follow them where they apply; this prompt wins if the
 - Every acceptance criterion must be testable: something a command or a reviewer can check.
 - `files_hint` lists the files or directories the task will likely touch.
 - `test_command` is one shell command run from the repository root, or null.
+- When the work involves UI/frontend/screens (new or changed user-facing surfaces), set
+  `needs_design: true` at the top level of the plan JSON: a designer drafts the screens
+  before any coder starts, and coders get the design with their prompts. Backend-only
+  work leaves it `false` (or omits it).
 - Do not modify any files. You only plan.
 
 ## Output
@@ -69,6 +73,7 @@ Reply with exactly one JSON object and nothing else, matching this shape:
       "test_command": "pytest tests/test_module.py"
     }
   ],
-  "risks": ["anything that could go wrong"]
+  "risks": ["anything that could go wrong"],
+  "needs_design": false
 }
 ```
