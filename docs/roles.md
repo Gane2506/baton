@@ -264,6 +264,17 @@ prompt_file = "prompts/planner.md"   # relative to the repo root; absolute paths
 
 Only the prompt changes; the role's workers, models and output schema stay the same.
 
+For a lighter touch than a whole template, `prompt_addendum` appends plain-text
+instructions after the rendered prompt (built-in template or your `prompt_file`):
+
+```toml
+[roles.coder]
+prompt_addendum = "Always run the linter before reporting success."
+```
+
+Up to 4000 characters, no control characters, blank means none. It is also editable per
+role on the dashboard's Fleet page ("Additional prompt").
+
 Start from a copy of the built-in template, `src/jev_agent/roles/<role>/prompt.md` in the jev
 repository, and edit it. Commit it with your repo so every run uses the same prompt.
 

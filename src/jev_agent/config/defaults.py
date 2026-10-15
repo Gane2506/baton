@@ -160,6 +160,7 @@ DEFAULT_CONFIG_TOML = """\
 # Roles. `workers` lists who may do the job; `models` is empty until you fill it in.
 # selection = "dispatcher" lets the dispatcher choose among them; "fixed" skips that choice.
 # prompt_file = "prompts/planner.md" replaces the built-in prompt template for a role.
+# prompt_addendum = "extra instructions" appends to the role's prompt (multiline ok).
 # models = ["free", "openai/gpt-5-mini"]: "free" expands to cached free models (api worker only).
 # prefer_free = true|false overrides [models] prefer_free for one role.
 

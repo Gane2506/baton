@@ -982,6 +982,13 @@ class ToolsConfig(_Strict):
         return self
 
 
+# Control characters forbidden in `RoleConfig.prompt_addendum`: everything below
+# U+0020 and U+007F except the whitespace a multi-line instruction block needs.
+_ADDENDUM_FORBIDDEN = frozenset(chr(code) for code in (*range(0x00, 0x20), 0x7F)) - frozenset(
+    "\t\n\r"
+)
+
+
 class RoleConfig(_Strict):
     workers: list[str] = Field(
         default_factory=list,
@@ -1015,6 +1022,28 @@ class RoleConfig(_Strict):
         default=None,
         description="Your own Jinja2 prompt template for this role, replacing the built-in one.",
     )
+    # Extra instructions appended to the rendered prompt, after the template (built-in or
+    # prompt_file). Blank means none; kept in plain text so the dashboard can edit it.
+    prompt_addendum: str = Field(
+        default="",
+        max_length=4000,
+        description=(
+            "Extra instructions appended to this role's prompt, after the prompt template "
+            "is rendered. Blank means none."
+        ),
+    )
+
+    @field_validator("prompt_addendum")
+    @classmethod
+    def _check_addendum_text(cls, value: str) -> str:
+        # TOML and terminals have no use for control characters; tabs and newlines are
+        # the legitimate formatting of a multi-line instruction block.
+        bad = sorted({char for char in value if char in _ADDENDUM_FORBIDDEN}, key=ord)
+        if bad:
+            shown = ", ".join(f"U+{ord(char):04X}" for char in bad)
+            raise ValueError(f"prompt_addendum must not contain control characters ({shown})")
+        return value
+
     # Agent tools for this role, by name from `[tools]`.
     mcp: list[str] = Field(
         default_factory=list, description="MCP servers this role may use, by name from [tools.mcp]."

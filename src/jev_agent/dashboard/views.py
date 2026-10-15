@@ -925,6 +925,55 @@ def doctor_checks(root: Path) -> list[Check]:
 
 # ---- fleet ---------------------------------------------------------------------------------
 
+# The six agent roles, in pipeline order; the roster on the Fleet page shows one card each.
+ROLE_NAMES: tuple[str, ...] = (
+    "planner",
+    "validator",
+    "coder",
+    "reviewer",
+    "code_reviewer",
+    "learner",
+)
+
+
+@dataclass(frozen=True)
+class RoleCard:
+    """One row of the Fleet roster: a role, what it does, and whether it is working."""
+
+    role: str
+    title: str  # "Code Reviewer"
+    blurb: str  # one line, from the config schema's field description
+    workers: str  # "claude_code, api"
+    addendum: str  # the role's current additional prompt instructions
+    working: bool  # an agent with this role is running right now
+
+
+def role_roster(config: JevConfig, agents: list[FleetAgent]) -> list[RoleCard]:
+    """The six role cards for the Fleet page, in pipeline order.
+
+    `working` reuses what the fleet endpoint already computed: a role is working when
+    one of the currently-running agents has that role. Blurds come from the schema so
+    they cannot drift from the config reference.
+    """
+    from jev_agent.config.schema import RolesConfig
+
+    active = {agent.role for agent in agents}
+    cards: list[RoleCard] = []
+    for role in ROLE_NAMES:
+        rc = getattr(config.roles, role)
+        description = RolesConfig.model_fields[role].description or ""
+        cards.append(
+            RoleCard(
+                role=role,
+                title=role.replace("_", " ").title(),
+                blurb=description,
+                workers=", ".join(rc.workers) or "—",
+                addendum=rc.prompt_addendum,
+                working=role in active,
+            )
+        )
+    return cards
+
 
 @dataclass(frozen=True)
 class FleetAgent:

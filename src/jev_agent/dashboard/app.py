@@ -731,8 +731,58 @@ class Dashboard:
         return self._settings_page(request, "agents")
 
     def fleet_page(self, request: Request) -> Response:
-        """Every agent working right now, across runs and servers (`templates/fleet.html`)."""
-        return self.page(request, "fleet.html", lambda repo: {"agents": views.fleet(repo)})
+        """The six-role roster plus every agent working right now (`templates/fleet.html`).
+
+        The roster is static config (not part of the live poll), so the addendum
+        textareas are never reset by the auto-refresh; only `_fleet.html` polls.
+        """
+
+        def build(repo: views.Repo) -> dict[str, Any]:
+            agents = views.fleet(repo)
+            return {"agents": agents, "roles": views.role_roster(repo.config, agents)}
+
+        return self.page(request, "fleet.html", build)
+
+    async def fleet_addendum(self, request: Request) -> Response:
+        """Save one role's additional prompt instructions (POST), back to its roster card.
+
+        Follows the settings editor's save path (`settings.save` on the repo's
+        jev.toml): the merged config must validate, and an empty value removes the key
+        so the role falls back to the default (no addendum).
+        """
+        form = await checked_form(request)
+        role = _text(form, "role") or ""
+        to = f"/fleet#role-{role}" if role in views.ROLE_NAMES else "/fleet"
+
+        def job() -> str | None:
+            if role not in views.ROLE_NAMES:
+                return f"unknown role {role!r}"
+            path = f"roles.{role}.prompt_addendum"
+            value = str(form.get("value", "") or "")
+            root = self.settings.root
+            try:
+                file = settings.target_file(root, "repo")
+            except ValueError as exc:
+                return str(exc)
+            if not value.strip():
+                return settings.save(
+                    root,
+                    "repo",
+                    lambda layer: settings.remove_path(layer, path),
+                    lambda: settings.unset_value(file, path),
+                )
+            return settings.save(
+                root,
+                "repo",
+                lambda layer: settings.set_path(layer, path, value),
+                lambda: settings.write_value(file, path, value),
+            )
+
+        error = await run_in_threadpool(job)
+        self.flash(
+            request, "error" if error else "ok", error or f"saved the additional prompt for {role}"
+        )
+        return self.back(to)
 
     def fleet_fragment(self, request: Request) -> Response:
         """The fleet table alone, for live.js polling and `JevShell.mountPane("terminal",
@@ -2019,6 +2069,7 @@ def create_app(
         Route("/agents", dash.agents_page),
         Route("/fleet", dash.fleet_page),
         Route("/fleet/live", dash.fleet_fragment),
+        Route("/fleet/addendum", dash.fleet_addendum, methods=["POST"]),
         Route("/tools", dash.tools_page),
         Route("/connections", dash.connections_page),
         Route("/connections/live", dash.connections_live),

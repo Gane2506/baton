@@ -106,12 +106,15 @@ class Harness:
     def prompt(self, role: Role, lessons: Sequence[Lesson] = (), **variables: object) -> str:
         """Render the role's prompt. A bad template stops the run in NEEDS_HUMAN (resumable).
 
-        Every template gets `lessons` (a list, empty when learning is off).
+        Every template gets `lessons` (a list, empty when learning is off). The role's
+        `prompt_addendum` (Fleet page "Additional prompt") is appended after rendering,
+        so it applies on top of the built-in template and any `prompt_file`.
         """
         try:
-            return render_prompt(role, self.prompt_file(role), lessons=list(lessons), **variables)
+            text = render_prompt(role, self.prompt_file(role), lessons=list(lessons), **variables)
         except PromptError as exc:
             raise _prompt_halt(exc) from exc
+        return with_prompt_addendum(text, getattr(self.config.roles, role).prompt_addendum)
 
     def check_prompts(self) -> None:
         """Load and parse every custom prompt template, so a missing file or a syntax error
@@ -366,6 +369,19 @@ class Harness:
 
 def _prompt_halt(exc: PromptError) -> Halt:
     return Halt(RunState.NEEDS_HUMAN, f"bad prompt template: {exc}", resumable=True)
+
+
+def with_prompt_addendum(text: str, addendum: str) -> str:
+    """Append a role's extra instructions to its rendered prompt (blank: unchanged).
+
+    The block goes after the whole template so it can override or extend anything the
+    template said; surrounding blank lines are normalised so a template that ends (or
+    an addendum that starts) with newlines cannot glue the two together.
+    """
+    extra = addendum.strip()
+    if not extra:
+        return text
+    return f"{text.rstrip()}\n\n## Additional instructions\n\n{extra}\n"
 
 
 def _require_structured_output(role: Role, output: WorkerOutput) -> WorkerOutput:

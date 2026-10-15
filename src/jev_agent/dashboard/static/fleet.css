@@ -1,0 +1,75 @@
+/* Fleet roster (workstream 4). Scoped to the /fleet page; if WS1's design system
+   absorbs these patterns, move them into the shared stylesheet and drop this file. */
+
+.roster-lede {
+  margin-bottom: var(--s4);
+}
+
+.roster-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: var(--s4);
+  align-items: start;
+  margin-bottom: var(--s6);
+}
+
+.role-card {
+  margin-bottom: 0;
+}
+
+.role-head {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--s3);
+}
+
+.role-icon {
+  width: 36px;
+  height: 36px;
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: var(--accent);
+}
+
+.role-titles {
+  flex: 1;
+  min-width: 0;
+}
+
+.role-titles h3 {
+  margin: 0 0 var(--s1);
+  font-size: var(--text-base);
+}
+
+.role-titles .muted {
+  margin: 0;
+  font-size: var(--text-sm);
+}
+
+.role-head .badge {
+  flex: none;
+  margin-top: 2px;
+}
+
+.role-meta {
+  font-size: var(--text-xs);
+  margin: var(--s1) 0 0;
+}
+
+.role-form {
+  margin-top: var(--s2);
+}
+
+.role-form textarea {
+  min-height: 64px;
+}
+
+.role-actions {
+  margin-top: var(--s2);
+  display: flex;
+  justify-content: flex-end;
+}

@@ -3,17 +3,21 @@
 
 from __future__ import annotations
 
+import re
 import sqlite3
 from collections.abc import Iterator
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+import httpx
 import pytest
 from starlette.testclient import TestClient
 from typer.testing import CliRunner
 
 from jev_agent.cli.app import app as cli_app
 from jev_agent.cli.wiring import FAKE_WORKERS_ENV
+from jev_agent.config import load_config
+from jev_agent.config.schema import JevConfig, RolesConfig
 from jev_agent.core.models import RunState
 from jev_agent.core.store import Store
 from jev_agent.dashboard import views
@@ -137,3 +141,134 @@ def test_sidebar_nav_has_fleet(client: TestClient) -> None:
     html = client.get("/").text
     assert 'href="/fleet"' in html
     assert ">Fleet<" in html
+
+
+# ---- fleet roster: the six role cards with per-role prompt injection ------------------------
+
+
+def _fleet_csrf(client: TestClient) -> str:
+    match = re.search(r'name="csrf_token" value="([0-9a-f]+)"', client.get("/fleet").text)
+    assert match
+    return match.group(1)
+
+
+def _post_addendum(client: TestClient, role: str, value: str) -> httpx.Response:
+    return client.post(
+        "/fleet/addendum",
+        data={"role": role, "value": value, "csrf_token": _fleet_csrf(client)},
+        follow_redirects=False,
+    )
+
+
+def test_fleet_page_links_its_stylesheet(client: TestClient) -> None:
+    html = client.get("/fleet").text
+    assert 'href="/static/fleet.css"' in html
+    css = client.get("/static/fleet.css").text
+    assert ".roster-grid" in css
+
+
+def test_fleet_page_renders_six_role_cards(client: TestClient) -> None:
+    html = client.get("/fleet").text
+    for title in ("Planner", "Validator", "Coder", "Reviewer", "Code Reviewer", "Learner"):
+        assert f"<h3>{title}</h3>" in html
+    # One card per role, each with its own additional-prompt form.
+    assert html.count('action="/fleet/addendum"') == 6
+    assert 'name="value"' in html
+    assert "Additional prompt" in html
+
+
+def test_fleet_roster_shows_working_status(client: TestClient, fixture_repo: Path) -> None:
+    _add_run(fixture_repo)
+    html = client.get("/fleet").text
+    coder = html.split('id="role-coder"')[1].split("</section>")[0]
+    assert "Working" in coder
+    planner = html.split('id="role-planner"')[1].split("</section>")[0]
+    assert "Idle" in planner
+
+
+def test_fleet_roster_idle_when_nothing_running(client: TestClient) -> None:
+    html = client.get("/fleet").text
+    assert "No agents running" in html
+    assert html.count(">Idle<") == 6
+
+
+def test_fleet_addendum_save_round_trip(client: TestClient, fixture_repo: Path) -> None:
+    _config_with_server(fixture_repo)
+    response = _post_addendum(client, "planner", "Always start with a summary.")
+    assert response.status_code == 303
+    assert load_config(fixture_repo).roles.planner.prompt_addendum == (
+        "Always start with a summary."
+    )
+    # The saved value renders back into the card's textarea.
+    html = client.get("/fleet").text
+    assert "Always start with a summary." in html
+    # Other roles are untouched.
+    assert load_config(fixture_repo).roles.coder.prompt_addendum == ""
+
+
+def test_fleet_addendum_multiline_round_trip(client: TestClient, fixture_repo: Path) -> None:
+    _config_with_server(fixture_repo)
+    value = "Line one.\n\nLine two."
+    assert _post_addendum(client, "code_reviewer", value).status_code == 303
+    assert load_config(fixture_repo).roles.code_reviewer.prompt_addendum == value
+
+
+def test_fleet_addendum_empty_clears(client: TestClient, fixture_repo: Path) -> None:
+    _config_with_server(fixture_repo)
+    _post_addendum(client, "learner", "Some guidance.")
+    assert _post_addendum(client, "learner", "   ").status_code == 303
+    assert load_config(fixture_repo).roles.learner.prompt_addendum == ""
+
+
+def test_fleet_addendum_rejects_unknown_role(client: TestClient) -> None:
+    response = _post_addendum(client, "janitor", "do the thing")
+    assert response.status_code == 303
+    assert response.headers["location"] == "/fleet"
+
+
+def test_fleet_addendum_rejects_control_characters(client: TestClient, fixture_repo: Path) -> None:
+    _config_with_server(fixture_repo)
+    response = _post_addendum(client, "coder", "bad\x00char")
+    assert response.status_code == 303
+    assert load_config(fixture_repo).roles.coder.prompt_addendum == ""
+
+
+def test_role_roster_uses_schema_blurbs() -> None:
+    config = JevConfig()
+    cards = views.role_roster(config, [])
+    assert [card.role for card in cards] == list(views.ROLE_NAMES)
+    assert [card.title for card in cards] == [
+        "Planner",
+        "Validator",
+        "Coder",
+        "Reviewer",
+        "Code Reviewer",
+        "Learner",
+    ]
+    # Blurbs come from the schema's field descriptions: no second source of truth.
+    for card in cards:
+        assert card.blurb == RolesConfig.model_fields[card.role].description
+    # Working flags follow the fleet agents' roles.
+    agent = views.FleetAgent(
+        run_id="r",
+        run_idea="idea",
+        run_state=RunState.EXECUTING,
+        task_id=None,
+        task_title=None,
+        task_state=None,
+        role="coder",
+        worker="claude_code",
+        model=None,
+        started_at=datetime.now(UTC),
+        stale=False,
+        grants=[],
+    )
+    working = {card.role: card.working for card in views.role_roster(config, [agent])}
+    assert working == {
+        "planner": False,
+        "validator": False,
+        "coder": True,
+        "reviewer": False,
+        "code_reviewer": False,
+        "learner": False,
+    }
