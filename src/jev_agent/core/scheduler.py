@@ -242,6 +242,7 @@ class Scheduler:
         sleep: Callable[[float], None] = time.sleep,
         log: Callable[[str], None] = lambda message: None,
         now: Callable[[], datetime] = lambda: datetime.now(UTC),
+        should_stop: Callable[[], bool] | None = None,
     ) -> None:
         self.store = store
         self.start = start
@@ -250,6 +251,9 @@ class Scheduler:
         self.sleep = sleep
         self.log = log
         self.now = now
+        # Checked at the top of every loop iteration: a graceful exit between items
+        # (the dashboard's scheduler sets this; the CLI leaves it None and uses Ctrl-C).
+        self.should_stop = should_stop
 
     def run(self) -> SchedulerSummary:
         """Loop until --once/--max-runs/the daily budget says stop, or Ctrl-C.
@@ -260,6 +264,9 @@ class Scheduler:
         try:
             self.recover()
             while True:
+                if self.should_stop is not None and self.should_stop():
+                    summary.stopped_because = "stopped"
+                    break
                 self._pump_recurring()
                 if self.options.max_runs is not None and summary.runs >= self.options.max_runs:
                     summary.stopped_because = f"reached --max-runs {self.options.max_runs}"

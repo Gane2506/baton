@@ -143,6 +143,39 @@ def test_interrupt_leaves_run_resumable(store: Store, tmp_path: Path) -> None:
     assert _statuses(store)["done never"] == "queued"
 
 
+def test_should_stop_exits_before_the_first_item(store: Store, tmp_path: Path) -> None:
+    store.add_queue_item("done one")
+    scheduler = Scheduler(
+        store,
+        FakeStarter(store, tmp_path),
+        SchedulerOptions(),
+        sleep=_no_sleep,
+        should_stop=lambda: True,
+    )
+    summary = scheduler.run()
+    assert summary.runs == 0 and summary.stopped_because == "stopped"
+    assert _statuses(store) == {"done one": "queued"}
+
+
+def test_should_stop_exits_between_items(store: Store, tmp_path: Path) -> None:
+    store.add_queue_item("done one")
+    store.add_queue_item("done two")
+    inner = FakeStarter(store, tmp_path)
+    started = 0
+
+    async def start(item: QueueItem) -> RunRecord:
+        nonlocal started
+        started += 1
+        return await inner(item)
+
+    scheduler = Scheduler(
+        store, start, SchedulerOptions(), sleep=_no_sleep, should_stop=lambda: started >= 1
+    )
+    summary = scheduler.run()
+    assert summary.runs == 1 and summary.stopped_because == "stopped"
+    assert _statuses(store) == {"done one": "done", "done two": "queued"}
+
+
 def test_poll_sleeps_when_empty(store: Store, tmp_path: Path) -> None:
     sleeps: list[float] = []
 

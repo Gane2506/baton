@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% from "macros.html" import csrf_input, icon with context %}
+{% block title %}Delete profile {{ profile }}?{% endblock %}
+{% block content %}
+<div class="focus-page">
+  <section class="panel">
+    <h1>Delete profile {{ profile }}?</h1>
+    <p>This deletes the profile <strong>{{ profile }}</strong> and all
+    {{ lessons }} of its lesson{{ "s" if lessons != 1 }}.{% if active %} It is the
+    <strong>active</strong> profile: the repo falls back to its configured profile.{% endif %}
+    This cannot be undone.</p>
+    <div class="actions">
+      <form class="inline" method="post" action="/learning/delete">
+        {{ csrf_input() }}
+        <input type="hidden" name="profile" value="{{ profile }}">
+        <input type="hidden" name="confirm" value="yes">
+        <button class="btn btn-danger" type="submit">{{ icon("i-remove", "sm") }}Delete profile</button>
+      </form>
+      <a class="btn btn-secondary" href="/learning?profile={{ profile | urlencode }}">Keep it</a>
+    </div>
+  </section>
+</div>
+{% endblock %}

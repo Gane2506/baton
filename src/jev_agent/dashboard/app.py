@@ -43,11 +43,15 @@ from starlette.staticfiles import StaticFiles
 
 from jev_agent import __version__
 from jev_agent.app import chat, settings
+from jev_agent.app import profiles as app_profiles
 from jev_agent.app.board import DONE_LIMIT, state_legend
 from jev_agent.app.errors import JevError
 from jev_agent.app.format import format_age, format_answers, format_time
 from jev_agent.app.learning import (
     create_profile as learning_create,
+)
+from jev_agent.app.learning import (
+    delete as learning_delete_profile,
 )
 from jev_agent.app.learning import (
     disable as learning_disable,
@@ -81,12 +85,21 @@ from jev_agent.core.chat import (
     ChatMeta,
 )
 from jev_agent.core.kpi import DiffStat, diff_stat
-from jev_agent.core.learning import LearningError
+from jev_agent.core.learning import LearningError, learning_status
 from jev_agent.core.lease import RunInUseError
 from jev_agent.core.models import RunState, TaskState
 from jev_agent.core.pipeline import STOPPED, PipelineError, cancel_run
-from jev_agent.core.queue import Move, QueueError, add_idea, move_item, remove_item
-from jev_agent.core.ship import Gh, ShipError, ShipPlan, prepare_ship
+from jev_agent.core.queue import Move, QueueError, add_idea, move_item, queue_counts, remove_item
+from jev_agent.core.scheduler import SchedulerLocked, spent_today
+from jev_agent.core.ship import (
+    Gh,
+    ShipError,
+    ShipPlan,
+    check_gh,
+    prepare_ship,
+    prs_to_sync,
+    sync_pr,
+)
 from jev_agent.core.store import (
     QUEUE_PRIORITIES,
     AttemptRecord,
@@ -102,6 +115,7 @@ from jev_agent.core.workspace import (
     start_ref,
 )
 from jev_agent.dashboard import views
+from jev_agent.dashboard.browser_install import BrowserInstallBusy, BrowserInstallRunner
 from jev_agent.dashboard.preview import (
     PreviewBridge,
     PreviewError,
@@ -123,6 +137,7 @@ from jev_agent.dashboard.runner import (
     prepare_run,
     request_changes,
 )
+from jev_agent.dashboard.scheduler_runner import SchedulerRunner
 from jev_agent.dashboard.security import (
     CSRF_FIELD,
     DashboardSettings,
@@ -131,8 +146,9 @@ from jev_agent.dashboard.security import (
     same_origin,
 )
 from jev_agent.demo import is_demo_repo
-from jev_agent.quality.levels import LEVELS
+from jev_agent.quality.levels import LEVEL_SUMMARY, LEVELS
 from jev_agent.servers.audit import AuditEntry, AuditLog, audit_path
+from jev_agent.servers.profiles import ProfileError
 from jev_agent.servers.ssh import (
     CONNECT_TIMEOUT_S,
     SshRunner,
@@ -151,11 +167,15 @@ NAV = (
     ("/fleet", "Fleet"),
     ("/chats", "Chats"),
     ("/learning", "Learning"),
+    ("/profiles", "Profiles"),
+    ("/chats", "Chats"),
+    ("/learning", "Learning"),
     ("/tools", "Tools"),
     ("/connections", "Connections"),
     ("/spend", "Spend"),
     ("/kpis", "KPIs"),
     ("/settings", "Settings"),
+    ("/diagnostics", "Diagnostics"),
 )
 
 
@@ -482,6 +502,9 @@ class Dashboard:
         self.settings = settings
         self.launcher = launcher
         self.chat_runner = ChatRunner()
+        self.scheduler_runner = SchedulerRunner(settings.root, launcher)
+        self.browser_installer = BrowserInstallRunner(settings.root)
+        self.started_at = datetime.now(UTC)  # the About panel's uptime
         self.env = _environment()
         self._flash_lock = threading.Lock()
         self._flashes: dict[str, list[tuple[str, str]]] = {}
@@ -497,8 +520,17 @@ class Dashboard:
             return self._flashes.pop(request.state.session, [])
 
     def shutdown_jobs(self, timeout: float) -> list[str]:
-        """Cancel and join every background job (runs and chat turns), for the lifespan."""
-        return [*self.launcher.shutdown(timeout), *self.chat_runner.shutdown(timeout)]
+        """Cancel and join every background job (runs, chat turns and the dashboard's
+        scheduler), for the lifespan."""
+        # Stop the scheduler first so it starts no new items; the launcher then cancels
+        # the in-flight item's run, which lets the scheduler thread exit promptly.
+        self.scheduler_runner.stop()
+        self.browser_installer.shutdown()
+        return [
+            *self.launcher.shutdown(timeout),
+            *self.chat_runner.shutdown(timeout),
+            *self.scheduler_runner.shutdown(timeout),
+        ]
 
     def render(
         self, request: Request, template: str, status_code: int = 200, **context: Any
@@ -510,6 +542,7 @@ class Dashboard:
             request=request,
             path=request.url.path,
             csrf=request.state.csrf,
+            palette_registry=palette_registry(request.state.csrf),
             refresh_ms=int(self.settings.refresh_s * 1000),
             root=self.settings.root,
             demo=is_demo_repo(self.settings.root),
@@ -559,6 +592,7 @@ class Dashboard:
             PipelineError,
             QueueError,
             LearningError,
+            ShipError,
             ValueError,
         ) as exc:
             self.flash(request, "error", str(exc))
@@ -632,6 +666,7 @@ class Dashboard:
             "queue.html",
             lambda repo: {
                 "q": views.queue_view(repo, show_all),
+                "sched": self.scheduler_runner.status(),
                 "show_all": show_all,
                 "priorities": QUEUE_PRIORITIES,
                 "levels": LEVELS,
@@ -641,14 +676,34 @@ class Dashboard:
     def learning_page(self, request: Request) -> Response:
         profile = request.query_params.get("profile")
         include_retired = request.query_params.get("all") == "1"
-        return self.page(
-            request,
-            "learning.html",
-            lambda repo: {
-                "lv": views.learning_view(repo, profile, include_retired),
+        tab = request.query_params.get("tab", "list")
+
+        def build(repo: views.Repo) -> dict[str, Any]:
+            lv = views.learning_view(repo, profile, include_retired)
+            graph = (
+                views.learning_graph_view(
+                    repo,
+                    lv.selected or "",
+                    q=request.query_params.get("q", ""),
+                    module=request.query_params.get("module", ""),
+                    relation=request.query_params.get("rel", ""),
+                    focus_id=request.query_params.get("lesson", ""),
+                )
+                if tab == "graph" and lv.selected
+                else None
+            )
+            return {
+                "lv": lv,
                 "include_retired": include_retired,
-            },
-        )
+                "tab": tab if tab == "graph" and graph is not None else "list",
+                "graph": graph,
+                "relation_facets": views.RELATION_FACETS,
+                "laya": views.laya_view(
+                    repo, request.query_params.get("laya_profile") or lv.selected
+                ),
+            }
+
+        return self.page(request, "learning.html", build)
 
     def chats_page(self, request: Request) -> Response:
         query = request.query_params.get("q", "")
@@ -730,8 +785,46 @@ class Dashboard:
             lambda repo: {"k": views.kpi_view(repo, last), "rk": views.product_kpis(repo)},
         )
 
+    async def kpis_sync(self, request: Request) -> Response:
+        """`jev ship sync --all` behind a button (Tier 1: re-running it is the undo).
+
+        Refreshes every shipped PR's state, reviews and CI from GitHub and records when
+        the sync ran, so the page can say how fresh its numbers are.
+        """
+
+        def sync(repo: views.Repo, form: FormData) -> str:
+            prs = prs_to_sync(repo.store, None)
+            if not prs:
+                return "nothing shipped yet"
+            gh = Gh(repo.root)
+            problem = check_gh(gh)
+            if problem is not None:
+                raise ShipError(problem)
+            failed = 0
+            for pr in prs:
+                try:
+                    sync_pr(repo.store, gh, pr)
+                except ShipError:
+                    failed += 1
+            _record_ship_sync(repo.state_dir)
+            synced = len(prs) - failed
+            note = f"synced {synced} PR(s)"
+            return note if not failed else f"{note}, {failed} failed"
+
+        return await self.act(request, "/kpis", sync)
+
     def settings_page(self, request: Request) -> Response:
         return self._settings_page(request, "settings")
+
+    def diagnostics_page(self, request: Request) -> Response:
+        """`jev doctor` (local checks only) as a read-only page (Tier 0)."""
+
+        def build(repo: views.Repo) -> dict[str, Any]:
+            checks = views.doctor_checks(repo.root)
+            failed = sum(1 for c in checks if c.status == "fail")
+            return {"checks": checks, "failed": failed}
+
+        return self.page(request, "diagnostics.html", build)
 
     def agents_page(self, request: Request) -> Response:
         return self._settings_page(request, "agents")
@@ -790,13 +883,63 @@ class Dashboard:
         )
         return self.back(to)
 
+    def profiles_page(self, request: Request) -> Response:
+        """`jev profile list` / `show`: the workspace profiles, the repo default and what
+        each role gets from each one (Tier 0)."""
+
+        name = request.query_params.get("name")
+
+        def build(repo: views.Repo) -> dict[str, Any]:
+            detail = None
+            if name is not None:
+                try:
+                    detail = app_profiles.describe_profile(repo.config, repo.state_dir, name)
+                except ProfileError as exc:
+                    raise NotFoundError(str(exc)) from exc
+            return {
+                "profiles": app_profiles.list_profiles(repo.config, repo.state_dir),
+                "detail": detail,
+            }
+
+        return self.page(request, "profiles.html", build)
+
+    async def profiles_use(self, request: Request) -> Response:
+        """`jev profile use` (Tier 1): make a profile the repo default, or clear it."""
+        form = await checked_form(request)
+        name = _text(form, "profile")
+
+        def use() -> str:
+            with views.open_repo(self.settings.root) as repo:
+                if not name or name == "none":
+                    app_profiles.set_default_profile(repo.config, repo.state_dir, None)
+                    return "no default workspace profile: runs use none unless --profile is given"
+                app_profiles.set_default_profile(repo.config, repo.state_dir, name)
+                return f"default workspace profile: {name}"
+
+        try:
+            message = await run_in_threadpool(use)
+        except (JevError, ConfigError, ProfileError) as exc:
+            self.flash(request, "error", str(exc))
+        else:
+            self.flash(request, "ok", message)
+        return self.back("/profiles")
+
     def fleet_fragment(self, request: Request) -> Response:
         """The fleet table alone, for live.js polling and `JevShell.mountPane("terminal",
         "/fleet/live", ms)` (see the hook documented in `templates/fleet.html`)."""
         return self.page(request, "_fleet.html", lambda repo: {"agents": views.fleet(repo)})
 
     def tools_page(self, request: Request) -> Response:
-        return self._settings_page(request, "tools", "tools.html")
+        def extra(repo: views.Repo) -> dict[str, Any]:
+            listing, warning = views.model_listing(repo)
+            return {
+                "models_listing": listing,
+                "models_warning": warning,
+                "quality_rows": views.quality_checks(repo),
+                "level_summaries": LEVEL_SUMMARY,
+            }
+
+        return self._settings_page(request, "tools", "tools.html", extra)
 
     def connections_page(self, request: Request) -> Response:
         """The full panel: cached per-server reachability, the dispatcher route and key
@@ -816,6 +959,8 @@ class Dashboard:
                 "route": _dispatcher_route(repo.config),
                 "env_vars": views.env_vars(repo.config),
                 "key_names": views.env_var_names(repo.config),
+                "browser_check": views.browser_check(repo),
+                "browser_install": self.browser_installer.status(),
                 # the settings editor, unchanged from the old connections page
                 "sections": secs,
                 "entities": ents,
@@ -895,6 +1040,34 @@ class Dashboard:
             return f"{name} removed from the secrets file."
 
         return await self.act(request, "/connections", remove)
+
+    async def browser_install(self, request: Request) -> Response:
+        """Two steps (Tier 2: it downloads and runs an installer): the first POST names
+        the exact command on a confirmation page; only `confirm=yes` starts it, once."""
+        form = await checked_form(request)
+        to = "/connections"
+        status = self.browser_installer.status()
+        if form.get("confirm") != "yes":
+            if status.state == "running":
+                self.flash(request, "error", "a browser install is already running")
+                return self.back(to)
+            return self.render(request, "confirm_browser_install.html", install=status)
+        try:
+            await run_in_threadpool(self.browser_installer.start)
+        except BrowserInstallBusy as exc:
+            self.flash(request, "error", str(exc))
+        else:
+            self.flash(request, "ok", "browser install started; its progress shows below")
+        return self.back(to)
+
+    async def browser_install_stop(self, request: Request) -> Response:
+        """Stop the running browser install (Tier 1)."""
+        await checked_form(request)
+        if self.browser_installer.stop():
+            self.flash(request, "ok", "stopping the browser install")
+        else:
+            self.flash(request, "error", "no browser install is running")
+        return self.back("/connections")
 
     # ---- agent browser preview (workstream F) ----------------------------------
 
@@ -1036,12 +1209,16 @@ class Dashboard:
         )
 
     def _settings_page(
-        self, request: Request, page: str, template: str = "settings.html"
+        self,
+        request: Request,
+        page: str,
+        template: str = "settings.html",
+        extra: Callable[[views.Repo], dict[str, Any]] | None = None,
     ) -> Response:
         def build(repo: views.Repo) -> dict[str, Any]:
             repo_raw, user_raw, user_file = settings.read_layers(repo.root)
             title, lede, secs, ents = settings.page_view(repo.config, repo_raw, user_raw, page)
-            return {
+            context = {
                 "page": page,
                 "page_title": title,
                 "page_lede": lede,
@@ -1054,7 +1231,12 @@ class Dashboard:
                 "env_vars": views.env_vars(repo.config),
                 "checks": views.doctor_checks(repo.root),
                 "settings": self.settings,
+                "dashboard_started": _time(self.started_at),
+                "dashboard_uptime": _age(self.started_at),
             }
+            if extra is not None:
+                context.update(extra(repo))
+            return context
 
         return self.page(request, template, build)
 
@@ -1721,12 +1903,92 @@ class Dashboard:
 
         return await self.act(request, "/queue", remove)
 
+    async def scheduler_start(self, request: Request) -> Response:
+        """Two steps (Tier 2: a scheduler spends real money): the first POST names the
+        spend implication on a confirmation page; only `confirm=yes` starts the
+        dashboard's own scheduler, which dies with the dashboard."""
+        form = await checked_form(request)
+        to = "/queue"
+        if form.get("confirm") != "yes":
+
+            def preview() -> dict[str, Any]:
+                with views.open_repo(self.settings.root) as repo:
+                    return {
+                        "queued": queue_counts(repo.store).get("queued", 0),
+                        "spent_today": spent_today(repo.store, datetime.now(UTC)),
+                    }
+
+            try:
+                info = await run_in_threadpool(preview)
+            except (JevError, ConfigError) as exc:
+                self.flash(request, "error", str(exc))
+                return self.back(to)
+            if self.scheduler_runner.status().owner is not None:
+                self.flash(request, "error", "a scheduler is already running")
+                return self.back(to)
+            return self.render(request, "confirm_scheduler.html", **info)
+
+        try:
+            await run_in_threadpool(self.scheduler_runner.start)
+        except (SchedulerLocked, PipelineError, JevError, ConfigError) as exc:
+            self.flash(request, "error", str(exc))
+        else:
+            self.flash(request, "ok", "scheduler started; it stops when the dashboard stops")
+        return self.back(to)
+
+    async def scheduler_stop(self, request: Request) -> Response:
+        """Stop the dashboard's scheduler after the current item (Tier 1: graceful, and
+        only ever our own scheduler — a terminal's keeps running)."""
+        await checked_form(request)
+        if self.scheduler_runner.stop():
+            self.flash(
+                request, "ok", "scheduler stopping: it finishes the current item, then stops"
+            )
+        else:
+            self.flash(request, "error", "the dashboard's scheduler is not running")
+        return self.back("/queue")
+
+    async def queue_clear(self, request: Request) -> Response:
+        """Two steps (Tier 2), like `learning_flush`: the first POST shows how many queued
+        ideas would go; only `confirm=yes` deletes them (items with a run are kept)."""
+        form = await checked_form(request)
+        to = "/queue"
+        if form.get("confirm") != "yes":
+
+            def count() -> int:
+                with views.open_repo(self.settings.root) as repo:
+                    return queue_counts(repo.store).get("queued", 0)
+
+            try:
+                queued = await run_in_threadpool(count)
+            except (JevError, ConfigError) as exc:
+                self.flash(request, "error", str(exc))
+                return self.back(to)
+            if queued == 0:
+                self.flash(request, "ok", "the queue is already empty")
+                return self.back(to)
+            return self.render(request, "confirm_queue_clear.html", queued=queued)
+
+        def clear() -> int:
+            with views.open_repo(self.settings.root) as repo:
+                return repo.store.clear_queued()
+
+        try:
+            deleted = await run_in_threadpool(clear)
+        except (JevError, ConfigError) as exc:
+            self.flash(request, "error", str(exc))
+        else:
+            self.flash(request, "ok", f"removed {deleted} queued item(s)")
+        return self.back(to)
+
     # ---- actions: learning -----------------------------------------------------------------
 
     async def learning_action(self, request: Request) -> Response:
         action: str = request.path_params["action"]
         if action == "flush":
             return await self.learning_flush(request)
+        if action == "delete":
+            return await self.learning_delete(request)
         handlers: dict[str, Callable[[views.Repo, FormData], str]] = {
             "create": _learning_create,
             "use": _learning_use,
@@ -1767,6 +2029,97 @@ class Dashboard:
             self.flash(request, "error", str(exc))
         else:
             self.flash(request, "ok", f"deleted {deleted} lesson(s) from {name}")
+        return self.back(f"/learning?profile={name}")
+
+    async def learning_delete(self, request: Request) -> Response:
+        """Two steps (Tier 2), like `learning_flush`: the first POST names the profile and
+        its lesson count; only `confirm=yes` deletes the profile and all its lessons."""
+        form = await checked_form(request)
+        name = _text(form, "profile") or ""
+        if form.get("confirm") != "yes":
+
+            def describe() -> dict[str, Any]:
+                with views.open_repo(self.settings.root) as repo:
+                    repo.learning.db_for(name)  # unknown profile: error before asking
+                    status = learning_status(repo.store, repo.config)
+                    return {
+                        "lessons": len(repo.learning.lessons(name)),
+                        "active": status.profile == name,
+                    }
+
+            try:
+                info = await run_in_threadpool(describe)
+            except (JevError, LearningError) as exc:
+                self.flash(request, "error", str(exc))
+                return self.back("/learning")
+            return self.render(request, "confirm_learning_delete.html", profile=name, **info)
+
+        def delete() -> None:
+            with views.open_repo(self.settings.root) as repo:
+                learning_delete_profile(repo.store, repo.learning, name)
+
+        try:
+            await run_in_threadpool(delete)
+        except (JevError, LearningError) as exc:
+            self.flash(request, "error", str(exc))
+        else:
+            self.flash(request, "ok", f"deleted profile {name}")
+        return self.back("/learning")
+
+    async def laya_apply(self, request: Request) -> Response:
+        """Apply the selected `laya tune` suggestions to a profile (Tier 1: re-running
+        the tune or `laya reset` undoes it). Refuses when jev.toml pins the weights."""
+        form = await checked_form(request)
+        name = _text(form, "profile") or ""
+        accepted = [key for key in form if key.startswith("accept_")]
+
+        def apply() -> str:
+            with views.open_repo(self.settings.root) as repo:
+                view = views.laya_view(repo, name)
+                if view.profile is None:
+                    raise LearningError(f"unknown profile {name}")
+                if view.configured:
+                    raise LearningError(
+                        "jev.toml sets [dispatcher.laya] weights, which win over a "
+                        "profile's; edit them there instead"
+                    )
+                suggestion = view.suggestion
+                if suggestion is None or suggestion.weights is None:
+                    raise LearningError(f"nothing to apply: {view.reason}")
+                criteria = [key[7:] for key in accepted if key[7:] in suggestion.weights]
+                if not criteria:
+                    raise LearningError("select at least one suggestion")
+                merged = views.apply_laya_selection(
+                    suggestion.current, suggestion.weights, criteria
+                )
+                repo.learning.set_laya_weights(view.profile, merged)
+                return f"applied {len(criteria)} weight(s) on profile {view.profile}"
+
+        try:
+            message = await run_in_threadpool(apply)
+        except (JevError, LearningError, ConfigError) as exc:
+            self.flash(request, "error", str(exc))
+        else:
+            self.flash(request, "ok", message)
+        return self.back(f"/learning?profile={name}")
+
+    async def laya_reset(self, request: Request) -> Response:
+        """Remove a profile's tuned weights (Tier 1; the button confirms first)."""
+        form = await checked_form(request)
+        name = _text(form, "profile") or ""
+
+        def reset() -> str:
+            with views.open_repo(self.settings.root) as repo:
+                repo.learning.db_for(name)  # unknown profile: error first
+                repo.learning.set_laya_weights(name, None)
+                return f"profile {name} uses the configured weights again"
+
+        try:
+            message = await run_in_threadpool(reset)
+        except (JevError, LearningError, ConfigError) as exc:
+            self.flash(request, "error", str(exc))
+        else:
+            self.flash(request, "ok", message)
         return self.back(f"/learning?profile={name}")
 
 
@@ -2026,6 +2379,68 @@ def _learning_forget(repo: views.Repo, form: FormData) -> str:
     return f"retired {lesson.id} from {lesson.profile}"
 
 
+# ---- command palette (issue #88) ------------------------------------------------------------
+
+
+def palette_registry(csrf_token: str) -> dict[str, Any]:
+    """The Cmd+K palette's registry: navigation entries, whitelisted POST actions and
+    CLI-only commands (greyed, with the pasteable command). Rendered as JSON into
+    base.html; `static/palette.js` filters it and handles the keyboard. No backend route
+    is needed: actions POST to the same routes their pages use, with the same confirm
+    flows (Tier 2 entries open the confirm page, they do not fire directly)."""
+    nav = [
+        ("Board: runs and the new-run form", "/#new-run"),
+        ("Run: approve, resume, cancel, ship (on the run page)", "/"),
+        ("Queue: ideas and the scheduler", "/queue#scheduler"),
+        ("Artifacts: work products", "/artifacts"),
+        ("Agents: roles, workers and models", "/agents"),
+        ("Fleet: the agent roster", "/fleet"),
+        ("Chats", "/chats"),
+        ("Learning: profiles, lessons, Laya tuning", "/learning#laya"),
+        ("Profiles: workspace profiles", "/profiles"),
+        ("Tools: MCP, skills and plugins", "/tools"),
+        ("Tools: model browser", "/tools#models"),
+        ("Tools: quality checks", "/tools#quality-checks"),
+        ("Connections: servers, keys, browser", "/connections#browser"),
+        ("Spend", "/spend"),
+        ("KPIs: shipped pull requests", "/kpis"),
+        ("Diagnostics: doctor checks", "/diagnostics"),
+        ("Settings: this dashboard", "/settings#s-readonly"),
+    ]
+    actions = [
+        ("Queue: clear all items", "/queue/clear"),
+        ("Scheduler: start", "/queue/scheduler/start"),
+        ("Scheduler: stop", "/queue/scheduler/stop"),
+        ("KPIs: sync from GitHub", "/kpis/sync"),
+        ("Connections: check servers now", "/connections/refresh"),
+        ("Connections: install the browser", "/connections/browser/install"),
+    ]
+    cli = [
+        ("init: create jev.toml and .jev/", "jev init"),
+        ("dashboard: serve the dashboard", "jev dashboard"),
+        ("mcp servers: serve MCP tools over stdio", "jev mcp servers"),
+        ("mcp runs: serve the pipeline tools over stdio", "jev mcp runs"),
+        ("doctor: also check servers over SSH", "jev doctor --connect"),
+        ("scheduler: run one item, then exit", "jev scheduler start --once"),
+        ("ship: show the PR without opening it", "jev ship --dry-run"),
+    ]
+    return {
+        "csrf_field": CSRF_FIELD,
+        "csrf_token": csrf_token,
+        "entries": [
+            *({"kind": "nav", "label": label, "target": target} for label, target in nav),
+            *({"kind": "action", "label": label, "target": target} for label, target in actions),
+            *({"kind": "cli", "label": label, "command": command} for label, command in cli),
+        ],
+    }
+
+
+def _record_ship_sync(state_dir: Path) -> None:
+    """Stamp when `ship sync --all` last ran, so the KPIs page can show its freshness."""
+    payload = json.dumps({"synced_at": datetime.now(UTC).isoformat()})
+    (state_dir / views.SHIP_SYNC_FILENAME).write_text(payload)
+
+
 JOB_SHUTDOWN_TIMEOUT_S = 30.0  # per job, for blocking steps that ignore cancellation
 
 
@@ -2056,8 +2471,13 @@ def create_app(
         Route("/queue/recurring/{id}/pause", dash.queue_recurring_pause, methods=["POST"]),
         Route("/queue/recurring/{id}/resume", dash.queue_recurring_resume, methods=["POST"]),
         Route("/queue/recurring/{id}/remove", dash.queue_recurring_remove, methods=["POST"]),
+        Route("/queue/scheduler/start", dash.scheduler_start, methods=["POST"]),
+        Route("/queue/scheduler/stop", dash.scheduler_stop, methods=["POST"]),
+        Route("/queue/clear", dash.queue_clear, methods=["POST"]),
         Route("/artifacts", dash.artifacts_page),
         Route("/learning", dash.learning_page),
+        Route("/learning/laya/apply", dash.laya_apply, methods=["POST"]),
+        Route("/learning/laya/reset", dash.laya_reset, methods=["POST"]),
         Route("/learning/{action}", dash.learning_action, methods=["POST"]),
         Route("/chats", dash.chats_page),
         Route("/chats/new", dash.chats_new, methods=["POST"]),
@@ -2074,16 +2494,21 @@ def create_app(
         Route("/chats/{chat_id}/work/{tab}", dash.chat_work_tab),
         Route("/spend", dash.spend_page),
         Route("/kpis", dash.kpis_page),
+        Route("/kpis/sync", dash.kpis_sync, methods=["POST"]),
         Route("/agents", dash.agents_page),
         Route("/fleet", dash.fleet_page),
         Route("/fleet/live", dash.fleet_fragment),
         Route("/fleet/addendum", dash.fleet_addendum, methods=["POST"]),
+        Route("/profiles", dash.profiles_page),
+        Route("/profiles/use", dash.profiles_use, methods=["POST"]),
         Route("/tools", dash.tools_page),
         Route("/connections", dash.connections_page),
         Route("/connections/live", dash.connections_live),
         Route("/connections/refresh", dash.connections_refresh, methods=["POST"]),
         Route("/connections/keys/add", dash.connections_key_add, methods=["POST"]),
         Route("/connections/keys/remove", dash.connections_key_remove, methods=["POST"]),
+        Route("/connections/browser/install", dash.browser_install, methods=["POST"]),
+        Route("/connections/browser/install/stop", dash.browser_install_stop, methods=["POST"]),
         Route("/preview/live", dash.preview_live),
         Route("/preview/frame", dash.preview_frame),
         Route("/preview/takeover", dash.preview_takeover, methods=["POST"]),
@@ -2093,6 +2518,7 @@ def create_app(
         Route("/preview/agent/frame", dash.preview_agent_frame, methods=["POST"]),
         Route("/preview/agent/poll", dash.preview_agent_poll, methods=["POST"]),
         Route("/settings", dash.settings_page),
+        Route("/diagnostics", dash.diagnostics_page),
         Route("/settings/set", dash.settings_set, methods=["POST"]),
         Route("/settings/unset", dash.settings_unset, methods=["POST"]),
         Route("/settings/entity", dash.settings_entity, methods=["POST"]),

@@ -1133,7 +1133,10 @@ def test_kpis_page_lists_prs_cards_and_trends(
     assert "https://github.com/acme/widgets/pull/14" in text and ">#11<" not in text
     assert "add &lt;b&gt;search&lt;/b&gt;" in text and "<b>search</b>" not in text
     assert text.count('<svg class="trend"') >= 5
-    assert "<script" not in text.split("</head>")[1]
+    # The KPIs page carries no executable inline JS: the command palette's data
+    # block and the vendored scripts are the only script tags allowed.
+    scripts = re.findall(r"<script[^>]*>", text.split("</head>")[1])
+    assert all('type="application/json"' in s or "src=" in s for s in scripts), scripts
     assert client.get("/kpis?last=oops").status_code == 200
 
 

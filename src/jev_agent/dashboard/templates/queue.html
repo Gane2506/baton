@@ -9,17 +9,33 @@
   </div>
 </div>
 
-<section class="panel">
+<section class="panel" id="scheduler">
   <div class="panel-head">
     <h2>Scheduler</h2>
-    {% if q.scheduler %}{{ badge("running", live=true) }}{% else %}{{ badge("not running", "pending") }}{% endif %}
+    {% if sched.owner %}{{ badge("running", live=true) }}{% else %}{{ badge("not running", "pending") }}{% endif %}
   </div>
-  {% if q.scheduler %}
-    <p class="small">pid {{ q.scheduler.pid }} on <span class="mono">{{ q.scheduler.host }}</span>, since {{ q.scheduler.started_at | time }}
-    {% if q.scheduler.current_item is not none %}; current item <strong>#{{ q.scheduler.current_item }}</strong>{% endif %}</p>
-  {% else %}
-    <p class="small muted">Start it in a terminal: <code>jev scheduler start</code>.</p>
+  {% if sched.holder %}
+    <p class="small">pid {{ sched.holder.pid }} on <span class="mono">{{ sched.holder.host }}</span>, since {{ sched.holder.started_at | time }}
+    {% if sched.holder.current_item is not none %}; current item <strong>#{{ sched.holder.current_item }}</strong>{% endif %}</p>
   {% endif %}
+  {% if sched.owner == "dashboard" %}
+    <p class="small">Started from this dashboard — it stops when the dashboard stops.</p>
+    <form method="post" action="/queue/scheduler/stop">
+      {{ csrf_input() }}
+      <button class="btn btn-secondary" type="submit">{{ icon("i-stop", "sm") }}Stop scheduler</button>
+      <span class="hint">Finishes the current item first.</span>
+    </form>
+  {% elif sched.owner == "external" %}
+    <p class="small muted">Started outside this dashboard (<code>jev scheduler start</code> in a terminal) —
+    it keeps running if the dashboard stops. Stop it where it was started.</p>
+  {% else %}
+    <p class="small muted">Works through the queue, running agent workers for each idea.</p>
+    <form method="post" action="/queue/scheduler/start">
+      {{ csrf_input() }}
+      <button class="btn btn-primary" type="submit">{{ icon("i-run", "sm") }}Start scheduler</button>
+    </form>
+  {% endif %}
+  {% if sched.error %}<p class="flash error small" role="status">The scheduler stopped with an error: {{ sched.error }}</p>{% endif %}
   <p class="small muted">
   {% for name, count in q.counts.items() %}{{ count }} {{ name }}{% if not loop.last %} / {% endif %}{% endfor %}
   / spent today (UTC, all runs): {{ q.spent_today | usd }}</p>
@@ -111,8 +127,13 @@
 
 <div class="panel-head">
   <h2 class="section">Items</h2>
-  <p class="small muted">
-  {% if show_all %}<a class="btn btn-sm btn-ghost" href="/queue">Hide finished items</a>{% else %}{% if q.hidden %}{{ q.hidden }} finished item(s) hidden; {% endif %}<a class="btn btn-sm btn-ghost" href="/queue?all=1">Show all</a>{% endif %}</p>
+  <div class="actions">
+    <form class="inline" method="post" action="/queue/clear">
+      {{ csrf_input() }}<button class="btn btn-sm btn-danger" type="submit">Clear queue…</button>
+    </form>
+    <p class="small muted">
+    {% if show_all %}<a class="btn btn-sm btn-ghost" href="/queue">Hide finished items</a>{% else %}{% if q.hidden %}{{ q.hidden }} finished item(s) hidden; {% endif %}<a class="btn btn-sm btn-ghost" href="/queue?all=1">Show all</a>{% endif %}</p>
+  </div>
 </div>
 {% if q.rows %}
 <div class="table-wrap"><table>

@@ -1,11 +1,18 @@
 {% extends "base.html" %}
-{% from "macros.html" import badge, icon with context %}
+{% from "macros.html" import badge, csrf_input, icon with context %}
 {% block title %}KPIs{% endblock %}
 {% block content %}
 <div class="page-head">
   <div class="titles">
     <h1>KPIs</h1>
     <p class="lede">This repo's runs, and the pull requests <code>jev ship</code> opened.</p>
+  </div>
+  <div class="actions">
+    <form class="inline" method="post" action="/kpis/sync">
+      {{ csrf_input() }}
+      <button class="btn btn-secondary" type="submit">{{ icon("i-sync", "sm") }}Sync from GitHub</button>
+    </form>
+    <p class="small muted">{% if k.last_synced %}Synced {{ k.last_synced | age }}{% else %}Never synced{% endif %}</p>
   </div>
 </div>
 

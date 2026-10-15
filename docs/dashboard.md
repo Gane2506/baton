@@ -42,6 +42,10 @@ Resume button). A Ship job cannot be cancelled mid-step; shutdown waits for it.
 
 ## Pages
 
+Press **Cmd+K** (or Ctrl+K) anywhere for the command palette: fuzzy search over every page,
+page section and whitelisted action, plus the terminal-only commands with the exact command
+to paste. It is the fastest way to check whether a `jev` command has a dashboard home.
+
 ![The Board page](images/dashboard-board.png)
 
 - **Board** (`/`): the `jev board` columns (Backlog, Planning, Awaiting approval, Running, Done,
@@ -78,13 +82,27 @@ Resume button). A Ship job cannot be cancelled mid-step; shutdown waits for it.
   jev process".
 - **Queue** (`/queue`): items in scheduler order with their effective status and flags; add an
   idea (priority, plan only, learning profile or none, quality level, workspace profile name),
-  move an item to the top, up or down, remove it; scheduler status (lock holder, current item,
-  queue counts, spend today). The scheduler itself is started from a terminal
-  (`jev scheduler start`).
+  move an item to the top, up or down, remove it, or clear the whole queue (asks for
+  confirmation first; items with a run are kept). The scheduler strip at the top shows whether
+  a scheduler is running, whose it is (the dashboard's own, or a terminal's), what item it is
+  working on, queue counts and spend today. **Start scheduler** asks for confirmation (it spends
+  real money) and starts the dashboard's own scheduler, which stops when the dashboard stops;
+  **Stop scheduler** finishes the current item first. A scheduler started in a terminal
+  (`jev scheduler start`) keeps running independently and can only be stopped there.
 - **Learning** (`/learning`): the repo switch and active profile, profiles (scope, enabled,
   active, lesson count) and each profile's lessons. Actions: create (repo or shared), use,
-  enable / disable (the repo or one profile), forget a lesson, and flush a profile, which asks
-  for confirmation on a separate page first.
+  enable / disable (the repo or one profile), forget a lesson, flush a profile (asks for
+  confirmation on a separate page first), and delete a profile with all its lessons (also a
+  confirmation page). Below the profiles, **Laya tuning**: the `jev laya tune` suggestions for
+  a profile (weight, current → suggested, the passed/failed evidence), with per-suggestion
+  checkboxes and **Apply selected**, plus **Reset tuned weights** when a profile has tuned
+  weights. Applying is disabled while `jev.toml` sets `[dispatcher.laya] weights` (those
+  always win).
+- **Profiles** (`/profiles`): the workspace profiles (`jev profile list` / `show` / `use`):
+  servers, browser access, learning and quality per profile, which one is the repo default,
+  what each role gets from the selected profile, and **Make default** / **Clear default**.
+- **Diagnostics** (`/diagnostics`): the `jev doctor` checks (local checks only — no SSH) as a
+  read-only matrix. Key values are never shown, only whether each one is set.
 - **Chats** (`/chats`): saved `jev chat` sessions and their transcripts, read-only.
 - **Spend** (`/spend`): spend per day for the last 30 days and the costliest runs, as
   server-rendered SVG bar charts, plus every run's spend.
@@ -93,7 +111,21 @@ Resume button). A Ship job cannot be cancelled mid-step; shutdown waits for it.
   (median cost per PR, median time to merge, first-pass rate, fallback rate, merged share),
   regressions in the latest PR, and one server-rendered SVG trend chart per KPI with its
   rolling median and red regression points. Without shipped PRs it explains `jev ship`. See
-  [ship.md](ship.md).
+  [ship.md](ship.md). **Sync from GitHub** runs `jev ship sync --all` (refreshing every PR's
+  state, reviews and CI) and the page shows how long ago the last sync ran, so you can tell
+  how fresh the numbers are.
+- **Tools** (`/tools`): the MCP servers, skills and plugins editor (as before), plus three
+  reference sections: the **Models** browser (`jev models list` — a filterable table with
+  context length, prices and json_schema/reasoning support, and a copy button per model id;
+  read from the on-disk cache, never fetched by the page), the **Quality checks** matrix
+  (`jev quality checks` — every check by level, whether its tool is installed and whether it
+  applies to this repo), and the **MCP servers (CLI only)** note documenting `jev mcp servers`
+  and `jev mcp runs`.
+- **Connections** (`/connections`): servers, the decision route and key health (as before),
+  plus the **Browser** panel: the doctor's browser check and the **Install browser** button,
+  which asks for confirmation naming the exact command, then runs the install in the
+  background (one at a time; stoppable; the output tail shows on the page). Installing on a
+  server stays in the terminal (`jev browser install --server NAME`).
 - **Settings** (`/settings`): a list of sections on the left (sticky on wide windows) and an
   editor for common settings in this repository's `jev.toml`: `[dispatcher] primary`, the
   budgets (`per_run_usd`, `per_task_usd`, `max_task_attempts`), `[approval]
@@ -109,7 +141,9 @@ Resume button). A Ship job cannot be cancelled mid-step; shutdown waits for it.
   file from these fields on every step: a request can never write a guarded key
   ([security.md](security.md)), `[trust]` or your user config. Below the editor, read-only: the
   effective config, the environment variables the config names with whether each is set (names
-  only, never values), and the `jev doctor` checks (local checks only).
+  only, never values), and the `jev doctor` checks (local checks only). At the bottom,
+  **This dashboard**: version, listen address, access mode, start time and the live-region
+  refresh interval.
 
 Pages follow your OS light/dark setting and work on narrow screens. Nothing is loaded from
 other origins: no CDN, no web fonts, no analytics. The scripts are small and vendored:
@@ -127,6 +161,54 @@ JavaScript every page still works (reload to refresh).
 | ![KPIs](images/dashboard-kpis.png) | ![Settings editor with its section list](images/dashboard-settings.png) |
 
 The Board in dark mode: [images/dashboard-board-dark.png](images/dashboard-board-dark.png).
+
+## CLI coverage and action tiers
+
+Every `jev` command verb is reachable from the dashboard: as a page, a page section, a
+palette action, or (for the commands below) a greyed palette entry with the pasteable
+command. Full flag parity is explicitly out of scope: the web exposes the common path,
+exotic flags stay in the terminal (the palette lists the important ones).
+
+New web actions follow a tier policy, on top of the CSRF/same-origin/token rules below:
+
+- **Tier 0 — read-only.** GET pages and fragments: the doctor report, the model list, the
+  quality checks, scheduler status, profiles, the sync preview. Never renders secret values
+  (presence booleans only).
+- **Tier 1 — reversible or low-blast-radius.** POST + CSRF + same-origin (the `act()` path):
+  queue add/move/remove, learning create/use/enable/disable/forget, profile use, Laya apply /
+  reset, `ship sync`, scheduler stop, browser install stop.
+- **Tier 2 — destructive, irreversible, costly, or process-spawning.** POST + CSRF +
+  **two-step confirm page**: the first POST renders a page naming exactly what will happen;
+  only `confirm=yes` executes. Learning flush and delete, queue clear, run cancel and ship,
+  browser install, and scheduler start (the confirm names the spend implication: a scheduler
+  runs agent workers, which spend real money).
+- **NEVER web-triggerable.** No route may serve MCP (`mcp servers` / `mcp runs` are
+  stdio-bound; the `servers` variant exposes `run_command` / `write_file`), bind a new
+  listener or mint tokens (`dashboard` serve options), print or accept a raw secret value,
+  or run an arbitrary command: **there is no generic "run this jev command" endpoint.**
+  Every web action gets its own route calling the same library code as the CLI (never a
+  subprocess of `jev`).
+
+### CLI-only commands
+
+- **`jev mcp servers` / `jev mcp runs`.** Serve MCP over stdio to a local MCP client; a
+  browser page cannot hold the other end of the pipe, and the `servers` variant exposes
+  `run_command` / `read_file` / `write_file` — binding that to the web would massively widen
+  the attack surface. Documented on the Tools page; never triggerable.
+- **`jev dashboard`.** Self-referential: serving a dashboard from the dashboard is
+  meaningless, and `--host` / `--port` / `--token` are process-launch concerns. The About
+  panel (**This dashboard** at the bottom of Settings) covers the legitimate need — version,
+  listen address, access mode, start time.
+- **`jev init`.** The dashboard requires an initialized repo; by the time the UI exists,
+  `init` has already run. A web wizard could clobber an existing `jev.toml`, so there is
+  none — the palette shows the pasteable command instead.
+
+### Adding a CLI command? Decide its dashboard home in the same PR
+
+Every new CLI flag or subcommand needs a dashboard decision: either a dashboard home (page,
+section, or palette entry) or a CLI-only justification added to the list above. The palette
+registry (`palette_registry()` in `dashboard/app.py`) is the checklist — if the verb is not
+in it, the PR is not done.
 
 ## Security
 

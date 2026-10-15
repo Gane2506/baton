@@ -1,0 +1,73 @@
+{% extends "base.html" %}
+{% from "macros.html" import badge, csrf_input with context %}
+{% block title %}Profiles{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div class="titles">
+    <h1>Profiles</h1>
+    <p class="lede">Workspace profiles: which servers, browser access, learning and quality level
+    each run gets (<code>jev profile list</code>, <code>show</code>, <code>use</code>).</p>
+  </div>
+  {% if profiles | selectattr("is_default") | list | length %}
+  <div class="actions">
+    <form class="inline" method="post" action="/profiles/use">
+      {{ csrf_input() }}
+      <input type="hidden" name="profile" value="none">
+      <button class="btn btn-sm btn-secondary" type="submit">Clear default</button>
+    </form>
+  </div>
+  {% endif %}
+</div>
+
+{% if profiles %}
+<div class="table-wrap"><table>
+  <thead><tr><th>Profile</th><th>Servers</th><th>Browser</th><th>Learning</th><th>Quality</th><th>Description</th><th>Default</th><th><span class="sr-only">actions</span></th></tr></thead>
+  <tbody>
+  {% for p in profiles %}
+    <tr>
+      <td class="mono"><a href="/profiles?name={{ p.name | urlencode }}">{{ p.name }}</a></td>
+      <td class="small">{{ p.servers }}</td>
+      <td>{{ "yes" if p.browser else "no" }}</td>
+      <td class="small">{{ p.learning }}</td>
+      <td class="small">{{ p.quality }}</td>
+      <td class="wrap small">{{ p.description }}</td>
+      <td>{% if p.is_default %}{{ badge("default", "ok") }}{% endif %}</td>
+      <td>{% if not p.is_default %}
+        <form class="inline" method="post" action="/profiles/use">
+          {{ csrf_input() }}<input type="hidden" name="profile" value="{{ p.name }}">
+          <button class="btn btn-sm btn-secondary" type="submit">Make default</button>
+        </form>
+      {% endif %}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table></div>
+{% else %}
+<div class="empty"><div class="title">No workspace profiles</div><p>Define them in <code>jev.toml</code> under <code>[profiles.NAME]</code>.</p></div>
+{% endif %}
+
+{% if detail %}
+<section class="panel" id="profile-detail">
+  <div class="panel-head">
+    <h2>{{ detail.name }}</h2>
+    {% if detail.is_default %}{{ badge("default", "ok") }}{% endif %}
+  </div>
+  {% if detail.description %}<p>{{ detail.description }}</p>{% endif %}
+  <dl class="facts">
+    <dt>Servers</dt><dd>{{ detail.servers }}</dd>
+    <dt>Browser</dt><dd>{{ "yes" if detail.browser else "no" }}</dd>
+    <dt>Learning</dt><dd>{{ detail.learning }}</dd>
+    <dt>Quality</dt><dd>{{ detail.quality }}</dd>
+  </dl>
+  <h3>What each role gets</h3>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Role</th><th>Grants</th></tr></thead>
+    <tbody>
+    {% for g in detail.roles %}
+      <tr><td class="mono">{{ g.role }}</td><td class="small">{{ g.text }}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table></div>
+</section>
+{% endif %}
+{% endblock %}

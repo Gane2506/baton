@@ -600,6 +600,7 @@ td .mono, td.mono { font-size: var(--fs-12); }
   background: color-mix(in srgb, var(--bad) 10%, transparent);
 }
 .s-EXECUTING, .s-INTEGRATING, .s-SHIPPING, .s-RUNNING, .s-running, .s-REVIEWING, .s-note, .s-info,
+.s-installing,
 .s-queued, .s-INTAKE, .s-PLANNING, .s-VALIDATING, .s-DESIGNING, .s-TESTING, .s-repo, .s-user,
 .s-plan, .s-diff, .s-design {
   color: var(--info); border-color: color-mix(in srgb, var(--info) 50%, transparent);
@@ -932,3 +933,67 @@ details.add-entity > summary:focus-visible {
   .field-row { grid-template-columns: 1fr; }
   .field-actions { justify-content: flex-start; }
 }
+
+/* ---- command palette (Cmd+K) ----------------------------------------------------- */
+
+.palette-btn kbd {
+  margin-left: auto;
+  font-family: inherit;
+  font-size: var(--text-xs);
+  opacity: 0.6;
+}
+dialog.palette {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 0;
+  width: min(560px, calc(100vw - 2rem));
+  background: var(--bg);
+  color: var(--text);
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.35);
+}
+dialog.palette::backdrop { background: rgba(0, 0, 0, 0.45); }
+#palette-input {
+  width: 100%;
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  border-radius: 12px 12px 0 0;
+  padding: var(--s3) var(--s4);
+  font-size: var(--text-base);
+  background: transparent;
+  color: var(--text);
+}
+#palette-input:focus { outline: none; }
+#palette-list {
+  list-style: none;
+  margin: 0;
+  padding: var(--s2);
+  max-height: 320px;
+  overflow-y: auto;
+}
+.palette-item {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s2);
+  padding: var(--s2) var(--s3);
+  border-radius: 8px;
+  cursor: pointer;
+}
+.palette-item.selected { background: var(--accent-soft); }
+.palette-item .palette-label { flex: 1; }
+.palette-item .palette-command {
+  font-size: var(--text-xs);
+  opacity: 0.75;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 45%;
+}
+.palette-item.kind-cli { opacity: 0.72; }
+.palette-item .palette-kind {
+  font-size: var(--text-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  opacity: 0.55;
+  white-space: nowrap;
+}
+.palette-empty { padding: var(--s3); opacity: 0.6; }

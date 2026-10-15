@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% from "macros.html" import csrf_input, icon with context %}
+{% block title %}Install the browser?{% endblock %}
+{% block content %}
+<div class="focus-page">
+  <section class="panel">
+    <h1>Install the browser?</h1>
+    <p>This runs, as the dashboard's user:</p>
+    <p><code>{{ install.command }}</code></p>
+    <p>It downloads Chromium and installs its system libraries (<code>--with-deps</code> needs
+    root for the system libraries). It never runs on its own — only this button starts it —
+    and a second install cannot start while one is running. Installing on a server instead
+    stays in the terminal: <code>jev browser install --server NAME</code>.</p>
+    <div class="actions">
+      <form class="inline" method="post" action="/connections/browser/install">
+        {{ csrf_input() }}
+        <input type="hidden" name="confirm" value="yes">
+        <button class="btn btn-primary" type="submit">{{ icon("i-run", "sm") }}Install browser</button>
+      </form>
+      <a class="btn btn-secondary" href="/connections">Cancel</a>
+    </div>
+  </section>
+</div>
+{% endblock %}

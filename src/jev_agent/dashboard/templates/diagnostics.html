@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% from "macros.html" import badge with context %}
+{% block title %}Diagnostics{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div class="titles">
+    <h1>Diagnostics</h1>
+    <p class="lede">The checks of <code>jev doctor</code> (local checks only — no SSH).
+    {% if failed %}<strong>{{ failed }} failing</strong>{% else %}Everything passes.{% endif %}</p>
+  </div>
+</div>
+
+<section class="panel">
+  <div class="table-wrap"><table>
+    <thead><tr><th>Check</th><th>Status</th><th>Detail</th></tr></thead>
+    <tbody>
+    {% for c in checks %}
+      <tr>
+        <td>{{ c.name }}</td>
+        <td>{{ badge(c.status, "ok" if c.status in ("ok", "note") else ("fail" if c.status == "fail" else "warn")) }}</td>
+        <td class="wrap small">{{ c.detail }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table></div>
+  <p class="hint">Key values are never shown here — only whether each one is set. The server
+  checks (<code>jev doctor --connect</code>) live on the Connections page.</p>
+</section>
+{% endblock %}

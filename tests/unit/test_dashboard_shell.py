@@ -144,7 +144,10 @@ def test_no_inline_scripts_or_styles(client: TestClient) -> None:
     assert "<style" not in html
     tags = re.findall(r"<script[^>]*>", html)
     assert tags, "expected the vendored scripts"
-    assert all("src=" in tag for tag in tags), tags
+    # Data blocks (type=application/json) are not executable and are allowed by
+    # script-src 'self'; only executable scripts must be vendored files.
+    executable = [t for t in tags if 'type="application/json"' not in t]
+    assert all("src=" in tag for tag in executable), tags
 
 
 # ---- WS-B: app shell, tables, mobile nav -------------------------------------------

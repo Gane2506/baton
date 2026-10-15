@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% from "macros.html" import csrf_input, icon with context %}
+{% block title %}Clear the queue?{% endblock %}
+{% block content %}
+<div class="focus-page">
+  <section class="panel">
+    <h1>Clear the queue?</h1>
+    <p>This removes every queued idea — <strong>{{ queued }} item{{ "s" if queued != 1 }}</strong>.
+    Items that already have a run are kept. This cannot be undone.</p>
+    <div class="actions">
+      <form class="inline" method="post" action="/queue/clear">
+        {{ csrf_input() }}
+        <input type="hidden" name="confirm" value="yes">
+        <button class="btn btn-danger" type="submit">{{ icon("i-remove", "sm") }}Clear {{ queued }} item{{ "s" if queued != 1 }}</button>
+      </form>
+      <a class="btn btn-secondary" href="/queue">Keep them</a>
+    </div>
+  </section>
+</div>
+{% endblock %}

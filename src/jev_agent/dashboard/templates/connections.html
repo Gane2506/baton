@@ -42,6 +42,41 @@
   {% endif %}
 </section>
 
+<section class="panel" id="browser" aria-label="Browser">
+  <div class="panel-head">
+    <h2>Browser</h2>
+    {% if browser_check %}{{ badge(browser_check.status, "ok" if browser_check.status in ("ok", "note") else ("fail" if browser_check.status == "fail" else "warn")) }}{% endif %}
+  </div>
+  {% if browser_check %}
+  <p class="small">{{ browser_check.detail }}</p>
+  {% else %}
+  <p class="small muted">No role or workspace profile uses the browser, so there is nothing to install.</p>
+  {% endif %}
+  {% if browser_install.state == "running" %}
+  <p>{{ badge("installing", live=true) }} <span class="small muted">started {{ browser_install.started_at | time }}</span></p>
+  <form method="post" action="/connections/browser/install/stop">
+    {{ csrf_input() }}
+    <button class="btn btn-secondary" type="submit">{{ icon("i-stop", "sm") }}Stop install</button>
+  </form>
+  {% else %}
+  {% if browser_install.state in ("done", "failed", "stopped") %}
+  <p class="small">{{ badge(browser_install.state, "ok" if browser_install.state == "done" else "warn") }} {{ browser_install.message }} <span class="muted">({{ browser_install.finished_at | time }})</span></p>
+  {% endif %}
+  <form method="post" action="/connections/browser/install">
+    {{ csrf_input() }}
+    <button class="btn btn-secondary" type="submit">Install browser…</button>
+    <span class="hint">Downloads Chromium and its system libraries, locally.</span>
+  </form>
+  {% endif %}
+  {% if browser_install.log_tail %}
+  <details class="disclosure">
+    <summary>Install output</summary>
+    <pre class="small mono">{% for line in browser_install.log_tail %}{{ line }}
+{% endfor %}</pre>
+  </details>
+  {% endif %}
+</section>
+
 <section class="panel" aria-label="Dispatcher route">
   <h2>Decision route <span class="muted">·</span> {{ badge(route.primary, "info") }}</h2>
   <ol>

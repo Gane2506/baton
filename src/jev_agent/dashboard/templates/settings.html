@@ -224,8 +224,10 @@
 <section class="panel">
   <h2>This dashboard</h2>
   <dl class="facts">
+    <dt>Version</dt><dd class="mono">{{ version }}</dd>
     <dt>Listening on</dt><dd class="mono">{{ settings.host }}:{{ settings.port }}</dd>
     <dt>Access</dt><dd>{% if settings.token %}token required{% else %}loopback only, no token{% endif %}</dd>
+    <dt>Started</dt><dd>{{ dashboard_started }} ({{ dashboard_uptime }})</dd>
     <dt>Refresh</dt><dd>{{ settings.refresh_s }}s for live regions</dd>
   </dl>
 </section>

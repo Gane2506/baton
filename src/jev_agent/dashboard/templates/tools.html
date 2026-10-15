@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "macros.html" import badge, icon, csrf_input, field_label, pretty with context %}
+{% from "macros.html" import badge, copy_button, icon, csrf_input, field_label, pretty with context %}
 {% block title %}{{ page_title }}{% endblock %}
 
 {# Section titles (without the "Tools: " prefix) and plain-language blurbs under
@@ -135,6 +135,7 @@
 {% endfor %}
 {% endmacro %}
 
+{% block extra_head %}<script src="/static/models.js" defer></script>{% endblock %}
 {% block content %}
 <div class="page-head">
   <div class="titles">
@@ -155,4 +156,91 @@
 </nav>
 
 {{ render_entities(entities) }}
+
+<h2 class="section" id="models">Models</h2>
+<section class="panel" aria-label="Models browser">
+  <p class="hint">The OpenRouter catalog <code>jev models list</code> reads — what the api worker
+  can run. Pick a model id while editing the Agents page; the copy button puts it on the clipboard.</p>
+  {% if models_warning %}<p class="flash warn small" role="note">{{ models_warning }}</p>{% endif %}
+  {% if models_listing %}
+  <div class="field-row">
+    <label for="models-filter">Filter</label>
+    <div class="field-control">
+      <input type="search" id="models-filter" placeholder="e.g. claude, free, 200k" autocomplete="off">
+    </div>
+    <div class="field-actions"><span class="hint small">{{ models_listing.models | length }} models</span></div>
+  </div>
+  <div class="table-wrap table-scroll"><table id="models-table">
+    <thead><tr><th>Model</th><th class="num">Context</th><th class="num">In $/M</th><th class="num">Out $/M</th><th>JSON schema</th><th>Reasoning</th><th><span class="sr-only">Copy</span></th></tr></thead>
+    <tbody>
+    {% for m in models_listing.models %}
+      <tr>
+        <td class="mono wrap">{{ m.id }}</td>
+        <td class="num">{{ "{:,}".format(m.context_length) if m.context_length else "?" }}</td>
+        <td class="num">{% if m.prompt_price is none %}?{% elif m.prompt_price == 0 %}free{% else %}${{ "%.2f" % (m.prompt_price * 1000000) }}{% endif %}</td>
+        <td class="num">{% if m.completion_price is none %}?{% elif m.completion_price == 0 %}free{% else %}${{ "%.2f" % (m.completion_price * 1000000) }}{% endif %}</td>
+        <td>{{ {true: "yes", false: "no"}.get(m.supports.get("json_schema"), "?") }}</td>
+        <td>{{ {true: "yes", false: "no"}.get(m.supports.get("reasoning"), "?") }}</td>
+        <td>{{ copy_button(m.id, "Copy model id") }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table></div>
+  <p class="hint" id="models-empty" hidden>No models match the filter.</p>
+  <p class="hint">List fetched {{ "%.1f" % models_listing.fetched_hours_ago }}h ago; refresh it with
+  <code>jev models list --refresh</code>. Free models are rate-limited and run on the api worker only.</p>
+  {% else %}
+  <div class="empty"><div class="title">No model list yet</div><p>Run <code>jev models list --refresh</code> once to fetch the catalog.</p></div>
+  {% endif %}
+</section>
+
+<h2 class="section" id="quality-checks">Quality checks</h2>
+<section class="panel" aria-label="Quality checks matrix">
+  <p class="hint"><code>jev quality checks</code>: every check, the level it starts at, whether its
+  tool is installed and whether it applies to this repo. Missing tools are skipped (never fail a run)
+  unless listed in <code>[quality] required_tools</code>.</p>
+  <div class="table-wrap table-scroll"><table>
+    <thead><tr><th>From level</th><th>Check</th><th>Tool</th><th>Installed</th><th>Applies here</th><th>Blocks from</th></tr></thead>
+    <tbody>
+    {% for r in quality_rows %}
+      <tr>
+        <td>{{ r.level }}</td>
+        <td>{{ r.name }}</td>
+        <td class="mono small">{{ r.tool }}</td>
+        <td>{{ badge("yes", "ok") if r.installed.startswith("yes") else (badge("built in", "note") if r.installed in ("built in", "varies") else badge(r.installed, "warn")) }}</td>
+        <td>{{ "yes" if r.applies else "no" }}</td>
+        <td>{{ r.blocks_from }}</td>
+      </tr>
+    {% endfor %}
+      <tr>
+        <td>basic+</td>
+        <td>ai-review</td>
+        <td class="mono small">code_reviewer role</td>
+        <td>{{ badge("built in", "note") }}</td>
+        <td>yes</td>
+        <td>findings</td>
+      </tr>
+    </tbody>
+  </table></div>
+  <dl class="facts">
+  {% for level, summary in level_summaries.items() %}
+    <dt class="mono">{{ level }}</dt><dd>{{ summary }}</dd>
+  {% endfor %}
+  </dl>
+</section>
+
+<h2 class="section" id="mcp">MCP servers (CLI only)</h2>
+<section class="panel" aria-label="MCP commands">
+  <p><code>jev mcp servers</code> and <code>jev mcp runs</code> serve MCP over <strong>stdio</strong>
+  to a local MCP client. A browser page cannot hold the other end of that pipe, so these stay in
+  the terminal:</p>
+  <dl class="facts">
+    <dt><code>jev mcp servers</code></dt><dd>Serves <code>list_servers</code>, <code>run_command</code>,
+    <code>read_file</code> (and <code>write_file</code> at medium access) over stdio. Every call is
+    checked against the access policy and audited.</dd>
+    <dt><code>jev mcp runs</code></dt><dd>Serves the pipeline tools (<code>run_list</code>,
+    <code>run_status</code>, <code>run_start</code>, <code>quality_show</code>,
+    <code>chat_send</code>) over stdio; every call is audit-logged.</dd>
+  </dl>
+</section>
 {% endblock %}

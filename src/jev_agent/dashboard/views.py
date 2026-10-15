@@ -12,7 +12,7 @@ import re
 import sqlite3
 import statistics
 from collections import Counter
-from collections.abc import Iterator
+from collections.abc import Collection, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
@@ -26,7 +26,8 @@ from jev_agent.app.context import FAKE_WORKERS_ENV, STATE_DB_FILENAME
 from jev_agent.app.doctor import Check, run_checks
 from jev_agent.app.errors import JevError
 from jev_agent.app.format import format_answers, learning_line, quality_line
-from jev_agent.app.quality import review_text
+from jev_agent.app.models import ModelListing
+from jev_agent.app.quality import CheckRow, check_rows, review_text
 from jev_agent.app.queue import item_flags
 from jev_agent.config import STATE_DIRNAME, JevConfig, load_config
 from jev_agent.core.benchmarks import DEFAULT_LAST, Summary, Trend, summarize, trends
@@ -39,7 +40,18 @@ from jev_agent.core.budget import (
 from jev_agent.core.chat import ChatMeta, list_chats, read_transcript
 from jev_agent.core.harness import DEFAULT_TIMEOUT_S
 from jev_agent.core.kpi import PrKpis, compute_run_kpis, load_pr_kpis
-from jev_agent.core.learning import Learning, LearningStatus, Lesson, Profile, learning_status
+from jev_agent.core.learning import (
+    EdgeView,
+    GraphStats,
+    Learning,
+    LearningError,
+    LearningStatus,
+    Lesson,
+    Profile,
+    learning_status,
+    normalize_module_ref,
+    split_module_ref,
+)
 from jev_agent.core.lease import describe_holder, live_holder
 from jev_agent.core.migrations import SchemaVersionError
 from jev_agent.core.models import RunState, TaskState
@@ -60,6 +72,7 @@ from jev_agent.core.store import (
     Store,
     TaskRecord,
 )
+from jev_agent.core.tuning import MIN_OUTCOMES, Suggestion, collect_samples, suggest
 from jev_agent.core.workspace import result_branch
 from jev_agent.dashboard.render import render_markdown
 from jev_agent.quality.report import latest_per_gate
@@ -519,6 +532,277 @@ def learning_view(repo: Repo, profile: str | None, include_retired: bool) -> Lea
     return LearningView(status, profiles, selected, lessons, repo.learning.shared_path)
 
 
+@dataclass
+class LayaView:
+    """`jev laya tune` for one profile: the suggestion and what it is based on."""
+
+    profiles: list[str]  # the profile selector's options
+    profile: str | None  # the profile the suggestion is for (None: no profiles exist)
+    source: str  # where the current weights come from: jev.toml, defaults, profile NAME
+    configured: bool  # jev.toml pins the weights: applying is disabled
+    tuned: bool  # the profile has tuned weights: resetting is offered
+    passed: int
+    failed: int
+    suggestion: Suggestion | None  # None when there is nothing to suggest
+    reason: str  # why there is no suggestion
+
+
+def laya_view(repo: Repo, name: str | None) -> LayaView:
+    """`jev laya tune` without `--apply`: the weight suggestion for `name` (default: the
+    active profile), with per-criterion evidence for the review table."""
+    profiles = [p.name for p in repo.learning.profiles()]
+    status = learning_status(repo.store, repo.config)
+    target = name if name in profiles else (status.profile if status.profile in profiles else None)
+    if target is None:
+        return LayaView(profiles, None, "defaults", False, False, 0, 0, None, "no profiles yet")
+    configured = "weights" in repo.config.dispatcher.laya.model_fields_set
+    tuned_weights = None if configured else repo.learning.laya_weights(target)
+    current = repo.config.dispatcher.laya.weights if tuned_weights is None else tuned_weights
+    source = "jev.toml" if configured else ("defaults" if tuned_weights is None else target)
+    result = suggest(collect_samples(repo.store), current, MIN_OUTCOMES)
+    return LayaView(
+        profiles=profiles,
+        profile=target,
+        source=source,
+        configured=configured,
+        tuned=tuned_weights is not None,
+        passed=result.passed,
+        failed=result.failed,
+        suggestion=result if result.weights is not None else None,
+        reason=result.reason or "",
+    )
+
+
+def apply_laya_selection(
+    current: dict[str, float], suggested: dict[str, float], accepted: Collection[str]
+) -> dict[str, float]:
+    """Merge the accepted suggested weights into the current ones, renormalized to sum
+    to 1 (the same rounding as `core.tuning.suggest`)."""
+    raw = {
+        criterion: (suggested[criterion] if criterion in accepted else weight)
+        for criterion, weight in current.items()
+    }
+    total = sum(raw.values())
+    weights = {criterion: round(weight / total, 3) for criterion, weight in raw.items()}
+    largest = max(weights, key=lambda criterion: weights[criterion])
+    weights[largest] = round(weights[largest] + 1 - sum(weights.values()), 3)
+    return weights
+
+
+# ---- the lesson graph (the Graph tab of the learning page) ------------------------------
+
+
+@dataclass(frozen=True)
+class GraphLessonRow:
+    """One lesson row in the Graph tab: the lesson, its relation counts, and its modules."""
+
+    lesson: Lesson
+    relations: dict[str, int]  # "contradicts", "supersedes", "superseded-by", "applies-to"
+    modules: list[str]
+
+
+@dataclass(frozen=True)
+class GraphNode:
+    kind: str  # "focus" | "lesson" | "run" | "module"
+    label: str
+    sub: str  # edge label from the focus node
+    x: float
+    y: float
+
+
+@dataclass(frozen=True)
+class GraphLink:
+    x1: float
+    y1: float
+    x2: float
+    y2: float
+    color: str
+    label: str
+
+
+@dataclass(frozen=True)
+class LearningGraph:
+    """The Graph tab: faceted browser rows, module/relation facets, stats, and the focused
+    lesson's radial neighborhood (pre-positioned SVG nodes, no JS graph library)."""
+
+    profile: str
+    stats: GraphStats
+    q: str
+    module: str
+    relation: str
+    modules: list[tuple[str, int]]  # facet chips: (path, applies-to count)
+    rows: list[GraphLessonRow]
+    focus: Lesson | None
+    focus_edges: list[EdgeView]
+    focus_co_occurs: list[tuple[str, int]]
+    nodes: list[GraphNode]
+    links: list[GraphLink]
+
+
+RELATION_FACETS = (
+    ("contradictions", "has contradictions"),
+    ("supersedes", "supersedes another"),
+    ("superseded", "superseded by another"),
+    ("failed-runs", "from failed runs"),
+)
+
+_EDGE_COLORS = {
+    "supersedes": "#2f9e44",
+    "contradicts": "#d64545",
+    "applies-to": "#3b82f6",
+    "derived-from": "#8a8f98",
+    "co-occurs-with": "#8b5cf6",
+}
+
+
+def _failed_runs(store: Store) -> set[str]:
+    return {
+        run.id
+        for run in store.list_runs()
+        if run.state is RunState.FAILED and run.learning_profile is not None
+    }
+
+
+def learning_graph_view(
+    repo: Repo,
+    profile: str,
+    *,
+    q: str = "",
+    module: str = "",
+    relation: str = "",
+    focus_id: str = "",
+) -> LearningGraph | None:
+    """The Graph tab's data. None when the profile is unknown or its database has no graph
+    tables yet (repo databases before their graph migration)."""
+    try:
+        db = repo.learning.db_for(profile)
+    except LearningError:
+        return None
+    if not db.graph_ready():
+        return None
+    stats = db.graph_stats(profile)
+    lessons = db.list_lessons(profile)
+    if q.strip():
+        try:
+            wanted = {lesson.id for lesson in db.graph_query(profile, q.strip(), limit=500)}
+            lessons = [lesson for lesson in lessons if lesson.id in wanted]
+        except LearningError:
+            pass  # not a searchable query: fall back to the unfiltered list
+    neighborhoods = {
+        lesson.number: db.edges_for_lesson(profile, lesson.number) for lesson in lessons
+    }
+    if module:
+        lessons = [
+            lesson
+            for lesson in lessons
+            if any(
+                v.edge == "applies-to" and _module_matches(v.other, module)
+                for v in neighborhoods[lesson.number]
+            )
+        ]
+    failed = _failed_runs(repo.store) if relation == "failed-runs" else set()
+    if relation == "failed-runs":
+        lessons = [lesson for lesson in lessons if lesson.source_run in failed]
+    elif relation in ("contradictions", "supersedes", "superseded"):
+        want = {
+            "contradictions": ("contradicts", None),
+            "supersedes": ("supersedes", "out"),
+            "superseded": ("supersedes", "in"),
+        }[relation]
+        lessons = [
+            lesson
+            for lesson in lessons
+            if any(
+                v.edge == want[0] and (want[1] is None or v.direction == want[1])
+                for v in neighborhoods[lesson.number]
+            )
+        ]
+    rows = []
+    for lesson in lessons:
+        counts = {"contradicts": 0, "supersedes": 0, "superseded-by": 0, "applies-to": 0}
+        modules: list[str] = []
+        for view in neighborhoods[lesson.number]:
+            if view.edge == "contradicts":
+                counts["contradicts"] += 1
+            elif view.edge == "supersedes":
+                counts["supersedes" if view.direction == "out" else "superseded-by"] += 1
+            elif view.edge == "applies-to":
+                counts["applies-to"] += 1
+                modules.append(view.other)
+        rows.append(GraphLessonRow(lesson, counts, sorted(set(modules))))
+    focus: Lesson | None = None
+    focus_edges: list[EdgeView] = []
+    focus_co: list[tuple[str, int]] = []
+    nodes: list[GraphNode] = []
+    links: list[GraphLink] = []
+    if focus_id:
+        try:
+            _, focus = repo.learning.find_lesson(focus_id)
+        except LearningError:
+            focus = None
+        if focus is not None and focus.profile == profile:
+            focus_edges = db.edges_for_lesson(profile, focus.number)
+            focus_co = db.co_occurs(repo.store.connection, profile, focus.number)
+            nodes, links = _neighborhood_svg(focus, focus_edges, focus_co)
+        else:
+            focus = None
+    return LearningGraph(
+        profile=profile,
+        stats=stats,
+        q=q,
+        module=module,
+        relation=relation,
+        modules=stats.top_modules,
+        rows=rows,
+        focus=focus,
+        focus_edges=focus_edges,
+        focus_co_occurs=focus_co,
+        nodes=nodes,
+        links=links,
+    )
+
+
+def _module_matches(stored: str, query: str) -> bool:
+    """Directory-prefix matching on module refs, qualified or not (`src/auth` matches
+    `baton:src/auth/login.py`)."""
+    _, tail = split_module_ref(query.strip())
+    want = normalize_module_ref(tail)
+    if not want:
+        return False
+    paths = [stored] if ":" not in stored else [stored, stored.split(":", 1)[1]]
+    return any(p == want or p.startswith(want + "/") for p in paths)
+
+
+def _neighborhood_svg(
+    focus: Lesson, edges: list[EdgeView], co_occurs: list[tuple[str, int]]
+) -> tuple[list[GraphNode], list[GraphLink]]:
+    """Radial 1-hop neighborhood: the lesson centered, neighbors on a circle, edges labeled
+    and color-coded. Deterministic, ≤ 13 nodes, no layout library."""
+    import math
+
+    items: list[tuple[str, str, str, str]] = []  # (kind, label, edge, sub)
+    for view in edges:
+        kind = {"lesson": "lesson", "run": "run", "module": "module"}.get(view.other_type, "lesson")
+        label = view.other if len(view.other) <= 26 else "…" + view.other[-25:]
+        sub = view.edge if view.direction == "out" else f"{view.edge}-by"
+        if view.edge == "contradicts":
+            sub = "contradicts"
+        items.append((kind, label, view.edge, sub))
+    for other, times in co_occurs[:4]:
+        items.append(("lesson", other, "co-occurs-with", f"co-occurs x{times}"))
+    items = items[:12]
+    cx, cy, radius = 160.0, 160.0, 118.0
+    nodes = [GraphNode("focus", focus.id, "", cx, cy)]
+    links: list[GraphLink] = []
+    for i, (kind, label, edge, sub) in enumerate(items):
+        angle = 2 * math.pi * i / max(len(items), 1) - math.pi / 2
+        x, y = cx + radius * math.cos(angle), cy + radius * math.sin(angle)
+        nodes.append(GraphNode(kind, label, sub, x, y))
+        color = _EDGE_COLORS.get(edge, "#8a8f98")
+        links.append(GraphLink(cx, cy, x, y, color, sub))
+    return nodes, links
+
+
 # ---- chats -------------------------------------------------------------------------------
 
 
@@ -837,10 +1121,25 @@ class KpiView:
     trends: list[Trend]
     last: int
     ship_enabled: bool
+    last_synced: datetime | None = None  # when `ship sync --all` last ran (any surface)
 
     @property
     def regressions(self) -> list[Trend]:
         return [t for t in self.trends if t.regressed]
+
+
+SHIP_SYNC_FILENAME = "ship_sync.json"  # in the state dir: {"synced_at": isoformat}
+
+
+def ship_last_synced(repo: Repo) -> datetime | None:
+    """When `jev ship sync --all` last refreshed the shipped PRs (any surface), if ever."""
+    import json
+
+    try:
+        raw = json.loads((repo.state_dir / SHIP_SYNC_FILENAME).read_text())
+        return datetime.fromisoformat(raw["synced_at"])
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
 
 
 def kpi_view(repo: Repo, last: int = DEFAULT_LAST) -> KpiView:
@@ -852,6 +1151,7 @@ def kpi_view(repo: Repo, last: int = DEFAULT_LAST) -> KpiView:
         trends=trends(rows, last),
         last=last,
         ship_enabled=repo.config.ship.enabled,
+        last_synced=ship_last_synced(repo),
     )
 
 
@@ -958,6 +1258,40 @@ def config_summary(repo: Repo) -> list[tuple[str, str]]:
 def doctor_checks(root: Path) -> list[Check]:
     """`jev doctor` without `--connect`: local checks only."""
     return run_checks(root)
+
+
+def browser_check(repo: Repo) -> Check | None:
+    """The doctor's browser check, if the config uses the browser at all."""
+    for check in doctor_checks(repo.root):
+        if check.name == "browser":
+            return check
+    return None
+
+
+def model_listing(repo: Repo) -> tuple[ModelListing | None, str | None]:
+    """`jev models list` from the on-disk cache only: the dashboard never fetches the
+    network for this page (that would hang a render); `jev models list --refresh`
+    refreshes the cache."""
+    from jev_agent.app.models import list_models
+    from jev_agent.workers.openrouter_models import cache_path, load_catalog
+
+    catalog, _ = load_catalog(
+        cache_path(repo.root),
+        repo.config.workers.api.base_url,
+        ttl_s=repo.config.models.cache_ttl_hours * 3600,
+        refresh=False,
+        allow_fetch=False,
+    )
+    if catalog is None:
+        return None, None
+    return list_models(catalog, free=False, supports=[]), None
+
+
+def quality_checks(repo: Repo) -> list[CheckRow]:
+    """`jev quality checks`: every check by level, whether its tool is installed and
+    whether it applies to this repo. (The ai-review gate is a static row in the
+    template, like the CLI's extra table row.)"""
+    return check_rows(repo.root, repo.config)
 
 
 # ---- fleet ---------------------------------------------------------------------------------
