@@ -1,33 +1,76 @@
 {% extends "base.html" %}
-{% from "macros.html" import bars, badge with context %}
+{% from "macros.html" import badge with context %}
 {% block title %}Spend{% endblock %}
 {% block content %}
 <div class="page-head">
   <div class="titles">
     <h1>Spend</h1>
-    <p class="lede">Total reported spend over {{ s.runs | length }} run{{ "s" if s.runs | length != 1 }}: <strong>{{ s.total | usd }}</strong>.
+    <p class="lede">What your Jev runs cost, per day and per run.
     <span class="muted">Codex reports no cost, so its attempts count $0.</span></p>
   </div>
 </div>
 
+<div class="stats">
+  <div class="stat">
+    <div class="stat-label">Total spend</div>
+    <div class="stat-value">{{ s.total | usd }}</div>
+    <div class="stat-note">{% if s.has_spend %}All time{% else %}No spend recorded yet{% endif %}</div>
+  </div>
+  <div class="stat">
+    <div class="stat-label">This week</div>
+    <div class="stat-value">{{ s.week_usd | usd }}</div>
+    <div class="stat-note">Last 7 days</div>
+  </div>
+  <div class="stat">
+    <div class="stat-label">This month</div>
+    <div class="stat-value">{{ s.month_usd | usd }}</div>
+    <div class="stat-note">Last 30 days</div>
+  </div>
+  <div class="stat">
+    <div class="stat-label">Avg per run</div>
+    <div class="stat-value">{{ s.avg_usd | usd }}</div>
+    <div class="stat-note">{% if s.runs %}Across {{ s.runs | length }} run{{ "s" if s.runs | length != 1 }}{% else %}No runs yet{% endif %}</div>
+  </div>
+</div>
+
+<h2 class="section">Daily spend</h2>
 <section class="panel">
-  <h2>Per day (last {{ s.days }} days, UTC, by run start)</h2>
-  {{ bars(s.by_day) }}
+  {{ daily_bars_svg(s.day_totals) }}
+  {% if s.has_spend %}
+  <p class="hint">UTC, bucketed by run start. Hover a bar for the exact day.</p>
+  {% else %}
+  <p class="hint">No spend in the last 30 days — once a run reports a cost, its day lights up here.</p>
+  {% endif %}
 </section>
 
-<section class="panel">
-  <h2>Costliest runs</h2>
-  {{ bars(s.by_run, "No runs yet.") }}
-</section>
+<h2 class="section">Costliest runs</h2>
+{% if s.costliest %}
+<div class="table-wrap"><table>
+  <thead><tr><th class="num">#</th><th>Run</th><th>Idea</th><th>State</th><th class="num">Spent</th></tr></thead>
+  <tbody>
+  {% for r in s.costliest %}
+    <tr>
+      <td class="num muted">{{ loop.index }}</td>
+      <td class="mono nowrap"><a href="/runs/{{ r.id }}">{{ r.id }}</a></td>
+      <td class="wrap" title="{{ r.idea.text }}">{{ r.idea.text | truncate(64, end="…") }}</td>
+      <td>{{ badge(r.state) }}</td>
+      <td class="num">{{ r.spend_usd | usd }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table></div>
+{% else %}
+<div class="empty"><div class="title">No runs yet</div><p>Start one with <code>jev run</code>, the queue, or the dashboard, and its cost shows up here.</p></div>
+{% endif %}
 
 <h2 class="section">Every run</h2>
 {% if s.runs %}
 <div class="table-wrap"><table>
-  <thead><tr><th>run</th><th>state</th><th>created</th><th>idea</th><th class="num">spent</th></tr></thead>
+  <thead><tr><th>Run</th><th>State</th><th>Created</th><th>Idea</th><th class="num">Spent</th></tr></thead>
   <tbody>
   {% for r in s.runs %}
     <tr>
-      <td class="mono"><a href="/runs/{{ r.id }}">{{ r.id }}</a></td>
+      <td class="mono nowrap"><a href="/runs/{{ r.id }}">{{ r.id }}</a></td>
       <td>{{ badge(r.state) }}</td>
       <td class="small">{{ r.created_at | time }}</td>
       <td class="wrap">{{ r.idea.text }}</td>

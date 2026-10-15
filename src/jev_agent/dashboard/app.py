@@ -108,7 +108,12 @@ from jev_agent.dashboard.preview import (
     PreviewInput,
     PreviewSession,
 )
-from jev_agent.dashboard.render import render_bar_chart, render_markdown, render_trend_chart
+from jev_agent.dashboard.render import (
+    render_bar_chart,
+    render_daily_spend,
+    render_markdown,
+    render_trend_chart,
+)
 from jev_agent.dashboard.runner import (
     ChatRunner,
     Executor,
@@ -187,6 +192,7 @@ def _environment() -> Environment:
     env.globals["version"] = __version__
     env.globals["csrf_field"] = CSRF_FIELD
     env.globals["bar_chart_svg"] = render_bar_chart
+    env.globals["daily_bars_svg"] = render_daily_spend
     env.globals["trend_chart_svg"] = render_trend_chart
     env.globals["fmt"] = format_value
     return env
@@ -790,7 +796,7 @@ class Dashboard:
         return self.page(request, "_fleet.html", lambda repo: {"agents": views.fleet(repo)})
 
     def tools_page(self, request: Request) -> Response:
-        return self._settings_page(request, "tools")
+        return self._settings_page(request, "tools", "tools.html")
 
     def connections_page(self, request: Request) -> Response:
         """The full panel: cached per-server reachability, the dispatcher route and key
@@ -1029,7 +1035,9 @@ class Dashboard:
             {"driver": driver.value, "inputs": [event.as_dict() for event in events]}
         )
 
-    def _settings_page(self, request: Request, page: str) -> Response:
+    def _settings_page(
+        self, request: Request, page: str, template: str = "settings.html"
+    ) -> Response:
         def build(repo: views.Repo) -> dict[str, Any]:
             repo_raw, user_raw, user_file = settings.read_layers(repo.root)
             title, lede, secs, ents = settings.page_view(repo.config, repo_raw, user_raw, page)
@@ -1048,7 +1056,7 @@ class Dashboard:
                 "settings": self.settings,
             }
 
-        return self.page(request, "settings.html", build)
+        return self.page(request, template, build)
 
     async def settings_set(self, request: Request) -> Response:
         return await self._settings_write(request, unset=False)

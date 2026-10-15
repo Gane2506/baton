@@ -61,7 +61,7 @@ from jev_agent.core.store import (
     TaskRecord,
 )
 from jev_agent.core.workspace import result_branch
-from jev_agent.dashboard.render import BarChart, bar_chart, render_markdown
+from jev_agent.dashboard.render import render_markdown
 from jev_agent.quality.report import latest_per_gate
 from jev_agent.servers.access import server_grants
 from jev_agent.servers.profiles import ProfileError, read_run_profile
@@ -769,25 +769,48 @@ def spend_by_day(
 class SpendView:
     runs: list[RunRecord]
     total: float
-    by_run: BarChart
-    by_day: BarChart
+    week_usd: float  # trailing 7 days, same buckets as the daily chart
+    month_usd: float  # trailing `days` days, same buckets as the daily chart
+    avg_usd: float  # total / runs, 0.0 when there are no runs
+    costliest: list[RunRecord]  # top runs by spend, for the leaderboard table
+    day_totals: list[tuple[date, float]]  # (day, usd) oldest first, one per day
     days: int
 
+    @property
+    def has_spend(self) -> bool:
+        return self.total > 0
 
-def spend_view(repo: Repo, days: int = 30, top_runs: int = 25) -> SpendView:
+
+def spend_view(
+    repo: Repo, days: int = 30, top_runs: int = 25, today: date | None = None
+) -> SpendView:
     runs = repo.store.list_runs()
+    return spend_view_for_runs(runs, days=days, top_runs=top_runs, today=today)
+
+
+def spend_view_for_runs(
+    runs: list[RunRecord], *, days: int = 30, top_runs: int = 25, today: date | None = None
+) -> SpendView:
+    """The spend page's numbers from a run list (pure; `spend_view` reads the store).
+
+    The week/month windows reuse `spend_by_day`'s buckets, so the summary cards
+    can never disagree with the daily chart.
+    """
+    day_totals = spend_by_day(runs, days, today)
+    month_usd = sum(usd for _, usd in day_totals)
+    week_usd = sum(usd for _, usd in spend_by_day(runs, 7, today))
+    total = sum(r.spend_usd for r in runs)
     costly = sorted(runs, key=lambda r: r.spend_usd, reverse=True)[:top_runs]
-    # Long labels are cut with an ellipsis by bar_chart; the full one is the row's tooltip.
-    by_run = bar_chart(
-        [(f"{r.id} {r.idea.text}", r.spend_usd, f"/runs/{r.id}") for r in costly],
-        label_width=330,
+    return SpendView(
+        runs=runs,
+        total=total,
+        week_usd=week_usd,
+        month_usd=month_usd,
+        avg_usd=total / len(runs) if runs else 0.0,
+        costliest=costly,
+        day_totals=day_totals,
+        days=days,
     )
-    by_day = bar_chart(
-        [(day.isoformat(), usd, None) for day, usd in spend_by_day(runs, days)],
-        label_width=100,
-        row=18,
-    )
-    return SpendView(runs, sum(r.spend_usd for r in runs), by_run, by_day, days)
 
 
 # ---- KPIs --------------------------------------------------------------------------------

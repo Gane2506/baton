@@ -679,6 +679,7 @@ dl.facts dd ul { margin: 0; }
 .stat-label { color: var(--muted); font-size: var(--fs-11); font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; }
 .stat-value { font-family: var(--mono); font-variant-numeric: tabular-nums; font-size: 22px; font-weight: 600; margin-top: 4px; letter-spacing: -0.01em; }
 .stat-value .unit { font-size: var(--fs-12); color: var(--muted); font-weight: 500; margin-left: 4px; }
+.stat-note { color: var(--muted); font-size: var(--text-xs); margin-top: 6px; line-height: 1.45; }
 
 /* ---- alerts panel -------------------------------------------------------- */
 
@@ -746,6 +747,16 @@ svg.chart .bar { fill: var(--bar); }
 svg.chart .label { fill: var(--fg); font: 12px var(--sans); }
 svg.chart .value { fill: var(--muted); font: 12px var(--mono); }
 svg.chart a .label { fill: var(--accent); }
+
+/* Daily spend columns (Spend page): one vertical column per day. Zero days draw
+   a short stub so the axis always reads as a full window. */
+svg.daily { width: 100%; height: auto; display: block; }
+svg.daily .col { fill: var(--bar); }
+svg.daily .col.zero { fill: var(--faint); opacity: 0.45; }
+svg.daily .col:hover { fill: var(--accent); }
+svg.daily .axis { stroke: var(--border-strong); stroke-width: 1; }
+svg.daily .tick { fill: var(--muted); font: 12px var(--mono); }
+svg.daily .maxv { fill: var(--muted); font: 12px var(--mono); }
 
 .trends { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: var(--s3); }
 .trend-card { margin-bottom: 0; }

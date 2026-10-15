@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
+from datetime import date
 
 from markdown_it import MarkdownIt
 from markupsafe import Markup
@@ -146,6 +147,112 @@ def render_bar_chart(chart: BarChart, empty: str = "No data yet.") -> Markup:
                 bar.value_text,
             )
         )
+    parts.append(Markup("</svg>"))
+    return Markup("\n").join(parts)
+
+
+# ---- daily spend columns (Spend page) ----------------------------------------------------
+
+
+@dataclass(frozen=True)
+class DayBar:
+    day: date
+    value: float
+    x: float  # left edge of the column
+    y: float  # top edge of the column
+    width: float
+    height: float
+
+
+@dataclass(frozen=True)
+class DailyBars:
+    bars: list[DayBar]
+    width: int
+    height: int
+    baseline: float  # y of the x axis
+    max_value: float
+
+
+def daily_bars(
+    days: Sequence[tuple[date, float]],
+    *,
+    width: int = 720,
+    plot_height: int = 170,
+) -> DailyBars:
+    """Vertical columns, one per (day, usd), oldest first.
+
+    Every day gets a column even at $0.00 (a short stub), so the axis always reads
+    as a full window and tooltips stay one-per-day. Columns scale to the largest
+    value; a nonzero value always draws at least 3px so it stays visible.
+    """
+    rows = list(days)
+    left, right, top_pad, bottom_pad = 6, 6, 26, 30
+    plot_width = max(width - left - right, 1)
+    baseline = top_pad + plot_height
+    height = int(baseline + bottom_pad)
+    top = max((usd for _, usd in rows), default=0.0)
+    bars = []
+    n = len(rows)
+    for i, (day, usd) in enumerate(rows):
+        slot = plot_width / n if n else 0.0
+        gap = max(2.0, slot * 0.28)
+        col_w = max(slot - gap, 1.0)
+        x = left + i * slot + gap / 2
+        col_h = (max(usd, 0.0) / top * plot_height) if top > 0 else 0.0
+        if usd > 0:
+            col_h = max(col_h, 3.0)
+        elif n:
+            col_h = 3.0  # the $0.00 stub: the day is still there
+        bars.append(DayBar(day, usd, x, baseline - col_h, col_w, col_h))
+    return DailyBars(bars, width, height, baseline, top)
+
+
+def render_daily_spend(days: Sequence[tuple[date, float]]) -> Markup:
+    """Template entry point: build the daily columns from (day, usd) pairs and render them."""
+    return render_daily_bars(daily_bars(days))
+
+
+def render_daily_bars(chart: DailyBars, empty: str = "No data yet.") -> Markup:
+    """The daily columns as an inline SVG (or a muted paragraph when there are no days)."""
+    if not chart.bars:
+        return Markup('<p class="muted">{}</p>').format(empty)
+    parts = [
+        Markup(
+            '<svg class="daily" viewBox="0 0 {} {}" role="img"'
+            ' aria-label="Daily spend, last {} days">'
+        ).format(chart.width, chart.height, len(chart.bars))
+    ]
+    parts.append(
+        Markup('<line class="axis" x1="{}" y1="{:.1f}" x2="{}" y2="{:.1f}"/>').format(
+            6, chart.baseline, chart.width - 6, chart.baseline
+        )
+    )
+    if chart.max_value > 0:
+        max_label = Markup('<text class="maxv" x="{}" y="16">{}</text>').format(
+            6, usd_text(chart.max_value)
+        )
+        parts.append(max_label)
+    for i, bar in enumerate(chart.bars):
+        tick = bar.day.strftime("%b ") + str(bar.day.day)  # "Oct 5", never "Oct 05"
+        tip = f"{bar.day.isoformat()}: {usd_text(bar.value)}"
+        cls = "col zero" if bar.value == 0 else "col"
+        col = Markup(
+            '<g><title>{}</title><rect class="{}" x="{:.1f}" y="{:.1f}"'
+            ' width="{:.1f}" height="{:.1f}" rx="2"/></g>'
+        ).format(tip, cls, bar.x, bar.y, bar.width, bar.height)
+        parts.append(col)
+        if i % 7 == 0:
+            # Keep the first/last tick inside the viewBox: anchor the edges inward.
+            cx = bar.x + bar.width / 2
+            anchor = "middle"
+            if i == 0:
+                cx, anchor = 6.0, "start"
+            elif bar.x + bar.width / 2 + 24 > chart.width - 6:
+                cx, anchor = float(chart.width - 6), "end"
+            parts.append(
+                Markup('<text class="tick" x="{:.1f}" y="{:.1f}"').format(cx, chart.baseline + 20)
+                + Markup(' text-anchor="{}">{}</text>').format(anchor, tick)
+            )
     parts.append(Markup("</svg>"))
     return Markup("\n").join(parts)
 

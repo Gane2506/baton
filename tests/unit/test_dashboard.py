@@ -13,7 +13,7 @@ import threading
 import time
 import xml.etree.ElementTree as ET
 from collections.abc import Callable, Iterator
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -27,15 +27,17 @@ from jev_agent.cli.app import app as cli_app
 from jev_agent.cli.wiring import FAKE_WORKERS_ENV
 from jev_agent.core.chat import CHATS_DIRNAME, META_FILE, TRANSCRIPT_FILE
 from jev_agent.core.learning import Learning
-from jev_agent.core.models import RunState
+from jev_agent.core.models import Idea, RunState
 from jev_agent.core.pipeline import PipelineError
-from jev_agent.core.store import Store
+from jev_agent.core.store import RunRecord, Store
 from jev_agent.dashboard.app import create_app
 from jev_agent.dashboard.render import (
     LABEL_CHAR_PX,
     bar_chart,
+    daily_bars,
     fit_label,
     render_bar_chart,
+    render_daily_bars,
     render_markdown,
 )
 from jev_agent.dashboard.runner import (
@@ -51,7 +53,7 @@ from jev_agent.dashboard.security import (
     DashboardSettings,
     is_loopback,
 )
-from jev_agent.dashboard.views import spend_by_day
+from jev_agent.dashboard.views import spend_by_day, spend_view_for_runs
 from jev_agent.quality.models import GateResult
 from jev_agent.workers.subprocess_runner import run_command
 
@@ -740,13 +742,152 @@ def test_render_bar_chart_svg_has_full_label_tooltips() -> None:
     assert str(render_bar_chart(bar_chart([]), "Nothing.")) == '<p class="muted">Nothing.</p>'
 
 
-def test_spend_page_truncates_long_run_labels(
+def test_spend_page_truncates_long_ideas_in_costliest_table(
     client: TestClient, planned: tuple[Path, str]
 ) -> None:
-    _, run_id = planned
+    repo, _ = planned
+    long_idea = "Rebuild the entire reporting pipeline from scratch " * 3
+    assert len(long_idea) > 64
+    with _store(repo) as store:
+        run = store.create_run(Idea(text=long_idea, repo_path=repo))
+        store.add_run_spend(run.id, 9.99)
     page = client.get("/spend")
     assert page.status_code == 200
-    assert f"<title>{run_id} " in page.text
+    # The cell shows the truncated idea; the full text stays in the tooltip.
+    assert f'title="{long_idea}"' in page.text
+    assert "…" in page.text
+
+
+def _run_record(
+    run_id: str, spend: float, created_at: datetime, idea: str = "test idea"
+) -> RunRecord:
+    return RunRecord(
+        id=run_id,
+        idea=Idea(text=idea, repo_path=Path("/tmp")),
+        state=RunState.DONE,
+        plan=None,
+        plan_round=1,
+        spend_usd=spend,
+        created_at=created_at,
+        updated_at=created_at,
+    )
+
+
+def test_spend_by_day_buckets_runs_by_utc_start_day() -> None:
+    runs = [
+        _run_record("a", 1.0, datetime(2026, 10, 14, 10, 0, tzinfo=UTC)),
+        _run_record("b", 2.0, datetime(2026, 10, 14, 23, 30, tzinfo=UTC)),
+        _run_record("c", 4.0, datetime(2026, 10, 10, 8, 0, tzinfo=UTC)),
+    ]
+    days = dict(spend_by_day(runs, days=30, today=date(2026, 10, 15)))
+    assert len(days) == 30
+    assert days[date(2026, 10, 14)] == 3.0  # same UTC day sums
+    assert days[date(2026, 10, 10)] == 4.0
+    assert days[date(2026, 10, 15)] == 0.0  # days without runs are present at $0
+    assert days[date(2026, 9, 16)] == 0.0  # oldest day of the window
+
+
+def test_spend_by_day_uses_utc_not_local_time() -> None:
+    # 00:30 at +02:00 is still the previous day in UTC.
+    plus_two = timezone(timedelta(hours=2))
+    run = _run_record("a", 1.5, datetime(2026, 10, 15, 0, 30, tzinfo=plus_two))
+    days = dict(spend_by_day([run], days=3, today=date(2026, 10, 15)))
+    assert days[date(2026, 10, 14)] == 1.5
+    assert days[date(2026, 10, 15)] == 0.0
+
+
+def test_spend_by_day_ignores_runs_outside_the_window() -> None:
+    run = _run_record("old", 9.0, datetime(2026, 9, 1, 12, 0, tzinfo=UTC))
+    days = spend_by_day([run], days=30, today=date(2026, 10, 15))
+    assert len(days) == 30 and all(usd == 0.0 for _, usd in days)
+
+
+def test_spend_view_for_runs_week_month_and_avg() -> None:
+    today = date(2026, 10, 15)
+    runs = [
+        _run_record("today", 1.25, datetime(2026, 10, 15, 9, 0, tzinfo=UTC)),
+        _run_record("week", 2.50, datetime(2026, 10, 10, 9, 0, tzinfo=UTC)),
+        _run_record("month", 4.00, datetime(2026, 9, 20, 9, 0, tzinfo=UTC)),
+        _run_record("old", 8.00, datetime(2026, 8, 1, 9, 0, tzinfo=UTC)),
+    ]
+    view = spend_view_for_runs(runs, today=today)
+    assert view.total == 15.75
+    assert view.week_usd == 3.75  # today + 5-days-ago only
+    assert view.month_usd == 7.75  # everything inside the 30-day window
+    assert view.avg_usd == pytest.approx(15.75 / 4)
+    assert view.has_spend
+    assert [r.id for r in view.costliest] == ["old", "month", "week", "today"]
+    assert len(view.day_totals) == 30
+
+
+def test_spend_view_for_runs_empty() -> None:
+    view = spend_view_for_runs([], today=date(2026, 10, 15))
+    assert (view.total, view.week_usd, view.month_usd, view.avg_usd) == (0.0, 0.0, 0.0, 0.0)
+    assert not view.has_spend and view.costliest == [] and len(view.day_totals) == 30
+
+
+def test_daily_bars_scales_columns_to_max() -> None:
+    days = [(date(2026, 10, 13) + timedelta(days=i), v) for i, v in enumerate([0.0, 2.0, 4.0])]
+    chart = daily_bars(days)
+    assert len(chart.bars) == 3
+    tallest = max(bar.height for bar in chart.bars)
+    assert chart.bars[2].height == tallest
+    assert chart.bars[1].height == pytest.approx(tallest / 2)
+    assert chart.bars[0].height == 3.0  # the $0.00 stub keeps the day visible
+    assert all(bar.y + bar.height == pytest.approx(chart.baseline) for bar in chart.bars)
+
+
+def test_render_daily_bars_has_one_tooltip_per_day() -> None:
+    pair = [(date(2026, 10, 14), 1.25), (date(2026, 10, 15), 0.0)]
+    svg = str(render_daily_bars(daily_bars(pair)))
+    assert svg.count("<title>") == 2
+    assert "<title>2026-10-14: $1.25</title>" in svg
+    assert "<title>2026-10-15: $0.00</title>" in svg
+    assert 'class="col zero"' in svg and 'class="col"' in svg
+    assert "Oct 14" in svg  # sparse, human-readable tick labels
+
+
+def test_render_daily_bars_empty() -> None:
+    assert str(render_daily_bars(daily_bars([]))) == '<p class="muted">No data yet.</p>'
+
+
+@pytest.fixture
+def empty_client(fixture_repo: Path) -> Iterator[TestClient]:
+    """A dashboard client for a repo with no runs at all."""
+    (fixture_repo / "jev.toml").write_text('[dispatcher]\nprimary = "jev"\n')
+    yield from _client(fixture_repo)
+
+
+def test_spend_page_summary_cards(client: TestClient, planned: tuple[Path, str]) -> None:
+    repo, run_id = planned
+    with _store(repo) as store:
+        store.add_run_spend(run_id, 1.25)
+        older = store.create_run(Idea(text="older run", repo_path=repo))
+        ten_days_ago = (datetime.now(UTC) - timedelta(days=10)).isoformat(timespec="microseconds")
+        store.connection.execute(
+            "UPDATE runs SET created_at=?, updated_at=?, spend_usd=? WHERE id=?",
+            (ten_days_ago, ten_days_ago, 2.50, older.id),
+        )
+    page = client.get("/spend")
+    assert page.status_code == 200
+    text = page.text
+    for label in ("Total spend", "This week", "This month", "Avg per run"):
+        assert label in text
+    assert "$3.75" in text  # total and month: both runs
+    assert "$1.25" in text  # this week: only the recent run
+    assert f"${3.75 / 2:.2f}" in text  # avg per run
+    assert "No spend recorded yet" not in text
+
+
+def test_spend_page_empty_state_teaches(empty_client: TestClient) -> None:
+    page = empty_client.get("/spend")
+    assert page.status_code == 200
+    text = page.text
+    assert "No spend recorded yet" in text  # the $0.00 cards read as intentional
+    assert "No spend in the last 30 days" in text  # under the chart
+    assert "<svg" in text  # the 30-day axis still renders
+    assert "No runs yet" in text
+    assert "Start one with" in text and "jev run" in text
 
 
 def test_settings_never_renders_secret_values(
