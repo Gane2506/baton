@@ -303,6 +303,17 @@ model call (the learner) whenever there is something to learn.
 Precedence: `jev run --learning NAME` / `--no-learning` > settings from `jev learning` > this
 table > the defaults. The learner's workers and models are set in `[roles.learner]`.
 
+## `[events]`
+
+The event-sourced execution log: every run mutation is dual-written as an append-only event
+in `run_events`, which powers `jev events`, `jev replay` and `jev bisect`. See
+[events.md](events.md). On by default; the snapshot tables the pipeline reads are unaffected
+either way.
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `enabled` | `true` | Write the event log. Turn off if the log ever misbehaves; `jev replay` / `jev bisect` then report the log as disabled. |
+
 ## `[ship]`
 
 `jev ship RUN` pushes a DONE run's result branch to a new branch on your remote and opens a

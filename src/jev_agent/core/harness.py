@@ -15,6 +15,10 @@ from jev_agent.config.schema import JevConfig
 from jev_agent.core.assign import Assignment, fit_free, quota_fallback, reassign
 from jev_agent.core.budget import Budget
 from jev_agent.core.commands import CommandRunner
+from jev_agent.core.events import (
+    DecisionRequestedPayload,
+    EventType,
+)
 from jev_agent.core.learning import (
     Learning,
     LearningError,
@@ -205,7 +209,23 @@ class Harness:
                 raise Halt(RunState.NEEDS_HUMAN, reason, resumable=True) from exc
             raise Halt(RunState.FAILED, reason) from exc
         decision = guarded.decision
-        self.store.record_decision(run_id, task_id, req, decision, guarded.fallback_reason)
+        # The request goes on the log first (its own transaction: no snapshot row is
+        # written for it); the recorded event below names it as its causal parent.
+        motivated_by = self.store.latest_event_seq(
+            run_id, EventType.ATTEMPT_FINISHED, task_id=task_id
+        )
+        requested_seq = self.store.emit(
+            run_id,
+            EventType.DECISION_REQUESTED,
+            DecisionRequestedPayload(
+                point=str(req.point), task_id=task_id, questions=req.questions
+            ),
+            parent_run_seq=motivated_by,
+        )
+        self.store.record_decision(
+            run_id, task_id, req, decision, guarded.fallback_reason,
+            parent_run_seq=requested_seq,
+        )
         if decision.cost_usd:
             self.store.add_spend(run_id, task_id, decision.cost_usd)
         return decision

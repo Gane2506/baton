@@ -154,7 +154,9 @@ class PipelineError(Exception):
 def cancel_run(store: Store, run_id: str) -> RunRecord:
     """Cancel a run (`jev cancel`, the dashboard): it only touches the store, so front ends
     that have no pipeline can call it. Its branches and worktrees are kept."""
-    if not store.set_run_state(run_id, RunState.CANCELLED, "cancelled by user", unless=STOPPED):
+    if not store.set_run_state(
+        run_id, RunState.CANCELLED, "cancelled by user", unless=STOPPED, actor="human"
+    ):
         raise PipelineError(f"run {run_id} is already {store.get_run(run_id).state}")
     return store.get_run(run_id)
 

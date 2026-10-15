@@ -525,6 +525,21 @@ class LearningConfig(_Strict):
     )
 
 
+class EventsConfig(_Strict):
+    """`[events]`: the event-sourced execution log (docs/events.md). On by default: every
+    run mutation is dual-written as an append-only event in `run_events`, which powers
+    `jev events`, `jev replay` and `jev bisect`."""
+
+    enabled: bool = Field(
+        default=True,
+        description=(
+            "Write the event log. Turn off if the log ever misbehaves; the snapshot tables "
+            "the pipeline reads are unaffected, and `jev replay`/`jev bisect` report the "
+            "log as disabled."
+        ),
+    )
+
+
 FREE_MODELS_TOKEN = "free"  # in a role's `models`: the cached free models (docs/config.md)
 
 
@@ -1205,6 +1220,9 @@ class JevConfig(_Strict):
     )
     learning: LearningConfig = Field(
         default_factory=LearningConfig, description="Learning lessons from past runs."
+    )
+    events: EventsConfig = Field(
+        default_factory=EventsConfig, description="The event-sourced execution log."
     )
     ship: ShipConfig = Field(
         default_factory=ShipConfig, description="Opening a GitHub pull request for a finished run."
