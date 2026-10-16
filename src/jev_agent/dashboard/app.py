@@ -889,13 +889,16 @@ class Dashboard:
 
         def build(repo: views.Repo) -> dict[str, Any]:
             detail = None
+            sources = app_profiles.profile_sources(repo.root)
             if name is not None:
                 try:
-                    detail = app_profiles.describe_profile(repo.config, repo.state_dir, name)
+                    detail = app_profiles.describe_profile(
+                        repo.config, repo.state_dir, name, sources
+                    )
                 except ProfileError as exc:
                     raise NotFoundError(str(exc)) from exc
             return {
-                "profiles": app_profiles.list_profiles(repo.config, repo.state_dir),
+                "profiles": app_profiles.list_profiles(repo.config, repo.state_dir, sources),
                 "detail": detail,
             }
 

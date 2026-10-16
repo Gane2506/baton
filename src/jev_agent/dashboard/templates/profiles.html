@@ -21,11 +21,12 @@
 
 {% if profiles %}
 <div class="table-wrap"><table>
-  <thead><tr><th>Profile</th><th>Servers</th><th>Browser</th><th>Learning</th><th>Quality</th><th>Description</th><th>Default</th><th><span class="sr-only">actions</span></th></tr></thead>
+  <thead><tr><th>Profile</th><th>Source</th><th>Servers</th><th>Browser</th><th>Learning</th><th>Quality</th><th>Description</th><th>Default</th><th><span class="sr-only">actions</span></th></tr></thead>
   <tbody>
   {% for p in profiles %}
     <tr>
       <td class="mono"><a href="/profiles?name={{ p.name | urlencode }}">{{ p.name }}</a></td>
+      <td class="small">{{ p.source }}</td>
       <td class="small">{{ p.servers }}</td>
       <td>{{ "yes" if p.browser else "no" }}</td>
       <td class="small">{{ p.learning }}</td>
@@ -54,11 +55,26 @@
   </div>
   {% if detail.description %}<p>{{ detail.description }}</p>{% endif %}
   <dl class="facts">
+    <dt>Source</dt><dd>{{ detail.source }}</dd>
     <dt>Servers</dt><dd>{{ detail.servers }}</dd>
     <dt>Browser</dt><dd>{{ "yes" if detail.browser else "no" }}</dd>
     <dt>Learning</dt><dd>{{ detail.learning }}</dd>
     <dt>Quality</dt><dd>{{ detail.quality }}</dd>
   </dl>
+  <h3>Access overrides</h3>
+  {% if detail.access_overrides %}
+  <p class="small muted">This profile lowers access on these servers — it can never raise it.</p>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Server</th><th>Access for this profile</th></tr></thead>
+    <tbody>
+    {% for o in detail.access_overrides %}
+      <tr><td class="mono">{{ o.server }}</td><td>{{ o.level }}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table></div>
+  {% else %}
+  <p class="small muted">None — every server uses its configured access level.</p>
+  {% endif %}
   <h3>What each role gets</h3>
   <div class="table-wrap"><table>
     <thead><tr><th>Role</th><th>Grants</th></tr></thead>

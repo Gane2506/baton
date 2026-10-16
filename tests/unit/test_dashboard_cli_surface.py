@@ -492,6 +492,48 @@ def test_profiles_show_unknown_profile_is_404(
     assert client.get("/profiles?name=nope").status_code == 404
 
 
+def _write_profile_with_overrides(repo: Path, tmp_path: Path) -> None:
+    trust = tmp_path / "xdg" / "jev" / "config.toml"
+    trust.parent.mkdir(parents=True, exist_ok=True)
+    with trust.open("a") as fh:
+        fh.write('[trust]\nrepos = ["*"]\n')
+    (repo / "jev.toml").write_text(
+        '[servers.db]\nhost = "db1"\naccess = "medium"\n'
+        "[profiles.dev]\n"
+        'description = "dev box"\n'
+        'servers = ["db"]\n'
+        "browser = true\n"
+        "[profiles.dev.access_overrides]\n"
+        'db = "basic"\n'
+    )
+
+
+def test_profiles_detail_shows_access_overrides_and_source(
+    client: TestClient, fixture_repo: Path, tmp_path: Path
+) -> None:
+    _write_profile_with_overrides(fixture_repo, tmp_path)
+    text = client.get("/profiles").text
+    assert "Repo jev.toml" in text
+    text = client.get("/profiles?name=dev").text
+    assert "Access overrides" in text
+    assert "db" in text and "basic" in text
+    assert "Repo jev.toml" in text
+
+
+def test_profiles_source_labels_user_config(
+    client: TestClient, fixture_repo: Path, tmp_path: Path
+) -> None:
+    user_cfg = tmp_path / "xdg" / "jev" / "config.toml"
+    user_cfg.parent.mkdir(parents=True, exist_ok=True)
+    user_cfg.write_text('[profiles.mine]\ndescription = "from user config"\n')
+    text = client.get("/profiles").text
+    assert "mine" in text
+    assert "User config" in text
+    text = client.get("/profiles?name=mine").text
+    assert "User config" in text
+    assert "None \u2014 every server uses its configured access level." in text
+
+
 # ---- browser install ---------------------------------------------------------------------------
 
 

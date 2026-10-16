@@ -8,9 +8,12 @@ re-exported here so `app/` has one profile surface.
 
 from __future__ import annotations
 
+import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 
+from jev_agent.config.defaults import CONFIG_FILENAME
+from jev_agent.config.loader import default_user_config_path
 from jev_agent.config.schema import JevConfig
 from jev_agent.servers.access import (
     READ_ONLY_ROLES,
@@ -31,6 +34,7 @@ from jev_agent.servers.profiles import (
 )
 
 __all__ = [
+    "AccessOverride",
     "ProfileDetail",
     "ProfileError",
     "ProfileSummary",
@@ -40,6 +44,7 @@ __all__ = [
     "effective_name",
     "get_profile",
     "list_profiles",
+    "profile_sources",
     "read_run_profile",
     "repo_default",
     "servers_text",
@@ -51,6 +56,12 @@ __all__ = [
 
 
 @dataclass(frozen=True)
+class AccessOverride:
+    server: str
+    level: str  # the lowered access level for this profile
+
+
+@dataclass(frozen=True)
 class ProfileSummary:
     name: str
     servers: str  # "db (medium), web (basic)", or "none"
@@ -59,6 +70,7 @@ class ProfileSummary:
     quality: str  # the level, or "-" (the config `[quality] level`)
     description: str
     is_default: bool
+    source: str = ""  # "User config", "Repo jev.toml", "User + repo", or "" when unknown
 
 
 @dataclass(frozen=True)
@@ -77,6 +89,37 @@ class ProfileDetail:
     quality: str
     roles: list[RoleGrants]
     is_default: bool
+    source: str = ""
+    access_overrides: tuple[AccessOverride, ...] = ()
+
+
+def _profile_names_in(path: Path) -> set[str]:
+    """Profile names in a raw TOML file's `[profiles]` table (names only, no validation)."""
+    try:
+        data = tomllib.loads(path.read_text(encoding="utf-8"))
+    except (OSError, tomllib.TOMLDecodeError):
+        return set()
+    profiles = data.get("profiles")
+    return set(profiles) if isinstance(profiles, dict) else set()
+
+
+def profile_sources(repo_root: Path, user_config_path: Path | None = None) -> dict[str, str]:
+    """Where each workspace profile is defined: user config, repo jev.toml, or both.
+
+    Reads the raw TOML layers (names only, never validated) so the UI can label each
+    profile's source. Missing or unreadable files count as defining nothing.
+    """
+    user_names = _profile_names_in(user_config_path or default_user_config_path())
+    repo_names = _profile_names_in(repo_root / CONFIG_FILENAME)
+    sources: dict[str, str] = {}
+    for name in sorted(user_names | repo_names):
+        if name in user_names and name in repo_names:
+            sources[name] = "User + repo"
+        elif name in user_names:
+            sources[name] = "User config"
+        else:
+            sources[name] = "Repo jev.toml"
+    return sources
 
 
 def servers_text(config: JevConfig, name: str) -> str:
@@ -89,9 +132,12 @@ def servers_text(config: JevConfig, name: str) -> str:
     return ", ".join(parts) or "none"
 
 
-def list_profiles(config: JevConfig, state_dir: Path) -> list[ProfileSummary]:
+def list_profiles(
+    config: JevConfig, state_dir: Path, sources: dict[str, str] | None = None
+) -> list[ProfileSummary]:
     """Every workspace profile, with the repo default marked."""
     default = repo_default(state_dir)
+    known = sources or {}
     return [
         ProfileSummary(
             name=name,
@@ -101,12 +147,18 @@ def list_profiles(config: JevConfig, state_dir: Path) -> list[ProfileSummary]:
             quality=profile.quality or "-",
             description=profile.description,
             is_default=name == default,
+            source=known.get(name, ""),
         )
         for name, profile in config.profiles.items()
     ]
 
 
-def describe_profile(config: JevConfig, state_dir: Path, name: str) -> ProfileDetail:
+def describe_profile(
+    config: JevConfig,
+    state_dir: Path,
+    name: str,
+    sources: dict[str, str] | None = None,
+) -> ProfileDetail:
     """One profile and what each role gets from it. `ProfileError` for an unknown name."""
     profile = snapshot(config, name)  # ProfileError for an unknown profile
     learning = "off" if profile.learning is False else (profile.learning or "repo setting")
@@ -126,6 +178,11 @@ def describe_profile(config: JevConfig, state_dir: Path, name: str) -> ProfileDe
         quality=profile.quality or "config [quality] level",
         roles=roles,
         is_default=name == repo_default(state_dir),
+        source=(sources or {}).get(name, ""),
+        access_overrides=tuple(
+            AccessOverride(server=server, level=str(level))
+            for server, level in profile.access_overrides.items()
+        ),
     )
 
 
