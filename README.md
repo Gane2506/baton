@@ -66,7 +66,7 @@ Every image below is real `jev` output on illustrative demo data
 terminal images; see [docs/dashboard.md](docs/dashboard.md#screenshots)).
 
 <table>
-  <tr><td colspan="2"><b>Plan → validate → code → test → integrate</b><br>A planner splits the idea into tasks, a validator from another vendor checks the plan, coders work in their own worktrees, tests run after each task and on the merged result branch. <a href="#how-it-works">How it works</a> · <a href="docs/roles.md">Roles</a></td></tr>
+  <tr><td colspan="2"><b>Plan → validate → design → code → test → integrate</b><br>A planner splits the idea into tasks, a validator from another vendor checks the plan, and when the plan involves UI work a designer turns it into a design grounded in the repo's stored design system — plan and design are approved together. Coders work in their own worktrees, tests run after each task and on the merged result branch. <a href="#how-it-works">How it works</a> · <a href="docs/roles.md">Roles</a></td></tr>
   <tr>
     <td width="50%"><img alt="Dashboard run page: plan, tasks, decisions and attempts" src="docs/images/dashboard-run.png"></td>
     <td width="50%"><img alt="jev status RUN: plan summary, validation verdict, tasks with worker, model and spend" src="docs/images/cli-status-run.svg"></td>
@@ -122,7 +122,9 @@ flowchart LR
     I[INTAKE] -->|D1| P[PLANNING]
     P -->|D2| V[VALIDATING]
     V -->|"D3: revise"| P
-    V -->|"D3: approve"| A{{AWAITING_APPROVAL}}
+    V -->|"D3: approve, no UI"| A{{AWAITING_APPROVAL}}
+    V -->|"D3: approve, UI work"| DS[DESIGNING]
+    DS -->|"design done"| A
     A -->|jev approve| E[EXECUTING]
     E -->|"D4, D5 per task"| E
     E --> G[INTEGRATING]
