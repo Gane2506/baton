@@ -46,7 +46,7 @@
 
 </div>
 
-> **Status: Alpha (v0.3). Expect breaking changes.**
+> **Status: Alpha (v0.4.0). Expect breaking changes.**
 
 ## Why Baton
 
