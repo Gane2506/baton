@@ -49,6 +49,10 @@ LEARN_STATES = frozenset(
 )
 MAX_ADDS = 5
 MAX_UPDATES = 10
+# The learner may retire lessons too, but — like adds and updates — only a bounded
+# number per run: an unbounded retire list could wipe the profile, and there is no
+# CLI un-retire path (a product decision, not a defect).
+MAX_RETIRES = 10
 MAX_TAGS = 8
 MAX_TAG_CHARS = 60
 # Edges (`supersedes`, `contradicts`, `applies-to`) the learner may declare per run, across
@@ -276,10 +280,11 @@ def apply_learner_output(
 ) -> Applied:
     """Store the learner's changes, within limits.
 
-    At most `MAX_ADDS` adds and `MAX_UPDATES` updates. Text is redacted, put on one line and
-    clipped to 300 characters; unknown roles are dropped (no roles left: every role); tags are
-    normalized. Updates and retirements only apply to lessons that were shown to the learner,
-    so it cannot touch other profiles. Adds that repeat an existing lesson are ignored.
+    At most `MAX_ADDS` adds, `MAX_UPDATES` updates and `MAX_RETIRES` retirements. Text is
+    redacted, put on one line and clipped to 300 characters; unknown roles are dropped
+    (no roles left: every role); tags are normalized. Updates and retirements only apply
+    to lessons that were shown to the learner, so it cannot touch other profiles. Adds
+    that repeat an existing lesson are ignored.
 
     Each added draft may declare `supersedes`/`contradicts` (lesson ids it replaces or
     disagrees with) and `applies_to` (module paths); at most `MAX_EDGES_PER_RUN` edges are
@@ -304,6 +309,7 @@ def apply_learner_output(
             clean_tags(draft.tags),
             run_id,
             repo_slug=repo_slug,
+            origin="learner",
         )
         existing.add(key)
         added.append(lesson.id)
@@ -317,7 +323,7 @@ def apply_learner_output(
         db.update_text(profile, target.number, text)
         updated.append(target.id)
     retired: list[str] = []
-    for lesson_id in output.retire:
+    for lesson_id in output.retire[:MAX_RETIRES]:
         target = by_id.get(lesson_id.strip().upper())
         if target is None or target.id in retired:
             continue

@@ -575,6 +575,11 @@ class Harness:
         """`run_worker`, and when a free model runs out of quota: the next free model, then the
         first paid model, then one other worker (docs/config.md "Free models").
 
+        A paid model's `quota_exhausted` is terminal: the quota ladder exists only for
+        free models (rate limits are usually per-key, so reassigning the worker would
+        just burn another paid call). The exhausted output is returned as-is and the
+        run sees the real failure instead of a silent fallback.
+
         Each try is its own attempt. Without `attempt_no` every try takes the next run-level
         attempt number (planner, validator, learner); with it (the reviewer) tries share the
         number and get the log names `<log_name>`, `<log_name>.2`, ...
@@ -686,7 +691,20 @@ def _role_cache_output(role: Role, value_json: str) -> WorkerOutput:
         )
     except (json.JSONDecodeError, KeyError, ValidationError):
         # Entry written before parsed outputs were cached: the value was the result.
-        output = WorkerOutput(result=WorkerResult.model_validate_json(value_json))
+        try:
+            output = WorkerOutput(result=WorkerResult.model_validate_json(value_json))
+        except (json.JSONDecodeError, ValidationError):
+            # The second validation failed too (a schema evolved since the entry was
+            # cached, or a tampered cache): degrade to a success with no parsed
+            # output, so `_require_structured_output` demotes it to a recorded
+            # review `error` instead of crashing the gate.
+            output = WorkerOutput(
+                result=WorkerResult(
+                    status="success",
+                    summary="cached output failed schema validation",
+                    raw_log_path=Path(""),
+                )
+            )
     return _require_structured_output(role, output)
 
 

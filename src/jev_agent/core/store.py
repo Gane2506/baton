@@ -322,6 +322,16 @@ def new_run_id() -> str:
     return f"{datetime.now(UTC):%Y%m%d-%H%M%S}-{secrets.token_hex(2)}"
 
 
+def _is_runs_id_collision(exc: sqlite3.IntegrityError) -> bool:
+    """True when the error is a PK/UNIQUE collision on `runs.id` (and nothing else).
+
+    SQLite reports it as `UNIQUE constraint failed: runs.id`. Matching the full
+    phrase matters: a prefix match on `runs.id` would also catch e.g.
+    `NOT NULL constraint failed: runs.idea_json`.
+    """
+    return "UNIQUE constraint failed: runs.id" in str(exc)
+
+
 class Store:
     """Persistent state for runs. Open with `Store.open(path)`; use as a context manager."""
 
@@ -547,46 +557,98 @@ class Store:
         run_id: str | None = None,
     ) -> RunRecord:
         now = self._clock()
-        for _ in range(5):  # retry on the (very unlikely) id collision within one second
-            run_id = new_run_id() if run_id is None else run_id
+        if run_id is not None:
+            # An explicitly chosen id is used as-is: retrying the same id can never
+            # succeed, and any other constraint failure is the caller's bug, not a
+            # collision. Fail fast with a clear message either way.
             try:
-                with self._tx() as db:
-                    db.execute(
-                        "INSERT INTO runs (id, idea_json, state, created_at, updated_at,"
-                        " learning_profile, quality_level, plan_only, ship_mode,"
-                        " autonomy_mode, autonomous_opt_in, medium_folder)"
-                        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                        (
-                            run_id,
-                            idea.model_dump_json(),
-                            RunState.INTAKE,
-                            now,
-                            now,
-                            learning_profile,
-                            quality_level,
-                            int(plan_only),
-                            ship_mode,
-                            autonomy_mode,
-                            int(autonomous_opt_in),
-                            medium_folder,
-                        ),
-                    )
-                    self._emit(
-                        db,
-                        run_id,
-                        EventType.RUN_CREATED,
-                        RunCreatedPayload(
-                            idea_text=idea.text,
-                            quality_level=str(quality_level),
-                            plan_only=plan_only,
-                            ship_mode=None if ship_mode is None else str(ship_mode),
-                            autonomy_mode=autonomy_mode,
-                        ),
-                    )
-            except sqlite3.IntegrityError:
-                continue
-            return self.get_run(run_id)
+                return self._insert_run(
+                    run_id,
+                    idea,
+                    now,
+                    learning_profile,
+                    quality_level,
+                    plan_only,
+                    ship_mode,
+                    autonomy_mode,
+                    autonomous_opt_in,
+                    medium_folder,
+                )
+            except sqlite3.IntegrityError as exc:
+                if _is_runs_id_collision(exc):
+                    raise StoreError(f"run {run_id!r} already exists") from exc
+                raise StoreError(f"could not create run: {exc}") from exc
+        for _ in range(5):  # retry on the (very unlikely) generated-id collision
+            candidate = new_run_id()
+            try:
+                return self._insert_run(
+                    candidate,
+                    idea,
+                    now,
+                    learning_profile,
+                    quality_level,
+                    plan_only,
+                    ship_mode,
+                    autonomy_mode,
+                    autonomous_opt_in,
+                    medium_folder,
+                )
+            except sqlite3.IntegrityError as exc:
+                # Only a PK/UNIQUE collision on runs.id is worth retrying; anything
+                # else (a CHECK violation, a NOT NULL, ...) is a real bug that would
+                # fail identically five times.
+                if not _is_runs_id_collision(exc):
+                    raise StoreError(f"could not create run: {exc}") from exc
         raise StoreError("could not generate a unique run id")
+
+    def _insert_run(
+        self,
+        run_id: str,
+        idea: Idea,
+        now: str,
+        learning_profile: str | None,
+        quality_level: QualityLevel,
+        plan_only: bool,
+        ship_mode: ShipMode | None,
+        autonomy_mode: str,
+        autonomous_opt_in: bool,
+        medium_folder: str | None,
+    ) -> RunRecord:
+        """Insert one run row plus its RUN_CREATED event; raise on any constraint."""
+        with self._tx() as db:
+            db.execute(
+                "INSERT INTO runs (id, idea_json, state, created_at, updated_at,"
+                " learning_profile, quality_level, plan_only, ship_mode,"
+                " autonomy_mode, autonomous_opt_in, medium_folder)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    run_id,
+                    idea.model_dump_json(),
+                    RunState.INTAKE,
+                    now,
+                    now,
+                    learning_profile,
+                    quality_level,
+                    int(plan_only),
+                    ship_mode,
+                    autonomy_mode,
+                    int(autonomous_opt_in),
+                    medium_folder,
+                ),
+            )
+            self._emit(
+                db,
+                run_id,
+                EventType.RUN_CREATED,
+                RunCreatedPayload(
+                    idea_text=idea.text,
+                    quality_level=str(quality_level),
+                    plan_only=plan_only,
+                    ship_mode=None if ship_mode is None else str(ship_mode),
+                    autonomy_mode=autonomy_mode,
+                ),
+            )
+        return self.get_run(run_id)
 
     def get_run(self, run_id: str) -> RunRecord:
         row = self._conn.execute("SELECT * FROM runs WHERE id = ?", (run_id,)).fetchone()

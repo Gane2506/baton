@@ -90,6 +90,13 @@ def evaluate(
     min_margin: float,
 ) -> Verdict:
     """Apply the consensus rules to one question's votes. Pure, so the rules are testable."""
+    if len(options) < 2:
+        raise ValueError(f"consensus needs at least 2 options, got {len(options)}")
+    missing = [(o, c) for o in options for c in weights if (o, c) not in scores]
+    if missing:
+        shown = ", ".join(f"({o!r}, {c!r})" for o, c in missing[:5])
+        more = f" (+{len(missing) - 5} more)" if len(missing) > 5 else ""
+        raise KeyError(f"consensus scores are missing {len(missing)} cell(s): {shown}{more}")
     totals = {o: sum(w * scores[(o, c)].value for c, w in weights.items()) for o in options}
     laya_choice = max(options, key=lambda o: totals[o])  # ties go to the earlier option
     uncertain = tuple(
@@ -174,7 +181,8 @@ class ConsensusDispatcher:
         verdicts: dict[str, Verdict] = {}
         usage = _Usage()
         providers: set[str] = set()  # every Jev provider that served a call below
-        model: str | None = None
+        jev_model: str | None = None  # model of Jev's vote call: the decision's provenance
+        laya_model: str | None = None  # model of Laya's scoring call (second vote)
         unsettled = list(asked)
         for round_no in range(1, self.laya.follow_up_rounds + 2):
             state = dict(req.state)
@@ -190,7 +198,8 @@ class ConsensusDispatcher:
             body = await self.jev.post(payload)
             _note_provider(body, providers)
             usage.add(body)
-            model = body.get("model") if isinstance(body.get("model"), str) else model
+            if isinstance(body.get("model"), str):
+                jev_model = body["model"]
             jev_votes.update(parse_answers(body, questions)[1])
 
             # Laya second: score the cells that are new or still uncertain.
@@ -202,6 +211,8 @@ class ConsensusDispatcher:
             body = await self.jev.post(laya_payload)
             _note_provider(body, providers)
             usage.add(body)
+            if isinstance(body.get("model"), str):
+                laya_model = body["model"]
             for q, new in _parse_scores(body, laya_payload["questions"], cells).items():
                 for cell, score in new.items():
                     old = scores[q].get(cell)
@@ -241,7 +252,9 @@ class ConsensusDispatcher:
             point=req.point,
             answers={**direct, **{q: v.jev_choice for q, v in verdicts.items()}},
             dispatcher=self.name,
-            model=model or self.jev.settings.model,
+            # Prefer Jev's vote-call model: it is the model that made the decision;
+            # Laya's scoring model is provenance for the second vote, not the choice.
+            model=jev_model or laya_model or self.jev.settings.model,
             cost_usd=cost_from_usage(details["usage"]),
             latency_ms=int((time.monotonic() - started) * 1000),
             details=details,

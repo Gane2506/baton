@@ -61,10 +61,20 @@ CACHE_MARKER = "[served from cache]"
 
 #: Decision state keys that are dropped outright (the rest is pattern-matched).
 _VOLATILE_KEYS = frozenset({"previous_rounds"})
+#: Stable config keys the volatile regex below would otherwise match. The D5
+#: retry/escalate ladder is attempt-relative-to-max (`attempt` vs `max_attempts`),
+#: and the plan/fix round counters are round-relative-to-max too — all of these are
+#: decision-relevant, so they are kept. (`round`/`fix_rounds` never match the regex
+#: anyway; they are listed here so a future broadening of `_VOLATILE_RE` cannot
+#: silently drop them.)
+_KEY_KEEP = frozenset({"max_attempts", "max_rounds", "max_fix_rounds", "round", "fix_rounds"})
 #: Matches volatile counters/timestamps anywhere in a state key: `attempt_no`,
 #: `budget_usd`, `spend_usd`, `cost_estimate`, `created_at`, `latency_ms`, ...
 #: Note: the bare key `attempt` (the D5/D8 attempt number) is deliberately NOT
 #: matched — it drives the retry/escalate ladder, so it is decision-relevant.
+#: Spend/budget keys ARE stripped: a deliberate, documented freshness tradeoff for
+#: hit rate (see core-a.md minor 11) — the hard `check_budget` gate in the harness
+#: bounds it, so it can never cause overspend.
 _VOLATILE_RE = re.compile(
     r"(^|_)(attempts|attempt_no|budget|budgets|spend|spent|cost|costs|token|tokens|"
     r"timestamp|timestamps|latency|duration)(_|$)|(_at|_ms|_us)$"
@@ -91,13 +101,15 @@ def strip_volatile(obj: Any) -> Any:
 
     `previous_rounds` changes every follow-up round while the decision-relevant facts
     don't; budget/spend/attempt counters and timestamps change on every call. Keeping
-    them in the key would make every `jev resume` a miss.
+    them in the key would make every `jev resume` a miss. Stable config such as
+    `max_attempts` is kept (`_KEY_KEEP`): the retry/escalate ladder is relative to it.
     """
     if isinstance(obj, dict):
         return {
             key: strip_volatile(value)
             for key, value in obj.items()
-            if key not in _VOLATILE_KEYS and not _VOLATILE_RE.search(str(key))
+            if str(key) in _KEY_KEEP
+            or (key not in _VOLATILE_KEYS and not _VOLATILE_RE.search(str(key)))
         }
     if isinstance(obj, (list, tuple)):
         return [strip_volatile(value) for value in obj]
@@ -294,6 +306,9 @@ def role_cache_key(
         "template_fp": _template_fingerprint(template),
         "lessons_fp": hashlib.sha256(canonical_json(sorted(lesson_texts)).encode()).hexdigest(),
         "role_config_fp": hashlib.sha256(role_config_json.encode()).hexdigest(),
+        # The jev version, like decision keys have: an upgrade that changes worker
+        # output parsing or ROLE_SCHEMAS invalidates stale {result, parsed} entries.
+        "jev_version": __version__,
         # run_id is provenance, filled in on put — not key material.
         "simhash": SimHashEmbedder().fingerprint(text),
     }
@@ -485,9 +500,11 @@ class Cache:
         self.store.cache_evict_lru(self.settings.max_entries)
         size_mb = self.store.cache_size_bytes() / (1024 * 1024)
         if size_mb > self.settings.max_mb:
-            # Evict least-recently-hit first until under budget (keep at least 100).
-            over = self.settings.max_entries * size_mb / self.settings.max_mb
-            self.store.cache_evict_lru(max(100, int(over)))
+            # Shrink the table proportionally to the size budget: keep the fraction
+            # max_mb/size_mb of max_entries (never below 100, so a tiny budget does
+            # not wipe a warm cache), evicting least-recently-hit first.
+            keep = int(self.settings.max_entries * self.settings.max_mb / size_mb)
+            self.store.cache_evict_lru(max(100, keep))
 
     def stats(self) -> CacheStats:
         return self.store.cache_stats()
@@ -535,7 +552,12 @@ class Cache:
                 continue
             if not simhash:
                 continue
-            sim = embedder.similarity(needle, simhash)
+            try:
+                sim = embedder.similarity(needle, simhash)
+            except Exception:
+                # A stale entry written under another embedder (simhash hex vs
+                # OpenRouter JSON vectors) must not crash the scan — skip it.
+                continue
             if sim >= threshold:
                 hits.append((entry, sim))
         hits.sort(key=lambda pair: pair[1], reverse=True)

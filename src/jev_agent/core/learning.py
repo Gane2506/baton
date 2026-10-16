@@ -240,7 +240,6 @@ def co_injected(conn: sqlite3.Connection, a: str, b: str) -> bool:
 
 def _now() -> str:
     return datetime.now(UTC).isoformat(timespec="microseconds")
-    return datetime.now(UTC).isoformat(timespec="microseconds")
 
 
 def _checked_weights(profile: str, weights: object) -> dict[str, float]:
@@ -399,7 +398,16 @@ class LessonDB:
         source_run: str | None = None,
         source_task: str | None = None,
         repo_slug: str | None = None,
+        origin: str = "manual",
     ) -> Lesson:
+        """Add a lesson; path-looking tags become `applies-to` module edges.
+
+        `origin` is where the lesson came from (`"manual"` for CLI/user adds, `"learner"`
+        for the learner role): it is recorded on the auto-derived `applies-to` edges so
+        `jev learning graph` attributes them correctly.
+        """
+        if origin not in _EDGE_ORIGINS:
+            raise LearningError(f"unknown lesson origin {origin!r}")
         now = self._clock()
         with self._tx() as db:
             cur = db.execute(
@@ -438,8 +446,8 @@ class LessonDB:
                     db.execute(
                         "INSERT OR IGNORE INTO lesson_edges (profile, src_type, src_id, edge,"
                         " dst_type, dst_id, origin, created_at)"
-                        " VALUES (?, 'lesson', ?, 'applies-to', 'module', ?, 'manual', ?)",
-                        (profile, str(number), qualify_module(path, repo_slug), now),
+                        " VALUES (?, 'lesson', ?, 'applies-to', 'module', ?, ?, ?)",
+                        (profile, str(number), qualify_module(path, repo_slug), origin, now),
                     )
         return lesson
 

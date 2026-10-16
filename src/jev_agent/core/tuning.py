@@ -225,7 +225,11 @@ def _mean(values: list[float]) -> float:
 
 def _normalised(raw: dict[str, float]) -> dict[str, float]:
     """Scale to a sum of 1, round to 3 decimals, and put the rounding rest on the largest."""
+    if not raw:
+        raise ValueError("cannot normalise an empty weight map")
     total = sum(raw.values())
+    if not total:
+        raise ValueError("cannot normalise weights: every weight is zero")
     weights = {c: round(w / total, 3) for c, w in raw.items()}
     largest = max(weights, key=lambda c: weights[c])
     weights[largest] = round(weights[largest] + 1 - sum(weights.values()), 3)

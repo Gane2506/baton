@@ -204,7 +204,9 @@ class ClaudeChatBackend:
             " ".join(self.DENIED_TOOLS),
         ]
         if budget_left_usd > 0:
-            argv += ["--max-budget-usd", f"{budget_left_usd:.2f}"]
+            # Never pass "0.00": a sub-cent budget would round to zero and the CLI
+            # would reject it. A cent is the smallest unit it can express.
+            argv += ["--max-budget-usd", f"{max(budget_left_usd, 0.01):.2f}"]
         return argv
 
     @staticmethod

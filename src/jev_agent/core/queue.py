@@ -14,6 +14,7 @@ from typing import Literal, get_args
 from jev_agent.config.schema import ShipMode
 from jev_agent.core.learning import Learning, LearningError, check_profile_name
 from jev_agent.core.models import RunState
+from jev_agent.core.pipeline import APPROVAL_GATES
 from jev_agent.core.store import (
     QUEUE_PRIORITIES,
     QUEUE_STATUSES,
@@ -27,12 +28,15 @@ from jev_agent.quality.levels import parse_level
 
 __all__ = [
     "ACTIVE_STATUSES",
+    "APPROVAL_STATES",
+    "WAITING_STATES",
     "QueueError",
     "add_idea",
     "effective_status",
     "move_item",
     "priority_rank",
     "queue_counts",
+    "recover_note",
     "remove_item",
     "status_for_run",
 ]
@@ -41,6 +45,14 @@ Move = Literal["up", "down", "top"]
 
 # Statuses `jev queue list` shows without --all.
 ACTIVE_STATUSES: tuple[QueueStatus, ...] = ("queued", "running", "waiting")
+
+#: Run states where the queue item waits on a person: the plan/ship approvals plus the
+#: ASK_EVERY_STEP per-step gates (they wait for `jev approve`) and NEEDS_HUMAN.
+WAITING_STATES = APPROVAL_GATES | {RunState.AWAITING_SHIP, RunState.NEEDS_HUMAN}
+
+#: Run states where the queue item waits specifically for `jev approve` (the approval
+#: gates). `Scheduler.recover` uses this to point the note at the right command.
+APPROVAL_STATES = APPROVAL_GATES | {RunState.AWAITING_SHIP}
 
 
 class QueueError(Exception):
@@ -55,18 +67,31 @@ def priority_rank(priority: QueuePriority) -> int:
 def status_for_run(state: RunState) -> QueueStatus:
     """The queue status of an item whose run is in `state`.
 
-    A run waiting on a person (plan or ship approval, NEEDS_HUMAN) is `waiting`; a run still in
-    progress, or interrupted and resumable, is `running`.
+    A run waiting on a person (plan or ship approval, the ASK_EVERY_STEP per-step gates,
+    NEEDS_HUMAN) is `waiting`; a run still in progress, or interrupted and resumable,
+    is `running`.
     """
     if state is RunState.DONE:
         return "done"
-    if state in (RunState.AWAITING_APPROVAL, RunState.AWAITING_SHIP, RunState.NEEDS_HUMAN):
+    if state in WAITING_STATES:
         return "waiting"
     if state in (RunState.FAILED, RunState.BUDGET_EXCEEDED):
         return "failed"
     if state is RunState.CANCELLED:
         return "cancelled"
     return "running"
+
+
+def recover_note(state: RunState, run_id: str) -> str:
+    """The queue note for an item whose scheduler died mid-run (`Scheduler.recover`).
+
+    Gate-stuck runs continue with `jev approve` (the approval gates, including the
+    ASK_EVERY_STEP per-step gates and AWAITING_SHIP); an in-progress run that was
+    interrupted continues with `jev resume`.
+    """
+    if state in APPROVAL_STATES:
+        return f"the scheduler stopped; continue with `jev approve {run_id}`"
+    return f"the scheduler stopped; continue with `jev resume {run_id}`"
 
 
 def effective_status(item: QueueItem, run_state: RunState | None) -> QueueStatus:

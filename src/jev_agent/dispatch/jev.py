@@ -37,6 +37,8 @@ import math
 import os
 import time
 from collections.abc import Awaitable, Callable
+from datetime import UTC, datetime
+from email.utils import parsedate_to_datetime
 from typing import Any
 
 import httpx
@@ -343,7 +345,12 @@ class JevDispatcher:
         )
 
     def _input_price(self, provider: str | None) -> float:
-        """USD per input token for the leg that answered (`provider`)."""
+        """USD per input token for the leg that answered (`provider`).
+
+        The single-leg dispatcher charges one price for every call, so `provider` is
+        intentionally unused here; `MultiProviderJevDispatcher` overrides this with
+        per-leg prices from `[dispatcher.cost]`.
+        """
         return self._price_per_input
 
     async def decide(self, req: DecisionRequest) -> Decision:
@@ -685,7 +692,12 @@ _FAILOVER_PREFIXES = (
 
 
 def check_size(payload: dict[str, Any]) -> None:
-    """Raise if `state` plus the longest question likely exceeds Jev's 32k-token budget."""
+    """Raise if `state` plus the longest question likely exceeds Jev's 32k-token budget.
+
+    Raises `DispatchError` (never `ValueError`) so `post()`'s public contract holds.
+    """
+    if not payload["questions"]:
+        raise DispatchError("jev: no questions")
     state_chars = len(json.dumps(payload["state"], ensure_ascii=False))
     longest_question = max(
         len(json.dumps(q, ensure_ascii=False)) for q in payload["questions"].values()
@@ -749,13 +761,34 @@ def cost_from_usage(
 
 
 def retry_delay(resp: httpx.Response) -> float:
-    """Seconds to wait before the single retry: `Retry-After` if numeric, capped."""
+    """Seconds to wait before the single retry, capped at `MAX_BACKOFF_S`.
+
+    `Retry-After` is seconds when numeric, or an HTTP-date (RFC 9110 §13.1.1) converted
+    to a delay from now — a date in the past means no wait. Unparseable or missing
+    headers fall back to `DEFAULT_BACKOFF_S`.
+    """
     header = resp.headers.get("retry-after")
-    try:
-        delay = float(header) if header is not None else DEFAULT_BACKOFF_S
-    except ValueError:
-        delay = DEFAULT_BACKOFF_S
+    delay = DEFAULT_BACKOFF_S
+    if header is not None:
+        try:
+            delay = float(header)
+        except ValueError:
+            when = _retry_after_date(header)
+            if when is not None:
+                delay = (when - datetime.now(UTC)).total_seconds()
     return min(max(delay, 0.0), MAX_BACKOFF_S)
+
+
+def _retry_after_date(header: str) -> datetime | None:
+    """Parse an HTTP-date `Retry-After` value, or None when it is not a valid date."""
+    try:
+        when = parsedate_to_datetime(header)
+    except (TypeError, ValueError):
+        return None
+    if when.tzinfo is None:
+        # A bare HTTP-date is GMT by definition (RFC 9110 §5.6.7).
+        when = when.replace(tzinfo=UTC)
+    return when
 
 
 def http_error_message(resp: httpx.Response, key_env: str, key: str) -> str:
