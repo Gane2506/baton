@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import os
 import re
+import tempfile
 import tomllib
 import types
 from collections.abc import Callable
@@ -22,9 +23,11 @@ from typing import Any, Literal, Union, get_args, get_origin
 
 import tomlkit
 from pydantic import BaseModel, ValidationError
+from tomlkit.exceptions import ParseError as TomlkitParseError
 
 from jev_agent.config.defaults import CONFIG_FILENAME
 from jev_agent.config.loader import (
+    ConfigError,
     changed_guarded_keys,
     deep_merge,
     default_user_config_path,
@@ -239,18 +242,44 @@ class EntitySection:
 
 
 def read_layers(root: Path) -> tuple[dict[str, Any], dict[str, Any], Path]:
-    """(repo jev.toml, user config, the user config's path); a missing file reads as {}."""
+    """(repo jev.toml, user config, the user config's path).
+
+    A missing file reads as {}; a file that exists but cannot be read or parsed
+    raises `CorruptConfigError` (it must never silently degrade to defaults).
+    """
     user_path = default_user_config_path()
     return _load(root / CONFIG_FILENAME), _load(user_path), user_path
 
 
+class CorruptConfigError(ConfigError):
+    """A config file exists but cannot be read or parsed.
+
+    Subclasses `ConfigError` so the dashboard renders its config-error page
+    instead of silently showing defaults for a corrupt file.
+    """
+
+
 def _load(path: Path) -> dict[str, Any]:
+    """The TOML file as a dict; a missing file reads as {}.
+
+    Raises `CorruptConfigError` for an unreadable or unparsable file: silently
+    degrading to defaults would poison the trust-gate `before` comparison in
+    `save()` (audit 2026-10-16, app major 3).
+    """
     try:
-        return tomllib.loads(path.read_text(encoding="utf-8"))
+        raw = path.read_bytes()
     except FileNotFoundError:
         return {}
-    except (OSError, tomllib.TOMLDecodeError):
-        return {}
+    except OSError as exc:
+        raise CorruptConfigError(f"{path}: cannot be read: {exc}") from exc
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise CorruptConfigError(f"{path}: not valid UTF-8: {exc}") from exc
+    try:
+        return tomllib.loads(text)
+    except tomllib.TOMLDecodeError as exc:
+        raise CorruptConfigError(f"{path}: not valid TOML: {exc}") from exc
 
 
 def target_file(root: Path, target: str) -> Path:
@@ -263,14 +292,18 @@ def target_file(root: Path, target: str) -> Path:
 
 
 def set_path(raw: dict[str, Any], path: str, value: Any) -> None:
-    """Set `path` in a plain dict, creating tables on the way."""
+    """Set `path` in a plain dict, creating tables on the way.
+
+    Also works on a tomlkit document (which `save()` relies on): the table is
+    re-read after assignment because tomlkit converts a plain dict on `[]=`.
+    """
     parts = path.split(".")
     node = raw
     for part in parts[:-1]:
         child = node.get(part)
         if not isinstance(child, dict):
-            child = {}
-            node[part] = child
+            node[part] = {}
+            child = node[part]
         node = child
     node[parts[-1]] = value
 
@@ -308,7 +341,12 @@ def _attr_at(config: BaseModel, path: str) -> Any:
 
 def _parse_file(path: Path) -> Any:
     if path.exists():
-        return tomlkit.parse(path.read_text(encoding="utf-8"))
+        try:
+            return tomlkit.parse(path.read_text(encoding="utf-8"))
+        except TomlkitParseError as exc:
+            # The module contract is "errors are strings": never let the raw
+            # tomlkit exception escape; callers surface this message instead.
+            raise ValueError(f"{path}: not valid TOML: {exc}") from exc
     return tomlkit.document()
 
 
@@ -324,8 +362,25 @@ def _table(doc: Any, parts: list[str]) -> Any:
 
 
 def _write(path: Path, doc: Any) -> None:
+    """Write `doc` to `path` atomically.
+
+    The document goes to a temp file in the same directory (so the rename cannot
+    cross filesystems), is fsynced, then `os.replace()`d into place: a crash at
+    any point leaves either the old file or the new one, never a torn write.
+    The temp file is removed when anything fails.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(tomlkit.dumps(doc), encoding="utf-8")
+    fd, tmp_name = tempfile.mkstemp(prefix=path.name + ".", suffix=".tmp", dir=path.parent)
+    tmp = Path(tmp_name)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(tomlkit.dumps(doc))
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp, path)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
 
 
 def write_value(path: Path, dotted: str, value: Any) -> None:
@@ -372,22 +427,59 @@ def remove_entity(path: Path, section: str, name: str) -> None:
 # ---- validation ----------------------------------------------------------------------------
 
 
+def _snapshot(path: Path) -> tuple[bytes, dict[str, Any]]:
+    """(raw bytes, parsed dict) of a config file, read exactly once.
+
+    A missing file reads as `(b"", {})`; an unreadable or unparsable file raises
+    `CorruptConfigError`. `save()` works from this single read so the validated
+    unit and the written unit are the same bytes (no validate/write TOCTOU).
+    """
+    try:
+        raw = path.read_bytes()
+    except FileNotFoundError:
+        return b"", {}
+    except OSError as exc:
+        raise CorruptConfigError(f"{path}: cannot be read: {exc}") from exc
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise CorruptConfigError(f"{path}: not valid UTF-8: {exc}") from exc
+    try:
+        return raw, tomllib.loads(text)
+    except tomllib.TOMLDecodeError as exc:
+        raise CorruptConfigError(f"{path}: not valid TOML: {exc}") from exc
+
+
 def save(
     root: Path,
     target: str,
     mutate: Callable[[dict[str, Any]], None],
-    write: Callable[[], None],
+    write: Callable[[], None] | None = None,
 ) -> str | None:
     """Check a change, then write it. Returns an error message, or None on success.
 
     `mutate` edits a copy of the chosen layer; the merged result must validate, and a repo
     change to a guarded key needs the repo trusted (then the message says how).
+
+    The validated unit and the written unit are the same: `save()` snapshots the target
+    file once, validates the mutated layer, then applies `mutate` to the TOML document
+    parsed from those exact bytes (comments and ordering survive — `set_path` and
+    `remove_path` work on tomlkit documents too) and writes it atomically. A second
+    settings tab racing this save cannot slip unvalidated content into the file, and
+    the trust-gate `before` is computed from the same snapshot. `write` is retained
+    for backward compatibility and ignored: the old write closures re-parsed the live
+    file, which is the TOCTOU this fixes.
     """
     try:
-        target_file(root, target)  # ValueError for anything but repo/user
+        path = target_file(root, target)  # ValueError for anything but repo/user
     except ValueError as exc:
         return str(exc)
-    repo_raw, user_raw, user_path = read_layers(root)
+    user_path = default_user_config_path()
+    try:
+        repo_snapshot, repo_raw = _snapshot(root / CONFIG_FILENAME)
+        _user_snapshot, user_raw = _snapshot(user_path)
+    except CorruptConfigError as exc:
+        return str(exc)
     before = _validate_or_none(deep_merge(user_raw, repo_raw))
     layer = dict(repo_raw) if target == "repo" else dict(user_raw)
     mutate(layer)
@@ -407,7 +499,16 @@ def save(
                 f"get). Add the repo under Trust below, or save this to the user config "
                 f"({user_path}) instead."
             )
-    write()
+    target_snapshot = repo_snapshot if target == "repo" else _user_snapshot
+    try:
+        doc = tomlkit.parse(target_snapshot.decode("utf-8"))
+    except TomlkitParseError as exc:  # unreachable: the same bytes parsed above
+        return f"{path}: not valid TOML: {exc}"
+    mutate(doc)
+    try:
+        _write(path, doc)
+    except OSError as exc:
+        return f"{path}: could not be written: {exc}"
     return None
 
 
@@ -438,6 +539,12 @@ def _base(annotation: Any) -> tuple[Any, bool]:
     return annotation, False
 
 
+# Field names that hold a secret (an env-var name, token, key ...): anchored at the
+# end of the name, so `envelope` or `environment` are not treated as secrets.
+_SECRET_NAME_SUFFIXES = ("_env", "_token", "_key", "_secret")
+_SECRET_NAMES = frozenset({"token"})
+
+
 def _kind_of(name: str, annotation: Any) -> tuple[str, tuple[str, ...]]:
     base, optional = _base(annotation)
     origin = get_origin(base)
@@ -452,7 +559,8 @@ def _kind_of(name: str, annotation: Any) -> tuple[str, tuple[str, ...]]:
     if base is float:
         return "float", ()
     if base is str or base is Path:
-        return ("env" if "env" in name or "token" in name else "str"), ()
+        secret = name.endswith(_SECRET_NAME_SUFFIXES) or name in _SECRET_NAMES
+        return ("env" if secret else "str"), ()
     if origin is list:
         return "list", ()
     if origin is dict:
@@ -535,8 +643,17 @@ def entity_sections(
         entries: list[Entity] = []
         for name, item in sorted(current.items()):
             in_repo, _ = _at(repo_raw, f"{path}.{name}")
+            in_user, _ = _at(user_raw, f"{path}.{name}")
+            # Like profiles.profile_sources: say where the entry is defined, not just
+            # which layer wins — an entry in both layers is "User + repo", never "user".
+            if in_repo and in_user:
+                source = "User + repo"
+            elif in_repo:
+                source = "repo"
+            else:
+                source = "user"
             fields = _entity_fields(item)
-            entries.append(Entity(name=name, source="repo" if in_repo else "user", fields=fields))
+            entries.append(Entity(name=name, source=source, fields=fields))
         model = _dict_value_model(path)
         if model is None:
             add_fields = [EntityField("path", "str", (), "", "a folder with a SKILL.md")]
@@ -596,10 +713,26 @@ def _entity_fields(item: Any) -> list[EntityField]:
 
 
 def parse_value(kind: str, raw: str, form: dict[str, str]) -> Any:
-    """A posted value as the TOML type; `UNSET` for an empty one; `ValueError` for a bad one."""
+    """A posted value as the TOML type; `UNSET` for an empty one; `ValueError` for a bad one.
+
+    The `ValueError` messages are user-facing (the dashboard flashes them). The `bool`
+    branch is checkbox-shaped on purpose: HTML checkboxes submit nothing when unchecked,
+    so any value other than a truthy one (`true`/`on`/`1`/`yes`) reads as False rather
+    than erroring — anything stricter would reject every unchecked box.
+    """
     text = raw.strip()
     if kind == "weights":
-        return {name: float(form[f"w_{name}"].strip()) for name in _weight_names(form)}
+        weights: dict[str, float] = {}
+        for name in _weight_names(form):
+            posted = form.get(f"w_{name}")
+            if posted is None:
+                raise ValueError(f"missing weight for {name!r}")
+            number = posted.strip()
+            try:
+                weights[name] = float(number)
+            except ValueError:
+                raise ValueError(f"{name}: {number!r} is not a number") from None
+        return weights
     if not text:
         return UNSET
     if kind == "bool":

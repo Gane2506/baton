@@ -14,8 +14,9 @@ returns None and `list_versions` skips what it cannot read, warning on stderr.
 from __future__ import annotations
 
 import json
-import shutil
+import os
 import sys
+import tempfile
 import warnings
 from datetime import UTC, datetime
 from pathlib import Path
@@ -74,9 +75,42 @@ def get_design_system(repo: Path) -> DesignSystem | None:
         return None
 
 
+def _stage_temp(path: Path, text: str) -> Path:
+    """Write `text` to a temp file next to `path` (fsynced); the caller renames it
+    into place with `os.replace`. The temp is removed when the write fails."""
+    fd, tmp_name = tempfile.mkstemp(prefix=path.name + ".", suffix=".tmp", dir=path.parent)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(text)
+            handle.flush()
+            os.fsync(handle.fileno())
+    except BaseException:
+        Path(tmp_name).unlink(missing_ok=True)
+        raise
+    return Path(tmp_name)
+
+
+def _write_atomic(path: Path, text: str) -> None:
+    """Write `text` to `path` atomically: temp file in the same directory (so the
+    rename cannot cross filesystems), fsynced, then `os.replace()`d into place.
+    A crash leaves the old file or the new one, never a torn write."""
+    tmp = _stage_temp(path, text)
+    try:
+        os.replace(tmp, path)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
+
+
 def save_design_system(repo: Path, markdown: str, tokens: dict[str, object]) -> int:
     """Write a new design system, keeping the old one as `design-system.v<n>.md` /
-    `tokens.v<n>.json`. Returns the new version number (starts at 1)."""
+    `tokens.v<n>.json`. Returns the new version number (starts at 1).
+
+    The three current files (`design-system.md`, `tokens.json`, `meta.json`) are
+    written to temp names and renamed into place together: a crash before the
+    renames leaves the old version intact (temps are cleaned up), never a mix of
+    old and new files that `get_design_system` would silently accept.
+    """
     d = design_dir(repo)
     d.mkdir(parents=True, exist_ok=True)
     current = get_design_system(repo)
@@ -88,14 +122,25 @@ def save_design_system(repo: Path, markdown: str, tokens: dict[str, object]) -> 
         ):
             src = d / name
             if src.exists():
-                shutil.copy2(src, d / vname)
+                _write_atomic(d / vname, src.read_text(encoding="utf-8"))
     updated_at = datetime.now(UTC).isoformat(timespec="seconds")
-    (d / SYSTEM_MD).write_text(markdown, encoding="utf-8")
-    (d / TOKENS_JSON).write_text(json.dumps(tokens, indent=2) + "\n", encoding="utf-8")
-    (d / META_JSON).write_text(
-        json.dumps({"version": version, "updated_at": updated_at}, indent=2) + "\n",
-        encoding="utf-8",
-    )
+    pending = {
+        SYSTEM_MD: markdown,
+        TOKENS_JSON: json.dumps(tokens, indent=2) + "\n",
+        META_JSON: json.dumps({"version": version, "updated_at": updated_at}, indent=2) + "\n",
+    }
+    temps: dict[str, Path] = {}
+    try:
+        for name, text in pending.items():
+            temps[name] = _stage_temp(d / name, text)
+        # All three staged: commit them together. A crash in this loop is the only
+        # window where files can mix versions, and it holds no writes — just renames.
+        for name, tmp in temps.items():
+            os.replace(tmp, d / name)
+    except BaseException:
+        for tmp in temps.values():
+            tmp.unlink(missing_ok=True)
+        raise
     return version
 
 

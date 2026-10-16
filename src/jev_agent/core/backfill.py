@@ -259,6 +259,11 @@ def backfill_run(store: Store, run_id: str) -> int:
     Returns the number of events created. Raises `NotFoundError` for an unknown
     run and `BackfillError` when the run already has events (backfill is
     all-or-nothing per run: a second run would duplicate).
+
+    All-or-nothing is transactional, not just guarded: every synthetic event is
+    emitted inside one `_tx()` block, so a crash mid-backfill rolls everything
+    back and the retry starts from a clean log instead of a permanently partial
+    one the guard would refuse.
     """
     store.get_run(run_id)  # raises NotFoundError for an unknown run
     if store.list_events(run_id, limit=1):
@@ -270,7 +275,10 @@ def backfill_run(store: Store, run_id: str) -> int:
         raise BackfillError("event log disabled for this repo ([events] enabled = false)")
     candidates = sorted(_candidates(store, run_id), key=lambda c: (c[0], c[1]))
     count = 0
-    for _, _, event_type, payload in candidates:
-        store.emit(run_id, event_type, payload, actor=ACTOR_PIPELINE, synthetic=True)
-        count += 1
+    # One transaction for the whole backfill: `_emit` (not `emit`) appends inside
+    # the caller's `_tx()` block, so any failure rolls back every synthetic event.
+    with store._tx() as db:
+        for _, _, event_type, payload in candidates:
+            store._emit(db, run_id, event_type, payload, actor=ACTOR_PIPELINE, synthetic=True)
+            count += 1
     return count  # at least run.created: a known run always yields events
