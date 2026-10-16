@@ -183,10 +183,9 @@ def test_base_html_drops_panes() -> None:
     assert "_panes.html" not in text
 
 
-def test_run_html_keeps_panes() -> None:
+def test_run_html_drops_panes() -> None:
     text = (TEMPLATES / "run.html").read_text(encoding="utf-8")
-    _require_landed("_panes.html" in text, "Worker 1 (templates)")
-    assert "_panes.html" in text
+    assert "_panes.html" not in text
 
 
 def test_chat_html_includes_workpanel() -> None:
