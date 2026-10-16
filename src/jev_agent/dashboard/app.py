@@ -168,8 +168,6 @@ NAV = (
     ("/chats", "Chats"),
     ("/learning", "Learning"),
     ("/profiles", "Profiles"),
-    ("/chats", "Chats"),
-    ("/learning", "Learning"),
     ("/tools", "Tools"),
     ("/connections", "Connections"),
     ("/spend", "Spend"),

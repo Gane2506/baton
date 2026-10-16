@@ -153,6 +153,13 @@ def _launcher(client: TestClient) -> RunLauncher:
 # ---- pages -------------------------------------------------------------------------------
 
 
+def test_nav_has_no_duplicate_entries() -> None:
+    from jev_agent.dashboard.app import NAV
+
+    hrefs = [href for href, _ in NAV]
+    assert len(hrefs) == len(set(hrefs)), "duplicate href in dashboard NAV"
+
+
 def test_board_shows_runs_and_queue_escaped(client: TestClient, planned: tuple[Path, str]) -> None:
     repo, run_id = planned
     with _store(repo) as store:
