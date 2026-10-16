@@ -26,9 +26,12 @@ def default_user_config_path() -> Path:
 
 # Keys a repository's jev.toml may change only when the user config trusts that repository
 # (`[trust] repos`, docs/security.md): where jev sends API keys and which credential variables
-# it reads, which commands its workers run and with what permissions, and which tools, servers
-# and browser agents reach. A committed jev.toml from someone else could otherwise send a token
-# to their host or give an agent production access (issue #16). `*` matches any table key.
+# it reads, which commands its workers run and with what permissions, which tools, servers
+# and browser agents reach, and the safety gates a run operates under (the autonomy mode and
+# ship settings decide whether a run stops for approval and whether it may merge a PR on its
+# own). A committed jev.toml from someone else could otherwise send a token to their host,
+# give an agent production access, or silently turn a user-started run into an autonomous,
+# auto-merging pipeline (issue #16). `*` matches any table key.
 GUARDED_KEYS: tuple[str, ...] = (
     "dispatcher.jev.base_url",
     "dispatcher.jev.api_key_env",
@@ -52,8 +55,10 @@ GUARDED_KEYS: tuple[str, ...] = (
     "roles.*.mcp",
     "roles.*.skills",
     "roles.*.plugins",
+    "autonomy.mode",
     "autonomy.access_tier",
     "autonomy.unrestricted_acknowledged",
+    "ship",
 )
 
 

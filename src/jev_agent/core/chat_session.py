@@ -31,6 +31,7 @@ BACKEND_LOG_FILE = "backend.log"
 LOCK_FILE = "chat.lock"
 DEFAULT_BUDGET_USD = 1.00
 _CHAT_ID = re.compile(r"^c-\d{8}-\d{6}-[0-9a-f]{4}$")
+_CREATE_ID_RETRIES = 10  # fresh `new_chat_id()` attempts before `create()` gives up
 
 
 class ChatError(Exception):
@@ -194,20 +195,34 @@ class ChatSession:
     ) -> ChatSession:
         clock = _now if clock is None else clock
         now = clock()
-        meta = ChatMeta(
-            chat_id=new_chat_id() if chat_id is None else chat_id,
-            created_at=now,
-            updated_at=now,
-            learning=learning,
-            profile=profile,
-            backend=backend.name,
-            model=backend.model,
-            budget_usd=budget_usd,
-        )
-        session = cls(root, meta, backend, system_prompt, clock=clock)
-        session.dir.mkdir(parents=True, exist_ok=True)
-        session.save()
-        return session
+        # A generated id can collide with an existing chat (same second, same 4 random hex
+        # chars): retry with a fresh id instead of silently merging two chats into one
+        # directory. An explicitly chosen id keeps the old merge behavior.
+        attempts = _CREATE_ID_RETRIES if chat_id is None else 1
+        for _ in range(attempts):
+            resolved = new_chat_id() if chat_id is None else chat_id
+            meta = ChatMeta(
+                chat_id=resolved,
+                created_at=now,
+                updated_at=now,
+                learning=learning,
+                profile=profile,
+                backend=backend.name,
+                model=backend.model,
+                budget_usd=budget_usd,
+            )
+            session = cls(root, meta, backend, system_prompt, clock=clock)
+            try:
+                session.dir.mkdir(parents=True, exist_ok=False)
+            except FileExistsError:
+                if chat_id is not None:
+                    session.dir.mkdir(parents=True, exist_ok=True)
+                    session.save()
+                    return session
+                continue
+            session.save()
+            return session
+        raise ChatError("could not pick an unused chat id; please try again")
 
     @staticmethod
     def load_meta(root: Path, chat_id: str) -> ChatMeta:
@@ -253,8 +268,15 @@ class ChatSession:
         os.replace(tmp, self.dir / META_FILE)
 
     def record(self, kind: str, text: str, **extra: Any) -> None:
-        """Append one redacted entry to the transcript."""
-        entry = {"at": self._clock(), "kind": kind, "text": redact(text), **extra}
+        """Append one redacted entry to the transcript. String extras are redacted too: the
+        `say()` error path stores the user's message as an extra, and it must not persist
+        raw (e.g. a pasted API key) when a backend call fails."""
+        entry = {
+            "at": self._clock(),
+            "kind": kind,
+            "text": redact(text),
+            **{k: redact(v) if isinstance(v, str) else v for k, v in extra.items()},
+        }
         self.dir.mkdir(parents=True, exist_ok=True)
         with self.transcript_path.open("a", encoding="utf-8") as f:
             f.write(json.dumps(entry) + "\n")

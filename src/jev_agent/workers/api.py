@@ -13,7 +13,7 @@ import asyncio
 import json
 import os
 import re
-from collections.abc import Awaitable, Callable, Collection
+from collections.abc import Awaitable, Callable, Collection, Mapping
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -31,6 +31,7 @@ from jev_agent.workers.structured import (
     strict_json_schema,
     structured_summary,
 )
+from jev_agent.workers.tools import with_redact_names
 
 PROJECT_TITLE = "Baton Agent Orchestrator"
 PROJECT_URL = "https://github.com/Gane2506/baton"
@@ -140,7 +141,9 @@ class ApiWorker:
         return body
 
     async def run(self, job: WorkerJob) -> WorkerOutput:
-        log = _Log(job.log_path)
+        # The log redacts against `with_redact_names`, like the CLI workers, so benign-named
+        # MCP secret values are covered when a provider echoes them in an error body.
+        log = _Log(job.log_path, with_redact_names(dict(os.environ), job.tools))
         model = job.model or self.default_model
         effort = f"{job.effort}"
         if job.effort is not None and job.effort not in EFFORTS:
@@ -224,7 +227,7 @@ class ApiWorker:
     ) -> httpx.Response:
         if self._client is not None:
             return await self._client.post(url, json=body, headers=headers, timeout=timeout_s)
-        async with httpx.AsyncClient(transport=self._transport) as client:
+        async with httpx.AsyncClient(transport=self._transport, follow_redirects=True) as client:
             return await client.post(url, json=body, headers=headers, timeout=timeout_s)
 
     @staticmethod
@@ -353,12 +356,15 @@ def _retry_delay(response: httpx.Response) -> float | None:
 class _Log:
     """Collects log sections and writes them, redacted, to the job's log file."""
 
-    def __init__(self, path: Path) -> None:
+    def __init__(self, path: Path, env: Mapping[str, str] | None = None) -> None:
         self.path = path
         self.sections: list[str] = []
         # Literal values (the API key) to scrub before writing. `redact` only knows env vars whose
         # names look secret (KEY, TOKEN, ...), and `api_key_env` may be named anything.
         self.secrets: list[str] = []
+        # The environment `redact()` reads: callers pass `with_redact_names(...)` so
+        # benign-named MCP secret values are covered too.
+        self._env = dict(os.environ if env is None else env)
 
     def add(self, title: str, text: str) -> None:
         stamp = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -371,4 +377,4 @@ class _Log:
     def scrub(self, text: str) -> str:
         for secret in self.secrets:
             text = text.replace(secret, REDACTED)
-        return redact(text)
+        return redact(text, self._env)

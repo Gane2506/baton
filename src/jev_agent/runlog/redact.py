@@ -4,9 +4,11 @@ Two kinds of secret are removed: values matching well-known credential shapes
 (`CREDENTIAL_PATTERNS`: API keys, GitHub/Slack/AWS/Google tokens, private keys, JWTs, `Bearer`
 and `Authorization:` headers, `user:password@` in URLs), and the current values (8+ chars)
 of environment variables whose names say they hold a secret (containing KEY, TOKEN, SECRET,
-PASSWORD or CREDENTIAL), plus the values of the variables listed by name in `JEV_REDACT_NAMES` (a
-comma-separated list; workers put the env vars that feed MCP servers there, whatever they are
-called).
+PASSWORD or CREDENTIAL), plus the values of the variables listed by name in `JEV_REDACT_NAMES`
+(a comma-separated list; workers put the env vars that feed MCP servers there, whatever they
+are called, and `core/secrets.py` registers every name it injects from the secrets file).
+A value listed by name is a declared secret, so it is redacted from 4 chars up — shorter
+than the 8-char bar for coincidental, secret-named environment variables.
 """
 
 from __future__ import annotations
@@ -70,6 +72,8 @@ def secret_env_values(env: Mapping[str, str]) -> list[str]:
         if _SECRET_ENV_NAME.search(name) and len(value) >= _MIN_SECRET_LEN
     }
     named = {n.strip() for n in env.get(REDACT_NAMES_ENV, "").split(",") if n.strip()}
+    # Declared secrets (MCP secret names, secrets-file names): a declared secret is trusted
+    # to be one, so only the tiniest values are kept.
     values |= {
         value
         for name, value in env.items()

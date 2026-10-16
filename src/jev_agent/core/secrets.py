@@ -19,6 +19,7 @@ import tempfile
 from pathlib import Path
 
 from jev_agent.app.errors import JevError
+from jev_agent.runlog.redact import REDACT_NAMES_ENV
 
 __all__ = [
     "SecretsError",
@@ -84,11 +85,23 @@ def _check_permissions(path: Path) -> bool:
     return True
 
 
+def _register_redact_names(names: list[str]) -> None:
+    """Append `names` to `JEV_REDACT_NAMES` in the process environment, so `redact()`
+    covers secrets-file values regardless of what they are called. `with_redact_names`
+    preserves the existing list, so the names propagate to every worker's log redaction."""
+    names = [name for name in names if name]
+    if not names:
+        return
+    existing = [n for n in os.environ.get(REDACT_NAMES_ENV, "").split(",") if n]
+    os.environ[REDACT_NAMES_ENV] = ",".join(dict.fromkeys([*existing, *names]))
+
+
 def load_secrets(path: Path | None = None) -> None:
     """Inject the secrets file into `os.environ`. Real environment wins.
 
     Never raises: a missing file is the normal case, and a malformed or too-open
     file only warns, so a bad secrets file can never break a CLI invocation.
+    Every injected name is registered for log redaction (see `_register_redact_names`).
     """
     file = path or default_path()
     if not file.is_file():
@@ -100,10 +113,13 @@ def load_secrets(path: Path | None = None) -> None:
     except OSError as exc:
         _warn(f"could not read {file}: {exc}")
         return
+    injected = []
     for name, value in secrets.items():
         if name not in os.environ:
             os.environ[name] = value
             _loaded.add(name)
+            injected.append(name)
+    _register_redact_names(injected)
 
 
 def loaded_names() -> frozenset[str]:
@@ -135,6 +151,10 @@ def _write_all(path: Path, secrets: dict[str, str]) -> None:
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
             for name, value in secrets.items():
                 handle.write(f"{name}={value}\n")
+            # Flush to the file before the rename: a crash between write and rename must
+            # not leave a truncated secrets file behind.
+            handle.flush()
+            os.fsync(handle.fileno())
         os.chmod(tmp, 0o600)
         os.replace(tmp, path)
     except BaseException:
@@ -169,6 +189,7 @@ def write_secret(name: str, value: str, path: Path | None = None) -> None:
     _write_all(file, secrets)
     os.environ[name] = value
     _loaded.add(name)
+    _register_redact_names([name])
 
 
 def delete_secret(name: str, path: Path | None = None) -> None:
