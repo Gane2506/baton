@@ -10,6 +10,7 @@ gate) to measure what the orchestrator-plus-workers can do, published in
 
 from jev_agent.capbench.grading import (
     diff_within_bands,
+    grade_main,
     read_ship_score,
     run_grade_script,
     run_hidden_pytest,
@@ -22,6 +23,7 @@ from jev_agent.capbench.models import (
     DEFAULT_PER_RUN_USD,
     DEFAULT_PROFILE,
     DEFAULT_QUALITY_LEVEL,
+    GRADE_ARGV,
     TIME_FULL_MIN,
     TIME_ZERO_MIN,
     W_CORRECTNESS,
@@ -39,14 +41,17 @@ from jev_agent.capbench.models import (
     load_tasks,
     suite_score,
     time_score,
+    unevaluated_suite,
 )
 from jev_agent.capbench.report import badge_payload, render_scoreboard, write_scoreboard
 from jev_agent.capbench.runner import (
     BENCHMARK_TOML_TEMPLATE,
     BenchmarkConfig,
+    benchmark_toml,
     prepare_sandbox,
     run_suite,
     run_task,
+    write_suite_json,
 )
 
 __all__ = [
@@ -56,6 +61,7 @@ __all__ = [
     "DEFAULT_PER_RUN_USD",
     "DEFAULT_PROFILE",
     "DEFAULT_QUALITY_LEVEL",
+    "GRADE_ARGV",
     "TIME_FULL_MIN",
     "TIME_ZERO_MIN",
     "W_CORRECTNESS",
@@ -68,10 +74,12 @@ __all__ = [
     "TaskResult",
     "TaskSpec",
     "badge_payload",
+    "benchmark_toml",
     "composite_score",
     "correctness_score",
     "cost_score",
     "diff_within_bands",
+    "grade_main",
     "load_task",
     "load_tasks",
     "prepare_sandbox",
@@ -85,5 +93,7 @@ __all__ = [
     "suite_score",
     "tests_dir_untouched",
     "time_score",
+    "unevaluated_suite",
     "write_scoreboard",
+    "write_suite_json",
 ]

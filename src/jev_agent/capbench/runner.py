@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import shutil
 import subprocess
 import tempfile
@@ -169,7 +170,12 @@ def _result_diff(sandbox: Path, base_sha: str, run_id: str) -> tuple[Path, str]:
 
 
 def _checkout_result(sandbox: Path, run_id: str, dest: Path) -> Path:
-    """A clean checkout of the result branch (the agent's code, no `.jev/` state)."""
+    """A clean checkout of the result branch (the agent's code, no `.jev/` state).
+
+    `.jev/` only ever holds *untracked* run artifacts (capbench-run.json,
+    capbench.diff), so nothing under it is committed to the result branch and
+    checking out the tracked files (`<branch> -- .`) cannot leak sandbox state.
+    """
     branch = result_branch(run_id)
     if dest.exists():
         shutil.rmtree(dest)
@@ -203,6 +209,10 @@ def run_task(
             record = asyncio.run(asyncio.wait_for(_run(), timeout=config.timeout_min * 60))
         else:
             record = asyncio.run(_run())
+    except TimeoutError:
+        return _failed_task(
+            spec, config, started, note=f"run timed out after {config.timeout_min} min"
+        )
     except Exception as exc:
         return _failed_task(spec, config, started, note=f"run failed to start: {exc}")
 
@@ -302,26 +312,55 @@ def run_suite(
     task_ids: list[str] | None,
     config: BenchmarkConfig,
     tasks_dir: Path | None = None,
+    out_path: Path | None = None,
 ) -> SuiteResult:
     """Run the suite (one `jev run` per task) and collect the results.
 
     `task_ids=None` runs every task. Each task runs once (Phase 1: n=1, and
-    the scoreboard says so).
+    the scoreboard says so). Duplicate ids are dropped (order preserved): each
+    task spends model money, so `--task t1 --task t1` must not bill twice.
+
+    One task's failure must never discard the others (a suite is hours of
+    model spend): the per-task body is isolated, and a failure becomes a
+    `_failed_task` with an explanatory `note` - zeros, not guesses. When
+    `out_path` is given the suite JSON is rewritten after every task, so even
+    a crash mid-suite keeps the completed results.
     """
     specs = load_tasks(tasks_dir)
     ids = task_ids if task_ids is not None else [spec.id for spec in specs]
-    unknown = [task_id for task_id in ids if task_id not in {spec.id for spec in specs}]
+    ids = list(dict.fromkeys(ids))  # dedupe, preserving order
+    specs_by_id = {spec.id: spec for spec in specs}
+    unknown = [task_id for task_id in ids if task_id not in specs_by_id]
     if unknown:
         raise ValueError(f"unknown benchmark task(s): {', '.join(unknown)}")
-    results = [run_task(task_id, config, tasks_dir) for task_id in ids]
-    return SuiteResult(
-        evaluated=True,
-        profile=config.profile,
-        commit=_repo_commit(),
-        repeats_per_task=1,
-        tasks=results,
-        note="Phase 1: each task ran once (n=1); single-run scores, no repeats.",
-    )
+
+    def _partial(results: list[TaskResult]) -> SuiteResult:
+        return SuiteResult(
+            evaluated=True,
+            profile=config.profile,
+            commit=_repo_commit(),
+            repeats_per_task=1,
+            per_run_usd=config.per_run_usd,
+            tasks=list(results),
+            note="Phase 1: each task ran once (n=1); single-run scores, no repeats.",
+        )
+
+    results: list[TaskResult] = []
+    for task_id in ids:
+        try:
+            results.append(run_task(task_id, config, tasks_dir))
+        except Exception as exc:  # a suite must survive one bad task
+            results.append(
+                _failed_task(
+                    specs_by_id[task_id],
+                    config,
+                    datetime.now(UTC),
+                    note=f"harness error: {exc}",
+                )
+            )
+        if out_path is not None:
+            write_suite_json(_partial(results), out_path)
+    return _partial(results)
 
 
 def _repo_commit() -> str | None:
@@ -340,8 +379,14 @@ def _repo_commit() -> str | None:
 
 
 def write_suite_json(suite: SuiteResult, path: Path) -> Path:
-    """Write a suite result (evaluated or template) as JSON."""
-    path.write_text(suite.model_dump_json(indent=2), encoding="utf-8")
+    """Write a suite result (evaluated or template) as JSON, atomically.
+
+    Temp-file + rename: a crash mid-write never leaves a truncated suite JSON
+    (matters most for the incremental writes `run_suite` does after each task).
+    """
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(suite.model_dump_json(indent=2), encoding="utf-8")
+    os.replace(tmp, path)
     return path
 
 

@@ -136,6 +136,10 @@ class SuiteResult(BaseModel):
     evaluated: bool = Field(description="False for the template: no benchmark run has happened yet")
     profile: str = DEFAULT_PROFILE
     commit: str | None = Field(default=None, description="baton commit the suite ran against")
+    per_run_usd: float | None = Field(
+        default=None,
+        description="the [budget] per_run_usd cap the suite ran under; None for older JSON",
+    )
     repeats_per_task: int = Field(default=1, description="Phase 1 runs each task once")
     tasks: list[TaskResult] = Field(default_factory=list)
     note: str = Field(default="", description="human note, e.g. why unevaluated")

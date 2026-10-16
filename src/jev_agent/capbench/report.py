@@ -15,6 +15,7 @@ from typing import Any
 from jev_agent.capbench.models import (
     COST_FULL_USD,
     COST_ZERO_USD,
+    DEFAULT_PER_RUN_USD,
     TIME_FULL_MIN,
     TIME_ZERO_MIN,
     W_CORRECTNESS,
@@ -48,13 +49,25 @@ def badge_payload(suite: SuiteResult) -> dict[str, Any]:
     "not run yet", never as a score.
     """
     score = suite.score
-    if not suite.evaluated or score is None:
+    if not suite.evaluated:
         return {
             "schemaVersion": 1,
             "label": "capbench",
             "message": "not run yet",
             "color": "lightgrey",
             "evaluated": False,
+            "suite_score": None,
+        }
+    if score is None:
+        # Evaluated, but nothing to average: an empty task list. Not "not run
+        # yet" - the suite really did run (or the JSON was hand-built), there
+        # is just no mean to publish.
+        return {
+            "schemaVersion": 1,
+            "label": "capbench",
+            "message": "evaluated, no tasks",
+            "color": "lightgrey",
+            "evaluated": True,
             "suite_score": None,
         }
     return {
@@ -81,10 +94,6 @@ def _badge_color(score: float) -> str:
     return "red"
 
 
-def _fmt_score(value: float | None) -> str:
-    return "-" if value is None else f"{value:.0f}"
-
-
 def _task_row(task: TaskResult, evaluated: bool) -> str:
     if not evaluated:
         return f"| `{task.task_id}` | {task.title} | not run | - | - | - | - | - | - |"
@@ -101,9 +110,19 @@ def _task_row(task: TaskResult, evaluated: bool) -> str:
 
 def render_scoreboard(suite: SuiteResult, tasks_dir: Path | None = None) -> str:
     """Render `docs/benchmarks.md` from a suite result (evaluated or template)."""
+    # The budget this suite actually ran under; old suite JSON predates the
+    # field, so fall back to the historical default.
+    budget = suite.per_run_usd if suite.per_run_usd is not None else DEFAULT_PER_RUN_USD
     lines = ["# Capability benchmark scoreboard", "", DISAMBIGUATION, ""]
     if not suite.evaluated:
         lines += [UNEVALUATED_NOTICE, ""]
+    elif suite.score is None:
+        # Evaluated, but the task list was empty: nothing to average.
+        lines += [
+            "> **Status: evaluated, no tasks.** This suite ran with an empty task list, "
+            "so there is no score to show.",
+            "",
+        ]
     else:
         lines += [
             f"> Suite score: **{suite.score:.0f}/100** (mean of task composites) · "
@@ -161,7 +180,7 @@ def render_scoreboard(suite: SuiteResult, tasks_dir: Path | None = None) -> str:
         "",
         "- Manual trigger only: `jev capbench run --task <id>` or `jev capbench run --all`.",
         "- Each task gets a throwaway sandbox repo copied from its fixture, a fixed "
-        f"`[budget] per_run_usd = ${2.0:.0f}` cap, `basic` quality level, and the pinned "
+        f"`[budget] per_run_usd = ${budget:.0f}` cap, `basic` quality level, and the pinned "
         "worker profile; grading happens on the merged result branch.",
         "- **No nightly schedule exists.** A nightly run would cost ~$3-7/night in model "
         "spend and needs the maintainer's explicit go-ahead before it is built.",

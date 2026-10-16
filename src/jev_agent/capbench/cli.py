@@ -24,7 +24,7 @@ from jev_agent.capbench.models import (
     load_tasks,
 )
 from jev_agent.capbench.report import write_scoreboard
-from jev_agent.capbench.runner import BenchmarkConfig, run_suite, write_suite_json
+from jev_agent.capbench.runner import BenchmarkConfig, run_suite
 from jev_agent.cli.repo import RepoOption, find_git_root
 from jev_agent.cli.wiring import fail
 
@@ -68,10 +68,25 @@ def run(
         float,
         typer.Option("--budget", min=0.01, help="Per-run budget cap in USD."),
     ] = DEFAULT_PER_RUN_USD,
+    timeout_min: Annotated[
+        float | None,
+        typer.Option(
+            "--timeout-min",
+            min=0.01,
+            help="Timeout per task in minutes (default: none; a run may take 30-90 min).",
+        ),
+    ] = None,
     workdir: Annotated[
         Path | None,
         typer.Option("--workdir", help="Where to build the sandboxes (default: temp dir)."),
     ] = None,
+    force: Annotated[
+        bool,
+        typer.Option(
+            "--force",
+            help="Overwrite an existing capbench-suite.json in the workdir.",
+        ),
+    ] = False,
     dry_run: Annotated[
         bool, typer.Option("--dry-run", help="Print what would run; spend nothing.")
     ] = False,
@@ -81,17 +96,24 @@ def run(
 
     Manual trigger only - this command spends real model money (up to --budget
     per task) and creates no schedule. Results print as a table; the raw suite
-    JSON is written to the workdir for `jev capbench report`.
+    JSON is written to the workdir for `jev capbench report`. The suite JSON is
+    rewritten after every task (a crash keeps the completed results), and the
+    command refuses to overwrite an existing capbench-suite.json unless --force
+    is passed, so a previous suite's raw data is never silently clobbered.
     """
     root = _baton_root(repo)
     tasks_dir = _tasks_dir(root)
     specs = load_tasks(tasks_dir)
-    wanted = [spec.id for spec in specs] if (all_ or not task) else list(task or [])
+    wanted = [spec.id for spec in specs] if (all_ or not task) else list(task)
     unknown = [t for t in wanted if t not in {spec.id for spec in specs}]
     if unknown:
         raise fail(f"unknown benchmark task(s): {', '.join(unknown)}")
     config = BenchmarkConfig(
-        profile=profile, per_run_usd=budget, workdir=workdir, keep_sandbox=True
+        profile=profile,
+        per_run_usd=budget,
+        workdir=workdir,
+        keep_sandbox=True,
+        timeout_min=timeout_min,
     )
     if dry_run:
         console.print(
@@ -100,17 +122,21 @@ def run(
             "No model spend in a dry run."
         )
         return
+    out = (config.workdir or Path.cwd()) / "capbench-suite.json"
+    if out.exists() and not force:
+        raise fail(
+            f"{out} already exists - refusing to overwrite a previous suite's results. "
+            "Pass --force to overwrite it, or use --workdir to write the new suite elsewhere."
+        )
     console.print(
         f"Running {len(wanted)} benchmark task(s) ({', '.join(wanted)}); "
         f"up to ${budget:.2f} per task. This spends real model money; "
         "no schedule is created - rerun manually."
     )
     try:
-        suite = run_suite(wanted, config, tasks_dir)
+        suite = run_suite(wanted, config, tasks_dir, out_path=out)
     except ValueError as exc:
         raise fail(str(exc)) from exc
-    out = (config.workdir or Path.cwd()) / "capbench-suite.json"
-    write_suite_json(suite, out)
     console.print(f"suite JSON: {out}")
     _print_suite(suite)
 

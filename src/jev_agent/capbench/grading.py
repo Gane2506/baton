@@ -225,18 +225,29 @@ def grade_main(
 
     reasons: list[str] = []
     details: dict[str, str] = {}
-    tests_passed, tests_total = run_hidden_pytest(
-        hidden_tests,
-        result_dir,
-        extra_collect=[result_dir / rel for rel in extra_collect],
-    )
+    hidden_timeout_s = 300
+    try:
+        tests_passed, tests_total = run_hidden_pytest(
+            hidden_tests,
+            result_dir,
+            extra_collect=[result_dir / rel for rel in extra_collect],
+            timeout_s=hidden_timeout_s,
+        )
+    except subprocess.TimeoutExpired:
+        # Exit 2 is the harness-error protocol: the grading infrastructure
+        # failed, not the code under test.
+        print(json.dumps({"error": f"hidden tests timed out after {hidden_timeout_s}s"}))
+        return GRADE_ERROR
     details["hidden_tests"] = f"{tests_passed}/{tests_total} passed"
     if tests_passed < tests_total:
         reasons.append(f"hidden tests: {tests_passed}/{tests_total} passed")
 
     stats = diff_stats(diff_text)
     details["diff"] = f"+{stats.added}/-{stats.removed} in {stats.files_changed} file(s)"
-    if not diff_within_bands(diff_text, max_added, max_files):
+    # Reuse the stats computed above instead of recomputing them via
+    # diff_within_bands: same predicate, one pass over the diff.
+    diff_ok = stats.added <= max_added and stats.files_changed <= max_files
+    if not diff_ok:
         reasons.append(
             f"diff too big: +{stats.added} lines in {stats.files_changed} files "
             f"(band: {max_added} lines, {max_files} files)"
@@ -254,7 +265,7 @@ def grade_main(
         tests_total=tests_total,
         diff_added=stats.added,
         diff_files=stats.files_changed,
-        diff_within_band=diff_within_bands(diff_text, max_added, max_files),
+        diff_within_band=diff_ok,
         ship_score=ship_score,
         reasons=reasons,
         details=details,
