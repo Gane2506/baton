@@ -63,10 +63,10 @@ def test_migration_18_adds_run_events_and_lease_event_seq(tmp_path: Path) -> Non
     released migrations are immutable."""
     from jev_agent.core.migrations import MIGRATIONS
 
-    assert len(MIGRATIONS) == 18, "MIGRATIONS grew: this test pins migration 18's script"
+    assert len(MIGRATIONS) == 19, "MIGRATIONS grew: this test pins migration 18's script"
     conn = _connect(tmp_path / "state.db")
     apply_migrations(conn)
-    assert schema_version(conn) == 18
+    assert schema_version(conn) == 19
     assert "run_events" in _tables(conn)
     event_cols = {row[1] for row in conn.execute("PRAGMA table_info(run_events)")}
     assert event_cols == {
@@ -102,4 +102,34 @@ def test_migration_18_adds_run_events_and_lease_event_seq(tmp_path: Path) -> Non
     )
     conn.execute("DELETE FROM runs WHERE id = 'r2'")
     assert conn.execute("SELECT COUNT(*) FROM run_events WHERE run_id = 'r2'").fetchone()[0] == 0
+    conn.close()
+
+
+def test_migration_19_adds_runs_design_system(tmp_path: Path) -> None:
+    """Migration 19: the chat-launched run's design-system choice (`runs.design_system`).
+
+    NULL is the repo default as before (and covers every run created before this);
+    `"none"` is explicitly no design system; `"repo"` / `"library:<name>"` are the
+    explicit choices. Never edit this test to match a changed script: released
+    migrations are immutable.
+    """
+    from jev_agent.core.migrations import MIGRATIONS
+
+    assert len(MIGRATIONS) == 19, "MIGRATIONS grew: this test pins migration 19's script"
+    conn = _connect(tmp_path / "state.db")
+    apply_migrations(conn)
+    assert schema_version(conn) == 19
+    run_cols = {row[1] for row in conn.execute("PRAGMA table_info(runs)")}
+    assert "design_system" in run_cols
+    # An old database (v18) upgrades to v19 without losing rows; pre-existing runs
+    # read back NULL (repo default).
+    conn.execute(
+        "INSERT INTO runs (id, idea_json, state, created_at, updated_at)"
+        " VALUES ('r1', '{}', 'INTAKE', 't', 't')"
+    )
+    assert conn.execute("SELECT design_system FROM runs WHERE id = 'r1'").fetchone() == (None,)
+    conn.execute("UPDATE runs SET design_system = 'library:acme' WHERE id = 'r1'")
+    assert conn.execute("SELECT design_system FROM runs WHERE id = 'r1'").fetchone() == (
+        "library:acme",
+    )
     conn.close()

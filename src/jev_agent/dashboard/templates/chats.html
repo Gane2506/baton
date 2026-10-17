@@ -41,6 +41,14 @@
         </select>
       </div>
       <div>
+        <label for="design_system">Design System</label>
+        <select id="design_system" name="design_system">
+          <option value="none">None</option>
+          {% if has_repo_design_system %}<option value="repo">Repo design system</option>{% endif %}
+          {% for name in design_systems %}<option value="library:{{ name }}">Library: {{ name }}</option>{% endfor %}
+        </select>
+      </div>
+      <div>
         <label for="profile">Workspace profile</label>
         <input type="text" id="profile" name="profile" placeholder="(optional)" maxlength="80">
       </div>

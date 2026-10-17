@@ -246,6 +246,15 @@
   background: var(--surface);
 }
 
+/* Read-only fact row under the header: the chat's chosen design system. */
+.chat-facts {
+  flex: 0 0 auto;
+  margin: 0;
+  padding: var(--s1) var(--s4);
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+}
+
 .chat-title {
   flex: 1 1 auto;
   min-width: 0;

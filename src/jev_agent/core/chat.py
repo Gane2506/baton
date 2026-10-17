@@ -75,10 +75,15 @@ from jev_agent.core.chat_session import (
     _now,
     chat_dir,
     chats_dir,
+    describe_design_system,
     hold_chat,
     list_chats,
+    list_design_library,
     new_chat_id,
+    parse_design_system,
     read_transcript,
+    resolve_design_system,
+    with_design_system,
 )
 
 __all__ = [
@@ -128,12 +133,15 @@ __all__ = [
     "chats_dir",
     "check_learning_choice",
     "choose_learning",
+    "describe_design_system",
     "effective_profile",
     "extract_brief",
     "hold_chat",
     "learning_options",
     "list_chats",
+    "list_design_library",
     "new_chat_id",
+    "parse_design_system",
     "parse_input",
     "parse_learning_arg",
     "parse_priority",
@@ -141,4 +149,6 @@ __all__ = [
     "readme_head",
     "render_system_prompt",
     "repo_tree",
+    "resolve_design_system",
+    "with_design_system",
 ]

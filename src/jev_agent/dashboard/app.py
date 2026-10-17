@@ -84,7 +84,11 @@ from jev_agent.core.chat import (
     ChatError,
     ChatLearning,
     ChatMeta,
+    describe_design_system,
+    list_design_library,
+    parse_design_system,
 )
+from jev_agent.core.design_system import get_design_system
 from jev_agent.core.kpi import DiffStat, diff_stat
 from jev_agent.core.learning import LearningError, learning_status
 from jev_agent.core.lease import RunInUseError
@@ -737,6 +741,9 @@ class Dashboard:
                 },
                 "profiles": repo.learning.profiles(),
                 "backends": chat.backend_readiness(repo.config),
+                # The New chat form's design-system picker, like `profiles` above.
+                "design_systems": list_design_library(),
+                "has_repo_design_system": get_design_system(repo.root) is not None,
             }
 
         return self.page(request, "chats.html", build)
@@ -771,6 +778,10 @@ class Dashboard:
                 "entries": entries,
                 "job": self.chat_runner.job(chat_id),
                 "busy": self.chat_runner.busy(chat_id),
+                # The chat's design-system choice, read-only (set at creation).
+                "design_system_label": describe_design_system(
+                    meta.design_system if meta is not None else None
+                ),
                 # the redesigned chat page: the conversation rail, pending approvals, the
                 # empty-state suggestions, the run step timeline, and the composer picker.
                 "rail_chats": views.chats(repo, "")[:30],
@@ -1538,6 +1549,7 @@ class Dashboard:
                     _chat_learning(_text(form, "learning")),
                     _text(form, "profile") or None,
                     budget,
+                    parse_design_system(_text(form, "design_system")),
                 )
 
         try:

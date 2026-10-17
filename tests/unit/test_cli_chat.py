@@ -265,20 +265,23 @@ def test_start_screen(
 ) -> None:
     monkeypatch.setattr(chat_cmds, "is_interactive", lambda: True)
     _profile_with_lesson(repo, "other", "Other lesson.")
-    code, out = _chat(repo, input="3\n")
+    code, out = _chat(repo, input="3\n1\n")
     assert code == 0, out
     assert "1) With learning: default (0 lessons)" in out and "2) Other learning profile" in out
+    assert "Design system for this chat and the runs it starts:" in out
     assert _meta(repo)["learning"] == {"profile": None, "off": True}
+    assert _meta(repo)["design_system"] == "none"
 
     for path in (repo / ".jev" / "chats").iterdir():
         for f in path.iterdir():
             f.unlink()
         path.rmdir()
-    code, out = _chat(repo, input="2\n1\nhi\n")
+    code, out = _chat(repo, input="2\n1\n1\nhi\n")
     assert code == 0, out
     assert "1) other (repo, 1 lessons)" in out and "1 lesson(s) from other" in out
     assert "Other lesson." in backend.calls[-1][0]
     assert _meta(repo)["learning"] == {"profile": "other", "off": False}
+    assert _meta(repo)["design_system"] == "none"
 
     # A flag skips the start screen.
     code, out = _chat(repo, "--no-learning")

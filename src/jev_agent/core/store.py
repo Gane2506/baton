@@ -145,6 +145,9 @@ class RunRecord:
     # The designer's design doc (migration 16, the DESIGNING pipeline stage); None: the
     # run never needed a design (its plan had `needs_design` false).
     design: DesignDoc | None = None
+    # The chat's design-system choice, for runs launched from a chat (migration 19):
+    # "library:<name>", "repo", or None (the repo default, as before).
+    design_system: str | None = None
 
 
 @dataclass(frozen=True)
@@ -555,6 +558,7 @@ class Store:
         autonomous_opt_in: bool = False,
         medium_folder: str | None = None,
         run_id: str | None = None,
+        design_system: str | None = None,
     ) -> RunRecord:
         now = self._clock()
         if run_id is not None:
@@ -573,6 +577,7 @@ class Store:
                     autonomy_mode,
                     autonomous_opt_in,
                     medium_folder,
+                    design_system,
                 )
             except sqlite3.IntegrityError as exc:
                 if _is_runs_id_collision(exc):
@@ -592,6 +597,7 @@ class Store:
                     autonomy_mode,
                     autonomous_opt_in,
                     medium_folder,
+                    design_system,
                 )
             except sqlite3.IntegrityError as exc:
                 # Only a PK/UNIQUE collision on runs.id is worth retrying; anything
@@ -613,14 +619,15 @@ class Store:
         autonomy_mode: str,
         autonomous_opt_in: bool,
         medium_folder: str | None,
+        design_system: str | None = None,
     ) -> RunRecord:
         """Insert one run row plus its RUN_CREATED event; raise on any constraint."""
         with self._tx() as db:
             db.execute(
                 "INSERT INTO runs (id, idea_json, state, created_at, updated_at,"
                 " learning_profile, quality_level, plan_only, ship_mode,"
-                " autonomy_mode, autonomous_opt_in, medium_folder)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                " autonomy_mode, autonomous_opt_in, medium_folder, design_system)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     run_id,
                     idea.model_dump_json(),
@@ -634,6 +641,7 @@ class Store:
                     autonomy_mode,
                     int(autonomous_opt_in),
                     medium_folder,
+                    design_system,
                 ),
             )
             self._emit(
@@ -2047,6 +2055,7 @@ def _run_record(row: sqlite3.Row) -> RunRecord:
         autonomous_opt_in=bool(row["autonomous_opt_in"]),
         medium_folder=row["medium_folder"],
         design=None if design_json is None else DesignDoc.model_validate_json(design_json),
+        design_system=row["design_system"],
     )
 
 

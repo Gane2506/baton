@@ -100,12 +100,14 @@ def create_run(
     quality: str | None = None,
     profile: str | None = None,
     ship_mode: ShipMode | None = None,
+    design_system: str | None = None,
 ) -> RunRecord:
     """Create the run and record its flags, without advancing it (the front half of `jev run`;
     `Pipeline.advance` continues it from its first state). Same errors as `start_run`.
 
     Front ends that must show the run id at once (the dashboard, the chat) create a run this
-    way and advance it in the background.
+    way and advance it in the background. `design_system` is the launching chat's
+    design-system choice ("library:<name>", "repo", or None for the repo default).
     """
     workspace = effective_name(ctx.config, profile, ctx.root / STATE_DIRNAME)
     if workspace is not None:
@@ -132,6 +134,7 @@ def create_run(
         autonomy_mode=autonomy_mode,
         autonomous_opt_in=autonomous_opt_in,
         medium_folder=medium_folder,
+        design_system=design_system,
     )
     write_run_profile(ctx.root / STATE_DIRNAME, run.id, copy)
     return run
@@ -147,6 +150,7 @@ async def start_run(
     quality: str | None = None,
     profile: str | None = None,
     ship_mode: ShipMode | None = None,
+    design_system: str | None = None,
 ) -> RunRecord:
     """Start a run for `idea` and advance it as far as it goes (the body of `jev run`).
 
@@ -159,7 +163,8 @@ async def start_run(
     `profile` is the workspace profile (`none`: none); without it the repo default applies
     (`jev profile use`). The profile's `learning` and `quality` apply when no flag says
     otherwise. ProfileError (a ValueError) for an unknown profile. `ship_mode` is what the
-    run does after both votes approve at D6 (None: `[ship] after_approval`).
+    run does after both votes approve at D6 (None: `[ship] after_approval`). `design_system`
+    is the launching chat's design-system choice (None: the repo default).
     """
     run = create_run(
         ctx,
@@ -170,6 +175,7 @@ async def start_run(
         quality=quality,
         profile=profile,
         ship_mode=ship_mode,
+        design_system=design_system,
     )
     return await ctx.pipeline.advance(run.id)
 

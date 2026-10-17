@@ -519,6 +519,14 @@ MIGRATIONS: list[str] = [
     CREATE INDEX run_events_type ON run_events (run_id, type);
     ALTER TABLE run_leases ADD COLUMN event_seq INTEGER;
     """,
+    # 19: the design-system picker for the chat module (WS-D): a chat-launched run
+    # remembers the chat's design-system choice (`"library:<name>"`, `"repo"`, `"none"`
+    # for explicitly no design system, or NULL for the repo default as before), so the
+    # DESIGNING stage's designer prompt can prefer it over the repo default. NULL also
+    # covers every run created before this.
+    """
+    ALTER TABLE runs ADD COLUMN design_system TEXT;
+    """,
 ]
 
 SCHEMA_VERSION = len(MIGRATIONS)

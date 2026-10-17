@@ -4,10 +4,13 @@ the saved-chat helpers (`list_chats`, `read_transcript`, `hold_chat`) and the ch
 from __future__ import annotations
 
 import fcntl
+import importlib
 import json
 import os
 import re
 import secrets
+import sys
+import warnings
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field
@@ -19,6 +22,7 @@ from jev_agent.config import STATE_DIRNAME
 from jev_agent.core.chat_backends import BACKENDS, BackendName, Turn
 from jev_agent.core.chat_learning import ChatLearning
 from jev_agent.core.chat_prompts import BRIEF_REQUEST, extract_brief
+from jev_agent.core.design_system import DesignSystem, get_design_system, render_for_prompt
 from jev_agent.runlog.redact import redact
 
 if TYPE_CHECKING:
@@ -70,6 +74,11 @@ class ChatMeta:
     runs: list[dict[str, str]] = field(default_factory=list)  # {"run_id", "kind", "at"}
     queue_items: list[dict[str, Any]] = field(default_factory=list)  # {"id", "priority", "at"}
     quality: str | None = None  # quality level for launched runs; None: [quality] level
+    # The design system this chat (and the runs it starts) uses: "library:<name>",
+    # "repo", "none" (explicitly no design system), or None for no explicit choice
+    # (the repo default, as before). Old chats without the key load with None:
+    # `from_json` drops unknown keys and the default fills the rest.
+    design_system: str | None = None
 
     def to_json(self) -> dict[str, Any]:
         data = asdict(self)
@@ -84,6 +93,102 @@ class ChatMeta:
         if values.get("backend") not in BACKENDS:
             raise ChatError(f"chat {data.get('chat_id')!r} has an unknown backend")
         return cls(**values)
+
+
+def _design_library() -> Any | None:
+    """`jev_agent.core.design_library` (the library WS-A builds), or None when that module
+    is absent. Imported late so the chat still works in a build without the library."""
+    try:
+        return importlib.import_module("jev_agent.core.design_library")
+    except ImportError:
+        return None
+
+
+def _warn_design(message: str) -> None:
+    warnings.warn(message, stacklevel=3)
+    print(f"warning: {message}", file=sys.stderr)
+
+
+def list_design_library() -> list[str]:
+    """The design library's system names; empty when the library module is absent."""
+    library = _design_library()
+    if library is None:
+        return []
+    return list(library.list_library())
+
+
+def parse_design_system(value: str | None) -> str | None:
+    """Validate a `--design-system` flag or the New chat form's `design_system` field.
+
+    Accepts `library:<name>` (the name must exist in the design library), `repo` and
+    `none`; returns the choice to store on `ChatMeta.design_system` (`"library:<name>"`,
+    `"repo"`, `"none"`, or None for "no choice", which keeps the repo default).
+    Raises `ChatError` for anything else.
+    """
+    if value is None or not value.strip():
+        return None
+    value = value.strip()
+    if value == "none":
+        return "none"
+    if value == "repo":
+        return "repo"
+    if value.startswith("library:"):
+        name = value[len("library:") :]
+        if not name:
+            raise ChatError("a design system choice needs a library name after 'library:'")
+        library = _design_library()
+        if library is None:
+            raise ChatError("the design library is not available in this build of jev")
+        names = list_design_library()
+        if name not in names:
+            known = ", ".join(names) if names else "the library is empty"
+            raise ChatError(f"unknown design library system {name!r} (known: {known})")
+        return f"library:{name}"
+    raise ChatError(f"unknown design system {value!r}: use 'library:<name>', 'repo' or 'none'")
+
+
+def resolve_design_system(root: Path, choice: str | None) -> DesignSystem | None:
+    """The design system a chat's (or run's) `design_system` choice means, for prompt
+    injection. None is "no choice", which behaves exactly as before (the repo's own
+    system); `"repo"` is the repo's system explicitly; `"none"` means no design system
+    at all; `"library:<name>"` is the named library system, preferred over the repo
+    default. A library entry that vanished since the choice was stored warns and falls
+    back to the repo's system. Never raises."""
+    if choice == "none":
+        return None
+    if choice is None or choice == "repo":
+        return get_design_system(root)
+    if choice.startswith("library:"):
+        name = choice[len("library:") :]
+        library = _design_library()
+        if library is not None:
+            try:
+                system: DesignSystem | None = library.load_library_system(name)
+            except Exception as exc:
+                _warn_design(
+                    f"design library system {name!r} is unavailable and will be ignored ({exc})"
+                )
+            else:
+                return system
+        return get_design_system(root)
+    return None
+
+
+def describe_design_system(choice: str | None) -> str:
+    """The human label for a stored choice: "None", "Repo design system", "Library: <name>"."""
+    if choice is None or choice == "none":
+        return "None"
+    if choice == "repo":
+        return "Repo design system"
+    if choice.startswith("library:"):
+        return f"Library: {choice[len('library:') :]}"
+    return choice
+
+
+def with_design_system(root: Path, prompt: str, choice: str | None) -> str:
+    """Append the resolved design system to a chat's system prompt (unchanged when unset)."""
+    rendered = render_for_prompt(resolve_design_system(root, choice))
+    return f"{prompt}\n\n{rendered}" if rendered else prompt
 
 
 def chats_dir(root: Path) -> Path:
@@ -192,6 +297,7 @@ class ChatSession:
         *,
         clock: Callable[[], str] | None = None,
         chat_id: str | None = None,
+        design_system: str | None = None,
     ) -> ChatSession:
         clock = _now if clock is None else clock
         now = clock()
@@ -210,6 +316,7 @@ class ChatSession:
                 backend=backend.name,
                 model=backend.model,
                 budget_usd=budget_usd,
+                design_system=design_system,
             )
             session = cls(root, meta, backend, system_prompt, clock=clock)
             try:
@@ -398,8 +505,13 @@ __all__ = [
     "_now",
     "chat_dir",
     "chats_dir",
+    "describe_design_system",
     "hold_chat",
     "list_chats",
+    "list_design_library",
     "new_chat_id",
+    "parse_design_system",
     "read_transcript",
+    "resolve_design_system",
+    "with_design_system",
 ]

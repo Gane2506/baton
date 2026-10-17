@@ -41,8 +41,9 @@ from typing import Any
 from jev_agent.config.defaults import STATE_DIRNAME
 from jev_agent.config.schema import JevConfig, ShipMode
 from jev_agent.core.assign import Assignment
+from jev_agent.core.chat_session import resolve_design_system
 from jev_agent.core.commands import CommandRunner, ShellCommandRunner
-from jev_agent.core.design_system import get_design_system, render_for_prompt
+from jev_agent.core.design_system import render_for_prompt
 from jev_agent.core.events import (
     ACTOR_HUMAN,
     EventType,
@@ -522,7 +523,10 @@ class Pipeline:
         h.require_options("designer")
         h.check_budget(run.id)
         lessons = h.lessons_for(run.id, "designer")
-        design_system = render_for_prompt(get_design_system(h.repo))
+        # A chat-launched run prefers the chat's design-system choice ("library:<name>");
+        # "repo" and None resolve to the repo's own system, as before, while "none"
+        # means no design system at all (the designer prompt gets no design context).
+        design_system = render_for_prompt(resolve_design_system(h.repo, run.design_system))
         prompt = h.prompt(
             "designer",
             lessons,

@@ -56,15 +56,20 @@ from jev_agent.core.chat import (
     chat_lessons,
     check_learning_choice,
     choose_learning,
+    describe_design_system,
     effective_profile,
     hold_chat,
     learning_options,
     list_chats,
+    list_design_library,
+    parse_design_system,
     parse_input,
     parse_learning_arg,
     parse_priority,
     render_system_prompt,
+    with_design_system,
 )
+from jev_agent.core.design_system import get_design_system
 from jev_agent.core.learning import Learning, LearningError, Lesson, learning_status
 from jev_agent.core.lease import RunInUseError
 from jev_agent.core.pipeline import PipelineError
@@ -192,6 +197,24 @@ def start_screen(ctx: CliContext) -> ChatLearning:
     return ChatLearning(profile=others[int(number) - 1].name)
 
 
+def design_screen(ctx: CliContext) -> str | None:
+    """Ask which design system this chat (and the runs it starts) should use.
+
+    Only on a TTY, when no `--design-system` flag was given. Returns the stored choice:
+    `"library:<name>"`, `"repo"`, `"none"`, or None (keeps the repo default).
+    """
+    options: list[tuple[str, str, str | None]] = [("1", "None", "none")]
+    if get_design_system(ctx.root) is not None:
+        options.append((str(len(options) + 1), "Repo design system", "repo"))
+    for name in list_design_library():
+        options.append((str(len(options) + 1), f"Library: {name}", f"library:{name}"))
+    console.print("[bold]Design system for this chat and the runs it starts:[/bold]")
+    for key, label, _ in options:
+        console.print(f"  {key}) {escape(label)}")
+    key = Prompt.ask("Choose", choices=[k for k, _, _ in options], default="1", console=console)
+    return next(choice for k, _, choice in options if k == key)
+
+
 def lessons_and_prompt(
     ctx: CliContext, choice: ChatLearning, texts: list[str]
 ) -> tuple[str | None, list[Lesson], str]:
@@ -287,6 +310,7 @@ class ChatLoop:
                     quality=meta.quality,
                     # Without a profile, launched runs use the repo default like `jev run`.
                     profile=meta.profile,
+                    design_system=meta.design_system,
                 )
             )
         except (LearningError, PipelineError, RunInUseError, ValueError) as exc:
@@ -338,6 +362,7 @@ class ChatLoop:
             self.session.set_learning(choice)
         choice = self.session.meta.learning
         profile, lessons, prompt = lessons_and_prompt(self.ctx, choice, self._texts())
+        prompt = with_design_system(self.ctx.root, prompt, self.session.meta.design_system)
         if args:
             note = (
                 "the learning choice changed; lessons from earlier runs to use from now on:\n"
@@ -383,6 +408,7 @@ class ChatLoop:
         console.print(f"chat [bold]{meta.chat_id}[/bold]: {meta.turns} answered message(s)")
         console.print(f"  backend: {meta.backend} (model: {escape(meta.model or 'default')})")
         console.print(f"  learning: {escape(describe_learning(meta.learning, profile, lessons))}")
+        console.print(f"  design system: {escape(describe_design_system(meta.design_system))}")
         console.print(f"  workspace profile: {escape(meta.profile or 'none')}")
         console.print(f"  quality: {escape(self.quality_line())}")
         title = brief_title(meta.brief) or "not written yet (/brief)"
@@ -497,16 +523,27 @@ def open_session(
     model: str | None,
     resume: str | None,
     budget_usd: float | None,
+    design_system: str | None,
 ) -> ChatSession:
     """Create or resume the chat for these flags (flags win over a resumed chat's settings)."""
     stored: ChatMeta | None = None
     if resume is not None:
         stored = ChatSession.load_meta(ctx.root, resume)
     picked = None
+    picked_design: str | None = None
     if stored is None and learning is None and not no_learning and is_interactive():
         picked = start_screen(ctx)
+        if design_system is None:
+            picked_design = design_screen(ctx)
     choice = choose_learning(learning, no_learning, stored.learning if stored else None, picked)
     check_learning_choice(choice, _learning(ctx))
+    # The flag wins; a resumed chat keeps its stored choice; a new chat takes the prompt's.
+    if design_system is not None:
+        design_choice = parse_design_system(design_system)
+    elif stored is not None:
+        design_choice = stored.design_system
+    else:
+        design_choice = picked_design
     backend_name = pick_backend(ctx.config, worker, stored.backend if stored else None)
     same_backend = stored is not None and stored.backend == backend_name
     chosen_model = pick_model(
@@ -515,6 +552,7 @@ def open_session(
     backend = make_backend(ctx, backend_name, chosen_model)
     if stored is None:
         _, _, prompt = lessons_and_prompt(ctx, choice, [])
+        prompt = with_design_system(ctx.root, prompt, design_choice)
         return ChatSession.create(
             ctx.root,
             backend,
@@ -522,14 +560,18 @@ def open_session(
             choice,
             profile,
             DEFAULT_BUDGET_USD if budget_usd is None else budget_usd,
+            design_system=design_choice,
         )
     stored.learning = choice
+    if design_system is not None:
+        stored.design_system = design_choice
     if profile is not None:
         stored.profile = profile
     if budget_usd is not None:
         stored.budget_usd = budget_usd
     session = ChatSession(ctx.root, stored, backend, "")
     _, _, prompt = lessons_and_prompt(ctx, choice, [t.text for t in session.read_history()])
+    prompt = with_design_system(ctx.root, prompt, stored.design_system)
     return ChatSession.resume(ctx.root, stored, backend, prompt)
 
 
@@ -575,6 +617,15 @@ def chat(
             f"{DEFAULT_BUDGET_USD:.2f}; a resumed chat keeps its own).",
         ),
     ] = None,
+    design_system: Annotated[
+        str | None,
+        typer.Option(
+            "--design-system",
+            metavar="library:NAME|repo|none",
+            help="Design system for this chat and the runs it starts "
+            "(default: ask on a TTY; a resumed chat keeps its own unless this overrides it).",
+        ),
+    ] = None,
     repo: RepoOption = Path("."),
 ) -> None:
     """Talk an idea through with a model, then /plan, /run or /queue the brief."""
@@ -605,6 +656,7 @@ def chat(
                     model=model,
                     resume=resume,
                     budget_usd=budget_usd,
+                    design_system=design_system,
                 )
                 if resume is None:
                     held.enter_context(hold_chat(ctx.root, session.meta.chat_id))
@@ -624,6 +676,10 @@ def chat(
             )
             if meta.profile:
                 console.print(f"workspace profile: {escape(meta.profile)}")
+            if meta.design_system:
+                console.print(
+                    f"design system: {escape(describe_design_system(meta.design_system))}"
+                )
             if resume and session.history:
                 console.print(f"{len(session.history) // 2} earlier exchange(s) restored.")
             console.print("Describe your idea. /help lists the commands; /quit leaves.")

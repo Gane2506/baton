@@ -47,6 +47,9 @@
       </h1>
       <a id="exit-fullscreen" class="btn btn-sm btn-ghost" href="/chats">{{ icon("i-x", "sm") }}<span>Chats</span></a>
     </header>
+    {% if design_system_label is defined %}
+    <p class="chat-facts muted small">Design system: {{ design_system_label }}</p>
+    {% endif %}
 
     <div id="chat-transcript" data-live="/chats/{{ chat_id }}/live" data-live-every="{{ refresh_ms }}" aria-label="Chat transcript" role="log" aria-live="polite">
       {% include "_chat_live.html" %}

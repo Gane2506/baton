@@ -38,6 +38,7 @@ from jev_agent.core.chat import (
     effective_profile,
     hold_chat,
     render_system_prompt,
+    with_design_system,
 )
 from jev_agent.core.learning import Learning
 from jev_agent.core.pipeline import PipelineError
@@ -111,6 +112,7 @@ def session_for(root: Path, repo: RepoLike, chat_id: str) -> ChatSession:
     backend = build_backend(repo.config, root, meta.backend, meta.model)
     profile = effective_profile(meta.learning, repo.store, repo.learning, repo.config)
     prompt = render_system_prompt(root, chat_lessons(profile, repo.learning, repo.config), profile)
+    prompt = with_design_system(root, prompt, meta.design_system)
     return ChatSession.resume(root, meta, backend, prompt)
 
 
@@ -122,13 +124,18 @@ def create_chat(
     choice: ChatLearning,
     profile: str | None,
     budget_usd: float,
+    design_system: str | None = None,
 ) -> str:
-    """A new chat, saved the way `jev chat` starts one; returns its id."""
+    """A new chat, saved the way `jev chat` starts one; returns its id. `design_system`
+    is the chat's design-system choice ("library:<name>", "repo", "none", or None)."""
     check_learning_choice(choice, repo.learning)
     backend = build_backend(repo.config, root, worker, model)
     active = effective_profile(choice, repo.store, repo.learning, repo.config)
     prompt = render_system_prompt(root, chat_lessons(active, repo.learning, repo.config), active)
-    session = ChatSession.create(root, backend, prompt, choice, profile, budget_usd)
+    prompt = with_design_system(root, prompt, design_system)
+    session = ChatSession.create(
+        root, backend, prompt, choice, profile, budget_usd, design_system=design_system
+    )
     return session.meta.chat_id
 
 
@@ -221,6 +228,7 @@ def start_run_from_chat(root: Path, chat_id: str, *, plan_only: bool) -> str:
             no_learning=flags["no_learning"],
             quality=meta.quality,
             profile=meta.profile,
+            design_system=meta.design_system,
         )
     with hold_chat(root, chat_id), open_repo(root) as repo:
         session_for(root, repo, chat_id).add_run(run.id, "plan-only" if plan_only else "run")
