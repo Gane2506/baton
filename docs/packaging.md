@@ -27,7 +27,7 @@ What the scripts do:
   what's missing), plus `curl`/`git` on Unix.
 - Pick the source: **PyPI** when `baton-agent-orchestrator` is published there,
   otherwise **GitHub** (`Gane2506/baton`). You can pin with `--ref`:
-  a version on PyPI (`--ref 0.4.0`) or a git ref on GitHub (`--ref v0.4.0`).
+  a version on PyPI (`--ref 0.5.0`) or a git ref on GitHub (`--ref v0.5.0`).
 - Install with **pipx** when available, otherwise `pip --user` — user-level
   only, never `sudo` unless you pass `--sudo` explicitly (Unix, pip only).
 - Re-running is safe: installs when missing, upgrades when present.
@@ -47,7 +47,7 @@ Examples:
 
 ```bash
 # Pin a release (works when piped: flags go after `bash -s --`)
-curl -fsSL https://raw.githubusercontent.com/Gane2506/baton/main/install.sh | bash -s -- --ref v0.4.0
+curl -fsSL https://raw.githubusercontent.com/Gane2506/baton/main/install.sh | bash -s -- --ref v0.5.0
 
 # Env-var style
 JEV_NO_DASHBOARD=1 curl -fsSL https://raw.githubusercontent.com/Gane2506/baton/main/install.sh | bash
@@ -55,7 +55,7 @@ JEV_NO_DASHBOARD=1 curl -fsSL https://raw.githubusercontent.com/Gane2506/baton/m
 
 ```powershell
 # Windows: options come from the environment (a piped script takes no arguments)
-$env:JEV_REF = "v0.4.0"
+$env:JEV_REF = "v0.5.0"
 irm https://raw.githubusercontent.com/Gane2506/baton/main/install.ps1 | iex
 ```
 
@@ -79,7 +79,7 @@ docker pull ghcr.io/gane2506/baton:latest
 docker run --rm -p 127.0.0.1:8765:8765 -v ./my-project:/data ghcr.io/gane2506/baton:latest
 ```
 
-Tags: `:latest` tracks the newest release; `:0.4.0`-style tags pin a version.
+Tags: `:latest` tracks the newest release; `:0.5.0`-style tags pin a version.
 Images are published automatically for every `v*` tag (see
 `.github/workflows/docker.yml`); you can also trigger a build manually from
 the Actions tab (workflow *Docker* → *Run workflow*).

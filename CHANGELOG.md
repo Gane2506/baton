@@ -5,9 +5,35 @@ All notable changes to this project are documented here. The format is based on
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Design detail for every entry is in
 [docs/decisions.md](docs/decisions.md).
 
-## [Unreleased]
+## [0.5.0] - 2026-10-17
 
 ### Added
+
+- **Design systems** ([#109](https://github.com/Gane2506/baton/issues/109)).
+  `jev design new` is an interactive wizard (purpose → app type mobile/website/PWA/
+  dashboard → stack recommendation → brand inputs) that saves a complete kit —
+  type-aware `tokens.json`, component docs, logo mark SVG+PNG, multi-size favicon —
+  into the user-level library at `~/.jev/design-systems/<name>/`. The library
+  supports `list`/`use`/`clone`/`export`/`delete`; `export` writes W3C design
+  tokens, a Tailwind config, or CSS variables. `jev design reverse <url>` extracts
+  a system from a website or screenshots (URL fetching is SSRF-guarded). A
+  design-system picker is available in `jev chat` and on the dashboard New chat
+  form, and the `designer` role grounds UI work in the repo's stored system
+  (see [docs/design.md](docs/design.md)).
+- **Full audit fix program** ([#108](https://github.com/Gane2506/baton/issues/108)).
+  All 22 major, ~60 minor and ~25 nit findings from the 2026-10-16 full-repo audit
+  (152 source files) fixed, with ~175 new regression tests.
+- **Issue #59 closeout verification**
+  ([#59](https://github.com/Gane2506/baton/issues/59)).
+  All 48 findings from the 2026-10-13 review verified fixed one-by-one against the
+  current code; the 4 genuine residuals ship here: timeout-guarded `run_git` in
+  `cli/migrate` and capbench (60s quick / 600s slow), redact-before-slice in
+  `fix_task_card`, the directly-imported `pydantic-core>=2.18` declared in
+  `pyproject.toml`, and a lightweight `views.run_live_view()` for the 3s live poll.
+- **CI green on main** ([#112](https://github.com/Gane2506/baton/issues/112)).
+  All required checks (lint, build, tests on 3.11/3.12/3.13, screenshots,
+  structural principles) pass on `main`, which is now branch-protected (PR
+  required, all checks green, enforced on admins, no force-push).
 
 - **Decision/role cache** ([#10](https://github.com/Gane2506/baton/issues/10)).
   Exact-match caching for dispatcher decisions (phase 1) and read-only role calls (phase 2):

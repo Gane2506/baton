@@ -12,7 +12,7 @@
 
 <p>
   <a href="https://github.com/Gane2506/baton/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/Gane2506/baton/actions/workflows/ci.yml/badge.svg"></a>
-  <a href="https://github.com/Gane2506/baton/releases"><img alt="Version 0.4.0" src="https://img.shields.io/badge/version-0.4.0-orange?style=flat-square"></a>
+  <a href="https://github.com/Gane2506/baton/releases"><img alt="Version 0.5.0" src="https://img.shields.io/badge/version-0.5.0-orange?style=flat-square"></a>
   <a href="pyproject.toml"><img alt="Python 3.11 | 3.12 | 3.13" src="https://img.shields.io/badge/python-3.11%20%7C%203.12%20%7C%203.13-3776AB?style=flat-square&logo=python&logoColor=white"></a>
   <a href="LICENSE"><img alt="License: Apache-2.0" src="https://img.shields.io/badge/license-Apache--2.0-blue?style=flat-square"></a>
   <a href="https://github.com/astral-sh/ruff"><img alt="Ruff" src="https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json&style=flat-square"></a>
@@ -46,7 +46,7 @@
 
 </div>
 
-> **Status: Alpha (v0.4.0). Expect breaking changes.**
+> **Status: Alpha (v0.5.0). Expect breaking changes.**
 
 ## Why Baton
 
@@ -111,6 +111,7 @@ terminal images; see [docs/dashboard.md](docs/dashboard.md#screenshots)).
     <td><img alt="jev kpi --last 10: one row per shipped PR, medians and regression flags" src="docs/images/cli-kpi.svg"></td>
   </tr>
   <tr><td colspan="2"><b>Servers, virtual browser and workspace profiles</b><br>Let agents check (<code>basic</code>, read-only) or maintain (<code>medium</code>: writes inside allowed paths, package installs, service restarts) your servers over SSH through jev's own policy-checked, audited MCP tools; give roles a pinned headless Playwright browser; pick servers, access and browser per run with <code>--profile</code>. <a href="#servers-browser-and-profiles">Servers</a></td></tr>
+  <tr><td colspan="2"><b>Design systems</b><br><code>jev design new</code> walks you through six questions (purpose, app type, stack, brand) and saves a complete system — type-aware tokens, component docs, logo mark, favicons — into your library; <code>jev design reverse</code> extracts one from a URL or screenshots. <code>jev design list/use/clone/export/delete</code> manage the library, and the designer grounds UI work in the repo's stored system. <a href="docs/design.md">Design</a></td></tr>
 </table>
 
 ## How it works
