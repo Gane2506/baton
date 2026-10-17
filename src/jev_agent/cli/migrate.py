@@ -26,6 +26,7 @@ from pathlib import Path
 from jev_agent.cli.repo import LEGACY_CONFIG_FILENAME, LEGACY_STATE_DIRNAME
 from jev_agent.cli.wiring import STATE_DB_FILENAME
 from jev_agent.config import CONFIG_FILENAME, STATE_DIRNAME
+from jev_agent.core.workspace import GIT_QUICK_TIMEOUT_S, run_git, timeout_message
 
 
 class MigrateError(Exception):
@@ -44,9 +45,11 @@ class MigrateReport:
 
 
 def _git(root: Path, *args: str, check: bool = True) -> str:
-    proc = subprocess.run(
-        ["git", "-C", str(root), *args], capture_output=True, text=True, check=False
-    )
+    """`git …` in `root` with a timeout; failures raise `MigrateError`."""
+    try:
+        proc = run_git(args, root, GIT_QUICK_TIMEOUT_S)
+    except subprocess.TimeoutExpired as exc:
+        raise MigrateError(timeout_message(args, GIT_QUICK_TIMEOUT_S)) from exc
     if check and proc.returncode != 0:
         raise MigrateError(f"git {' '.join(args)} failed: {proc.stderr.strip()}")
     return proc.stdout

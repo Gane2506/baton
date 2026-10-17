@@ -16,6 +16,7 @@ from collections.abc import Callable, Iterator
 from datetime import UTC, date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
+from unittest import mock
 
 import httpx
 import pytest
@@ -224,6 +225,24 @@ def test_run_page_shows_plan_decisions_attempts_and_files(
     assert live.status_code == 200 and "Fake task" in live.text
     assert client.get("/runs/20200101-000000-abcd").status_code == 404
     assert client.get("/runs/not-a-run").status_code == 404
+
+
+def test_live_fragment_skips_the_log_dir_walk(
+    client: TestClient, planned: tuple[Path, str]
+) -> None:
+    """#52 remainder: the 3s live poll rebuilt the full run view, including an os.walk of
+    the log dir. The fragment must stay walk-free; the full page still walks."""
+    run_id = planned[1]
+    with mock.patch("os.walk") as walk:
+        live = client.get(f"/runs/{run_id}/live")
+        assert live.status_code == 200
+        assert "Fake task" in live.text  # the fragment still renders everything it shows
+        walk.assert_not_called()
+    # The full run page still lists the log files: the walk was skipped, not broken.
+    with mock.patch("os.walk", wraps=os.walk) as walk:
+        page = client.get(f"/runs/{run_id}")
+        assert page.status_code == 200
+        assert walk.call_count >= 1
 
 
 def test_run_page_renders_quality_review_sanitized(

@@ -1,13 +1,17 @@
 """Legacy (jao v0.1) detection and `jev init --migrate`."""
 
+import os
 import sqlite3
 import subprocess
+import time
 from pathlib import Path
 
 import pytest
 from typer.testing import CliRunner
 
+from jev_agent.cli import migrate as migrate_mod
 from jev_agent.cli.app import app
+from jev_agent.cli.migrate import MigrateError
 
 runner = CliRunner()
 
@@ -181,3 +185,18 @@ def test_rerun_after_an_interrupted_migration_updates_the_db(legacy_repo: Path) 
     code, output = _invoke("init", "--migrate", "--repo", str(repo))
     assert code == 0, output
     assert _log_paths(repo) == [f"{repo}/.jev/runs/r1/T1/1.log", "/elsewhere/x.log"]
+
+
+def test_git_calls_time_out(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """#24 remainder: the migration's git calls ran with no timeout; a hung git must fail fast."""
+    bin_dir = tmp_path / "hang-bin"
+    bin_dir.mkdir()
+    fake = bin_dir / "git"
+    fake.write_text("#!/bin/sh\nsleep 60\n")
+    fake.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
+    monkeypatch.setattr(migrate_mod, "GIT_QUICK_TIMEOUT_S", 0.5)
+    started = time.monotonic()
+    with pytest.raises(MigrateError, match=r"git rev-parse HEAD timed out after 0\.5 s"):
+        migrate_mod._git(tmp_path, "rev-parse", "HEAD")
+    assert time.monotonic() - started < 20
