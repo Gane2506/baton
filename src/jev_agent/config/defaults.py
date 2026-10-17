@@ -43,6 +43,20 @@ DEFAULT_CONFIG_TOML = """\
 # tool_fit = 0.10
 # user_preference = 0.10
 
+# Cost-aware Jev leg ordering and pre-run cost estimates (the model prices live here, not
+# in code: providers reprice). This changes the leg order, never the availability.
+[dispatcher.cost]
+# prefer_cheaper_leg = true        # try the cheaper keyed leg first; the other still serves
+# native_price_per_million = 0.042 # USD per 1M input tokens, native TypeSafe leg
+# openrouter_price_per_million = 0.042 # USD per 1M input tokens, OpenRouter leg
+# min_history_runs = 3             # ended runs before the estimate trusts history
+# history_runs = 20                # how many of the newest ended runs feed the estimate
+# tokens_per_decision = 8000       # expected input tokens of one Jev decision call
+# tokens_per_task = 100000         # expected input tokens of one task's worker calls
+# worker_price_per_million = 3.0   # USD per 1M input tokens of worker calls (a guess)
+# warn_fraction = 0.8              # the estimate warns at this fraction of per_run_usd
+# refuse_fraction = 1.0            # the estimate refuses approval at this fraction
+
 [budget]
 # per_run_usd = 5.00               # hard cap for one run
 # per_task_usd = 1.50              # hard cap for one task (must be <= per_run_usd)
@@ -98,6 +112,11 @@ DEFAULT_CONFIG_TOML = """\
 # profile = "default"              # lesson store to use; `jev learning list` shows them all
 # max_lessons = 8                  # most lessons added to one prompt
 # max_chars = 2000                 # most characters of lesson text added to one prompt
+
+# The event-sourced execution log (docs/events.md): every run mutation is dual-written as
+# an append-only event, powering `jev events`, `jev replay` and `jev bisect`.
+[events]
+# enabled = true                   # turn off if the log ever misbehaves; snapshots are unaffected
 
 # Open a GitHub pull request for a finished run (docs/ship.md): `jev ship RUN` pushes
 # jev/<run>/result to a new branch on `remote` and runs `gh pr create` with your gh login.
@@ -247,4 +266,37 @@ DEFAULT_CONFIG_TOML = """\
 # learning = "default"             # a learning profile, or false
 # quality = "basic"
 # description = "read-only look at production"
+
+# Exact-match cache for dispatcher decisions and read-only role calls (docs/config.md
+# "[cache]", issue #10). Safe defaults: the coder and learner roles are hard-denied in code,
+# CLI workers are excluded unless opted in, D6 ship/fix decisions are excluded, and only
+# `success` results are stored.
+[cache]
+# enabled = true                   # master kill-switch; also `--no-cache` per run
+# ttl_hours = 168                  # default entry lifetime, hours (decisions)
+# max_entries = 10000              # LRU eviction kicks in past this many entries
+# max_mb = 256                     # evict least-recently-hit entries past this size
+# cache_roles = ["planner", "validator", "reviewer", "code_reviewer"]
+# cli_workers = false              # also cache role calls made through CLI workers
+# chat = false                     # opt-in exact-match caching for `jev chat`
+# d6_decisions = false             # cache D6 ship/fix decisions (a wrong ship vote is costly)
+
+# [cache.ttl_hours_overrides]      # per-kind TTLs, in hours
+# roles = 24                       # role-output entries expire after this long
+# chat = 1                         # chat entries expire after this long
+
+# [cache.semantic]                 # phase-3 similarity matching for near-duplicate calls
+# enabled = false                  # nothing is served semantically until shadow mode proves it
+# embedder = "simhash"             # "simhash" (stdlib) or "openrouter"
+# decision_threshold = 0.98        # similarity floor for decisions (`jev cache calibrate`)
+# role_threshold = 0.98            # similarity floor for role outputs
+# chat_threshold = 0.98            # similarity floor for chat turns (phase 4)
+# mode = "off"                     # "off" | "shadow" (measure only) | "serve"
+# min_agreement = 0.98             # live-sampling floor: serving auto-disables below this
+
+# Repositories whose jev.toml may change the guarded keys. This section belongs in your
+# user config (~/.config/jev/config.toml), never in a repo file: a repository cannot
+# trust itself, so an active [trust] table here would fail to load.
+# [trust]
+# repos = []                       # e.g. ["/home/you/work/proj"]; "*" trusts every repository
 """

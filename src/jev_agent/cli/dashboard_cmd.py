@@ -64,6 +64,8 @@ def dashboard(
     with cli_errors():
         root = repo_root(repo)
         repo_config(root)
+    # An empty env var (`JEV_DASHBOARD_TOKEN=`) counts as unset: generate as usual.
+    token = token or None
     if token is not None and len(token) < 16:
         raise fail("--token must be at least 16 characters")
     loopback = is_loopback(host)

@@ -12,9 +12,11 @@ or touch the network; the CLI passes its own patchable ones through.
 from __future__ import annotations
 
 import os
+import queue
 import shutil
 import socket
 import sqlite3
+import threading
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -25,7 +27,12 @@ from jev_agent.app.errors import JevError
 from jev_agent.app.quality import missing_tools
 from jev_agent.app.repo import LEGACY_MESSAGE, find_git_root, legacy_layout
 from jev_agent.config import CONFIG_FILENAME, STATE_DIRNAME, ConfigError, JevConfig, load_config
-from jev_agent.config.schema import role_can_use_free, role_prefers_free, role_uses_free
+from jev_agent.config.schema import (
+    JevSettings,
+    role_can_use_free,
+    role_prefers_free,
+    role_uses_free,
+)
 from jev_agent.core.learning import Learning, learning_status
 from jev_agent.core.store import Store, StoreError
 from jev_agent.roles import ROLE_SCHEMAS, PromptError, load_template
@@ -110,12 +117,29 @@ def run_checks(
 # ---- servers, browser, profiles (docs/servers.md) -----------------------------------------
 
 
+# The glibc resolver has no timeout of its own; on a dead DNS it can block for tens of
+# seconds per host, so the lookup runs on a thread with a bounded wait (audit 2026-10-16).
+_DNS_TIMEOUT_S = 5.0
+
+
 def _resolve_host(host: str) -> bool:
+    """Whether `host` resolves, with a bounded wait (the resolver itself can block)."""
+    outcome: queue.Queue[bool] = queue.Queue(maxsize=1)
+
+    def _lookup() -> None:
+        try:
+            socket.getaddrinfo(host, None)
+        except (OSError, UnicodeError):
+            outcome.put(False)
+        else:
+            outcome.put(True)
+
+    thread = threading.Thread(target=_lookup, daemon=True, name="jev-doctor-dns")
+    thread.start()
     try:
-        socket.getaddrinfo(host, None)
-    except (OSError, UnicodeError):
+        return outcome.get(timeout=_DNS_TIMEOUT_S)
+    except queue.Empty:
         return False
-    return True
 
 
 def _ssh_hostname(config: JevConfig, name: str, ssh: SshRunner) -> str | None:
@@ -396,29 +420,49 @@ def _prompt_checks(config: JevConfig, root: Path) -> list[Check]:
 
 
 def _dispatcher_check(config: JevConfig) -> Check:
-    """Which dispatcher decides, and whether Jev's key env var is set (never its value).
+    """Which dispatcher decides, and whether either Jev key env var is set (never its value).
 
-    Without the key, consensus cannot decide at all (fail); jev falls back to rules (warn)."""
+    Mirrors `context.build_dispatcher`'s two legs: the native TypeSafe API and Jev through
+    OpenRouter. Only a missing key on *both* legs fails (consensus) or warns (jev): with
+    one leg set the run decides fine (audit 2026-10-16: no more false "fail" on
+    native-key-only setups)."""
     primary = config.dispatcher.primary
     if primary == "rules":
         return Check("dispatcher", "ok", "rules")
     jev = config.dispatcher.jev
     who = "consensus: Jev, then Laya" if primary == "consensus" else "jev"
     where = f"{who} ({jev.model} at {jev.base_url})"
-    if os.environ.get(jev.api_key_env, "").strip():
-        return Check("dispatcher", "ok", f"{where}; {jev.api_key_env} is set")
+    native_env = JevSettings.for_native().api_key_env  # "TYPESAFE_API_KEY"
+    openrouter_env = jev.api_key_env
+    native_set = bool(os.environ.get(native_env, "").strip())
+    openrouter_set = bool(os.environ.get(openrouter_env, "").strip())
+    if native_set and openrouter_set and native_env != openrouter_env:
+        return Check("dispatcher", "ok", f"{where}; {native_env} and {openrouter_env} are set")
+    if native_set:
+        detail = f"{where}; {native_env} is set (native TypeSafe leg)"
+        if not openrouter_set:
+            detail += f"; no {openrouter_env} failover"
+        return Check("dispatcher", "ok", detail)
+    if openrouter_set:
+        detail = f"{where}; {openrouter_env} is set (OpenRouter leg)"
+        if not native_set:
+            detail += f"; no {native_env} native leg"
+        return Check("dispatcher", "ok", detail)
+    legs = (
+        f"neither {native_env} nor {openrouter_env}" if native_env != openrouter_env else native_env
+    )
     if primary == "consensus":
         return Check(
             "dispatcher",
             "fail",
-            f"{where}; {jev.api_key_env} is not set, so every run stops for a human at its "
+            f"{where}; {legs} is not set, so every run stops for a human at its "
             "first decision (set it via the dashboard Connections page or export it, or set "
             '`[dispatcher] primary = "rules"`)',
         )
     return Check(
         "dispatcher",
         "warn",
-        f"{where}; {jev.api_key_env} is not set, so decisions fall back to the rules dispatcher "
+        f"{where}; {legs} is not set, so decisions fall back to the rules dispatcher "
         "(set it via the dashboard Connections page or export it)",
     )
 

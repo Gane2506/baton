@@ -18,8 +18,8 @@ from jev_agent.app.runs import (
     approve_run,
     require_ship_enabled,
     resume_run,
+    start_run,
 )
-from jev_agent.app.runs import start_run as start_run
 from jev_agent.cli.repo import RepoOption
 from jev_agent.cli.server_cmds import pick_profile_for_run
 from jev_agent.cli.wiring import cli_context, fail
@@ -157,7 +157,7 @@ def print_warnings(ctx: AppContext) -> None:
 def print_ship_preview(preview: ShipPreview) -> None:
     """What a person reviews before `jev ship approve | modify | stop`."""
     console.print(f"  PR title: {escape(preview.title)}")
-    console.print(f"  branch: {preview.branch}")
+    console.print(f"  branch: {escape(preview.branch)}")
     if preview.diff is not None:
         d = preview.diff
         console.print(f"  diff: {d.files} files, +{d.additions} / -{d.deletions}")
@@ -254,7 +254,7 @@ def run(
                     ship_mode=mode,
                 )
             )
-        except (LearningError, ProfileError, RunInUseError) as exc:
+        except (LearningError, PipelineError, ProfileError, RunInUseError) as exc:
             raise fail(str(exc)) from exc
         print_outcome(record, ctx.store, ctx.config)
     exit_for(record)
@@ -276,8 +276,7 @@ def approve(
 
     Exit codes: 0 done or awaiting approval, 3 stopped short of DONE, 1 error."""
     with cli_context(repo) as ctx:
-        if ctx.has_workers:
-            print_warnings(ctx)
+        print_warnings(ctx)
         try:
             pending = ctx.store.get_run(run_id)
         except NotFoundError as exc:

@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import sqlite3
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -351,7 +352,9 @@ def open_store(root: Path, *, create: bool = True, events_enabled: bool = True) 
     """The repo's state database. With `create=False` (read-only commands) a missing database
     is not created: the store is an empty in-memory one with the current schema, so the
     command shows its usual "nothing yet" output and leaves no `.jev/` behind (issue #26).
-    A database written by a newer jev is a `JevError`, not a traceback (issue #25).
+    A database written by a newer jev is a `JevError`, not a traceback (issue #25), and so
+    is a corrupt database (truncated write, disk corruption): it gets the `error:` line
+    with recovery guidance instead of a `sqlite3.DatabaseError` traceback.
 
     `events_enabled` is the `[events] enabled` kill switch: with False no event is
     emitted to `run_events`."""
@@ -363,6 +366,11 @@ def open_store(root: Path, *, create: bool = True, events_enabled: bool = True) 
         )
     except SchemaVersionError as exc:
         raise JevError(str(exc)) from exc
+    except sqlite3.Error as exc:
+        raise JevError(
+            f"state database is corrupt ({path}): {exc}. Restore it from a backup, "
+            "or move it aside and run `jev init` in a fresh clone."
+        ) from exc
     with store:
         yield store
 

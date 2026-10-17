@@ -80,10 +80,15 @@ def _recurring_table(tasks: list[RecurringTask]) -> Table:
         table.add_column(column, overflow="fold")
     for task in tasks:
         last = _format_local(task.last_run_at, tz) if task.last_run_at is not None else "-"
+        try:
+            schedule = describe(parse_schedule(task.schedule_source))
+        except ScheduleError:
+            # A hand-edited or corrupt schedule must not break a read-only listing.
+            schedule = "invalid schedule"
         table.add_row(
             str(task.id),
             escape(short(task.brief, 40)),
-            escape(describe(parse_schedule(task.schedule_source))),
+            escape(schedule),
             _format_local(task.next_due_at, tz),
             "enabled" if task.enabled else "paused",
             last,
@@ -112,8 +117,16 @@ def _add_recurring(
                 f"no learning profile named {learning_profile!r}; "
                 f"create it with `jev learning create {learning_profile}`"
             )
-    if options.profile is not None and not options.profile.strip():
-        raise fail("--profile needs a name")
+    if options.profile is not None:
+        if not options.profile.strip():
+            raise fail("--profile needs a name")
+        # Fail fast like the one-shot path: a bogus profile would only fail when the
+        # scheduler fires the task, unattended (audit 2026-10-16).
+        if options.profile != NO_PROFILE:
+            try:
+                get_profile(ctx.config, options.profile)
+            except ProfileError as exc:
+                raise fail(str(exc)) from exc
     try:
         schedule = parse_schedule(repeat)
     except ScheduleError as exc:

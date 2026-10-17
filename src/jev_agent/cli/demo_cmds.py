@@ -18,7 +18,7 @@ console = Console()
 
 demo_app = typer.Typer(
     name="demo",
-    help="Demo data seeded by `jev init --demo`: inspect it, remove it.",
+    help="Demo data seeded by `jev init --demo`: remove it.",
     no_args_is_help=True,
 )
 

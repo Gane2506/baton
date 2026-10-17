@@ -70,6 +70,7 @@ from jev_agent.core.lease import RunInUseError
 from jev_agent.core.pipeline import PipelineError
 from jev_agent.core.store import NotFoundError
 from jev_agent.quality.levels import LEVELS, parse_level
+from jev_agent.runlog.redact import redact
 from jev_agent.servers.profiles import ProfileError, get_profile
 
 console = Console()
@@ -471,7 +472,8 @@ def print_chat_list(root: Path) -> None:
     for column in ("updated", "backend", "learning", "turns", "runs", "spent", "title"):
         table.add_column(column, overflow="fold")
     for meta in chats:
-        title = chat_title(meta, root) or "-"
+        # Titles come from the user's brief or first message: redact like the transcript.
+        title = redact(chat_title(meta, root)) or "-"
         table.add_row(
             meta.chat_id,
             meta.updated_at.replace("+00:00", "Z"),

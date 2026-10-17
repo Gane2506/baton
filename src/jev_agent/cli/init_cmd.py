@@ -67,6 +67,11 @@ def init(
         _migrate(root)
         return
 
+    if demo:
+        # Fail before writing anything: the seeder's own guard runs after jev.toml and
+        # .gitignore are already changed, which would leave residue behind (audit 2026-10-16).
+        _demo_precheck(root)
+
     config_path = root / CONFIG_FILENAME
     if config_path.exists() and not force:
         raise fail(f"{config_path} already exists. Use --force to overwrite it.")
@@ -93,15 +98,9 @@ def init(
         print_welcome()
 
 
-def _seed_demo(root: Path) -> None:
-    """Run the demo seeder against the freshly initialised repo and mark the data as demo."""
-    from jev_agent.demo import (
-        STATE_DB_FILENAME,
-        is_demo_repo,
-        marker_path,
-        write_demo_marker,
-    )
-    from jev_agent.demo.seeder import seed
+def _demo_precheck(root: Path) -> None:
+    """`fail` when `--demo` cannot seed this repo; called before `init` writes anything."""
+    from jev_agent.demo import STATE_DB_FILENAME, is_demo_repo
 
     state_dir = root / STATE_DIRNAME
     if (state_dir / STATE_DB_FILENAME).exists() or is_demo_repo(root):
@@ -109,12 +108,26 @@ def _seed_demo(root: Path) -> None:
             f"{state_dir} already holds state: --demo seeds a fresh repo only. "
             "Start from a clean repo instead."
         )
+
+
+def _seed_demo(root: Path) -> None:
+    """Run the demo seeder against the freshly initialised repo and mark the data as demo."""
+    from jev_agent.demo import marker_path, write_demo_marker
+    from jev_agent.demo.seeder import seed
+
+    _demo_precheck(root)  # re-checked: the state could have changed since `init` checked
     try:
-        seed(root, demo_config=False)
+        print(seed(root, demo_config=False))
     except SystemExit as exc:
-        raise fail(f"demo seeding failed: {exc}") from exc
+        raise fail(
+            f"demo seeding failed: {exc} (jev.toml and .gitignore were already updated; "
+            f"delete {root / STATE_DIRNAME}/ and retry, or start from a clean repo)"
+        ) from exc
     except Exception as exc:  # CLI boundary: report the failure, don't traceback
-        raise fail(f"demo seeding failed unexpectedly: {exc}") from exc
+        raise fail(
+            f"demo seeding failed unexpectedly: {exc} (jev.toml and .gitignore were already "
+            f"updated; delete {root / STATE_DIRNAME}/ and retry, or start from a clean repo)"
+        ) from exc
     write_demo_marker(root, seeded_by="jev init --demo")
     console.print(
         f"Demo data seeded and marked as demo in {escape(str(marker_path(root)))} "

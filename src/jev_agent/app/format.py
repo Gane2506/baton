@@ -14,9 +14,16 @@ from jev_agent.core.store import QualityReportRecord, RunRecord
 
 
 def short(text: str, width: int) -> str:
-    """`text` on one line, cut to `width` characters with `...`."""
+    """`text` on one line, cut to at most `width` characters with `...`.
+
+    Tiny widths cannot fit the ellipsis: below 4 the result is clamped to `width`
+    characters without it (the contract is "never wider than `width`")."""
     line = " ".join(text.split())
-    return line if len(line) <= width else line[: max(width - 3, 1)] + "..."
+    if len(line) <= width:
+        return line
+    if width < 4:
+        return line[: max(width, 0)]
+    return line[: width - 3] + "..."
 
 
 def format_time(value: datetime) -> str:

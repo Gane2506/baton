@@ -50,7 +50,10 @@ def _effort_list(levels: frozenset[str]) -> str:
 
 # Key names that look like they hold a secret. `api_key_env` and `bearer_token_env` are
 # allowed: they name an env var.
-_SECRET_KEY = re.compile(r"(api_)?key$|token|secret|password", re.IGNORECASE)
+_SECRET_KEY = re.compile(
+    r"(api_)?key$|token|secret|password|passphrase|authorization|bearer|auth",
+    re.IGNORECASE,
+)
 _ALLOWED_SECRET_LOOKALIKES = frozenset({"api_key_env", "bearer_token_env"})
 # Tables whose keys are names chosen by the user (MCP server, skill and plugin names, HTTP
 # header names), not settings: a server called "secrets" or a header "X-Api-Key" is fine.
@@ -830,6 +833,7 @@ class ApiWorkerConfig(_Strict):
     base_url: str = Field(
         default=OPENROUTER_BASE_URL,
         min_length=1,
+        pattern=r"^https?://",
         description="OpenAI-compatible API endpoint the worker calls.",
     )
     api_key_env: str = Field(
@@ -1197,27 +1201,36 @@ class CacheSemanticSettings(_Strict):
     available, but nothing is served semantically until shadow-mode data proves it safe."""
 
     enabled: bool = Field(default=False, description="Serve near-duplicate calls from the cache.")
-    embedder: str = Field(
+    embedder: Literal["simhash", "openrouter"] = Field(
         default="simhash",
         description='Similarity backend: "simhash" (stdlib, default) or "openrouter".',
     )
     decision_threshold: float = Field(
         default=0.98,
+        ge=0,
+        le=1,
         description="Similarity floor for decisions (see `jev cache calibrate`).",
     )
     role_threshold: float = Field(
         default=0.98,
+        ge=0,
+        le=1,
         description="Similarity floor for role outputs (shadow-measured before serving).",
     )
     chat_threshold: float = Field(
-        default=0.98, description="Similarity floor for chat turns (phase 4)."
+        default=0.98,
+        ge=0,
+        le=1,
+        description="Similarity floor for chat turns (phase 4).",
     )
-    mode: str = Field(
+    mode: Literal["off", "shadow", "serve"] = Field(
         default="off",
         description='Serving mode: "off", "shadow" (measure only, never serve), or "serve".',
     )
     min_agreement: float = Field(
         default=0.98,
+        ge=0,
+        le=1,
         description="Live-sampling floor: below it, semantic serving auto-disables.",
     )
 
@@ -1240,13 +1253,16 @@ class CacheSettings(_Strict):
     )
     ttl_hours: float = Field(
         default=168,
+        gt=0,
         description="Default entry lifetime, hours (decisions); per-kind overrides below.",
     )
     max_entries: int = Field(
         default=10_000, description="LRU eviction kicks in past this many entries."
     )
     max_mb: float = Field(
-        default=256, description="Evict least-recently-hit entries past this size."
+        default=256,
+        gt=0,
+        description="Evict least-recently-hit entries past this size.",
     )
     cache_roles: list[str] = Field(
         default_factory=lambda: ["planner", "validator", "reviewer", "code_reviewer"],

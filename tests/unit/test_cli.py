@@ -21,4 +21,6 @@ def test_no_args_shows_help() -> None:
 def test_short_puts_text_on_one_line_and_cuts_it() -> None:
     assert short("add\n  search ", 20) == "add search"
     assert short("abcdefghij", 6) == "abc..."
-    assert short("abcdefghij", 2) == "a..."
+    # Widths below 4 cannot fit the ellipsis: the result is clamped to `width`
+    # (audit 2026-10-16: `short()` must never return more than `width` characters).
+    assert short("abcdefghij", 2) == "ab"

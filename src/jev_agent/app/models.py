@@ -64,7 +64,11 @@ def fetch_catalog(
 
 
 def list_models(catalog: ModelCatalog, *, free: bool, supports: Sequence[str]) -> ModelListing:
-    """Filter the catalog: free models only, and/or models supporting each parameter."""
+    """Filter the catalog: free models only, and/or models supporting each parameter.
+
+    A model whose support for a parameter is *unknown* is dropped by the filter (it does
+    not count as supporting it): a filtered list only promises models known to support
+    every requested parameter."""
     wanted = [s.strip() for s in supports if s.strip()]
     models = [
         m

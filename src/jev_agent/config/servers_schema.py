@@ -143,7 +143,15 @@ class ServerConfig(_Strict):
                 "rights, so it is never granted by default, by typo or by omission"
             )
         if self.workdir is not None:
-            self.workdir = normalize_remote_path(self.workdir)
+            workdir = normalize_remote_path(self.workdir)
+            if workdir in _SYSTEM_DIRS:
+                raise ValueError(
+                    f"workdir: {workdir!r} is too broad; name the directory commands run in "
+                    "(for example /srv/app)"
+                )
+            if "/.ssh" in workdir + "/":
+                raise ValueError(f"workdir: {workdir!r}: ~/.ssh is never a workdir")
+            self.workdir = workdir
         paths = [normalize_remote_path(p) for p in self.allowed_paths]
         for value in paths:
             if value in _SYSTEM_DIRS:

@@ -187,7 +187,9 @@ def sync(run_id: str | None, all_: bool, repo: Path) -> None:
                 failed += 1
                 print_error(f"{describe_pr(pr)}: {exc}")
                 continue
-            console.print(f"{escape(describe_pr(updated))}: {pr_status(updated)}", highlight=False)
+            console.print(
+                f"{escape(describe_pr(updated))}: {escape(pr_status(updated))}", highlight=False
+            )
         if failed:
             raise typer.Exit(1)
 

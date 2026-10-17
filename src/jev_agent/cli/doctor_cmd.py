@@ -9,7 +9,6 @@ patch on this module.
 from __future__ import annotations
 
 import shutil
-import socket
 from collections.abc import Callable
 from pathlib import Path
 from typing import Annotated
@@ -19,7 +18,7 @@ from rich.console import Console
 from rich.markup import escape
 from rich.table import Table
 
-from jev_agent.app.doctor import Check, Status
+from jev_agent.app.doctor import Check, Status, _resolve_host
 from jev_agent.app.doctor import run_checks as _run_checks
 from jev_agent.cli.repo import RepoOption
 from jev_agent.cli.wiring import cli_errors
@@ -39,11 +38,9 @@ ssh_runner: SshRunner = run_process
 
 
 def resolve_host(host: str) -> bool:
-    try:
-        socket.getaddrinfo(host, None)
-    except (OSError, UnicodeError):
-        return False
-    return True
+    """Whether `host` resolves. The DNS indirection tests patch on this module; the bounded
+    implementation lives in `app.doctor._resolve_host` (one place, not two)."""
+    return _resolve_host(host)
 
 
 def run_checks(repo: Path, *, connect: bool = False) -> list[Check]:

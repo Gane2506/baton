@@ -74,7 +74,7 @@ def test_profile_commands(repo: Path, tmp_path: Path) -> None:
     code, out = _jev(repo, "learning", "show")
     assert code == 0 and lesson_id in out and "Keep tasks small." in out
     assert "planner,coder" in out
-    code, out = _jev(repo, "learning", "forget", lesson_id)
+    code, out = _jev(repo, "learning", "forget", lesson_id, input="y\n")
     assert code == 0 and f"Retired {lesson_id} from work" in out
     code, out = _jev(repo, "learning", "show", "work")
     assert code == 0 and "has no lessons" in out

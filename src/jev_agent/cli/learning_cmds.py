@@ -127,12 +127,20 @@ def show(
     include_retired: Annotated[
         bool, typer.Option("--all", help="Include retired lessons.")
     ] = False,
+    limit: Annotated[
+        int,
+        typer.Option(
+            "--limit",
+            min=1,
+            help="Show at most this many lessons (the newest ones).",
+        ),
+    ] = 50,
     repo: RepoOption = Path("."),
 ) -> None:
     """Show a profile's lessons."""
     with _context(repo, create=False) as (ctx, learning):
         name = profile or _active(ctx)
-        lessons = profile_lessons(learning, name, include_retired)
+        lessons = profile_lessons(learning, name, include_retired)[-limit:]
         if not lessons:
             console.print(f"Profile {escape(name)} has no lessons.")
             return
@@ -238,11 +246,17 @@ def delete(name: ProfileArg, yes: YesOption = False, repo: RepoOption = Path("."
 @learning_app.command("forget")
 def forget(
     lesson_id: Annotated[str, typer.Argument(help="Lesson id, e.g. L12 (see `show`).")],
+    yes: YesOption = False,
     repo: RepoOption = Path("."),
 ) -> None:
     """Retire one lesson so it is never used again."""
     with _context(repo) as (_, learning):
-        lesson = forget_lesson(learning, lesson_id)
+        _, lesson = learning.find_lesson(lesson_id)  # unknown id: error before asking
+        if not yes and not typer.confirm(
+            f"Retire lesson {lesson.id} from profile {lesson.profile}?"
+        ):
+            raise typer.Exit(1)
+        forget_lesson(learning, lesson_id)
         console.print(f"Retired {lesson.id} from {escape(lesson.profile)}.")
 
 

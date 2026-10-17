@@ -209,7 +209,10 @@ def bisect(
             html_text = render_timeline_html(
                 run_id, rctx.store.list_events(run_id), datetime.now().astimezone()
             )
-            export.write_text(html_text)
+            try:
+                export.write_text(html_text)
+            except OSError as exc:
+                raise fail(f"cannot write {export}: {exc}") from exc
             console.print(f"[green]timeline written to {escape(str(export))}[/green]")
     if result is None:
         console.print("[green]no bad event found: the run looks fine by the given criteria[/green]")

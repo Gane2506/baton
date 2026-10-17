@@ -51,7 +51,7 @@ def show(repo: RepoOption = Path(".")) -> None:
             console.print("No design system yet. `jev design init` scaffolds a starter one.")
             return
         console.print(f"[bold]Design system v{system.version}[/bold] ({system.updated_at})")
-        console.print(system.markdown)
+        console.print(system.markdown, markup=False)
 
 
 @design_app.command("init")

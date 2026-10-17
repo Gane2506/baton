@@ -40,6 +40,7 @@ OlderThanOption = Annotated[
     typer.Option(
         "--older-than",
         metavar="HOURS",
+        min=0.0,
         help="Only clear entries created more than this many hours ago.",
     ),
 ]
