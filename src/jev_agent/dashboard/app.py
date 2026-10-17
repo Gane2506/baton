@@ -661,9 +661,20 @@ class Dashboard:
         run_id = request.path_params["run_id"]
         return self.page(request, "run.html", lambda repo: self._run_context(repo, run_id))
 
+    def _run_live_context(self, repo: views.Repo, run_id: str) -> dict[str, Any]:
+        """The 3-second live poll's context: the lightweight view, no log-dir walk."""
+        if not views.valid_run_id(run_id):
+            raise NotFoundError(f"run {run_id} not found")
+        view = views.run_live_view(repo, run_id)
+        job = self.launcher.job(run_id)
+        busy = self.launcher.busy(run_id)
+        return {"v": view, "job": job, "busy": busy}
+
     def run_fragment(self, request: Request) -> Response:
         run_id = request.path_params["run_id"]
-        return self.page(request, "_run_live.html", lambda repo: self._run_context(repo, run_id))
+        return self.page(
+            request, "_run_live.html", lambda repo: self._run_live_context(repo, run_id)
+        )
 
     def run_file(self, request: Request) -> Response:
         run_id = request.path_params["run_id"]

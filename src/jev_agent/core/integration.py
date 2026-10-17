@@ -113,7 +113,8 @@ def fix_task_card(cards: list[TaskCard], failure: FailedCommand) -> TaskCard:
     """A new task, after all of `cards`, asking to make `failure.command` pass again."""
     next_no = 1 + max(int(card.id[1:]) for card in cards)
     command = redact(failure.command)
-    output = redact(failure.result.output[-OUTPUT_TAIL_CHARS:])
+    # Redact first: a cut can split a secret, and the pieces would not match.
+    output = redact(failure.result.output)[-OUTPUT_TAIL_CHARS:]
     description = (
         f"After merging all tasks, `{command}` fails (exit code {failure.result.exit_code}). "
         "Fix the code so it passes, keeping what the other tasks built.\n\n"

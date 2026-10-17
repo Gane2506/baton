@@ -37,7 +37,12 @@ from jev_agent.capbench.models import (
     task_result_from_grade,
 )
 from jev_agent.core.models import RunState
-from jev_agent.core.workspace import result_branch
+from jev_agent.core.workspace import (
+    GIT_QUICK_TIMEOUT_S,
+    GIT_SLOW_TIMEOUT_S,
+    result_branch,
+    run_git,
+)
 
 # The sandbox `jev.toml` every benchmark run gets: fixed budget cap, `basic`
 # quality level (fewer checks, fewer model calls), no plan approval gate (the
@@ -99,8 +104,12 @@ def benchmark_toml(per_run_usd: float) -> str:
     )
 
 
-def _git(sandbox: Path, *args: str) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(["git", *args], cwd=sandbox, capture_output=True, text=True, check=True)
+def _git(sandbox: Path, *args: str, slow: bool = False) -> subprocess.CompletedProcess[str]:
+    """`git …` in the sandbox with a timeout; a nonzero exit raises, as with `check=True`."""
+    proc = run_git(args, sandbox, GIT_SLOW_TIMEOUT_S if slow else GIT_QUICK_TIMEOUT_S)
+    if proc.returncode != 0:
+        raise subprocess.CalledProcessError(proc.returncode, proc.args, proc.stdout, proc.stderr)
+    return proc
 
 
 def prepare_sandbox(task: TaskSpec, parent: Path, config: BenchmarkConfig) -> tuple[Path, str]:
@@ -126,6 +135,7 @@ def prepare_sandbox(task: TaskSpec, parent: Path, config: BenchmarkConfig) -> tu
         "-q",
         "-m",
         f"benchmark fixture: {task.id}",
+        slow=True,  # commit can run repo hooks
     )
     (sandbox / "jev.toml").write_text(benchmark_toml(config.per_run_usd), encoding="utf-8")
     base_sha = _git(sandbox, "rev-parse", "HEAD").stdout.strip()
@@ -180,7 +190,7 @@ def _checkout_result(sandbox: Path, run_id: str, dest: Path) -> Path:
     if dest.exists():
         shutil.rmtree(dest)
     dest.mkdir(parents=True)
-    _git(sandbox, "--work-tree", str(dest), "checkout", branch, "--", ".")
+    _git(sandbox, "--work-tree", str(dest), "checkout", branch, "--", ".", slow=True)
     return dest
 
 

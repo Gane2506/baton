@@ -20,6 +20,8 @@ from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
+from markupsafe import Markup
+
 from jev_agent.app.board import COLUMN_FOR_STATE, COLUMNS, Card, load_board
 from jev_agent.app.chat import chat_title
 from jev_agent.app.context import FAKE_WORKERS_ENV, STATE_DB_FILENAME
@@ -206,7 +208,7 @@ class RunView:
     attempts: list[AttemptRow]
     learning: str
     quality: str
-    review_html: Any  # Markup, or None when no gate has run
+    review_html: Markup | None  # None when no gate has run
     branch: str | None
     files: list[LogFile]
     can_approve: bool
@@ -317,6 +319,20 @@ def resume_risk(repo: Repo, run: RunRecord, now: datetime | None = None) -> str:
 
 def run_view(repo: Repo, run_id: str) -> RunView:
     """Everything `jev status RUN`, `jev log RUN` and `jev quality show RUN` print."""
+    return _run_view(repo, run_id)
+
+
+def run_live_view(repo: Repo, run_id: str) -> RunView:
+    """What the 3-second live poll (`_run_live.html`) needs, without the slow parts.
+
+    Skips the `os.walk` of the run's log directory (`files`) and the markdown review
+    render: the live fragment shows neither.
+    """
+    return _run_view(repo, run_id, light=True)
+
+
+def _run_view(repo: Repo, run_id: str, *, light: bool = False) -> RunView:
+    """The run view; `light=True` skips the parts the live fragment never shows."""
     store = repo.store
     run = store.get_run(run_id)  # NotFoundError for an unknown run
     reports = store.list_quality_reports(run_id)
@@ -374,9 +390,11 @@ def run_view(repo: Repo, run_id: str) -> RunView:
         attempts=attempts,
         learning=learning_line(run),
         quality=quality_line(run, reports),
-        review_html=render_markdown(review_text(repo.root, run, reports)) if reports else None,
+        review_html=None
+        if light
+        else (render_markdown(review_text(repo.root, run, reports)) if reports else None),
         branch=result_branch(run_id) if integrated else None,
-        files=log_files(base),
+        files=[] if light else log_files(base),
         can_approve=run.state is RunState.AWAITING_APPROVAL,
         can_resume=can_resume(run),
         resume_risk=resume_risk(repo, run),

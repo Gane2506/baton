@@ -4,9 +4,12 @@ from __future__ import annotations
 
 from typing import Literal
 
+import pytest
+
 from jev_agent.core.commands import CommandResult
 from jev_agent.core.integration import (
     FIX_TITLE,
+    OUTPUT_TAIL_CHARS,
     FailedCommand,
     fix_rounds,
     fix_task_card,
@@ -53,3 +56,17 @@ def test_fix_task_card_marks_kind() -> None:
     # A second round counts on top of the first.
     card2 = fix_task_card([*cards, card], failure)
     assert fix_rounds([*cards, card, card2]) == 2
+
+
+def test_fix_task_card_redacts_secret_straddling_the_tail_cut(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#27 remainder: the tail was cut before redacting, so a secret split by the cut leaked."""
+    secret = "sk-test-" + "s3cr3t" * 8
+    monkeypatch.setenv("JEV_TEST_LEAK_SECRET", secret)
+    # The tail cut lands inside the secret: cut-then-redact left the second half behind.
+    output = "A" * 5000 + secret + "B" * (OUTPUT_TAIL_CHARS - 20)
+    failure = FailedCommand("make test", CommandResult(2, output))
+    card = fix_task_card([_card("T1", "Build the parser", kind="plan")], failure)
+    assert secret not in card.description
+    assert "[REDACTED]" in card.description
