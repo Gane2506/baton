@@ -181,9 +181,7 @@ def test_toml_syntax_error_includes_path(repo: Path, user_cfg: Path) -> None:
     assert "line 1" in str(exc.value)
 
 
-def test_non_utf8_config_raises_config_error_not_traceback(
-    repo: Path, user_cfg: Path
-) -> None:
+def test_non_utf8_config_raises_config_error_not_traceback(repo: Path, user_cfg: Path) -> None:
     """Audit 2026-10-16: non-UTF8 bytes must keep the ConfigError contract, not leak a
     raw UnicodeDecodeError."""
     path = repo / "jev.toml"
