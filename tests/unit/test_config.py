@@ -181,6 +181,18 @@ def test_toml_syntax_error_includes_path(repo: Path, user_cfg: Path) -> None:
     assert "line 1" in str(exc.value)
 
 
+def test_non_utf8_config_raises_config_error_not_traceback(
+    repo: Path, user_cfg: Path
+) -> None:
+    """Audit 2026-10-16: non-UTF8 bytes must keep the ConfigError contract, not leak a
+    raw UnicodeDecodeError."""
+    path = repo / "jev.toml"
+    path.write_bytes(b"\xff\xfe[budget]\n")
+    with pytest.raises(ConfigError) as exc:
+        load_config(repo, user_cfg)
+    assert str(exc.value).startswith(f"{path}: invalid TOML:")
+
+
 def test_partial_role_table_keeps_role_defaults() -> None:
     cfg = JevConfig.model_validate(
         {"roles": {"coder": {"models": ["x"]}, "validator": {"models": ["y"]}}}

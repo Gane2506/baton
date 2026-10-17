@@ -169,7 +169,10 @@ def _read_toml(path: Path) -> dict[str, Any] | None:
             return tomllib.load(f)
     except FileNotFoundError:
         return None
-    except tomllib.TOMLDecodeError as exc:
+    # `tomllib` decodes the bytes before parsing, so a non-UTF8 file raises
+    # `UnicodeDecodeError` (not a `TOMLDecodeError` subclass): keep the ConfigError
+    # contract for it too (audit 2026-10-16).
+    except (tomllib.TOMLDecodeError, UnicodeDecodeError) as exc:
         raise ConfigError(f"{path}: invalid TOML: {exc}") from exc
     except OSError as exc:
         raise ConfigError(f"{path}: cannot read file: {exc.strerror or exc}") from exc
