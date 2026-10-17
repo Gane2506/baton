@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import shlex
 from pathlib import Path
 
 from jev_agent.quality.base import (
@@ -39,9 +40,9 @@ class RuffCheck(BaseCheck):
         if not files:
             return CheckResult(status="pass", detail="no Python files changed")
         lint = await runner.run(
-            "ruff-check", f"{ruff} check --output-format=concise {quote(files)}"
+            "ruff-check", f"{shlex.quote(ruff)} check --output-format=concise {quote(files)}"
         )
-        fmt = await runner.run("ruff-format", f"{ruff} format --check {quote(files)}")
+        fmt = await runner.run("ruff-format", f"{shlex.quote(ruff)} format --check {quote(files)}")
         for result in (lint, fmt):  # 0: clean, 1: problems, anything else: ruff failed
             if result.timed_out or result.exit_code not in (0, 1):
                 return tool_error(self, result)
@@ -91,7 +92,7 @@ class EslintCheck(BaseCheck):
         files = runner.changed(JS_SUFFIXES)
         if not files:
             return CheckResult(status="pass", detail="no JS/TS files changed")
-        result = await runner.run("eslint", f"{eslint} --format unix {quote(files)}")
+        result = await runner.run("eslint", f"{shlex.quote(eslint)} --format unix {quote(files)}")
         if result.ok:
             return CheckResult(status="pass", detail=f"{len(files)} file(s) clean")
         if result.timed_out or result.exit_code != 1:  # 1: lint errors, 2: ESLint failed
@@ -122,7 +123,7 @@ class PrettierCheck(BaseCheck):
         files = runner.changed((*JS_SUFFIXES, ".json", ".css", ".scss", ".md", ".html"))
         if not files:
             return CheckResult(status="pass", detail="no files Prettier formats changed")
-        result = await runner.run("prettier", f"{prettier} --check {quote(files)}")
+        result = await runner.run("prettier", f"{shlex.quote(prettier)} --check {quote(files)}")
         if result.ok:
             return CheckResult(status="pass", detail=f"{len(files)} file(s) formatted")
         if result.timed_out or result.exit_code != 1:  # 1: unformatted, 2: Prettier failed
@@ -159,7 +160,7 @@ def pytest_command(repo: Path, runner: ToolRunner) -> tuple[str | None, str | No
         return "uv run pytest", None
     pytest = runner.resolve("pytest")
     if pytest is not None:
-        return pytest, None
+        return shlex.quote(pytest), None
     return None, "pytest"
 
 

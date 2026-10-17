@@ -15,6 +15,7 @@ import os
 import shutil
 import subprocess
 import threading
+import time
 from collections.abc import AsyncIterator, Callable, Collection
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -121,9 +122,9 @@ from jev_agent.dashboard.preview import (
     PreviewError,
     PreviewInput,
     PreviewSession,
+    read_capped_body,
 )
 from jev_agent.dashboard.render import (
-    render_bar_chart,
     render_daily_spend,
     render_markdown,
     render_trend_chart,
@@ -209,7 +210,6 @@ def _environment() -> Environment:
     env.globals["nav"] = NAV
     env.globals["version"] = __version__
     env.globals["csrf_field"] = CSRF_FIELD
-    env.globals["bar_chart_svg"] = render_bar_chart
     env.globals["daily_bars_svg"] = render_daily_spend
     env.globals["trend_chart_svg"] = render_trend_chart
     env.globals["fmt"] = format_value
@@ -496,6 +496,11 @@ def _refresh_servers(config: JevConfig, state_dir: Path) -> str:
 class Dashboard:
     """The app's state: settings, templates, background runs and one-time messages."""
 
+    # Flash store bounds: entries per session, and how long a session that never
+    # renders again may keep its entries (its cookie is attacker-influenceable).
+    _MAX_FLASHES_PER_SESSION = 30
+    _FLASH_SESSION_TTL_S = 6 * 3600
+
     def __init__(self, settings: DashboardSettings, launcher: RunLauncher) -> None:
         self.settings = settings
         self.launcher = launcher
@@ -506,16 +511,32 @@ class Dashboard:
         self.env = _environment()
         self._flash_lock = threading.Lock()
         self._flashes: dict[str, list[tuple[str, str]]] = {}
+        self._flash_seen: dict[str, float] = {}  # session -> last flash (monotonic)
 
     # ---- helpers ---------------------------------------------------------------------------
 
     def flash(self, request: Request, kind: str, text: str) -> None:
         with self._flash_lock:
-            self._flashes.setdefault(request.state.session, []).append((kind, text))
+            self._prune_flashes()
+            session = request.state.session
+            flashes = self._flashes.setdefault(session, [])
+            flashes.append((kind, text))
+            # A session that POSTs forever but never renders again must not grow the
+            # store without bound: keep the newest entries.
+            del flashes[: -self._MAX_FLASHES_PER_SESSION]
+            self._flash_seen[session] = time.monotonic()
 
     def take_flashes(self, request: Request) -> list[tuple[str, str]]:
         with self._flash_lock:
+            self._flash_seen.pop(request.state.session, None)
             return self._flashes.pop(request.state.session, [])
+
+    def _prune_flashes(self) -> None:
+        """Drop sessions older than the TTL (called with the flash lock held)."""
+        cutoff = time.monotonic() - self._FLASH_SESSION_TTL_S
+        for session in [s for s, seen in self._flash_seen.items() if seen < cutoff]:
+            del self._flash_seen[session]
+            self._flashes.pop(session, None)
 
     def shutdown_jobs(self, timeout: float) -> list[str]:
         """Cancel and join every background job (runs, chat turns and the dashboard's
@@ -1187,8 +1208,10 @@ class Dashboard:
         self._check_agent(request)
         session_id = request.query_params.get("session", "")
         page_url = request.query_params.get("url", "")
-        body = await request.body()
+        # Read in chunks with a bail-out: a malicious local caller must not make the
+        # server buffer an unbounded body before the size check runs.
         try:
+            body = await read_capped_body(request)
             self._preview_bridge(request).post_frame(session_id, body, page_url=page_url)
         except PreviewError as exc:
             raise HTTPException(exc.status_code, str(exc)) from exc

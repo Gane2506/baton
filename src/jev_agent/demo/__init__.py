@@ -32,11 +32,18 @@ def is_demo_repo(root: Path) -> bool:
 
 
 def read_demo_marker(root: Path) -> dict[str, Any] | None:
-    """The parsed demo marker, or None when `root` is not a demo repo."""
+    """The parsed demo marker, or None when `root` is not a demo repo.
+
+    A corrupt marker (hand-edited or truncated) is treated as absent, not fatal:
+    `jev demo reset` should report cleanly instead of dying on a traceback.
+    """
     path = marker_path(root)
     if not path.is_file():
         return None
-    data = json.loads(path.read_text(encoding="utf-8"))
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
     return data if isinstance(data, dict) else None
 
 

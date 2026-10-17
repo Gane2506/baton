@@ -162,12 +162,12 @@ class RunLauncher:
             return False
         job = Job(run_id, action, datetime.now(UTC))
         cancel = JobCancel()
-        # Daemon only as a last resort: `shutdown` cancels and joins the threads first.
+        # Non-daemon, like ChatRunner's threads below: the lifespan shutdown joins
+        # every job thread, so a missed shutdown must not silently abandon a run.
         thread = threading.Thread(
             target=self._work,
             args=(job, lock, cancel),
             name=f"jev-{action}-{run_id}",
-            daemon=True,
         )
         with self._guard:
             self._jobs[run_id] = job
@@ -176,6 +176,11 @@ class RunLauncher:
         try:
             thread.start()
         except BaseException:
+            # A thread that never started must not linger as a "running" job.
+            with self._guard:
+                del self._jobs[run_id]
+                del self._threads[run_id]
+                del self._cancels[run_id]
             lock.release()
             raise
         return True
@@ -272,6 +277,11 @@ class ChatRunner:
         try:
             thread.start()
         except BaseException:
+            # A thread that never started must not linger as a "running" job.
+            with self._guard:
+                del self._jobs[chat_id]
+                del self._threads[chat_id]
+                del self._cancels[chat_id]
             lock.release()
             raise
         return True

@@ -13,9 +13,25 @@ from jev_agent.runlog.redact import redact
 RUN_SCOPE = "run"
 
 
+def _segment(label: str, value: str | int) -> str:
+    """One path segment of a log path, validated: log paths are a write target, so `/`,
+    `..`, empty segments and NULs are rejected (callers pass app-generated ids; this
+    is defense in depth)."""
+    text = str(value)
+    if not text or text in {".", ".."} or "/" in text or "\\" in text or "\x00" in text:
+        raise ValueError(f"unsafe log path segment {label}={text!r}")
+    return text
+
+
 def log_path(state_dir: Path, run_id: str, scope: str | None, name: str | int) -> Path:
     """Path of a log file; `scope` None means run-level. Does not create anything."""
-    return state_dir / "runs" / run_id / (scope or RUN_SCOPE) / f"{name}.log"
+    return (
+        state_dir
+        / "runs"
+        / _segment("run_id", run_id)
+        / _segment("scope", scope or RUN_SCOPE)
+        / f"{_segment('name', name)}.log"
+    )
 
 
 def write_log(path: Path, text: str) -> None:

@@ -107,6 +107,7 @@ _KEY_NAMES = re.compile(r"^id_(rsa|dsa|ecdsa|ed25519)(_sk)?$|\.(pem|key|p12|pfx|
 _SECRET_FILES = frozenset(
     {".env", ".netrc", ".pgpass", ".git-credentials", ".npmrc", ".pypirc", "credentials"}
     | {"shadow", "gshadow", "shadow-", "gshadow-", "master.key", "secrets.yml", "environ"}
+    | {"database.yml"}
 )
 _SECRET_DIRS = frozenset({".ssh", ".gnupg", ".aws", ".kube", ".docker", "sudoers.d"})
 
@@ -187,6 +188,13 @@ def sensitive(value: str) -> str | None:
         return f"{value}: system credential files are off limits"
     if _KEY_NAMES.search(name) or name in _SECRET_FILES or name.startswith(".env."):
         return f"{value}: files that usually hold keys or passwords are off limits"
+    if name == "config" and _in_git_dir(value):
+        # `.git/config` routinely holds credentials (`https://user:TOKEN@host`,
+        # `extraHeader = Authorization: ...`); read it through `git config` instead.
+        return f"{value}: git config may hold credentials"
+    if len(parts) == 3 and parts[0] == "proc" and parts[2] == "cmdline":
+        # Process command lines routinely embed secrets (`mysql -p…`, tokens in flags).
+        return f"{value}: process command lines may hold secrets"
     return None
 
 
@@ -283,7 +291,9 @@ def _name(word: str) -> str:
 
 
 def _options(args: Sequence[str]) -> list[str]:
-    return [a for a in args if a.startswith("-") and a != "-"]
+    # `"--"` is the end-of-options separator, not an option: excluding it lets the
+    # safe `rm -- -dashfile` idiom through (`_operands` already handles it).
+    return [a for a in args if a.startswith("-") and a not in ("-", "--")]
 
 
 def _operands(args: Sequence[str]) -> list[str]:
@@ -751,12 +761,14 @@ def _pip_install(args: list[str], ctx: PolicyContext) -> None:
             if i + 1 >= len(args):
                 raise _Denied(f"pip install: {arg} needs a path")
             target = args[i + 1]
-            if arg in {"-e", "--editable"}:
-                _writable(target, ctx)
+            _sensitive_args([target])
+            if (boundary := _boundary(ctx)) is not None:
+                _require_within_boundary(target, ctx, boundary)
             else:
-                _sensitive_args([target])
-                if (boundary := _boundary(ctx)) is not None:
-                    _require_within_boundary(target, ctx, boundary)
+                # A `-r` file's own options are unchecked (documented residual risk),
+                # but its *location* gets the same scope check as `-e`: both run
+                # with the installer's privileges.
+                _writable(target, ctx)
             i, packages = i + 2, packages + 1
             continue
         if not arg.startswith("-"):
@@ -823,9 +835,19 @@ def _compose(args: list[str], ctx: PolicyContext) -> None:
     while i < len(args) and args[i] in {"-f", "--file", "-p", "--project-name"}:
         if i + 1 >= len(args):
             raise _Denied(f"docker compose: {args[i]} needs a value")
+        if args[i] in {"-p", "--project-name"}:
+            # Disallowed, not charset-restricted: `-p` selects which project's
+            # containers `down`/`restart` act on, so *any* value lets the agent hit
+            # another project's containers, and no charset could prevent that.
+            # The default (directory-derived) project name covers the agent's own.
+            raise _Denied("docker compose: -p/--project-name is not allowed")
         _sensitive_args([args[i + 1]])
-        if args[i] in {"-f", "--file"} and (boundary := _boundary(ctx)) is not None:
+        if (boundary := _boundary(ctx)) is not None:
             _require_within_boundary(args[i + 1], ctx, boundary)
+        else:
+            # The compose file decides which images, volumes and env the agent
+            # brings up: it must live inside the agent's write scope, like `-e`.
+            _writable(args[i + 1], ctx)
         i += 2
     rest = args[i:]
     if not rest:
@@ -918,8 +940,16 @@ def check_command(text: str, ctx: PolicyContext) -> Decision:
             reason = always_denied(inner, ctx) if inner else None
             if reason:
                 return Decision.deny(f"always blocked: {reason}")
-        if len(segments) == 2 and _name(segments[1][0]) in SHELLS:
-            return Decision.deny("always blocked: piping into a shell or interpreter (curl | sh)")
+        if len(segments) == 2:
+            # A leading `sudo` is not a shell: strip it before this check so the
+            # filter table below (not this branch) refuses `df | sudo grep x`,
+            # with the accurate "a pipe may only feed ..." reason.
+            second = segments[1]
+            inner = second[1:] if _name(second[0]) == "sudo" else second
+            if inner and _name(inner[0]) in SHELLS:
+                return Decision.deny(
+                    "always blocked: piping into a shell or interpreter (curl | sh)"
+                )
         first = segments[0]
         sudo = _name(first[0]) == "sudo"
         if sudo:

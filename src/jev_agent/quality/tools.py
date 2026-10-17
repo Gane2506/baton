@@ -156,10 +156,15 @@ _HUNK = re.compile(r"^@@ -\d+(?:,\d+)? \+(?P<start>\d+)(?:,\d+)? @@")
 def changed_files(diff: str) -> list[str]:
     """Files a unified diff adds or modifies (deleted files are left out), in diff order."""
     files: list[str] = []
+    prev = ""
     for line in diff.splitlines():
-        match = _DIFF_FILE.match(line)
-        if match and match.group("path") != "/dev/null" and match.group("path") not in files:
-            files.append(match.group("path"))
+        # A `+++ ` line is a file header only right after the `--- ` line: an added
+        # content line like `+++ x` (an added Markdown header) inside a hunk is not one.
+        if prev.startswith("--- ") and line.startswith("+++ "):
+            match = _DIFF_FILE.match(line)
+            if match and match.group("path") != "/dev/null" and match.group("path") not in files:
+                files.append(match.group("path"))
+        prev = line
     return files
 
 
@@ -168,21 +173,26 @@ def added_lines(diff: str) -> list[tuple[str, int, str]]:
     added: list[tuple[str, int, str]] = []
     current: str | None = None
     line_no = 0
+    prev = ""
     for line in diff.splitlines():
-        if line.startswith("+++ "):
+        if line.startswith("+++ ") and prev.startswith("--- "):
             match = _DIFF_FILE.match(line)
             path = match.group("path") if match else None
             current = None if path in (None, "/dev/null") else path
+            prev = line
             continue
         hunk = _HUNK.match(line)
         if hunk:
             line_no = int(hunk.group("start"))
+            prev = line
             continue
         if current is None or line.startswith("--- "):
+            prev = line
             continue
         if line.startswith("+"):
             added.append((current, line_no, line[1:]))
             line_no += 1
         elif line.startswith(" "):
             line_no += 1
+        prev = line
     return added

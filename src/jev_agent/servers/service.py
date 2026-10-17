@@ -162,7 +162,9 @@ class ServerService:
 
     @staticmethod
     def _timeout(value: float | None) -> float:
-        if value is None or value <= 0:
+        # `not (value > 0)` also catches NaN: it would otherwise survive `min()`
+        # and blow up `int()` inside `time_limited`.
+        if value is None or not (value > 0):
             return DEFAULT_TIMEOUT_S
         return min(float(value), MAX_TIMEOUT_S)
 
@@ -309,7 +311,10 @@ class ServerService:
             recheck = check_write_path(real, ctx)
             if not recheck.allowed:
                 return self._denied(name, action, f"{summary} (resolves to {real})", recheck)
-        if not within(real, ctx.write_roots, strictly=True):
+        # `unrestricted` is documented as "no checks at all": it skips this
+        # post-resolution re-check. Medium keeps it as a second verification
+        # after symlinks are resolved on the server.
+        if ctx.access != "unrestricted" and not within(real, ctx.write_roots, strictly=True):
             return self._denied(
                 name, action, summary, Decision.deny(f"{real} is outside allowed_paths")
             )

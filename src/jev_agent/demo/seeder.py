@@ -1170,7 +1170,7 @@ def seed_chat(root: Path, clock: Clock, start: datetime) -> str:
 # ---- main --------------------------------------------------------------------------------------
 
 
-def seed(root: Path, *, demo_config: bool = True) -> None:
+def seed(root: Path, *, demo_config: bool = True) -> str:
     """Fill `root/.jev/` with illustrative demo state (runs, queue, learning, spend, shipped
     PRs, a saved chat and quality reports).
 
@@ -1180,6 +1180,8 @@ def seed(root: Path, *, demo_config: bool = True) -> None:
     (`jev init --demo`) seeds state only: the demo `jev.toml` dressing changes guarded keys,
     which would need the repo trusted in the user's own config, and a demo must work
     immediately without touching the user's config, so only the offline model list is cached.
+
+    Returns the summary message (the caller prints it; library code stays quiet).
     """
     root = root.resolve()
     if not (root / "jev.toml").is_file() or not (root / STATE_DIRNAME).is_dir():
@@ -1361,13 +1363,13 @@ def seed(root: Path, *, demo_config: bool = True) -> None:
         seed_queue(store, clock, now)
         seed_chat(root, clock, now - timedelta(hours=4, minutes=10))
         seed_shipped(store, clock, now)
-    print(f"Seeded demo state in {root / STATE_DIRNAME}; richest run: {rich}")
+    return f"Seeded demo state in {root / STATE_DIRNAME}; richest run: {rich}"
 
 
 def main(argv: list[str]) -> None:
     if len(argv) != 2:
         raise SystemExit("usage: python examples/demo/seed_demo.py /path/to/initialised/repo")
-    seed(Path(argv[1]))
+    print(seed(Path(argv[1])))
 
 
 if __name__ == "__main__":

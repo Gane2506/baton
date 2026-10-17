@@ -1,7 +1,7 @@
 """`.jev/audit/servers.log`: one JSON line per server command or file operation, allowed or not.
 
 Fields: `time` (UTC, ISO 8601), `run_id`, `role`, `server`, `access`, `action` (`run_command`,
-`read_file`, `write_file`, `upload`, `browser_install`, `connect`), `command` (or the path),
+`read_file`, `write_file`, `upload`, `connect`), `command` (or the path),
 `allowed`, `reason`, `exit_code`, `duration_s`, `phase`. An allowed operation gets two lines:
 `phase` "started" before ssh runs and "finished" (with the exit code) after it returns, so a
 command whose process was killed meanwhile is still on record; refused operations and other
@@ -12,6 +12,7 @@ size.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 from dataclasses import asdict, dataclass
@@ -57,14 +58,30 @@ class AuditLog:
             data["duration_s"] = round(entry.duration_s, 3)
         line = redact(json.dumps(data, ensure_ascii=False)) + "\n"
         self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        with contextlib.suppress(OSError):
+            # `mkdir`'s mode applies only on creation; a pre-existing audit dir
+            # keeps whatever it had (like `ssh._prepare`).
+            self.path.parent.chmod(0o700)
         fd = os.open(self.path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
         with os.fdopen(fd, "a", encoding="utf-8") as f:
             f.write(line)
 
     def read(self) -> list[dict[str, object]]:
-        """Every entry, oldest first (for tests and `jev doctor`)."""
+        """Every entry, oldest first (for tests and `jev doctor`).
+
+        Best-effort: a torn line (a write killed mid-line) is skipped rather than
+        failing the whole read.
+        """
         try:
             lines = self.path.read_text(encoding="utf-8").splitlines()
         except FileNotFoundError:
             return []
-        return [json.loads(line) for line in lines if line.strip()]
+        entries: list[dict[str, object]] = []
+        for line in lines:
+            if not line.strip():
+                continue
+            try:
+                entries.append(json.loads(line))
+            except ValueError:
+                continue
+        return entries

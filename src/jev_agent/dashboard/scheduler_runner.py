@@ -19,7 +19,6 @@ from __future__ import annotations
 import asyncio
 import threading
 import time
-from collections import deque
 from collections.abc import Callable, Coroutine
 from dataclasses import dataclass
 from pathlib import Path
@@ -63,7 +62,6 @@ class SchedulerRunner:
         self._running = False
         self._lock: SchedulerLock | None = None
         self._error: str | None = None
-        self._log: deque[str] = deque(maxlen=20)
 
     # ---- state -------------------------------------------------------------------
 
@@ -151,7 +149,6 @@ class SchedulerRunner:
                     SchedulerOptions(),
                     lock=self._lock,
                     sleep=self._sleep,
-                    log=self._note,
                     should_stop=self._stop.is_set,
                 )
                 scheduler.run()
@@ -210,7 +207,3 @@ class SchedulerRunner:
             if time.monotonic() >= end:
                 return
             time.sleep(0.2)
-
-    def _note(self, message: str) -> None:
-        with self._guard:
-            self._log.append(message)

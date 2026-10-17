@@ -46,7 +46,10 @@ async def test_large_stdin_and_output_do_not_deadlock(tmp_path: Path) -> None:
     code = "import sys; d = sys.stdin.read(); sys.stdout.write(d); sys.stderr.write(d)"
     result = await run_command([PY, "-c", code], tmp_path, _env(), 60, stdin_text=big)
     assert result.exit_code == 0
-    assert len(result.stdout) == len(big) and len(result.stderr) == len(big)
+    # The pipes are still drained concurrently (no deadlock), but retained output is
+    # capped now: the head is kept and the dropped bytes are reported with a marker.
+    assert len(result.stdout) < len(big) and "[output truncated" in result.stdout
+    assert len(result.stderr) < len(big) and "[output truncated" in result.stderr
 
 
 async def test_timeout_kills_process_group(tmp_path: Path) -> None:

@@ -461,6 +461,7 @@ h2.section:first-child { margin-top: 0; }
 form.inline { display: inline-flex; }
 .actions { display: flex; flex-wrap: wrap; gap: var(--s2); align-items: center; }
 .actions .sep { width: 1px; height: 20px; background: var(--border); margin: 0 var(--s1); }
+.actions-gap { margin-bottom: var(--s3); }
 
 /* ---- form controls ---------------------------------------------------------
    ONE consistent style for every text input, select and textarea:

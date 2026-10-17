@@ -268,7 +268,7 @@ class PipAuditCheck(BaseCheck):
         audit = runner.resolve("pip-audit")
         if audit is None:
             return runner.missing("pip-audit", self.hint)
-        target = "-r requirements.txt" if (workdir / "requirements.txt").is_file() else "."
+        target, note = _audit_target(workdir)
         result = await runner.run("pip-audit", f"{audit} {target} -f json --progress-spinner off")
         if result.timed_out:
             return tool_error(self, result)
@@ -293,10 +293,22 @@ class PipAuditCheck(BaseCheck):
                     )
                 )
         if not findings:
-            return CheckResult(status="pass", detail="no known vulnerabilities")
+            return CheckResult(status="pass", detail=f"no known vulnerabilities{note}")
         return CheckResult(
-            status="fail", detail=f"{len(findings)} vulnerability(ies)", findings=findings
+            status="fail",
+            detail=f"{len(findings)} vulnerability(ies){note}",
+            findings=findings,
         )
+
+
+def _audit_target(workdir: Path) -> tuple[str, str]:
+    """`(pip-audit target, detail suffix)`: the pinned `requirements.txt` when the project
+    has one, else the installed environment of the project directory. pip-audit cannot
+    read lockfiles (`uv.lock`, `poetry.lock`), so for lockfile-only projects the detail
+    says what was actually audited: the ambient environment, not the lockfile pins."""
+    if (workdir / "requirements.txt").is_file():
+        return "-r requirements.txt", ""
+    return ".", " (no requirements.txt: audited the installed environment, not the lockfile pins)"
 
 
 class NpmAuditCheck(BaseCheck):

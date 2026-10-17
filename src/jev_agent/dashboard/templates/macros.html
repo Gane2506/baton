@@ -39,5 +39,3 @@
 {% macro copy_button(value, label="Copy") %}<button type="button" class="btn-icon copy" data-copy="{{ value }}" aria-label="{{ label }}">{{ icon("i-copy", "sm") }}</button>{% endmacro %}
 
 {% macro empty(title, text="", action="") %}<div class="empty">{{ icon("i-info", "") }}{% if title %}<div class="title">{{ title }}</div>{% endif %}{% if text %}<p>{{ text }}</p>{% endif %}{{ action }}</div>{% endmacro %}
-
-{% macro bars(chart, empty="No data yet.") %}{{ bar_chart_svg(chart, empty) }}{% endmacro %}

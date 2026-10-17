@@ -5,6 +5,9 @@ A script maps keys to steps. For each job the most specific key wins:
 step or a list of steps; a list is consumed one step per job and its last step then repeats.
 Roles without a scripted step get a sensible default: a one-task plan, an approving verdict,
 a clean code review, a coder that writes a small file, or a learner that learns nothing.
+
+Scripted file paths are confined to the job's workdir: absolute paths and `..` escapes are
+rejected, so a script (or the `JEV_FAKE_WORKERS=1` dry-run path) can never write outside it.
 """
 
 from __future__ import annotations
@@ -12,6 +15,7 @@ from __future__ import annotations
 from collections import defaultdict
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from pydantic import BaseModel
 
@@ -97,6 +101,9 @@ class FakeWorker:
         if job.role == "coder" and step.status == "success" and not files:
             files = {_default_file(job): f"written by {self.name}, attempt {job.attempt}\n"}
         for rel, content in files.items():
+            path = Path(rel)
+            if path.is_absolute() or ".." in path.parts:
+                raise ValueError(f"fake worker file {rel!r} escapes the workdir")
             target = job.workdir / rel
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text(content, encoding="utf-8")

@@ -18,6 +18,7 @@ from jev_agent.dispatch.requests import clip
 from jev_agent.quality.levels import QualityLevel, at_least
 from jev_agent.quality.models import CheckResult, ReviewStatus
 from jev_agent.roles.schemas import QualityReview
+from jev_agent.runlog.redact import redact
 
 DIFF_CHARS = 40_000  # diff shown to the reviewer
 
@@ -42,7 +43,12 @@ async def ai_review(
     log_name: str,
 ) -> ReviewOutcome:
     """Run the code reviewer on `diff`. Never fails the run: a reviewer that cannot run or
-    gives no valid review is reported as `skipped` or `error`."""
+    gives no valid review is reported as `skipped` or `error`.
+
+    The diff is redacted before it reaches the reviewer (defense in depth: the check
+    outputs are already redacted, but the diff itself is not), and clipped after
+    redacting so a secret straddling the cut cannot survive half-redacted.
+    """
     if not diff.strip():
         return ReviewOutcome("skipped", "empty diff")
     options = h.options("code_reviewer")
@@ -66,7 +72,7 @@ async def ai_review(
         task=task,
         idea=run.idea.text,
         plan_summary=run.plan.summary if run.plan else "",
-        diff=clip(diff, DIFF_CHARS),
+        diff=clip(redact(diff), DIFF_CHARS),
         checks=[
             {"name": c.name, "status": c.status, "detail": clip(c.detail, 200)} for c in checks
         ],

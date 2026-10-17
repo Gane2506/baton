@@ -11,7 +11,7 @@ LEVELS: tuple[QualityLevel, ...] = get_args(QualityLevel)
 LEVEL_SUMMARY: dict[QualityLevel, str] = {
     "none": "the task's own test command only (no gate)",
     "basic": "lint/format, full test suite, AI code review",
-    "medium": "+ secret scan, SAST, dependency audit, coverage >= 60%",
+    "medium": "+ secret scan, SAST, dependency audit, coverage >= 60% (blocking from production)",
     "production": "+ type check, coverage >= 80%, licences, security checklist; "
     "major security findings block",
     "scalable": "+ performance/scalability review, container/IaC scans, threat model; "

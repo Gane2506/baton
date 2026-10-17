@@ -294,7 +294,8 @@ class TrivyCheck(BaseCheck):
             for item in [*(target.get("Misconfigurations") or []), *(target.get("Secrets") or [])]:
                 if not isinstance(item, dict):
                     continue
-                cause = item.get("CauseMetadata") or {}
+                cause = item.get("CauseMetadata")
+                cause = cause if isinstance(cause, dict) else {}
                 findings.append(
                     self.finding(
                         _IAC_SEVERITY.get(str(item.get("Severity")).upper(), "minor"),

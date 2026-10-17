@@ -71,6 +71,12 @@ class SshRunner(Protocol):
     ) -> SshResult: ...
 
 
+def _tool_missing(result: SshResult) -> bool:
+    """The remote shell could not find the command: exit 127 with a "not found"
+    diagnostic (bash/zsh say "command not found", dash says "not found")."""
+    return result.exit_code == 127 and b"not found" in result.stderr
+
+
 def run_process(argv: Sequence[str], *, stdin: bytes | None, timeout_s: float) -> SshResult:
     """Run `argv` (no shell) in its own process group; kill the group on timeout."""
     started = time.monotonic()
@@ -197,8 +203,25 @@ class SshTransport:
         return self.run(f"head -c {max_bytes + 1} -- {shlex.quote(path)}", timeout_s=timeout_s)
 
     def realpath(self, path: str, timeout_s: float = DEFAULT_TIMEOUT_S) -> SshResult:
-        """`realpath -m -- path`: where `path` really points (symlinks resolved)."""
-        return self.run(f"realpath -m -- {shlex.quote(path)}", timeout_s=timeout_s)
+        """Where `path` really points (symlinks resolved).
+
+        GNU `realpath -m` when the server has it, else `python3`/`perl`
+        canonicalization (stock macOS ships no `realpath`). Each fallback runs only
+        when the previous *tool itself* is missing ("command not found"): a genuine
+        resolution failure is returned as-is, never papered over by the next tool.
+        """
+        quoted = shlex.quote(path)
+        attempts = (
+            f"realpath -m -- {quoted}",
+            f"python3 -c 'import os,sys;print(os.path.realpath(sys.argv[1]))' {quoted}",
+            f"perl -MCwd=abs_path -le 'print abs_path($ARGV[0])' {quoted}",
+        )
+        result = self.run(attempts[0], timeout_s=timeout_s)
+        for command in attempts[1:]:
+            if result.ok or not _tool_missing(result):
+                return result
+            result = self.run(command, timeout_s=timeout_s)
+        return result
 
     def write(self, path: str, data: bytes, timeout_s: float = DEFAULT_TIMEOUT_S) -> SshResult:
         """Write `data` to `path` (absolute, symlinks resolved) through a temporary file in the

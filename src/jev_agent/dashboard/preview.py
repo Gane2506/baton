@@ -71,6 +71,7 @@ from enum import StrEnum
 from typing import Any
 
 from starlette.datastructures import FormData
+from starlette.requests import Request
 
 PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
 MAX_FRAME_BYTES = 2_000_000  # a 1080p screenshot is far below this; larger is a mistake
@@ -107,6 +108,26 @@ class BadPreviewInput(PreviewError):
 
 class FrameTooLarge(BadPreviewInput):
     status_code = 413
+
+
+async def read_capped_body(request: Request, limit: int = MAX_FRAME_BYTES) -> bytes:
+    """The request body, raising `FrameTooLarge` past `limit` without buffering it all.
+
+    `Content-Length` is checked first so an obviously oversize frame is refused before
+    a single byte is read; the chunked read below is the backstop for a lying (or
+    missing) header.
+    """
+    declared = request.headers.get("content-length", "")
+    if declared.isdigit() and int(declared) > limit:
+        raise FrameTooLarge(f"frame declares {declared} bytes (max {limit})")
+    chunks: list[bytes] = []
+    total = 0
+    async for chunk in request.stream():
+        total += len(chunk)
+        if total > limit:
+            raise FrameTooLarge(f"frame is larger than {limit} bytes")
+        chunks.append(chunk)
+    return b"".join(chunks)
 
 
 @dataclass(frozen=True)

@@ -190,15 +190,25 @@ class ModelCatalog:
 
 
 def _from_cache(raw: dict[str, Any]) -> ModelInfo:
-    params = raw.get("supported_parameters")
-    return ModelInfo(
-        id=str(raw["id"]),
-        name=str(raw.get("name") or ""),
-        context_length=raw.get("context_length"),
-        prompt_price=raw.get("prompt_price"),
-        completion_price=raw.get("completion_price"),
-        supported_parameters=tuple(params) if isinstance(params, list) else None,
-    )
+    # The cache stores `to_json()` output (flat `prompt_price`/`completion_price`); adapt it
+    # to the `GET /models` shape so the cache path gets exactly `parse_model`'s validation
+    # (a corrupt entry degrades to "no usable id" instead of a half-validated ModelInfo).
+    if not isinstance(raw, dict):
+        raise ValueError(f"cached model entry is not an object: {raw!r}")
+    adapted = {
+        "id": raw.get("id"),
+        "name": raw.get("name"),
+        "context_length": raw.get("context_length"),
+        "pricing": {
+            "prompt": raw.get("prompt_price"),
+            "completion": raw.get("completion_price"),
+        },
+        "supported_parameters": raw.get("supported_parameters"),
+    }
+    model = parse_model(adapted)
+    if model is None:
+        raise ValueError(f"cached model has no usable id: {raw.get('id')!r}")
+    return model
 
 
 def cache_path(root: Path) -> Path:

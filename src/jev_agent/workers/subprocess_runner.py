@@ -1,8 +1,10 @@
 """Run a CLI as a subprocess with a timeout and a redacted log (used by the CLI worker adapters).
 
 `run_command` never uses a shell. The child gets its own process group, so on timeout the whole
-group (the CLI and anything it spawned) is killed. Output is collected in full and returned;
-the log gets the argv, cwd, stdin, exit status and output, redacted. Environment values are
+group (the CLI and anything it spawned) is killed. Output is collected with a retention cap
+(`MAX_OUTPUT_BYTES` per stream: the head is kept, the rest is counted and reported with a
+truncation marker), so a runaway agent cannot OOM the orchestrator by filling a pipe; the
+log gets the argv, cwd, stdin, exit status and output, redacted. Environment values are
 never logged.
 
 Workers take a `CommandRunner` so tests can inject recorded outputs instead of real processes.
@@ -30,6 +32,11 @@ KILL_GRACE_S = 5.0  # between SIGTERM and SIGKILL on timeout
 DRAIN_TIMEOUT_S = 5.0  # how long to wait for pipes to close after the process exits
 EXIT_NOT_FOUND = 127
 EXIT_NOT_EXECUTABLE = 126
+# Per-stream retention cap: a runaway agent CLI (timeouts up to `timeout_s`, verbose
+# `--output-format json` streams) can otherwise accumulate hundreds of MB in memory.
+# The head is kept (it holds the setup and the first error, which is what the
+# orchestrator debugs from) and the dropped byte count goes into a truncation marker.
+MAX_OUTPUT_BYTES = 1_048_576  # 1 MiB of stdout, 1 MiB of stderr
 
 
 @dataclass(frozen=True)
@@ -72,7 +79,12 @@ async def run_command(
     try:
         result = await _run(argv, cwd, env, timeout_s, stdin_text, started)
     except FileNotFoundError:
-        result = _failed_start(EXIT_NOT_FOUND, f"command not found: {argv[0]}", started)
+        # `create_subprocess_exec` raises this for a missing binary AND a missing
+        # cwd: check the workdir first so the message names the real problem.
+        if not cwd.is_dir():
+            result = _failed_start(EXIT_NOT_FOUND, f"working directory not found: {cwd}", started)
+        else:
+            result = _failed_start(EXIT_NOT_FOUND, f"command not found: {argv[0]}", started)
     except PermissionError:
         result = _failed_start(EXIT_NOT_EXECUTABLE, f"command not executable: {argv[0]}", started)
     if log_path is not None:
@@ -97,8 +109,7 @@ async def _run(
         stderr=asyncio.subprocess.PIPE,
         start_new_session=True,  # own process group, so a timeout kills grandchildren too
     )
-    out: list[bytes] = []
-    err: list[bytes] = []
+    out, err = _CappedOutput(), _CappedOutput()
     assert proc.stdout is not None and proc.stderr is not None
     readers = [
         asyncio.create_task(_drain(proc.stdout, out)),
@@ -129,16 +140,44 @@ async def _run(
             reader.cancel()
     return CommandResult(
         exit_code=proc.returncode,
-        stdout=b"".join(out).decode("utf-8", errors="replace"),
-        stderr=b"".join(err).decode("utf-8", errors="replace"),
+        stdout=out.text(),
+        stderr=err.text(),
         timed_out=timed_out,
         duration_s=round(time.monotonic() - started, 3),
     )
 
 
-async def _drain(stream: asyncio.StreamReader, chunks: list[bytes]) -> None:
+class _CappedOutput:
+    """The retained head of one subprocess stream: the first `limit` bytes, plus how many
+    bytes past the cap were dropped (reported in the truncation marker)."""
+
+    def __init__(self, limit: int = MAX_OUTPUT_BYTES) -> None:
+        self._limit = limit
+        self._chunks: list[bytes] = []
+        self.kept = 0
+        self.dropped = 0
+
+    def add(self, chunk: bytes) -> None:
+        room = self._limit - self.kept
+        keep = chunk[:room] if room > 0 else b""
+        if keep:
+            self._chunks.append(keep)
+            self.kept += len(keep)
+        self.dropped += len(chunk) - len(keep)
+
+    def text(self) -> str:
+        body = b"".join(self._chunks).decode("utf-8", errors="replace")
+        if self.dropped:
+            body += (
+                f"\n[output truncated: kept the first {self.kept} of "
+                f"{self.kept + self.dropped} bytes]"
+            )
+        return body
+
+
+async def _drain(stream: asyncio.StreamReader, sink: _CappedOutput) -> None:
     while chunk := await stream.read(65536):
-        chunks.append(chunk)
+        sink.add(chunk)
 
 
 async def _feed(proc: asyncio.subprocess.Process, text: str) -> None:

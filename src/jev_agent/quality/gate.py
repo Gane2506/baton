@@ -9,6 +9,7 @@ D5 or D6. Each gate is stored (`quality_reports`) and written to
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Collection, Iterable
 from pathlib import Path
 
@@ -75,7 +76,13 @@ async def run_gate(
         passed_commands=passed_commands,
         which=tools.which,
     )
-    results = [await _run_check(check, scope, level, runner) for check in checks_for(level, checks)]
+    # The checks are independent (they share only the read-only runner), so they run
+    # concurrently; `gather` keeps the results in registry order for stable reports.
+    results = list(
+        await asyncio.gather(
+            *(_run_check(check, scope, level, runner) for check in checks_for(level, checks))
+        )
+    )
     review = await ai_review(
         h,
         run_id=run_id,
@@ -101,24 +108,39 @@ async def run_gate(
     result = result.model_copy(update={"blocked": bool(reasons), "reasons": reasons})
     # The 0-100 ship score (quality/scoring.py): deterministic, from this gate's
     # checks, findings and diff. Stored on the result, so the score and its
-    # breakdown are audit-logged with the gate decision.
+    # breakdown are audit-logged with the gate decision. Scoring or persisting must
+    # not kill the run with a traceback: a failure here records a blocked gate
+    # with the error as the reason (fail-closed, with forensics in the reasons).
     skip_human = h.config.quality.score_skip_human
     skip_reason = "human-authored code ([quality] score_skip_human)" if skip_human else ""
-    result = result.model_copy(
-        update={
-            "score": score_gate(
-                result,
-                diff=diff,
-                weights=h.config.dispatcher.laya.weights,
-                threshold=h.config.quality.score_threshold,
-                skipped=skip_human,
-                skip_reason=skip_reason,
-            )
-        }
-    )
-    path = write_reports(h, run_id, result)
-    h.store.add_quality_report(run_id, result, path)
-    write_run_review(h, run_id)
+    try:
+        result = result.model_copy(
+            update={
+                "score": score_gate(
+                    result,
+                    diff=diff,
+                    weights=h.config.dispatcher.laya.weights,
+                    threshold=h.config.quality.score_threshold,
+                    skipped=skip_human,
+                    skip_reason=skip_reason,
+                )
+            }
+        )
+        path = write_reports(h, run_id, result)
+        h.store.add_quality_report(run_id, result, path)
+        write_run_review(h, run_id)
+    except Halt:
+        raise
+    except Exception as exc:
+        result = result.model_copy(
+            update={
+                "blocked": True,
+                "reasons": [
+                    *result.reasons,
+                    f"gate error: {redact(f'{type(exc).__name__}: {exc}')}",
+                ],
+            }
+        )
     return result
 
 

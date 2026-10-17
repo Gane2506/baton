@@ -129,7 +129,7 @@
   <h2 class="section">Lessons in {{ lv.selected }}</h2>
   <p class="small muted">{% if include_retired %}<a class="btn btn-sm btn-ghost" href="/learning?profile={{ lv.selected | urlencode }}">Hide retired lessons</a>{% else %}<a class="btn btn-sm btn-ghost" href="/learning?profile={{ lv.selected | urlencode }}&amp;all=1">Include retired lessons</a>{% endif %}</p>
 </div>
-<div class="actions" style="margin-bottom: var(--s3)">
+<div class="actions actions-gap">
   <a class="btn btn-sm {% if tab != 'graph' %}btn-primary{% else %}btn-ghost{% endif %}" href="/learning?profile={{ lv.selected | urlencode }}{% if include_retired %}&amp;all=1{% endif %}">List</a>
   <a class="btn btn-sm {% if tab == 'graph' %}btn-primary{% else %}btn-ghost{% endif %}" href="/learning?profile={{ lv.selected | urlencode }}&amp;tab=graph">Graph</a>
 </div>
