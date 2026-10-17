@@ -102,9 +102,18 @@ def _write_atomic(path: Path, text: str) -> None:
         raise
 
 
-def save_design_system(repo: Path, markdown: str, tokens: dict[str, object]) -> int:
+def save_design_system(
+    repo: Path,
+    markdown: str,
+    tokens: dict[str, object],
+    meta_extra: dict[str, object] | None = None,
+) -> int:
     """Write a new design system, keeping the old one as `design-system.v<n>.md` /
     `tokens.v<n>.json`. Returns the new version number (starts at 1).
+
+    `meta_extra` (e.g. `{"source": "library:<name>", "app_type": ..., "stack": ...}`)
+    is merged into `meta.json` next to `version`/`updated_at`; those two always win
+    so extras cannot corrupt the versioning.
 
     The three current files (`design-system.md`, `tokens.json`, `meta.json`) are
     written to temp names and renamed into place together: a crash before the
@@ -124,10 +133,13 @@ def save_design_system(repo: Path, markdown: str, tokens: dict[str, object]) -> 
             if src.exists():
                 _write_atomic(d / vname, src.read_text(encoding="utf-8"))
     updated_at = datetime.now(UTC).isoformat(timespec="seconds")
+    meta: dict[str, object] = dict(meta_extra or {})
+    meta["version"] = version
+    meta["updated_at"] = updated_at
     pending = {
         SYSTEM_MD: markdown,
         TOKENS_JSON: json.dumps(tokens, indent=2) + "\n",
-        META_JSON: json.dumps({"version": version, "updated_at": updated_at}, indent=2) + "\n",
+        META_JSON: json.dumps(meta, indent=2) + "\n",
     }
     temps: dict[str, Path] = {}
     try:
