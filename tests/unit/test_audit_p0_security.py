@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import json
 import os
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -166,7 +166,7 @@ async def test_say_error_path_stores_no_raw_user_text(tmp_path: Path) -> None:
 
 
 @pytest.fixture
-def sfile(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+def sfile(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Path]:
     """An isolated secrets file; the process-level `_loaded` set and any
     `JEV_REDACT_NAMES` additions are restored afterwards."""
     file = tmp_path / ".jev" / "secrets.env"

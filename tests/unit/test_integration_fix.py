@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Literal
+
 from jev_agent.core.commands import CommandResult
 from jev_agent.core.integration import (
     FIX_TITLE,
@@ -13,7 +15,7 @@ from jev_agent.core.integration import (
 from jev_agent.core.models import TaskCard
 
 
-def _card(id: str, title: str, kind: str | None = None) -> TaskCard:
+def _card(id: str, title: str, kind: Literal["plan", "fix"] | None = None) -> TaskCard:
     return TaskCard(id=id, title=title, description="d", kind=kind)
 
 

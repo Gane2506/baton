@@ -368,8 +368,9 @@ def test_migration_16_applies_on_v15_db(tmp_path: Path) -> None:
         assert old.state is RunState.AWAITING_APPROVAL
         assert old.design is None
         store.set_run_design("old-run", _design_doc())
-        assert store.get_run("old-run").design is not None
-        assert store.get_run("old-run").design.title == "Settings page redesign"
+        design = store.get_run("old-run").design
+        assert design is not None
+        assert design.title == "Settings page redesign"
 
 
 # ---- coder prompt design injection ------------------------------------------------------------

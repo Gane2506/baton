@@ -67,7 +67,10 @@ def _balanced_calls(text: str, name: str) -> list[str]:
 
 
 def _split_args(argstr: str) -> list[str]:
-    args, cur, depth, in_str = [], [], 0, None
+    args: list[str] = []
+    cur: list[str] = []
+    depth = 0
+    in_str: str | None = None
     for ch in argstr:
         if in_str:
             cur.append(ch)

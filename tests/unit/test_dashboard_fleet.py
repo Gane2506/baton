@@ -8,6 +8,7 @@ import sqlite3
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import cast
 
 import httpx
 import pytest
@@ -153,11 +154,12 @@ def _fleet_csrf(client: TestClient) -> str:
 
 
 def _post_addendum(client: TestClient, role: str, value: str) -> httpx.Response:
-    return client.post(
+    response = client.post(
         "/fleet/addendum",
         data={"role": role, "value": value, "csrf_token": _fleet_csrf(client)},
         follow_redirects=False,
     )
+    return cast(httpx.Response, response)
 
 
 def test_fleet_page_links_its_stylesheet(client: TestClient) -> None:

@@ -22,9 +22,9 @@ from typing import Any
 import pytest
 from typer.testing import CliRunner
 
+from jev_agent.app.runs import start_run
 from jev_agent.cli import doctor_cmd, server_cmds
 from jev_agent.cli.app import app
-from jev_agent.cli.run_cmds import start_run
 from jev_agent.cli.wiring import FAKE_WORKERS_ENV, cli_context
 from jev_agent.config import ConfigError, JevConfig, load_config
 from jev_agent.config.servers_schema import FULL_ACCESS_MESSAGE
