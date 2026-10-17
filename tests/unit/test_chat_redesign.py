@@ -24,7 +24,7 @@ import re
 import threading
 from collections.abc import Iterator
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import httpx
 import pytest
@@ -156,11 +156,14 @@ def _csrf(client: TestClient, page: str = "/") -> str:
 
 
 def _post(client: TestClient, url: str, data: dict[str, str] | None = None) -> httpx.Response:
-    token: str | None = getattr(client, "jev_csrf", None)  # type: ignore[attr-defined]
+    token: str | None = getattr(client, "jev_csrf", None)
     if token is None:
         token = _csrf(client)
-        client.jev_csrf = token  # type: ignore[attr-defined]
-    return client.post(url, data={"csrf_token": token, **(data or {})}, follow_redirects=False)
+        client.jev_csrf = token
+    return cast(
+        httpx.Response,
+        client.post(url, data={"csrf_token": token, **(data or {})}, follow_redirects=False),
+    )
 
 
 def _dash(client: TestClient) -> Any:
@@ -168,8 +171,9 @@ def _dash(client: TestClient) -> Any:
 
 
 def _cancellable_sleep() -> str:
-    async def nap() -> None:
+    async def nap() -> str:
         await asyncio.sleep(30)
+        return "slept"
 
     return run_job_coroutine(nap())
 
@@ -199,7 +203,7 @@ def test_chat_html_includes_workpanel() -> None:
 
 def test_chat_runner_stop_idle_returns_false() -> None:
     _require_landed(hasattr(ChatRunner, "stop"), "Worker 3 (ChatRunner.stop)")
-    assert ChatRunner().stop("no-such-chat") is False  # type: ignore[attr-defined]
+    assert ChatRunner().stop("no-such-chat") is False
 
 
 def test_chat_runner_stop_cancels_running_job() -> None:
@@ -213,7 +217,7 @@ def test_chat_runner_stop_cancels_running_job() -> None:
 
     assert runner.start("c1", slow) is True
     assert started.wait(10)
-    assert runner.stop("c1") is True  # type: ignore[attr-defined]
+    assert runner.stop("c1") is True
     job = runner.wait("c1", timeout=10)
     assert job is not None
     assert job.state == "failed"
@@ -343,7 +347,8 @@ def _chat_context_dict(client: TestClient, chat_id: str) -> dict[str, Any]:
     build = _dash(client)._chat_context(chat_id)
     root = _dash(client).settings.root
     with views.open_repo(root) as repo:
-        return build(repo)
+        context: dict[str, Any] = build(repo)
+        return context
 
 
 def test_chat_context_carries_redesign_keys(

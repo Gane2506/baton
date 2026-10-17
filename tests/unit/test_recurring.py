@@ -20,7 +20,7 @@ from jev_agent.core.recurrence import (
     next_due,
     parse_schedule,
 )
-from jev_agent.core.store import NotFoundError, RecurringTask, Store
+from jev_agent.core.store import NotFoundError, QueuePriority, RecurringTask, Store
 
 TORONTO = ZoneInfo("America/Toronto")
 
@@ -177,14 +177,26 @@ def _add(
     store: Store,
     brief: str = "water the plants",
     text: str = "daily@09:30",
-    **kwargs: object,
+    priority: QueuePriority = "normal",
+    plan_only: bool = False,
+    learning_profile: str | None = None,
+    no_learning: bool = False,
+    profile: str | None = None,
+    quality: str | None = None,
+    ship_mode: str | None = None,
 ) -> RecurringTask:
-    return store.add_recurring_task(  # type: ignore[arg-type]
+    return store.add_recurring_task(
         brief,
         parse_schedule(text),
         "America/Toronto",
         datetime(2026, 1, 6, 14, 30, tzinfo=UTC),
-        **kwargs,
+        priority=priority,
+        plan_only=plan_only,
+        learning_profile=learning_profile,
+        no_learning=no_learning,
+        profile=profile,
+        quality=quality,
+        ship_mode=ship_mode,
     )
 
 

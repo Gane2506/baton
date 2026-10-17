@@ -12,6 +12,7 @@ import subprocess
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import NoReturn
 
 import pytest
 from typer.testing import CliRunner
@@ -96,7 +97,9 @@ def test_run_suite_isolates_mid_suite_failure(
     tasks_dir = _make_tasks_dir(tmp_path, "t-a", "t-b")
     calls: list[str] = []
 
-    def fake_run_task(task_id: str, config: BenchmarkConfig, tasks_dir: Path | None = None):
+    def fake_run_task(
+        task_id: str, config: BenchmarkConfig, tasks_dir: Path | None = None
+    ) -> TaskResult:
         calls.append(task_id)
         if task_id == "t-b":
             raise RuntimeError("boom")
@@ -141,7 +144,9 @@ def test_run_suite_keeps_partial_results_on_uncatchable_failure(
     keeps the completed results on disk."""
     tasks_dir = _make_tasks_dir(tmp_path, "t-a", "t-b")
 
-    def fake_run_task(task_id: str, config: BenchmarkConfig, tasks_dir: Path | None = None):
+    def fake_run_task(
+        task_id: str, config: BenchmarkConfig, tasks_dir: Path | None = None
+    ) -> TaskResult:
         if task_id == "t-a":
             return _ok_result(task_id)
         raise KeyboardInterrupt()  # not an Exception subclass: isolation cannot catch it
@@ -163,7 +168,9 @@ def test_run_suite_dedupes_task_ids_preserving_order(
     tasks_dir = _make_tasks_dir(tmp_path, "t-a", "t-b")
     calls: list[str] = []
 
-    def fake_run_task(task_id: str, config: BenchmarkConfig, tasks_dir: Path | None = None):
+    def fake_run_task(
+        task_id: str, config: BenchmarkConfig, tasks_dir: Path | None = None
+    ) -> TaskResult:
         calls.append(task_id)
         return _ok_result(task_id)
 
@@ -383,7 +390,12 @@ def test_run_refuses_to_overwrite_suite_json(
 
     called: list[bool] = []
 
-    def fake_run_suite(task_ids, config, tasks_dir=None, out_path=None):
+    def fake_run_suite(
+        task_ids: list[str] | None,
+        config: BenchmarkConfig,
+        tasks_dir: Path | None = None,
+        out_path: Path | None = None,
+    ) -> SuiteResult:
         called.append(True)
         suite = SuiteResult(evaluated=True, per_run_usd=config.per_run_usd, tasks=[])
         if out_path is not None:
@@ -416,7 +428,12 @@ def test_timeout_min_wired_into_benchmark_config(
     workdir.mkdir()
     seen: list[BenchmarkConfig] = []
 
-    def fake_run_suite(task_ids, config, tasks_dir=None, out_path=None):
+    def fake_run_suite(
+        task_ids: list[str] | None,
+        config: BenchmarkConfig,
+        tasks_dir: Path | None = None,
+        out_path: Path | None = None,
+    ) -> SuiteResult:
         seen.append(config)
         if out_path is not None:
             write_suite_json(SuiteResult(evaluated=True, tasks=[]), out_path)
@@ -528,7 +545,7 @@ def test_grade_main_timeout_is_harness_error(
     ]
     monkeypatch.setattr(sys, "argv", argv)
 
-    def boom(*args, **kwargs):
+    def boom(*args: object, **kwargs: object) -> NoReturn:
         raise subprocess.TimeoutExpired(cmd="pytest", timeout=300)
 
     monkeypatch.setattr(grading_mod, "run_hidden_pytest", boom)

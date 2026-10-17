@@ -244,6 +244,7 @@ def chat_child(demo: Path, out: Path) -> None:
         list_=False,
         budget_usd=None,
         repo=demo,
+        design_system="none",  # scripted capture: skip the interactive design-system picker
     )
     save_svg(console, out, "jev chat")
 

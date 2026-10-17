@@ -8,8 +8,8 @@ from typer.testing import CliRunner
 
 from jev_agent.app import context
 from jev_agent.cli.app import app
+from jev_agent.app.format import format_answers, format_time
 from jev_agent.cli.run_cmds import STOPPED_EXIT_CODE, run_exit_code
-from jev_agent.cli.status_cmds import format_answers, format_time
 from jev_agent.cli.wiring import (
     FAKE_WORKERS_ENV,
     build_cli_workers,

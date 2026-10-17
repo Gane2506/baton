@@ -16,6 +16,7 @@ import os
 import re
 import sys
 import tempfile
+from collections.abc import Iterator
 from pathlib import Path
 
 from jev_agent.app.errors import JevError
@@ -35,10 +36,41 @@ FILE_ENV = "JEV_SECRETS_FILE"  # test/CI override for the secrets file location
 
 _NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
-# Names this process injected from the secrets file. `delete_secret` only pops a
-# name from `os.environ` when it is in this set, so a real environment variable is
-# never removed by deleting a secrets-file line with the same name.
-_loaded: set[str] = set()
+
+class _InjectionTracker:
+    """Explicit owner of the names this process injected from the secrets file.
+
+    P9: run state needs an explicit owner, not a module-global mutable. The
+    singleton `_loaded` below is the only reader/writer of this set.
+    `delete_secret` only pops a name from `os.environ` when it is tracked here,
+    so a real environment variable is never removed by deleting a secrets-file
+    line with the same name.
+    """
+
+    def __init__(self) -> None:
+        self._names: set[str] = set()
+
+    def add(self, name: str) -> None:
+        self._names.add(name)
+
+    def discard(self, name: str) -> None:
+        self._names.discard(name)
+
+    def clear(self) -> None:
+        self._names.clear()
+
+    def __contains__(self, name: object) -> bool:
+        return name in self._names
+
+    def __iter__(self) -> Iterator[str]:
+        return iter(self._names)
+
+    def __len__(self) -> int:
+        return len(self._names)
+
+
+_loaded = _InjectionTracker()
+"""Names this process injected from the secrets file (see `_InjectionTracker`)."""
 
 
 class SecretsError(JevError):

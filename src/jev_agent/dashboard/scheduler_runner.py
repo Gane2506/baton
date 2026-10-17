@@ -202,6 +202,8 @@ class SchedulerRunner:
 
     def _sleep(self, seconds: float) -> None:
         """Sleep in small steps so `stop()` wakes the loop promptly at the next poll."""
+        # P8: bounded — the loop exits at the monotonic deadline `end` (or early on
+        # `stop()`); the 0.2 s step only controls wake-up latency, never the total.
         end = time.monotonic() + seconds
         while not self._stop.is_set():
             if time.monotonic() >= end:

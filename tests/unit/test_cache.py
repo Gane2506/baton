@@ -78,7 +78,7 @@ def git_repo(tmp_path: Path) -> Path:
     return repo
 
 
-def _req(point: str = "D1", state: dict | None = None) -> DecisionRequest:
+def _req(point: str = "D1", state: dict[str, Any] | None = None) -> DecisionRequest:
     return DecisionRequest(
         point=point,  # type: ignore[arg-type]
         state={"idea": "add search", "round": 1, **(state or {})},
@@ -349,7 +349,7 @@ async def test_decide_config_change_invalidates(store: Store, run_id: str, tmp_p
 
 def _d6_decision() -> Decision:
     return Decision(
-        point="D6",  # type: ignore[arg-type]
+        point="D6",
         answers={"verdict": "ship"},
         dispatcher="stub",
         model="m",
@@ -359,7 +359,7 @@ def _d6_decision() -> Decision:
 
 def _d6_req() -> DecisionRequest:
     return DecisionRequest(
-        point="D6",  # type: ignore[arg-type]
+        point="D6",
         state={"ship": "ready"},
         questions={"verdict": ["ship", "fix"]},
     )
@@ -586,7 +586,7 @@ async def test_run_worker_no_cache_disables(store: Store, run_id: str, git_repo:
 
 def test_role_key_changes_with_repo_and_template(git_repo: Path) -> None:
     config = JevConfig()
-    base = {
+    base: dict[str, Any] = {
         "role": "reviewer",
         "worker": "api",
         "model": "m",
@@ -612,7 +612,7 @@ def test_role_key_changes_with_repo_and_template(git_repo: Path) -> None:
 
 def test_role_key_stable_for_same_inputs(git_repo: Path) -> None:
     config = JevConfig()
-    kwargs = {
+    kwargs: dict[str, Any] = {
         "role": "planner",
         "worker": "api",
         "model": "m",
@@ -703,3 +703,47 @@ def test_cache_prune_evicts_lru(store: Store, tmp_path: Path) -> None:
         store.cache_put(key.key_hash, "decision", key.key_json, "{}", 0.1, 168)
     cache.prune()
     assert store.cache_stats().entries == 3
+
+
+# --- P7: blind handlers record the failure ------------------------------------
+
+
+def test_repo_fingerprint_records_failure_and_stays_fail_soft(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    import jev_agent.core.cache as cache_mod
+
+    monkeypatch.setattr(cache_mod, "_git", Mock(side_effect=RuntimeError("git exploded")))
+    with caplog.at_level("DEBUG", logger="jev_agent.core.cache"):
+        assert repo_fingerprint(tmp_path) == "unknown"
+    assert any(
+        "RuntimeError" in rec.getMessage() and "git exploded" in rec.getMessage()
+        for rec in caplog.records
+    )
+
+
+class _ExplodingEmbedder:
+    """An embedder from another generation: similarity always blows up."""
+
+    def fingerprint(self, text: str) -> str:
+        return "00" * 8
+
+    def similarity(self, a: str, b: str) -> float:
+        raise RuntimeError("cross-embedder mismatch")
+
+
+def test_similar_skips_incompatible_entry_and_records(
+    store: Store, tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A stale entry written under another embedder must not crash the scan;
+    the skip records the failure's type + message (P7 trust-boundary catch)."""
+    config = JevConfig.model_validate({"cache": {"semantic": {"enabled": True}}})
+    cache = Cache(store, config.cache, tmp_path)
+    cache._embedder = _ExplodingEmbedder()
+    store.cache_put("deadbeef", "role", '{"simhash": "0011223344556677"}', "{}", 0.1, 168)
+    with caplog.at_level("DEBUG", logger="jev_agent.core.cache"):
+        assert cache.similar("role", "some prompt", 0.5) == []
+    assert any(
+        "RuntimeError" in rec.getMessage() and "cross-embedder mismatch" in rec.getMessage()
+        for rec in caplog.records
+    )

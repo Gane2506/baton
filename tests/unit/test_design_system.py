@@ -4,6 +4,7 @@ designer role: round-trip, versioning, prompt rendering and corrupt-file toleran
 import json
 import re
 from pathlib import Path
+from typing import Any
 
 import pytest
 from typer.testing import CliRunner
@@ -19,7 +20,7 @@ from jev_agent.core.design_system import (
     render_for_prompt,
     save_design_system,
 )
-from jev_agent.core.models import DesignDoc, Plan, RunState, ScreenSpec
+from jev_agent.core.models import DesignDoc, Plan, RunState, ScreenSpec, TaskCard
 from jev_agent.roles.render import render_prompt
 from jev_agent.roles.schemas import ROLE_SCHEMAS
 
@@ -144,7 +145,8 @@ def test_cli_init_then_show(repo: Path) -> None:
     assert code == 0 and "v1" in out, out
     system = get_design_system(repo)
     assert system is not None and system.version == 1
-    assert "primary" in system.tokens["colors"]  # type: ignore[index]
+    colors = system.tokens["colors"]
+    assert isinstance(colors, dict) and "primary" in colors
     assert "Screen specs (generated)" in system.markdown
     code, out = _jev(repo, "design", "show")
     assert code == 0 and "Design system v1" in out, out
@@ -164,7 +166,7 @@ def test_starter_template_is_not_empty() -> None:
 # ---- designer role -------------------------------------------------------------------------------
 
 
-def _prompt_vars(design_system: str | None) -> dict:
+def _prompt_vars(design_system: str | None) -> dict[str, Any]:
     return {
         "idea": "a dashboard",
         "plan_json": None,
@@ -214,7 +216,7 @@ def test_role_schemas_parses_design_doc() -> None:
 def test_plan_needs_design_defaults_false() -> None:
     plan = Plan(
         summary="s",
-        tasks=[{"id": "T1", "title": "t", "description": "d"}],
+        tasks=[TaskCard(id="T1", title="t", description="d")],
     )
     assert plan.needs_design is False
     plan2 = plan.model_copy(update={"needs_design": True})

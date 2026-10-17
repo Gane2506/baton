@@ -15,7 +15,7 @@ import subprocess
 import threading
 import time
 from pathlib import Path
-from typing import Union, get_args, get_origin
+from typing import Any, Union, get_args, get_origin
 
 import pytest
 from pydantic import BaseModel, ValidationError
@@ -208,7 +208,7 @@ def test_corrupt_state_db_is_a_one_line_error(fixture_repo: Path) -> None:
 # ---- app/doctor.py: native-key-only dispatcher check (audit app major 1) ----
 
 
-def _dispatcher_check(git_repo: Path) -> object:
+def _dispatcher_check(git_repo: Path) -> app_doctor.Check:
     return {c.name: c for c in doctor_cmd.run_checks(git_repo)}["dispatcher"]
 
 
@@ -376,7 +376,7 @@ def test_dashboard_empty_token_env_generates_one(
     import uvicorn
 
     monkeypatch.setenv("JEV_DASHBOARD_TOKEN", "")
-    served: dict = {}
+    served: dict[str, Any] = {}
     monkeypatch.setattr(uvicorn, "run", lambda *a, **kw: served.update(kw))
     result = runner.invoke(
         app, ["dashboard", "--host", "0.0.0.0", "--no-open", "--repo", str(fixture_repo)]
@@ -461,13 +461,12 @@ def test_approve_prints_warnings_without_workers(
 # ---- cli/run_cmds.py: ship preview branch escaping (audit cli-b nit 1) ----
 
 
-def test_print_ship_preview_escapes_branch(capsys: pytest.CaptureFixture) -> None:
-    from types import SimpleNamespace
-
+def test_print_ship_preview_escapes_branch(capsys: pytest.CaptureFixture[str]) -> None:
     from jev_agent.cli import run_cmds
+    from jev_agent.core.ship import ShipPreview
 
     run_cmds.print_ship_preview(
-        SimpleNamespace(title="ok", branch="jev/[evil]-branch", diff=None, vote=None)
+        ShipPreview(title="ok", branch="jev/[evil]-branch", diff=None, vote=None)
     )
     out = capsys.readouterr().out
     assert "jev/[evil]-branch" in out  # printed literally, not swallowed as markup

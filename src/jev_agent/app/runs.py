@@ -19,7 +19,7 @@ from jev_agent.app.profiles import (
 )
 from jev_agent.config import STATE_DIRNAME
 from jev_agent.config.schema import JevConfig, ShipMode
-from jev_agent.config.servers_schema import NO_PROFILE
+from jev_agent.config.servers_schema import NO_PROFILE as NO_PROFILE
 from jev_agent.core.learning import Learning, LearningError, check_profile_name, resolve_learning
 from jev_agent.core.models import AutonomyMode, Idea
 from jev_agent.core.store import RunRecord

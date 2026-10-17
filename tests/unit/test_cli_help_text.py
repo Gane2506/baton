@@ -11,9 +11,10 @@ from __future__ import annotations
 
 import re
 from collections.abc import Iterator
+from typing import cast
 
 import typer
-from click import Command, Group, Parameter
+from click import Command, Group, Option
 from rich.console import Console
 from typer.testing import CliRunner
 
@@ -44,12 +45,12 @@ def _help_texts(command: Command) -> Iterator[tuple[str, str]]:
     if command.help:
         yield command.help, f"command `{command.name}`"
     for param in command.params:
-        if isinstance(param, Parameter) and param.help:
+        if isinstance(param, Option) and param.help:
             yield param.help, f"`{command.name}` option `{param.name}`"
 
 
 def _commands() -> list[tuple[Command, tuple[str, ...]]]:
-    return list(_walk(typer.main.get_command(app)))
+    return list(_walk(cast(Command, typer.main.get_command(app))))
 
 
 def test_all_help_texts_render_without_double_spaces() -> None:

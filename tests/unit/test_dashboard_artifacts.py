@@ -15,7 +15,6 @@ from starlette.testclient import TestClient
 
 from jev_agent.core.models import Idea, Plan, RunState, TaskCard
 from jev_agent.core.store import Store
-from jev_agent.dashboard import app as dashboard_app_module
 from jev_agent.dashboard import views
 from jev_agent.dashboard.app import create_app
 from jev_agent.dashboard.security import DashboardSettings
@@ -58,7 +57,7 @@ def test_artifacts_aggregates_plans_diffs_and_reports(fixture_repo: Path) -> Non
         store.add_quality_report(run.id, GateResult(level="basic", scope="integration"))
         store.set_run_state(run.id, RunState.DONE)
         run_id = run.id
-    with dashboard_app_module.views.open_repo(fixture_repo) as repo:
+    with views.open_repo(fixture_repo) as repo:
         rows, _ = views.artifacts(repo)
     kinds = sorted(a.kind for a in rows)
     assert kinds == ["diff", "plan", "tests"]
@@ -75,7 +74,7 @@ def test_artifacts_filters(fixture_repo: Path) -> None:
         run = store.create_run(Idea(text="add the thing", repo_path=fixture_repo))
         store.set_run_plan(run.id, _plan(), 1)
         store.set_run_state(run.id, RunState.DONE)
-    with dashboard_app_module.views.open_repo(fixture_repo) as repo:
+    with views.open_repo(fixture_repo) as repo:
         plans, _ = views.artifacts(repo, kind="plan")
         diffs, _ = views.artifacts(repo, kind="diff")
         tests, _ = views.artifacts(repo, kind="tests")
@@ -129,7 +128,7 @@ def test_artifacts_lists_designs(fixture_repo: Path) -> None:
             ),
         )
         run_id = run.id
-    with dashboard_app_module.views.open_repo(fixture_repo) as repo:
+    with views.open_repo(fixture_repo) as repo:
         rows, _ = views.artifacts(repo, kind="design")
     assert len(rows) == 1
     assert rows[0].kind == "design"

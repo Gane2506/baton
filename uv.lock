@@ -106,11 +106,13 @@ name = "baton-agent-orchestrator"
 version = "0.4.0"
 source = { editable = "." }
 dependencies = [
+    { name = "click" },
     { name = "croniter" },
     { name = "httpx" },
     { name = "jinja2" },
     { name = "markupsafe" },
     { name = "pydantic" },
+    { name = "pydantic-core" },
     { name = "rich" },
     { name = "typer" },
 ]
@@ -136,12 +138,14 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "click", specifier = ">=8" },
     { name = "croniter", specifier = ">=6.0" },
     { name = "httpx", specifier = ">=0.27" },
     { name = "jinja2", specifier = ">=3.1" },
     { name = "markdown-it-py", marker = "extra == 'dashboard'", specifier = ">=3.0" },
     { name = "markupsafe", specifier = ">=2.1" },
     { name = "pydantic", specifier = ">=2.7" },
+    { name = "pydantic-core", specifier = ">=2" },
     { name = "python-multipart", marker = "extra == 'dashboard'", specifier = ">=0.0.18" },
     { name = "rich", specifier = ">=13" },
     { name = "starlette", marker = "extra == 'dashboard'", specifier = ">=0.40" },
