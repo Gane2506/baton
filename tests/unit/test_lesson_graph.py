@@ -399,7 +399,7 @@ def test_learner_declares_edges(graphed: LessonDB) -> None:
     edges = {(e.src, e.edge, e.dst, e.origin) for e in graphed.lesson_edges("work")}
     assert ("S4", "supersedes", "S1", "learner") in edges
     assert ("S4", "applies-to", "baton:src/api/client.py", "learner") in edges
-    assert ("S4", "applies-to", "baton:src/api", "manual") in edges  # from the path tag
+    assert ("S4", "applies-to", "baton:src/api", "learner") in edges  # from the path tag
     assert not graphed.get_lesson(1).retired  # advisory: S1 stays active
 
 

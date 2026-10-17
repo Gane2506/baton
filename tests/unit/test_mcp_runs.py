@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 import json
+import os
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -51,6 +52,19 @@ def _repo_ctx(repo: Path, toml: str = CONFIG) -> Iterator[RepoContext]:
             yield RepoContext(root=repo, config=config, store=store, learning=learning)
         finally:
             learning.close()
+
+
+def _trust(repo: Path) -> None:
+    """Trust a fixture repo in the isolated test user config.
+
+    `autonomy.mode` is a guarded key: an untrusted repo's jev.toml may not set it
+    (trust gate, audit 2026-10-16), so the fixture repo is opted in, mirroring a user
+    who trusts their own checkout. Idempotent within a test.
+    """
+    user_config = Path(os.environ["XDG_CONFIG_HOME"]) / "jev" / "config.toml"
+    if "[trust]" not in user_config.read_text():
+        with user_config.open("a") as fh:
+            fh.write(f'\n[trust]\nrepos = ["{repo}"]\n')
 
 
 @pytest.fixture
@@ -216,6 +230,7 @@ def test_run_start_creates_without_advancing(ctx: RepoContext) -> None:
 
 
 def test_run_start_records_autonomy_mode(repo: Path) -> None:
+    _trust(repo)  # `autonomy.mode` is a guarded key (trust gate, audit 2026-10-16)
     with _repo_ctx(repo, CONFIG + '[autonomy]\nmode = "ask_every_step"\n') as ctx:
         server = ctx_server(ctx, allow_mutations=True)
         text = _text(_call(server, "run_start", {"idea": "x"}))

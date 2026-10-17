@@ -43,6 +43,25 @@ PR_URL = "https://github.com/acme/widgets/pull/42"
 runner = CliRunner()
 
 
+def _trust(repo: Path) -> None:
+    """Trust a fixture repo in the isolated test user config.
+
+    `[ship]` is a guarded key: an untrusted repo's jev.toml may not set it (trust gate,
+    audit 2026-10-16), so the fixture repo is opted in, mirroring a user who trusts
+    their own checkout. Idempotent within a test.
+    """
+    user_config = Path(os.environ["XDG_CONFIG_HOME"]) / "jev" / "config.toml"
+    if "[trust]" not in user_config.read_text():
+        with user_config.open("a") as fh:
+            fh.write(f'\n[trust]\nrepos = ["{repo}"]\n')
+
+
+def _ship_config(repo: Path, extra: str = "") -> None:
+    """Enable shipping in the repo's jev.toml and trust the fixture repo (see `_trust`)."""
+    (repo / "jev.toml").write_text(SHIP_TOML + extra)
+    _trust(repo)
+
+
 class FakeGh:
     """The fake `gh` on PATH: its canned answers and the calls it saw."""
 
@@ -124,7 +143,7 @@ def done_run(fixture_repo: Path, origin: Path, gh: FakeGh) -> tuple[Path, str]:
     """A repo with a DONE run (fake workers) and a local bare `origin` holding main. With
     shipping on, the rules dispatcher's run waits to ship ("ask"); `jev ship stop` ends it
     DONE, not shipped, which `jev ship RUN` can still ship by hand."""
-    (fixture_repo / "jev.toml").write_text(SHIP_TOML)
+    _ship_config(fixture_repo)
     _git(fixture_repo, "remote", "add", "origin", str(origin))
     _git(fixture_repo, "push", "-q", "origin", "main")
     code, output = _jev(fixture_repo, "run", "add search")
@@ -203,9 +222,9 @@ def test_ship_pushes_the_result_branch_and_opens_a_draft_pr(
 
 def test_ship_labels_base_and_no_draft_from_config(done_run: tuple[Path, str], gh: FakeGh) -> None:
     repo, run_id = done_run
-    (repo / "jev.toml").write_text(
-        SHIP_TOML + 'draft = false\nlabels = ["jev", "bot"]\nbase = "develop"\n'
-        'branch_prefix = "bots/"\n'
+    _ship_config(
+        repo,
+        'draft = false\nlabels = ["jev", "bot"]\nbase = "develop"\nbranch_prefix = "bots/"\n',
     )
     code, output = _jev(repo, "ship", run_id, "--yes")
     assert code == 0, output
@@ -252,7 +271,7 @@ def test_refusals(done_run: tuple[Path, str], gh: FakeGh, monkeypatch: pytest.Mo
     (repo / "jev.toml").write_text('[dispatcher]\nprimary = "rules"\n')
     code, output = _jev(repo, "ship", run_id, "--yes")
     assert code == 1 and "shipping is off" in output
-    (repo / "jev.toml").write_text(SHIP_TOML)
+    _ship_config(repo)
 
     code, output = _jev(repo, "ship", "20990101-000000-abcd", "--yes")
     assert code == 1 and "not found" in output
@@ -262,10 +281,10 @@ def test_refusals(done_run: tuple[Path, str], gh: FakeGh, monkeypatch: pytest.Mo
     assert code == 1 and "gh auth login" in output
     gh.answer("auth status")
 
-    (repo / "jev.toml").write_text(SHIP_TOML + 'remote = "upstream"\n')
+    _ship_config(repo, 'remote = "upstream"\n')
     code, output = _jev(repo, "ship", run_id, "--yes")
     assert code == 1 and "no remote 'upstream'" in output
-    (repo / "jev.toml").write_text(SHIP_TOML)
+    _ship_config(repo)
 
     with _store(repo) as store:
         store.add_quality_report(
@@ -274,7 +293,7 @@ def test_refusals(done_run: tuple[Path, str], gh: FakeGh, monkeypatch: pytest.Mo
         )
     code, output = _jev(repo, "ship", run_id, "--yes")
     assert code == 1 and "quality gate blocked" in output
-    (repo / "jev.toml").write_text(SHIP_TOML + "require_quality_pass = false\n")
+    _ship_config(repo, "require_quality_pass = false\n")
     code, output = _jev(repo, "ship", run_id, "--dry-run")
     assert code == 0, output
 
@@ -290,7 +309,7 @@ def test_refusals(done_run: tuple[Path, str], gh: FakeGh, monkeypatch: pytest.Mo
 def test_refuses_below_threshold_score(done_run: tuple[Path, str], gh: FakeGh) -> None:
     """`jev ship` honors the score gate, not just blocked gates."""
     repo, run_id = done_run
-    (repo / "jev.toml").write_text(SHIP_TOML)
+    _ship_config(repo)
     low = ScoreBreakdown(
         criteria={
             "correctness": 2,
@@ -322,7 +341,7 @@ def test_refuses_below_threshold_score(done_run: tuple[Path, str], gh: FakeGh) -
 
 
 def test_refuses_runs_that_are_not_done(fixture_repo: Path, origin: Path, gh: FakeGh) -> None:
-    (fixture_repo / "jev.toml").write_text(SHIP_TOML)
+    _ship_config(fixture_repo)
     _git(fixture_repo, "remote", "add", "origin", str(origin))
     code, output = _jev(fixture_repo, "run", "add search")
     assert code == 0
@@ -741,6 +760,7 @@ def _open_view(head: str, checks: list[dict[str, Any]] | None = None, **extra: A
 
 def _ship_repo(fixture_repo: Path, origin: Path, toml: str = SHIP_TOML) -> Path:
     (fixture_repo / "jev.toml").write_text(toml)
+    _trust(fixture_repo)  # `[ship]` is a guarded key (trust gate, audit 2026-10-16)
     _git(fixture_repo, "remote", "add", "origin", str(origin))
     _git(fixture_repo, "push", "-q", "origin", "main")
     return fixture_repo
@@ -901,12 +921,12 @@ def test_no_checks_stop_unless_require_checks_is_off(
     waiting_run: tuple[Path, str, str], gh: FakeGh
 ) -> None:
     repo, run_id, sha = waiting_run
-    (repo / "jev.toml").write_text(SHIP_TOML + "checks_grace_s = 0\n")
+    _ship_config(repo, "checks_grace_s = 0\n")
     gh.answer(MERGE_KEY, _open_view(sha, []))
     code, output = _jev(repo, "ship", "approve", run_id)
     assert code == 3 and "no checks reported" in output, output
 
-    (repo / "jev.toml").write_text(SHIP_TOML + "checks_grace_s = 0\nrequire_checks = false\n")
+    _ship_config(repo, "checks_grace_s = 0\nrequire_checks = false\n")
     gh.answer(SYNC_KEY, json.dumps(PR_VIEW))
     code, output = _jev(repo, "resume", run_id)
     assert code == 0 and "merged PR #42" in output, output
@@ -916,7 +936,7 @@ def test_pending_checks_are_polled_until_green(
     waiting_run: tuple[Path, str, str], gh: FakeGh
 ) -> None:
     repo, run_id, sha = waiting_run
-    (repo / "jev.toml").write_text(SHIP_TOML + "checks_poll_s = 1\n")
+    _ship_config(repo, "checks_poll_s = 1\n")
     pending = [{"name": "test", "status": "QUEUED", "conclusion": None}]
     gh.answers(
         MERGE_KEY,
@@ -934,7 +954,7 @@ def test_pending_checks_forever_hit_the_timeout_and_stop(
     waiting_run: tuple[Path, str, str], gh: FakeGh
 ) -> None:
     repo, run_id, sha = waiting_run
-    (repo / "jev.toml").write_text(SHIP_TOML + "checks_poll_s = 1\nchecks_timeout_s = 1\n")
+    _ship_config(repo, "checks_poll_s = 1\nchecks_timeout_s = 1\n")
     pending = [{"name": "test", "status": "IN_PROGRESS", "conclusion": None}]
     gh.answer(MERGE_KEY, _open_view(sha, pending))
     code, output = _jev(repo, "ship", "approve", run_id)
@@ -1002,7 +1022,7 @@ def test_modify_adds_a_task_with_the_notes_and_votes_again(
 def test_ship_flags_need_shipping_on_and_exclude_each_other(fixture_repo: Path, gh: FakeGh) -> None:
     code, output = _jev(fixture_repo, "run", "--auto-ship", "idea")
     assert code == 1 and "needs shipping on" in output
-    (fixture_repo / "jev.toml").write_text(SHIP_TOML)
+    _ship_config(fixture_repo)
     code, output = _jev(fixture_repo, "run", "--auto-ship", "--ask-before-ship", "idea")
     assert code == 1 and "cannot be used together" in output
     code, output = _jev(fixture_repo, "queue", "add", "--ask-before-ship", "queued idea")

@@ -74,6 +74,19 @@ def _store(repo: Path) -> Store:
     return Store.open(repo / ".jev" / "state.db")
 
 
+def _trust(repo: Path) -> None:
+    """Trust a fixture repo in the isolated test user config.
+
+    `[ship]` is a guarded key: an untrusted repo's jev.toml may not set it (trust gate,
+    audit 2026-10-16), so the fixture repo is opted in, mirroring a user who trusts
+    their own checkout. Idempotent within a test.
+    """
+    user_config = Path(os.environ["XDG_CONFIG_HOME"]) / "jev" / "config.toml"
+    if "[trust]" not in user_config.read_text():
+        with user_config.open("a") as fh:
+            fh.write(f'\n[trust]\nrepos = ["{repo}"]\n')
+
+
 @pytest.fixture
 def planned(fixture_repo: Path) -> tuple[Path, str]:
     """A repo with one run awaiting approval (planned by the fake workers)."""
@@ -1141,6 +1154,7 @@ def test_ship_button_confirmation_and_background_job(
     for client in _client(repo, calls):
         assert "Ship as PR" not in client.get(f"/runs/{run_id}").text  # off by default
         (repo / "jev.toml").write_text("[ship]\nenabled = true\n")
+        _trust(repo)  # `[ship]` is a guarded key (trust gate, audit 2026-10-16)
         assert "Ship as PR" in client.get(f"/runs/{run_id}").text
 
         def refuse(*args: object, **kwargs: object) -> ShipPlan:
@@ -1277,6 +1291,7 @@ def waiting_to_ship(fixture_repo: Path) -> tuple[Path, str]:
     (fixture_repo / "jev.toml").write_text(
         '[dispatcher]\nprimary = "rules"\n[ship]\nenabled = true\nafter_approval = "ask"\n'
     )
+    _trust(fixture_repo)  # `[ship]` is a guarded key (trust gate, audit 2026-10-16)
     _jev(fixture_repo, "run", "add search")
     with _store(fixture_repo) as store:
         run_id = store.list_runs()[0].id
@@ -1336,6 +1351,7 @@ def test_queue_form_ship_choice(client: TestClient, planned: tuple[Path, str]) -
     _post(client, "/queue/add", {"idea": "auto idea", "ship_mode": "merge"})
     assert "needs shipping on" in client.get("/queue").text
     (repo / "jev.toml").write_text('[dispatcher]\nprimary = "jev"\n[ship]\nenabled = true\n')
+    _trust(repo)  # `[ship]` is a guarded key (trust gate, audit 2026-10-16)
     _post(client, "/queue/add", {"idea": "auto idea", "ship_mode": "merge"})
     _post(client, "/queue/add", {"idea": "bad idea", "ship_mode": "later"})
     page = client.get("/queue").text

@@ -636,6 +636,7 @@ def _writing_methods() -> set[str]:
 
     marks = (
         "_tx()",
+        "_insert_run(",  # create_run delegates the write to this helper
         "_update_run(",
         "_update_task(",
         "_update_queue_item(",
