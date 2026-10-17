@@ -15,6 +15,16 @@ from jev_agent.cli.app import (
 
 runner = CliRunner()
 
+# Rich emits ANSI color codes when it detects a color-capable terminal
+# (e.g. TERM=xterm on CI). Strip them so panel/command matching is
+# independent of the terminal's color support.
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def _plain(output: str) -> str:
+    return _ANSI_RE.sub("", output)
+
+
 # The one authoritative mapping: every top-level command -> its help panel.
 EXPECTED_PANELS: dict[str, str] = {
     # Run lifecycle
@@ -70,7 +80,7 @@ def test_every_registered_command_has_exactly_one_expected_panel() -> None:
 def test_help_renders_panels_in_order_with_no_default_panel() -> None:
     result = runner.invoke(app, ["--help"])
     assert result.exit_code == 0
-    output = result.output
+    output = _plain(result.output)
     positions = [output.index(f"─ {panel} ─") for panel in PANEL_ORDER]
     assert positions == sorted(positions)
     # Every command is grouped, so the catch-all panel must not appear.
@@ -80,7 +90,7 @@ def test_help_renders_panels_in_order_with_no_default_panel() -> None:
 def test_each_command_appears_exactly_once_in_help() -> None:
     result = runner.invoke(app, ["--help"])
     assert result.exit_code == 0
-    output = result.output
+    output = _plain(result.output)
     for name in EXPECTED_PANELS:
         rows = re.findall(rf"│ {re.escape(name)}\s", output)
         assert len(rows) == 1, f"{name!r} appears {len(rows)} times in --help"
