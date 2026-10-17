@@ -11,6 +11,7 @@ from jev_agent.cli.board_cmds import (
     COLUMNS,
     RUN_STATE_PHRASE,
     TASK_STATE_PHRASE,
+    Card,
     build_board,
     state_legend,
 )
@@ -38,7 +39,7 @@ def test_state_legend_covers_every_column_and_state() -> None:
         assert phrase in mentioned
 
 
-def _board_with_states(tmp_path: Path, states: list[RunState]):
+def _board_with_states(tmp_path: Path, states: list[RunState]) -> dict[str, list[Card]]:
     with Store.open(tmp_path / "state.db") as store:
         for i, state in enumerate(states):
             run = store.create_run(Idea(text=f"idea {i}", repo_path=tmp_path))

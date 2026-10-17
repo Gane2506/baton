@@ -7,13 +7,17 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
+from typing import Literal
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 import capture  # noqa: E402
 import screenshots  # noqa: E402  (examples/demo/screenshots.py)
+from playwright.sync_api import sync_playwright  # noqa: E402
 
-SHOTS = [
+Scheme = Literal["dark", "light"]
+
+SHOTS: list[tuple[str, str, int, Scheme]] = [
     ("tools-dark.png", "/tools", 1400, "dark"),
     ("tools-light.png", "/tools", 1400, "light"),
     ("settings-dark.png", "/settings", 1400, "dark"),
@@ -30,7 +34,7 @@ def main(argv: list[str]) -> None:
         env = capture.base_env(demo, capture.WIDTH)
         screenshots.seed(demo, env)
         run_id = capture.richest_run(demo)
-        with screenshots.dashboard(demo, env) as base, screenshots.sync_playwright() as pw:
+        with screenshots.dashboard(demo, env) as base, sync_playwright() as pw:
             browser = screenshots.launch(pw, None)
             try:
                 for name, path, height, scheme in SHOTS:

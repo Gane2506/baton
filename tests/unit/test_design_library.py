@@ -411,8 +411,13 @@ def test_save_uses_temp_files_next_to_targets(home: Path, monkeypatch: pytest.Mo
     seen: list[Path] = []
     real_mkstemp = tempfile.mkstemp
 
-    def spy_mkstemp(*args: object, **kwargs: object) -> tuple[int, str]:
-        fd, name = real_mkstemp(*args, **kwargs)
+    def spy_mkstemp(
+        suffix: str | None = None,
+        prefix: str | None = None,
+        dir: str | os.PathLike[str] | None = None,
+        text: bool = False,
+    ) -> tuple[int, str]:
+        fd, name = real_mkstemp(suffix=suffix, prefix=prefix, dir=dir, text=text)
         seen.append(Path(str(name)))
         return fd, name
 

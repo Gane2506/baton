@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
+import ast
 import json
 import os
 import subprocess
 from pathlib import Path
+from typing import Any
 
 import pytest
-from typer.testing import CliRunner
+from typer.testing import CliRunner, Result
 
 from jev_agent.cli.app import app
 from jev_agent.config import DEFAULT_CONFIG_TOML, STATE_DIRNAME
@@ -28,16 +30,19 @@ def git_repo(tmp_path: Path) -> Path:
     return repo
 
 
-def _init_demo(repo: Path, *extra: str):
+def _init_demo(repo: Path, *extra: str) -> Result:
     return runner.invoke(app, ["init", "--demo", "--repo", str(repo), *extra])
 
 
-def _reset(repo: Path, *extra: str, input: str | None = None):
+def _reset(repo: Path, *extra: str, input: str | None = None) -> Result:
     return runner.invoke(app, ["demo", "reset", "--repo", str(repo), *extra], input=input)
 
 
-def _marker(repo: Path) -> dict:
-    return json.loads((repo / STATE_DIRNAME / DEMO_MARKER_FILENAME).read_text(encoding="utf-8"))
+def _marker(repo: Path) -> dict[str, Any]:
+    marker: dict[str, Any] = json.loads(
+        (repo / STATE_DIRNAME / DEMO_MARKER_FILENAME).read_text(encoding="utf-8")
+    )
+    return marker
 
 
 def test_init_demo_seeds_expected_tables(git_repo: Path) -> None:
@@ -174,3 +179,37 @@ def test_dashboard_banner_marks_demo_repos() -> None:
     assert "Demo data" in _render_base(True)
     assert "jev demo reset" in _render_base(True)
     assert "Demo data" not in _render_base(False)
+
+
+def test_chat_capture_pins_design_system() -> None:
+    """`capture.chat_child` must pass `design_system` explicitly to `chat_cmds.chat`.
+
+    The scripted capture feeds `jev chat` exactly the lines in `CHAT_INPUT`; a future
+    interactive prompt (like the design-system picker, which fires when `design_system`
+    is None) would silently consume a scripted line and fail with `EOFError`. Passing
+    the flag keeps the capture deterministic.
+    """
+    repo_root = Path(__file__).resolve().parents[2]
+    source = (repo_root / "examples" / "demo" / "capture.py").read_text(encoding="utf-8")
+    module = ast.parse(source)
+    chat_child = next(
+        node
+        for node in ast.walk(module)
+        if isinstance(node, ast.FunctionDef) and node.name == "chat_child"
+    )
+    calls = [
+        node
+        for node in ast.walk(chat_child)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "chat"
+        and isinstance(node.func.value, ast.Name)
+        and node.func.value.id == "chat_cmds"
+    ]
+    assert calls, "chat_child must call chat_cmds.chat"
+    for call in calls:
+        keywords = {kw.arg for kw in call.keywords if kw.arg}
+        assert "design_system" in keywords, (
+            "chat_child's chat_cmds.chat(...) call must pass design_system explicitly so an "
+            "interactive picker cannot eat a scripted line"
+        )

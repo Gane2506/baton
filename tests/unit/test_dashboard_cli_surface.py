@@ -19,8 +19,9 @@ from starlette.testclient import TestClient
 
 from jev_agent.cli.wiring import FAKE_WORKERS_ENV
 from jev_agent.core.scheduler import scheduler_lock
-from jev_agent.core.store import Store
+from jev_agent.core.store import ShippedPrRecord, Store
 from jev_agent.dashboard.app import create_app
+from jev_agent.dashboard.browser_install import BrowserInstallRunner
 from jev_agent.dashboard.runner import RunAction
 from jev_agent.dashboard.security import DashboardSettings
 
@@ -71,16 +72,17 @@ def _csrf(client: TestClient) -> str:
 
 
 def _post(client: TestClient, url: str, data: dict[str, str] | None = None) -> httpx.Response:
-    return client.post(
+    response = client.post(
         url,
         data={**(data or {}), "csrf_token": _csrf(client)},
         follow_redirects=False,
     )
+    return cast(httpx.Response, response)
 
 
 def _follow(client: TestClient, response: httpx.Response) -> httpx.Response:
     assert response.status_code == 303
-    return client.get(response.headers["location"])
+    return cast(httpx.Response, client.get(response.headers["location"]))
 
 
 # ---- scheduler strip ---------------------------------------------------------------------
@@ -214,8 +216,13 @@ def test_kpis_sync_runs_and_stamps_last_synced(
 
     _add_shipped_pr(fixture_repo)
     synced: list[str] = []
+
+    def _sync_pr(store: Store, gh: object, pr: ShippedPrRecord) -> ShippedPrRecord:
+        synced.append(pr.branch)
+        return pr
+
     monkeypatch.setattr(app_module, "check_gh", lambda gh: None)
-    monkeypatch.setattr(app_module, "sync_pr", lambda store, gh, pr: synced.append(pr.branch) or pr)
+    monkeypatch.setattr(app_module, "sync_pr", _sync_pr)
     response = _post(client, "/kpis/sync")
     assert response.status_code == 303
     assert "synced 1 PR(s)" in _follow(client, response).text
@@ -562,17 +569,16 @@ class _DoneProc:
         pass
 
 
-def _installer_with(client: TestClient, fixture_repo: Path, proc: object):
-    from jev_agent.dashboard.browser_install import BrowserInstallRunner
-
-    def fake_spawn(argv: list[str], log: Path):
+def _installer_with(client: TestClient, fixture_repo: Path, proc: object) -> BrowserInstallRunner:
+    def fake_spawn(argv: list[str], log: Path) -> object:
         log.write_bytes(b"fake install output\n")
         assert argv[0] == "npx"  # the fixed installer command, never from the request
         return proc
 
     dash = _dashboard(client)
-    dash.browser_installer = BrowserInstallRunner(fixture_repo, spawn=fake_spawn)  # type: ignore[arg-type]
-    return dash.browser_installer
+    installer = BrowserInstallRunner(fixture_repo, spawn=fake_spawn)  # type: ignore[arg-type]
+    dash.browser_installer = installer
+    return installer
 
 
 def test_connections_has_the_browser_panel(client: TestClient) -> None:
@@ -636,7 +642,7 @@ def test_browser_install_routes_need_csrf(client: TestClient) -> None:
 # ---- command palette ---------------------------------------------------------------------------
 
 
-def _palette_registry(client: TestClient) -> dict:
+def _palette_registry(client: TestClient) -> dict[str, Any]:
     import json
 
     match = re.search(
@@ -645,12 +651,13 @@ def _palette_registry(client: TestClient) -> dict:
         re.DOTALL,
     )
     assert match, "the palette registry is rendered into the page"
-    return json.loads(match.group(1))
+    data: dict[str, Any] = json.loads(match.group(1))
+    return data
 
 
 def _routes(client: TestClient) -> dict[str, set[str]]:
     routes: dict[str, set[str]] = {}
-    for route in client.app.routes:
+    for route in cast(Any, client.app).routes:
         methods = getattr(route, "methods", None)
         path = getattr(route, "path", None)
         if methods and path:
@@ -734,3 +741,30 @@ def test_settings_about_panel(client: TestClient) -> None:
     from jev_agent import __version__
 
     assert __version__ in text
+
+
+def test_browser_install_reaps_real_child_process(tmp_path: Path) -> None:
+    """P2 regression: a real Popen child is reaped via communicate() — the runner
+    owns the child's lifetime, leaving no zombie behind."""
+    import subprocess
+    import time as _time
+
+    from jev_agent.dashboard.browser_install import BrowserInstallRunner
+
+    procs: list[subprocess.Popen[bytes]] = []
+
+    def spawn(argv: list[str], log: Path) -> subprocess.Popen[bytes]:
+        handle = log.open("ab")
+        proc = subprocess.Popen(["true"], stdout=handle, stderr=subprocess.STDOUT)
+        procs.append(proc)
+        return proc
+
+    runner = BrowserInstallRunner(tmp_path, spawn=spawn)
+    runner.start()
+    for _ in range(100):
+        if runner.status().state == "done":
+            break
+        _time.sleep(0.05)
+    assert runner.status().state == "done"
+    assert procs and procs[0].poll() is not None  # reaped, not a zombie
+    runner.shutdown(5)

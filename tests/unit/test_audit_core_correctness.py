@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import re
 import sqlite3
+from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 from email.utils import format_datetime
 from pathlib import Path
@@ -54,7 +55,7 @@ def _key(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture
-def store(tmp_path: Path) -> Store:
+def store(tmp_path: Path) -> Iterator[Store]:
     s = Store.open(tmp_path / "state.db")
     yield s
     s.close()
@@ -503,7 +504,7 @@ async def test_consensus_decision_model_is_jevs_vote_model() -> None:
     client = httpx.AsyncClient(transport=httpx.MockTransport(_ProvenanceServer()))
     dispatcher = ConsensusDispatcher(JevDispatcher(JevSettings(), client=client))
     req = DecisionRequest(
-        point="D4",  # type: ignore[arg-type]
+        point="D4",
         state={"task": {"id": "T1"}},
         questions={"action": ["retry", "escalate"]},
     )

@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import re
 import sqlite3
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -50,7 +51,7 @@ def repo(fixture_repo: Path) -> Path:
 
 
 @pytest.fixture
-def shared_db(tmp_path: Path) -> LessonDB:
+def shared_db(tmp_path: Path) -> Iterator[LessonDB]:
     """A shared-scope lesson database (the graph migration applies on open)."""
     db = LessonDB.open_shared(tmp_path / "learning.db")
     db.create_profile("work")
@@ -196,7 +197,9 @@ def test_supersede_is_advisory_only_no_auto_retire(shared_db: LessonDB) -> None:
     old = shared_db.add_lesson("work", "Old lesson", ["coder"], [])
     new = shared_db.add_lesson("work", "New lesson", ["coder"], [])
     assert shared_db.add_edge("work", new.id, "supersedes", old.id)
-    assert not shared_db.get_lesson(old.number).retired  # still active
+    old_lesson = shared_db.get_lesson(old.number)
+    assert old_lesson is not None
+    assert not old_lesson.retired  # still active
     assert old.id in [lesson.id for lesson in shared_db.list_lessons("work")]
     kinds = {(v.direction, v.edge) for v in shared_db.edges_for_lesson("work", old.number)}
     assert ("in", "supersedes") in kinds  # the lineage is visible
@@ -400,7 +403,9 @@ def test_learner_declares_edges(graphed: LessonDB) -> None:
     assert ("S4", "supersedes", "S1", "learner") in edges
     assert ("S4", "applies-to", "baton:src/api/client.py", "learner") in edges
     assert ("S4", "applies-to", "baton:src/api", "learner") in edges  # from the path tag
-    assert not graphed.get_lesson(1).retired  # advisory: S1 stays active
+    s1 = graphed.get_lesson(1)
+    assert s1 is not None
+    assert not s1.retired  # advisory: S1 stays active
 
 
 def test_learner_edges_bounded_by_max_edges_per_run(graphed: LessonDB) -> None:

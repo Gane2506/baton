@@ -8,9 +8,10 @@ from pathlib import Path
 
 import pytest
 
+from jev_agent.core.models import Idea, RunState
 from jev_agent.core.recurrence import parse_schedule
 from jev_agent.core.scheduler import Scheduler, SchedulerOptions
-from jev_agent.core.store import QueueItem, Store
+from jev_agent.core.store import QueueItem, RunRecord, Store
 
 
 @pytest.fixture
@@ -19,8 +20,18 @@ def store(tmp_path: Path) -> Iterator[Store]:
         yield s
 
 
-async def _noop_start(item: QueueItem) -> None:
-    return None
+async def _noop_start(item: QueueItem) -> RunRecord:
+    now = datetime.now(UTC)
+    return RunRecord(
+        id="noop",
+        idea=Idea(text=item.idea, repo_path=Path(".")),
+        state=RunState.DONE,
+        plan=None,
+        plan_round=0,
+        spend_usd=0.0,
+        created_at=now,
+        updated_at=now,
+    )
 
 
 def _no_sleep(seconds: float) -> None:

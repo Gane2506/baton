@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import re
 import subprocess
 from dataclasses import dataclass, field
@@ -58,6 +59,8 @@ __all__ = [
 
 #: Appended to a worker summary when the output was served from the cache.
 CACHE_MARKER = "[served from cache]"
+
+log = logging.getLogger(__name__)
 
 #: Decision state keys that are dropped outright (the rest is pattern-matched).
 _VOLATILE_KEYS = frozenset({"previous_rounds"})
@@ -247,7 +250,11 @@ def repo_fingerprint(repo: Path) -> str:
             except OSError:
                 continue
         return digest.hexdigest()
-    except Exception:
+    except Exception as exc:
+        # Fail-soft: without a fingerprint the cache still works (no repo
+        # invalidation). Record the failure's type + message so a broken git
+        # setup stays visible instead of silently degrading.
+        log.debug("repo fingerprint failed, caching without it: %s: %s", type(exc).__name__, exc)
         return "unknown"
 
 
@@ -554,9 +561,15 @@ class Cache:
                 continue
             try:
                 sim = embedder.similarity(needle, simhash)
-            except Exception:
+            except Exception as exc:
                 # A stale entry written under another embedder (simhash hex vs
-                # OpenRouter JSON vectors) must not crash the scan — skip it.
+                # OpenRouter JSON vectors) must not crash the scan — skip it,
+                # but record type + message (P7: a trust-boundary catch).
+                log.debug(
+                    "skipping cache entry with an incompatible simhash: %s: %s",
+                    type(exc).__name__,
+                    exc,
+                )
                 continue
             if sim >= threshold:
                 hits.append((entry, sim))

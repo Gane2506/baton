@@ -18,7 +18,6 @@ from __future__ import annotations
 
 import asyncio
 import threading
-import time
 from collections.abc import Callable, Coroutine
 from dataclasses import dataclass
 from pathlib import Path
@@ -201,9 +200,5 @@ class SchedulerRunner:
         return start
 
     def _sleep(self, seconds: float) -> None:
-        """Sleep in small steps so `stop()` wakes the loop promptly at the next poll."""
-        end = time.monotonic() + seconds
-        while not self._stop.is_set():
-            if time.monotonic() >= end:
-                return
-            time.sleep(0.2)
+        """Block until `seconds` elapse or `stop()` wakes us, whichever comes first."""
+        self._stop.wait(seconds)

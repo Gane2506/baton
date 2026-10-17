@@ -6,6 +6,7 @@ import os
 import re
 from collections.abc import Iterator
 from pathlib import Path
+from typing import cast
 
 import httpx
 import pytest
@@ -18,7 +19,7 @@ from jev_agent.dashboard.security import DashboardSettings
 
 
 @pytest.fixture
-def sfile(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+def sfile(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Path]:
     """An isolated secrets file; the module's process-level `_loaded` set is reset."""
     file = tmp_path / ".jev" / "secrets.env"
     monkeypatch.setenv(secrets.FILE_ENV, str(file))
@@ -163,7 +164,8 @@ def _csrf(client: TestClient) -> str:
 
 
 def _post(client: TestClient, url: str, data: dict[str, str]) -> httpx.Response:
-    return client.post(url, data={**data, "csrf_token": _csrf(client)}, follow_redirects=False)
+    response = client.post(url, data={**data, "csrf_token": _csrf(client)}, follow_redirects=False)
+    return cast(httpx.Response, response)
 
 
 def test_dashboard_add_and_remove_key(
@@ -251,3 +253,23 @@ def test_doctor_points_at_dashboard_when_key_missing(
     check = {c.name: c for c in doctor_cmd.run_checks(repo)}["dispatcher"]
     assert check.status == "warn"
     assert "dashboard Connections page" in check.detail
+
+
+# --- _InjectionTracker (P9) ---------------------------------------------------
+
+
+def test_loaded_names_round_trips_through_owner(sfile: Path) -> None:
+    """Write -> tracked, delete -> untracked and env-popped: the injection owner
+    wires end to end."""
+    secrets.write_secret("JEV_TEST_KEY_A", "aaa", path=sfile)
+    assert "JEV_TEST_KEY_A" in secrets.loaded_names()
+    secrets.delete_secret("JEV_TEST_KEY_A", path=sfile)
+    assert "JEV_TEST_KEY_A" not in secrets.loaded_names()
+    assert "JEV_TEST_KEY_A" not in os.environ
+
+
+def test_loaded_is_an_explicit_owner_not_a_bare_mutable() -> None:
+    """P9 regression: the module-level run state has an explicit owner class,
+    not a bare module-global mutable."""
+    assert type(secrets._loaded).__name__ == "_InjectionTracker"
+    assert not isinstance(secrets._loaded, (dict, list, set))

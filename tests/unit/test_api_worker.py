@@ -12,10 +12,9 @@ from jev_agent.workers.api import (
     PROJECT_URL,
     ApiWorker,
     classify_api_error,
-    parse_json_content,
-    strict_json_schema,
 )
 from jev_agent.workers.base import Worker, WorkerJob
+from jev_agent.workers.structured import parse_json_content, strict_json_schema
 
 FIXTURES = Path(__file__).parent.parent / "fixtures" / "openrouter"
 KEY_ENV = "JEV_TEST_OPENROUTER_KEY"

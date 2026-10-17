@@ -144,7 +144,15 @@ class BrowserInstallRunner:
 
     def _watch(self, proc: subprocess.Popen[bytes]) -> None:
         try:
-            code = proc.wait()
+            # P2: the runner owns the child's lifetime. `communicate()` reaps
+            # the process; its output already streams to the log file, so this
+            # is equivalent to `wait()` here. Injected test doubles only
+            # expose `wait()`.
+            if isinstance(proc, subprocess.Popen):
+                proc.communicate()
+                code: int | None = proc.returncode
+            else:  # test double
+                code = proc.wait()
         except Exception as exc:  # never leave the runner stuck in "running"
             code = None
             outcome = f"the installer could not be watched: {exc}"
