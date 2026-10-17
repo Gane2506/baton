@@ -28,7 +28,7 @@ from zoneinfo import ZoneInfo
 from jev_agent.config.defaults import STATE_DIRNAME
 from jev_agent.config.schema import ShipMode
 from jev_agent.core.lease import pid_alive as _pid_alive
-from jev_agent.core.queue import effective_status, run_states, status_for_run
+from jev_agent.core.queue import effective_status, recover_note, run_states, status_for_run
 from jev_agent.core.recurrence import next_due, parse_schedule
 from jev_agent.core.store import NotFoundError, QueueItem, QueueStatus, RunRecord, Store
 from jev_agent.quality.levels import QualityLevel
@@ -368,7 +368,10 @@ class Scheduler:
 
         An item with a run (linked when the run was created) takes its run's status; a run
         that was still in progress is resumable, so the item becomes `waiting` with a note
-        saying `jev resume RUN`. An item without a run never started: it is queued again.
+        saying `jev resume RUN`. A run stuck at an approval gate (plan/ship approval, the
+        ASK_EVERY_STEP per-step gates) keeps `waiting` with a note saying `jev approve RUN`
+        (audit 2026-10-16: gate-stuck runs were reported as resumable, which is wrong).
+        An item without a run never started: it is queued again.
         """
         for item in self.store.list_queue(["running"]):
             run = None
@@ -383,7 +386,10 @@ class Scheduler:
                 note = f"run {run.state}" + (f": {run.reason}" if run.reason else "")
                 if status == "running":
                     status = "waiting"
-                    note = f"the scheduler stopped; continue with `jev resume {run.id}`"
+                if status == "waiting":
+                    # Interrupted in progress, or stuck at an approval gate: both need a
+                    # person, and `recover_note` points at the right command.
+                    note = recover_note(run.state, run.id)
             if self._set_status(item.id, status, run_id=None, note=note):
                 self.log(f"queue item {item.id}: recovered from a stopped scheduler: {note}")
 

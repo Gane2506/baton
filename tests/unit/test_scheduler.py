@@ -351,6 +351,8 @@ def test_recovery_follows_a_finished_run(store: Store, tmp_path: Path) -> None:
     _scheduler(store, FakeStarter(store, tmp_path), once=True).run()
     got = store.get_queue_item(item.id)
     assert (got.status, got.run_id) == ("waiting", run.id)
+    # Audit 2026-10-16: a run stuck at an approval gate needs `jev approve`, not resume.
+    assert f"jev approve {run.id}" in (got.note or "")
 
 
 def test_link_new_run_links_only_the_first_run(store: Store, tmp_path: Path) -> None:
