@@ -170,7 +170,6 @@ jobs:
           #   core/scheduler.py   — injectable sleep; lock-file retry is 20 x 0.01 s
           #   core/migrations.py  — WAL setup retried against a monotonic deadline
           #   cli/board_cmds.py    — user-facing watch loop, interval-flagged, Ctrl-C ends it
-          #   dashboard/scheduler_runner.py — interruptible sleep, monotonic-deadline-bounded
           SLEEP_OK = {
               "src/jev_agent/core/scheduler.py",
               "src/jev_agent/core/migrations.py",
