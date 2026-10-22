@@ -121,7 +121,9 @@ def test_claude_card_offers_replace_when_connected(
 def waiting_flow(monkeypatch: pytest.MonkeyPatch) -> DeviceFlowStatus:
     """The dashboard's device flow, faked at the class level: already waiting."""
 
-    def fake_start(self: CodexDeviceFlow, command: str = "codex", home=None) -> DeviceFlowStatus:
+    def fake_start(
+        self: CodexDeviceFlow, command: str = "codex", home: Path | None = None
+    ) -> DeviceFlowStatus:
         return fake_status(self)
 
     def fake_status(self: CodexDeviceFlow) -> DeviceFlowStatus:
@@ -151,7 +153,12 @@ def test_codex_device_start_shows_url_and_code(
 
 def test_codex_device_cancel(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
     cancelled: list[bool] = []
-    monkeypatch.setattr(CodexDeviceFlow, "cancel", lambda self: cancelled.append(True) or True)
+
+    def fake_cancel(self: CodexDeviceFlow) -> bool:
+        cancelled.append(True)
+        return True
+
+    monkeypatch.setattr(CodexDeviceFlow, "cancel", fake_cancel)
     monkeypatch.setattr(
         CodexDeviceFlow,
         "status",

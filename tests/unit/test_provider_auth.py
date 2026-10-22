@@ -9,9 +9,10 @@ import json
 import shutil
 import threading
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -32,7 +33,7 @@ def _home(tmp_path: Path) -> Path:
     return home
 
 
-def _which(installed: bool):
+def _which(installed: bool) -> Callable[[str], str | None]:
     return (lambda cmd: "/fake/bin/" + cmd) if installed else (lambda cmd: None)
 
 
@@ -118,7 +119,7 @@ def test_claude_never_returns_values(tmp_path: Path) -> None:
 # --- Codex precedence ----------------------------------------------------------
 
 
-def _codex_home(tmp_path: Path, auth_json: dict | None) -> Path:
+def _codex_home(tmp_path: Path, auth_json: dict[str, Any] | None) -> Path:
     home = _home(tmp_path)
     if auth_json is not None:
         codex = home / ".codex"
@@ -243,13 +244,22 @@ def _device_lines(code: str = "ABCD-12EFG") -> list[str]:
     ]
 
 
+def _popen_fake(procs: list[FakeProcess]) -> Callable[..., FakeProcess]:
+    """A `popen` stand-in that records the fake child it spawns."""
+
+    def _popen(*args: Any, **kwargs: Any) -> FakeProcess:
+        proc = FakeProcess(_device_lines())
+        procs.append(proc)
+        return proc
+
+    return _popen
+
+
 def test_device_flow_waiting_then_done(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     home = _codex_home(tmp_path, None)
     monkeypatch.setattr(shutil, "which", lambda cmd: "/fake/bin/codex")
     procs: list[FakeProcess] = []
-    flow = pa.CodexDeviceFlow(
-        popen=lambda *a, **k: procs.append(FakeProcess(_device_lines())) or procs[-1]
-    )
+    flow = pa.CodexDeviceFlow(popen=_popen_fake(procs))
     flow.start(command="codex", home=home)
     try:
         _wait_for(flow, "waiting")
@@ -275,9 +285,7 @@ def test_device_flow_fails_without_completion(
     home = _codex_home(tmp_path, None)
     monkeypatch.setattr(shutil, "which", lambda cmd: "/fake/bin/codex")
     procs: list[FakeProcess] = []
-    flow = pa.CodexDeviceFlow(
-        popen=lambda *a, **k: procs.append(FakeProcess(_device_lines())) or procs[-1]
-    )
+    flow = pa.CodexDeviceFlow(popen=_popen_fake(procs))
     try:
         flow.start(command="codex", home=home)
         _wait_for(flow, "waiting")
@@ -293,9 +301,7 @@ def test_device_flow_busy_and_cancel(tmp_path: Path, monkeypatch: pytest.MonkeyP
     home = _codex_home(tmp_path, None)
     monkeypatch.setattr(shutil, "which", lambda cmd: "/fake/bin/codex")
     procs: list[FakeProcess] = []
-    flow = pa.CodexDeviceFlow(
-        popen=lambda *a, **k: procs.append(FakeProcess(_device_lines())) or procs[-1]
-    )
+    flow = pa.CodexDeviceFlow(popen=_popen_fake(procs))
     try:
         flow.start(command="codex", home=home)
         _wait_for(flow, "waiting")
@@ -351,7 +357,7 @@ def _job(tmp_path: Path, name: str) -> WorkerJob:
     (workdir / ".git").mkdir()  # enough for in_git_repo; no git needed
     (workdir / "logs").mkdir()
     return WorkerJob(
-        role="reviewer",  # type: ignore[arg-type]
+        role="reviewer",
         prompt="PROMPT",
         workdir=workdir,
         log_path=workdir / "logs" / f"{name}.log",
