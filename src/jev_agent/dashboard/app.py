@@ -111,6 +111,11 @@ from jev_agent.core.learning import LearningError, learning_status
 from jev_agent.core.lease import RunInUseError
 from jev_agent.core.models import RunState, TaskState
 from jev_agent.core.pipeline import STOPPED, PipelineError, cancel_run
+from jev_agent.core.provider_auth import (
+    CLAUDE_OAUTH_TOKEN_ENV,
+    CodexDeviceFlow,
+    check_claude_oauth_token,
+)
 from jev_agent.core.queue import Move, QueueError, add_idea, move_item, queue_counts, remove_item
 from jev_agent.core.scheduler import SchedulerLocked, spent_today
 from jev_agent.core.ship import (
@@ -529,6 +534,7 @@ class Dashboard:
         self.chat_runner = ChatRunner()
         self.scheduler_runner = SchedulerRunner(settings.root, launcher)
         self.browser_installer = BrowserInstallRunner(settings.root)
+        self.codex_flow = CodexDeviceFlow()
         self.started_at = datetime.now(UTC)  # the About panel's uptime
         self.env = _environment()
         self._flash_lock = threading.Lock()
@@ -567,6 +573,7 @@ class Dashboard:
         # the in-flight item's run, which lets the scheduler thread exit promptly.
         self.scheduler_runner.stop()
         self.browser_installer.shutdown()
+        self.codex_flow.shutdown()
         return [
             *self.launcher.shutdown(timeout),
             *self.chat_runner.shutdown(timeout),
@@ -1141,6 +1148,8 @@ class Dashboard:
                 "agg_state": state,
                 "agg_label": label,
                 "route": _dispatcher_route(repo.config),
+                "providers": views.cli_providers(repo.config),
+                "codex_flow": self.codex_flow.status(),
                 "env_vars": views.env_vars(repo.config),
                 "key_names": views.env_var_names(repo.config),
                 "browser_check": views.browser_check(repo),
@@ -1166,6 +1175,7 @@ class Dashboard:
         except (ConfigError, JevError) as exc:
             return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
         state, label = _conn_aggregate(servers)
+        flow = self.codex_flow.status()
         return JSONResponse(
             {
                 "ok": True,
@@ -1175,6 +1185,18 @@ class Dashboard:
                 "reachable": sum(s.state == "reachable" for s in servers),
                 "unreachable": sum(s.state == "unreachable" for s in servers),
                 "unknown": sum(s.state == "unknown" for s in servers),
+                "providers": [
+                    {
+                        "provider": p.provider,
+                        "auth": p.auth,
+                        "label": p.label,
+                        "installed": p.installed,
+                    }
+                    for p in views.cli_providers(repo.config)
+                ],
+                # The device flow's URL/code are single-use and already shown on
+                # the page; only the state travels here so the card can update.
+                "codex_flow": {"state": flow.state, "detail": flow.detail},
                 "servers": [
                     {
                         "name": s.name,
@@ -1224,6 +1246,51 @@ class Dashboard:
             return f"{name} removed from the secrets file."
 
         return await self.act(request, "/connections", remove)
+
+    async def claude_oauth_token_save(self, request: Request) -> Response:
+        """Save a pasted `claude setup-token` OAuth token to the secrets file (POST).
+
+        The token travels only in the POST body and is never rendered, logged, or
+        flashed back — same guarantees as the generic key form. It lands in this
+        process's environment at once, so the provider card flips to "Subscription
+        login (OAuth)" without a restart, and the next `claude` worker run sees it.
+        """
+
+        def save(repo: views.Repo, form: FormData) -> str:
+            from jev_agent.core.secrets import write_secret
+
+            value = str(form.get("value", "")).strip()
+            check_claude_oauth_token(value)  # ValueError -> flashed, nothing saved
+            write_secret(CLAUDE_OAUTH_TOKEN_ENV, value)
+            return "Claude subscription token saved to the secrets file; it is in effect now."
+
+        return await self.act(request, "/connections", save)
+
+    async def codex_device_start(self, request: Request) -> Response:
+        """Start the ChatGPT device sign-in (POST): spawns `codex login
+        --device-auth` in the background. The card shows the URL + one-time code
+        the CLI prints; the user finishes in their browser while the dashboard
+        polls for completion. Nothing secret is stored by jev itself — the CLI
+        keeps its own `~/.codex/auth.json`."""
+
+        def start(repo: views.Repo, form: FormData) -> str:
+            self.codex_flow.start(command=repo.config.workers.codex.command)
+            return (
+                "Codex sign-in started — open the link on the Codex card "
+                "and enter the code in your browser."
+            )
+
+        return await self.act(request, "/connections", start)
+
+    async def codex_device_cancel(self, request: Request) -> Response:
+        """Cancel a pending ChatGPT device sign-in (POST)."""
+
+        def cancel(repo: views.Repo, form: FormData) -> str:
+            if self.codex_flow.cancel():
+                return "Codex sign-in cancelled; no credentials were stored."
+            return "No Codex sign-in was in progress."
+
+        return await self.act(request, "/connections", cancel)
 
     async def browser_install(self, request: Request) -> Response:
         """Two steps (Tier 2: it downloads and runs an installer): the first POST names
@@ -2857,6 +2924,21 @@ def create_app(
         Route("/connections/refresh", dash.connections_refresh, methods=["POST"]),
         Route("/connections/keys/add", dash.connections_key_add, methods=["POST"]),
         Route("/connections/keys/remove", dash.connections_key_remove, methods=["POST"]),
+        Route(
+            "/connections/providers/claude/oauth-token",
+            dash.claude_oauth_token_save,
+            methods=["POST"],
+        ),
+        Route(
+            "/connections/providers/codex/device/start",
+            dash.codex_device_start,
+            methods=["POST"],
+        ),
+        Route(
+            "/connections/providers/codex/device/cancel",
+            dash.codex_device_cancel,
+            methods=["POST"],
+        ),
         Route("/connections/browser/install", dash.browser_install, methods=["POST"]),
         Route("/connections/browser/install/stop", dash.browser_install_stop, methods=["POST"]),
         Route("/preview/live", dash.preview_live),

@@ -392,6 +392,13 @@ pre code { background: none; padding: 0; }
 .panel-head h2, .panel h2 { font-size: var(--text-lg); margin: 0; }
 .panel h3 { font-size: var(--fs-14); margin: var(--s4) 0 var(--s2); }
 
+.provider + .provider {
+  border-top: 1px solid var(--border, ButtonBorder);
+  margin-top: var(--s4); padding-top: var(--s4);
+}
+.provider .panel-head { justify-content: flex-start; margin-bottom: var(--s2); }
+.provider .panel-head h3 { margin: 0; }
+
 h2.section { font-size: var(--text-lg); margin: var(--s6) 0 var(--s3); }
 h2.section:first-child { margin-top: 0; }
 /* Inside a .panel-head row the section heading is a flex item, not a standalone

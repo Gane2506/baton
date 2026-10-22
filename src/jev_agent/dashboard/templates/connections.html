@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "macros.html" import badge, csrf_input, icon with context %}
+{% from "macros.html" import badge, copy_button, csrf_input, icon with context %}
 {% from "settings.html" import render_sections, render_entities with context %}
 {% block title %}Connections{% endblock %}
 {% block content %}
@@ -90,6 +90,90 @@
   {% if route.warning %}
   <div class="flash warn" role="note">{{ icon("i-alert", "sm") }}<span>{{ route.warning }}</span></div>
   {% endif %}
+</section>
+
+<section class="panel" id="providers" aria-label="Providers">
+  <h2>Providers <span class="muted">·</span> subscription login first, API keys as fallback</h2>
+  <p class="small">How the <code>claude</code> and <code>codex</code> CLI workers authenticate.
+  The subscription login is the primary path; an API key under Keys below still works as
+  a fallback. Token <em>values</em> are never shown here — only which login is active.</p>
+  {% for p in providers %}
+  <div class="provider" id="provider-{{ p.provider }}">
+    <div class="panel-head">
+      <h3>{{ p.title }}</h3>
+      {{ badge("CLI installed", "ok") if p.installed else badge("CLI not on PATH", "warn") }}
+      <span data-provider-auth="{{ p.provider }}">{{ badge(p.label, "ok" if p.auth == "oauth_token" or p.auth == "cli_login" else ("info" if p.auth == "api_key" else "warn")) }}</span>
+    </div>
+    <p class="small">{{ p.detail }}</p>
+    {% if p.warning %}
+    <div class="flash warn" role="note">{{ icon("i-alert", "sm") }}<span>{{ p.warning }}</span></div>
+    {% endif %}
+    {% if p.provider == "claude_code" %}
+      {% if p.auth == "none" %}
+      <p class="small"><strong>Connect with your Claude subscription:</strong> on a machine with
+      a browser, run <code>claude setup-token</code>, approve the sign-in, then paste the
+      <code>sk-ant-oat01-…</code> token it prints:</p>
+      <form method="post" action="/connections/providers/claude/oauth-token" class="field-row">
+        {{ csrf_input() }}
+        <div class="field-control">
+          <input type="password" name="value" required autocomplete="new-password"
+                 placeholder="sk-ant-oat01-…" aria-label="Claude subscription token"
+                 pattern="sk-ant-oat01-.*" title="The token printed by `claude setup-token`">
+        </div>
+        <div class="field-actions"><button type="submit" class="btn btn-primary btn-sm">Save token</button></div>
+      </form>
+      {% elif p.auth == "oauth_token" %}
+      <details class="disclosure">
+        <summary>Replace the saved token</summary>
+        <form method="post" action="/connections/providers/claude/oauth-token" class="field-row">
+          {{ csrf_input() }}
+          <div class="field-control">
+            <input type="password" name="value" required autocomplete="new-password"
+                   placeholder="sk-ant-oat01-…" aria-label="Claude subscription token"
+                   pattern="sk-ant-oat01-.*" title="The token printed by `claude setup-token`">
+          </div>
+          <div class="field-actions"><button type="submit" class="btn btn-primary btn-sm">Save token</button></div>
+        </form>
+      </details>
+      {% else %}
+      <p class="small">The <code>claude</code> CLI is already signed in — workers reuse that login.</p>
+      {% endif %}
+      <p class="hint">Saved to <code>~/.jev/secrets.env</code> (mode 600) and in effect immediately.
+      Fallback: add <code>ANTHROPIC_API_KEY</code> under Keys below — it outranks the
+      subscription login and is billed per token.</p>
+    {% else %}
+      {% if p.auth == "oauth_token" %}
+      <p class="small">Workers run <code>codex</code> with your ChatGPT subscription.</p>
+      {% elif codex_flow.state in ("starting", "waiting") %}
+      <div id="codex-flow-waiting">
+        <p>{{ badge("waiting for browser approval", "info", live=true) }}</p>
+        <ol class="small">
+          <li>Open <a href="{{ codex_flow.url }}" target="_blank" rel="noopener">{{ codex_flow.url }}</a> in your browser.</li>
+          <li>Enter this one-time code: <code class="mono">{{ codex_flow.code }}</code> {{ copy_button(codex_flow.code, "Copy code") }}</li>
+        </ol>
+        <p class="hint">{{ codex_flow.detail }}</p>
+        <form method="post" action="/connections/providers/codex/device/cancel" class="inline">
+          {{ csrf_input() }}
+          <button type="submit" class="btn btn-sm btn-secondary">Cancel sign-in</button>
+        </form>
+      </div>
+      {% else %}
+        {% if codex_flow.state in ("failed", "cancelled") %}
+        <div class="flash warn" role="note">{{ icon("i-alert", "sm") }}<span>Sign-in {{ codex_flow.state }}: {{ codex_flow.detail }}</span></div>
+        {% endif %}
+        {% if p.auth == "none" %}
+        <form method="post" action="/connections/providers/codex/device/start">
+          {{ csrf_input() }}
+          <button type="submit" class="btn btn-primary">Sign in with ChatGPT</button>
+          <span class="hint">Device code flow: the dashboard shows a link and a one-time code,
+          you approve it in your browser, and the CLI stores its own credentials.</span>
+        </form>
+        {% endif %}
+      {% endif %}
+      <p class="hint">Fallback: add <code>OPENAI_API_KEY</code> under Keys below.</p>
+    {% endif %}
+  </div>
+  {% endfor %}
 </section>
 
 <section class="panel" aria-label="Key health">
