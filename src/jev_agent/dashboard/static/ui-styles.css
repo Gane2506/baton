@@ -1,0 +1,484 @@
+/* ============================================================================
+   Baton web UI — 16 selectable UI styles (workstream UI-02, issue #116)
+   ----------------------------------------------------------------------------
+   ONE theming mechanism, not 16 forks. Every page server-renders
+   `data-ui-style="<slug>"` on <html> (base.html, from the user's persisted
+   choice), and every style below keys off that attribute.
+
+   Each style is a block of CSS custom properties — the design tokens — plus a
+   small set of style-only extras (gradients, textures, layout tweaks). ONE
+   shared structural section consumes the tokens, so the 16 styles never fork
+   the component rules. A style that needs no extras is tokens alone.
+
+   The tokens are orthogonal to `data-theme` (the color profiles in
+   style.css): styles restyle borders, shadows, radii, type and density, and
+   only override colors where the design language demands it.
+
+   Constraints inherited from style.css: no CDN, no web fonts, no inline
+   style/script — system font stacks only.
+   ========================================================================== */
+
+/* ---- design tokens ---------------------------------------------------------
+   Defaults are the Bento Grid style (the default style): soft tiles, 16px
+   card radius, gentle lift, airy gaps. */
+
+:root {
+  --ui-radius: 16px;              /* cards, panels, columns, tables */
+  --ui-radius-control: 10px;      /* buttons, inputs, code blocks */
+  --ui-radius-badge: 999px;       /* status badges */
+  --ui-nav-radius: 10px;          /* sidebar nav rows */
+  --ui-border-w: 1px;
+  --ui-border-color: var(--border);
+  --ui-shadow: 0 2px 14px rgba(0, 0, 0, 0.22);
+  --ui-shadow-btn: 0 1px 3px rgba(0, 0, 0, 0.30);
+  --ui-font: var(--sans);
+  --ui-display: var(--sans);
+  --ui-h-transform: none;
+  --ui-h-spacing: -0.01em;
+  --ui-h-weight: 600;
+  --ui-pad: var(--s4) var(--s5);  /* card padding (layout density) */
+  --ui-gap: var(--s4);            /* grid gaps (layout density) */
+}
+
+/* ---- the 16 styles ----------------------------------------------------------
+   Registry order matches src/jev_agent/dashboard/ui_styles.py. */
+
+:root[data-ui-style="minimalism"] {
+  --ui-radius: 6px;
+  --ui-radius-control: 6px;
+  --ui-radius-badge: 4px;
+  --ui-nav-radius: 6px;
+  --ui-border-w: 1px;
+  --ui-shadow: none;
+  --ui-shadow-btn: none;
+  --ui-h-spacing: 0;
+  --ui-h-weight: 500;
+  --ui-pad: 20px 26px;
+  --ui-gap: 26px;
+}
+
+:root[data-ui-style="flat"] {
+  --ui-radius: 8px;
+  --ui-radius-control: 6px;
+  --ui-radius-badge: 4px;
+  --ui-nav-radius: 6px;
+  --ui-border-w: 1px;
+  --ui-shadow: none;
+  --ui-shadow-btn: none;
+  --ui-h-transform: none;
+  --ui-h-weight: 700;
+}
+
+:root[data-ui-style="skeuomorphism"] {
+  --ui-radius: 10px;
+  --ui-radius-control: 8px;
+  --ui-border-w: 1px;
+  --ui-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.12), 0 3px 8px rgba(0, 0, 0, 0.45);
+  --ui-shadow-btn: inset 0 1px 0 rgba(255, 255, 255, 0.28), 0 2px 5px rgba(0, 0, 0, 0.45);
+  --ui-h-weight: 600;
+}
+
+:root[data-ui-style="neumorphism"] {
+  --ui-radius: 18px;
+  --ui-radius-control: 14px;
+  --ui-radius-badge: 999px;
+  --ui-nav-radius: 14px;
+  --ui-border-w: 0;
+  --ui-shadow: 9px 9px 18px rgba(0, 0, 0, 0.38), -9px -9px 18px rgba(255, 255, 255, 0.05);
+  --ui-shadow-btn: 5px 5px 10px rgba(0, 0, 0, 0.38), -5px -5px 10px rgba(255, 255, 255, 0.05);
+  --ui-pad: 20px 22px;
+  --ui-gap: 22px;
+}
+
+:root[data-ui-style="glassmorphism"] {
+  --ui-radius: 18px;
+  --ui-radius-control: 12px;
+  --ui-nav-radius: 12px;
+  --ui-border-w: 1px;
+  --ui-border-color: color-mix(in srgb, var(--fg) 16%, transparent);
+  --ui-shadow: 0 12px 40px rgba(0, 0, 0, 0.30);
+  --ui-shadow-btn: 0 4px 16px rgba(0, 0, 0, 0.25);
+  --ui-h-weight: 600;
+}
+
+:root[data-ui-style="claymorphism"] {
+  --ui-radius: 24px;
+  --ui-radius-control: 18px;
+  --ui-nav-radius: 18px;
+  --ui-border-w: 3px;
+  --ui-border-color: color-mix(in srgb, var(--surface-2) 55%, white);
+  --ui-shadow: inset 3px 3px 6px rgba(255, 255, 255, 0.10),
+    inset -4px -4px 10px rgba(0, 0, 0, 0.28),
+    8px 8px 22px rgba(0, 0, 0, 0.30);
+  --ui-shadow-btn: inset 2px 2px 4px rgba(255, 255, 255, 0.14),
+    inset -3px -3px 6px rgba(0, 0, 0, 0.25),
+    5px 5px 12px rgba(0, 0, 0, 0.28);
+  --ui-pad: 20px 24px;
+  --ui-gap: 22px;
+  --ui-h-weight: 700;
+}
+
+:root[data-ui-style="bento"] {
+  /* The default: tokens already carry it (see :root above). Repeated here so
+     every registered slug has an explicit block. */
+  --ui-radius: 16px;
+  --ui-radius-control: 10px;
+  --ui-shadow: 0 2px 14px rgba(0, 0, 0, 0.22);
+  --ui-gap: var(--s4);
+}
+
+:root[data-ui-style="cards"] {
+  --ui-radius: 12px;
+  --ui-radius-control: 8px;
+  --ui-border-w: 1px;
+  --ui-shadow: 0 14px 34px rgba(0, 0, 0, 0.35);
+  --ui-shadow-btn: 0 6px 16px rgba(0, 0, 0, 0.30);
+  --ui-pad: 20px 22px;
+  --ui-gap: 24px;
+  --ui-h-weight: 700;
+}
+
+:root[data-ui-style="split-screen"] {
+  --ui-radius: 8px;
+  --ui-radius-control: 6px;
+  --ui-nav-radius: 6px;
+  --ui-border-w: 1px;
+  --ui-shadow: none;
+  --ui-shadow-btn: none;
+  --ui-h-transform: uppercase;
+  --ui-h-spacing: 0.06em;
+  --ui-h-weight: 700;
+}
+
+:root[data-ui-style="brutalism"] {
+  --ui-radius: 0;
+  --ui-radius-control: 0;
+  --ui-radius-badge: 0;
+  --ui-nav-radius: 0;
+  --ui-border-w: 2px;
+  --ui-border-color: var(--fg);
+  --ui-shadow: 5px 5px 0 var(--fg);
+  --ui-shadow-btn: 3px 3px 0 var(--fg);
+  --ui-h-transform: uppercase;
+  --ui-h-spacing: 0.02em;
+  --ui-h-weight: 800;
+  --ui-gap: var(--s3);
+}
+
+:root[data-ui-style="neo-brutalism"] {
+  --ui-radius: 8px;
+  --ui-radius-control: 6px;
+  --ui-radius-badge: 4px;
+  --ui-nav-radius: 6px;
+  --ui-border-w: 2px;
+  --ui-border-color: var(--fg);
+  --ui-shadow: 6px 6px 0 var(--accent);
+  --ui-shadow-btn: 4px 4px 0 var(--accent);
+  --ui-h-transform: uppercase;
+  --ui-h-spacing: 0.02em;
+  --ui-h-weight: 800;
+  --ui-gap: var(--s3);
+}
+
+:root[data-ui-style="bauhaus"] {
+  --ui-radius: 0;
+  --ui-radius-control: 0;
+  --ui-radius-badge: 0;
+  --ui-nav-radius: 0;
+  --ui-border-w: 2px;
+  --ui-border-color: var(--fg);
+  --ui-shadow: 6px 6px 0 rgba(0, 0, 0, 0.85);
+  --ui-shadow-btn: 4px 4px 0 rgba(0, 0, 0, 0.85);
+  --ui-h-transform: uppercase;
+  --ui-h-spacing: 0.14em;
+  --ui-h-weight: 800;
+  /* The design language demands primary colors: red takes the accent slot. */
+  --accent: #e30613;
+  --accent-soft: color-mix(in srgb, #e30613 12%, transparent);
+  --bar: #e30613;
+}
+
+:root[data-ui-style="hand-drawn"] {
+  --ui-radius: 255px 15px 225px 15px / 15px 225px 15px 255px;
+  --ui-radius-control: 15px 225px 15px 255px / 225px 15px 255px 15px;
+  --ui-radius-badge: 15px 225px 15px 255px / 225px 15px 255px 15px;
+  --ui-nav-radius: 15px 225px 15px 255px / 225px 15px 255px 15px;
+  --ui-border-w: 2px;
+  --ui-shadow: 2px 4px 0 rgba(0, 0, 0, 0.18);
+  --ui-shadow-btn: 2px 3px 0 rgba(0, 0, 0, 0.20);
+  --ui-font: "Segoe Print", "Bradley Hand", "Comic Sans MS", "Chalkboard SE", "Comic Neue", cursive;
+  --ui-display: "Segoe Print", "Bradley Hand", "Comic Sans MS", "Chalkboard SE", "Comic Neue", cursive;
+  --ui-h-spacing: 0;
+  --ui-h-weight: 600;
+  --ui-gap: var(--s5);
+}
+
+:root[data-ui-style="cyberpunk"] {
+  --ui-radius: 3px;
+  --ui-radius-control: 2px;
+  --ui-radius-badge: 2px;
+  --ui-nav-radius: 2px;
+  --ui-border-w: 1px;
+  --ui-border-color: color-mix(in srgb, var(--accent) 55%, transparent);
+  --ui-shadow: 0 0 16px color-mix(in srgb, var(--accent) 38%, transparent);
+  --ui-shadow-btn: 0 0 10px color-mix(in srgb, var(--accent) 45%, transparent);
+  --ui-font: var(--mono);
+  --ui-display: var(--mono);
+  --ui-h-transform: uppercase;
+  --ui-h-spacing: 0.22em;
+  --ui-h-weight: 700;
+  --ui-gap: var(--s3);
+}
+
+:root[data-ui-style="y2k"] {
+  --ui-radius: 16px;
+  --ui-radius-control: 999px;
+  --ui-nav-radius: 999px;
+  --ui-border-w: 1px;
+  --ui-border-color: color-mix(in srgb, var(--fg) 22%, transparent);
+  --ui-shadow: 0 6px 24px color-mix(in srgb, var(--accent) 22%, transparent);
+  --ui-shadow-btn: 0 4px 14px rgba(0, 0, 0, 0.30), inset 0 1px 0 rgba(255, 255, 255, 0.35);
+  --ui-h-transform: none;
+  --ui-h-spacing: 0;
+  --ui-h-weight: 800;
+  --ui-gap: var(--s5);
+}
+
+:root[data-ui-style="pixel-art"] {
+  --ui-radius: 0;
+  --ui-radius-control: 0;
+  --ui-radius-badge: 0;
+  --ui-nav-radius: 0;
+  --ui-border-w: 3px;
+  --ui-border-color: var(--fg);
+  --ui-shadow: 6px 6px 0 var(--fg);
+  --ui-shadow-btn: 4px 4px 0 var(--fg);
+  --ui-font: var(--mono);
+  --ui-display: var(--mono);
+  --ui-h-transform: uppercase;
+  --ui-h-spacing: 0.08em;
+  --ui-h-weight: 700;
+  --ui-gap: var(--s3);
+}
+
+/* ---- shared structural section ----------------------------------------------
+   Written ONCE, parameterized by the tokens above. Scoped to
+   `html[data-ui-style]` (always present), which outranks the base component
+   selectors without touching them. */
+
+html[data-ui-style] body {
+  font-family: var(--ui-font);
+}
+
+html[data-ui-style] h1,
+html[data-ui-style] h2,
+html[data-ui-style] h3,
+html[data-ui-style] .panel-head h2,
+html[data-ui-style] h2.section,
+html[data-ui-style] .brand .name {
+  font-family: var(--ui-display);
+  text-transform: var(--ui-h-transform);
+  letter-spacing: var(--ui-h-spacing);
+  font-weight: var(--ui-h-weight);
+}
+
+html[data-ui-style] .panel,
+html[data-ui-style] section.card,
+html[data-ui-style] .column,
+html[data-ui-style] .stat,
+html[data-ui-style] .table-wrap,
+html[data-ui-style] .flash {
+  border-radius: var(--ui-radius);
+  border-width: var(--ui-border-w);
+  border-color: var(--ui-border-color);
+  box-shadow: var(--ui-shadow);
+}
+
+html[data-ui-style] .panel,
+html[data-ui-style] section.card {
+  padding: var(--ui-pad);
+}
+
+html[data-ui-style] .grid-2,
+html[data-ui-style] .board,
+html[data-ui-style] .stats {
+  gap: var(--ui-gap);
+}
+
+html[data-ui-style] .btn,
+html[data-ui-style] button,
+html[data-ui-style] .button {
+  border-radius: var(--ui-radius-control);
+  border-width: var(--ui-border-w);
+  box-shadow: var(--ui-shadow-btn);
+  font-family: var(--ui-font);
+}
+
+html[data-ui-style] input[type="text"],
+html[data-ui-style] input[type="number"],
+html[data-ui-style] input[type="search"],
+html[data-ui-style] input[type="password"],
+html[data-ui-style] input[type="url"],
+html[data-ui-style] input[type="email"],
+html[data-ui-style] select,
+html[data-ui-style] textarea {
+  border-radius: var(--ui-radius-control);
+  border-width: var(--ui-border-w);
+  font-family: var(--ui-font);
+}
+
+html[data-ui-style] .badge {
+  border-radius: var(--ui-radius-badge);
+}
+
+html[data-ui-style] .sidebar {
+  border-right-width: var(--ui-border-w);
+  border-right-color: var(--ui-border-color);
+}
+
+html[data-ui-style] .sidebar nav a {
+  border-radius: var(--ui-nav-radius);
+}
+
+html[data-ui-style] code,
+html[data-ui-style] pre,
+html[data-ui-style] .markdown pre {
+  border-radius: var(--ui-radius-control);
+}
+
+/* ---- style-only extras -------------------------------------------------------
+   What tokens cannot express: gradients, textures, layout shifts. Kept small
+   and strictly per-style. */
+
+/* Skeuomorphism: glossy physicality — gradient faces, inset highlights. */
+html[data-ui-style="skeuomorphism"] .panel,
+html[data-ui-style="skeuomorphism"] section.card,
+html[data-ui-style="skeuomorphism"] .column,
+html[data-ui-style="skeuomorphism"] .stat,
+html[data-ui-style="skeuomorphism"] .sidebar {
+  background: linear-gradient(180deg, var(--surface-2), var(--surface) 65%);
+}
+html[data-ui-style="skeuomorphism"] .btn,
+html[data-ui-style="skeuomorphism"] button {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.12), rgba(255, 255, 255, 0) 55%),
+    var(--surface-2);
+  text-shadow: 0 1px 1px rgba(0, 0, 0, 0.55);
+}
+html[data-ui-style="skeuomorphism"] h1,
+html[data-ui-style="skeuomorphism"] h2 {
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6);
+}
+
+/* Neumorphism: pressed states carve in. */
+html[data-ui-style="neumorphism"] .btn:active,
+html[data-ui-style="neumorphism"] button:active {
+  box-shadow: inset 4px 4px 9px rgba(0, 0, 0, 0.38),
+    inset -4px -4px 9px rgba(255, 255, 255, 0.05);
+  transform: none;
+}
+
+/* Glassmorphism: frosted surfaces over the page background. */
+html[data-ui-style="glassmorphism"] .panel,
+html[data-ui-style="glassmorphism"] section.card,
+html[data-ui-style="glassmorphism"] .column,
+html[data-ui-style="glassmorphism"] .stat,
+html[data-ui-style="glassmorphism"] .table-wrap {
+  background: color-mix(in srgb, var(--surface) 58%, transparent);
+  -webkit-backdrop-filter: blur(16px) saturate(1.25);
+  backdrop-filter: blur(16px) saturate(1.25);
+}
+html[data-ui-style="glassmorphism"] .sidebar {
+  background: color-mix(in srgb, var(--surface) 66%, transparent);
+  -webkit-backdrop-filter: blur(20px) saturate(1.25);
+  backdrop-filter: blur(20px) saturate(1.25);
+}
+
+/* Split-screen: the sidebar becomes a contrasting zone; the divide is the design. */
+html[data-ui-style="split-screen"] {
+  --sidebar-w: 300px;
+}
+html[data-ui-style="split-screen"] .sidebar {
+  background: var(--surface-2);
+  border-right: 2px solid var(--border-strong);
+}
+html[data-ui-style="split-screen"] .sidebar nav a {
+  font-size: var(--text-base);
+  padding: 12px var(--s3);
+}
+html[data-ui-style="split-screen"] .sidebar nav a.active {
+  box-shadow: inset 4px 0 0 var(--accent);
+}
+
+/* Brutalism / neo-brutalism / pixel-art: buttons physically depress. */
+html[data-ui-style="brutalism"] .btn:active,
+html[data-ui-style="brutalism"] button:active,
+html[data-ui-style="neo-brutalism"] .btn:active,
+html[data-ui-style="neo-brutalism"] button:active,
+html[data-ui-style="pixel-art"] .btn:active,
+html[data-ui-style="pixel-art"] button:active {
+  transform: translate(3px, 3px);
+  box-shadow: 0 0 0 var(--fg);
+}
+html[data-ui-style="neo-brutalism"] .btn:active,
+html[data-ui-style="neo-brutalism"] button:active {
+  box-shadow: 0 0 0 var(--accent);
+}
+
+/* Bauhaus: a primary-color masthead rule on every card. */
+html[data-ui-style="bauhaus"] .panel,
+html[data-ui-style="bauhaus"] section.card {
+  border-top: 8px solid var(--accent);
+}
+html[data-ui-style="bauhaus"] .stat:nth-child(3n + 2) {
+  border-top: 8px solid #ffd200;
+}
+html[data-ui-style="bauhaus"] .stat:nth-child(3n) {
+  border-top: 8px solid #0066b3;
+}
+
+/* Cyberpunk: scanlines over the page, neon on the chrome. */
+html[data-ui-style="cyberpunk"] body {
+  background-image: repeating-linear-gradient(
+    0deg,
+    rgba(127, 255, 255, 0.028) 0 1px,
+    transparent 1px 4px
+  );
+}
+html[data-ui-style="cyberpunk"] .sidebar nav a.active {
+  text-shadow: 0 0 8px var(--accent);
+}
+
+/* Y2K: chrome gloss — glossy panels, pill buttons, gradient display type. */
+html[data-ui-style="y2k"] .panel,
+html[data-ui-style="y2k"] section.card {
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--surface) 82%, white),
+    var(--surface) 70%
+  );
+}
+html[data-ui-style="y2k"] .btn,
+html[data-ui-style="y2k"] button {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.24), rgba(255, 255, 255, 0) 52%),
+    var(--surface-2);
+}
+html[data-ui-style="y2k"] h1 {
+  background: linear-gradient(92deg, var(--accent), var(--info) 55%, #c084fc);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+/* Hand-drawn: underline sketch on section titles. */
+html[data-ui-style="hand-drawn"] h2.section {
+  text-decoration: underline wavy var(--accent) 2px;
+  text-underline-offset: 6px;
+}
+
+/* Reduced motion: hard shadows must not jump the layout. */
+@media (prefers-reduced-motion: reduce) {
+  html[data-ui-style] .btn:active,
+  html[data-ui-style] button:active {
+    transform: none;
+  }
+}

@@ -1,5 +1,8 @@
 <!doctype html>
-<html lang="en">
+{# The UI style (workstream UI-02, issue #116): server-rendered from the user's
+   persisted choice, so the style applies on the first paint with no flash.
+   `static/ui-styles.css` keys every style off this attribute. #}
+<html lang="en" data-ui-style="{{ ui_style | default('bento', true) }}">
 {% from "macros.html" import csrf_input with context %}
 <head>
 <meta charset="utf-8">
@@ -10,6 +13,8 @@
 <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="/static/style.css">
 <link rel="stylesheet" href="/static/shell.css">
+<link rel="stylesheet" href="/static/ui-styles.css">
+<script src="/static/ui-style.js" defer></script>
 <script src="/static/live.js" defer></script>
 <script src="/static/app.js" defer></script>
 <script src="/static/conn.js" defer></script>
@@ -108,6 +113,19 @@
           <option value="dark">Dark</option>
         </select>
       </label>
+      {# The UI style picker (workstream UI-02): same footer slot as the theme
+         control. The options are server-rendered from the style registry; the
+         select auto-submits via static/ui-style.js (a plain POST fallback keeps
+         it working without JavaScript). #}
+      <form class="theme-pick" method="post" action="/ui-style" id="ui-style-form">
+        {{ csrf_input() }}
+        <label for="ui-style">Style</label>
+        <select id="ui-style" name="style">
+          {% for style in ui_style_options | default([], true) %}
+          <option value="{{ style.slug }}"{% if style.slug == ui_style %} selected{% endif %} title="{{ style.blurb }}">{{ style.label }}</option>
+          {% endfor %}
+        </select>
+      </form>
       <div>{{ root }}</div>
     </div>
   </aside>

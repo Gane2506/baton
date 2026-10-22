@@ -22,6 +22,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
+from urllib.parse import urlsplit
 
 from jinja2 import Environment, PackageLoader
 from markupsafe import Markup, escape
@@ -135,7 +136,7 @@ from jev_agent.core.workspace import (
     run_git,
     start_ref,
 )
-from jev_agent.dashboard import views
+from jev_agent.dashboard import ui_styles, views
 from jev_agent.dashboard.browser_install import BrowserInstallBusy, BrowserInstallRunner
 from jev_agent.dashboard.preview import (
     PreviewBridge,
@@ -582,6 +583,12 @@ class Dashboard:
             request=request,
             path=request.url.path,
             csrf=request.state.csrf,
+            # The UI style (workstream UI-02): every page shares base.html, so one
+            # server-rendered `data-ui-style` attribute plus ui-styles.css covers
+            # the whole dashboard. read_ui_style() never raises (falls back to
+            # the default), so a broken preference cannot break page rendering.
+            ui_style=ui_styles.read_ui_style(),
+            ui_style_options=ui_styles.UI_STYLES,
             palette_registry=palette_registry(request.state.csrf),
             refresh_ms=int(self.settings.refresh_s * 1000),
             root=self.settings.root,
@@ -1424,6 +1431,21 @@ class Dashboard:
 
     async def settings_unset(self, request: Request) -> Response:
         return await self._settings_write(request, unset=True)
+
+    async def ui_style_set(self, request: Request) -> Response:
+        """The sidebar style picker: persist the chosen UI style (workstream UI-02)."""
+        form = await checked_form(request)
+        slug = _text(form, "style")
+        if not slug:
+            self.flash(request, "error", "no style given")
+        else:
+            try:
+                ui_styles.write_ui_style(slug)
+            except (ValueError, ConfigError) as exc:
+                self.flash(request, "error", str(exc))
+            else:
+                self.flash(request, "ok", f"UI style: {ui_styles.label_for(slug)}")
+        return self.back(_back_target(request))
 
     async def _settings_write(self, request: Request, *, unset: bool) -> Response:
         """One field of the settings editor: parse it, validate the config, then write."""
@@ -2308,6 +2330,23 @@ def _text(form: FormData, name: str) -> str | None:
     return value.strip() if isinstance(value, str) else None
 
 
+def _back_target(request: Request) -> str:
+    """Where a sidebar-picker POST redirects: the same-origin referer, else `/`.
+
+    Only the referer's path and query are kept, so a forged absolute URL can
+    never turn the redirect into an open redirect.
+    """
+    referer = request.headers.get("referer")
+    if referer and same_origin(request):
+        target = urlsplit(referer)
+        path = target.path or "/"
+        if target.query:
+            path += "?" + target.query
+        if path.startswith("/"):
+            return path
+    return "/"
+
+
 def _chat_backend_name(value: str | None) -> BackendName:
     """A form's worker value, or a `ChatError` (the form lists both backends)."""
     if value in BACKENDS:
@@ -2832,6 +2871,7 @@ def create_app(
         Route("/diagnostics", dash.diagnostics_page),
         Route("/settings/set", dash.settings_set, methods=["POST"]),
         Route("/settings/unset", dash.settings_unset, methods=["POST"]),
+        Route("/ui-style", dash.ui_style_set, methods=["POST"]),
         Route("/settings/entity", dash.settings_entity, methods=["POST"]),
         Mount("/static", app=StaticFiles(directory=STATIC_DIR), name="static"),
     ]
