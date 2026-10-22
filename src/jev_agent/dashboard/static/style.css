@@ -394,6 +394,10 @@ pre code { background: none; padding: 0; }
 
 h2.section { font-size: var(--text-lg); margin: var(--s6) 0 var(--s3); }
 h2.section:first-child { margin-top: 0; }
+/* Inside a .panel-head row the section heading is a flex item, not a standalone
+   block: its --s6 top margin would shove the heading below the row's actions
+   (Queue "Items", Learning "Lessons"). The row owns the spacing instead. */
+.panel-head h2.section { margin: 0; }
 
 .grid-2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: var(--s4); align-items: start; }
 .grid-2 > .panel { margin-bottom: 0; }
@@ -460,6 +464,10 @@ h2.section:first-child { margin-top: 0; }
 
 form.inline { display: inline-flex; }
 .actions { display: flex; flex-wrap: wrap; gap: var(--s2); align-items: center; }
+/* A paragraph sitting directly in a toolbar row (Queue "Show all" toggle, KPIs
+   sync note, Learning status line) is a flex item, not prose: the base p
+   bottom margin would lift it off the row's vertical center. */
+.panel-head > p, .actions > p { margin: 0; }
 .actions .sep { width: 1px; height: 20px; background: var(--border); margin: 0 var(--s1); }
 .actions-gap { margin-bottom: var(--s3); }
 
@@ -530,12 +538,21 @@ label.check {
   cursor: pointer;
 }
 .hint { font-size: var(--text-xs); color: var(--muted); margin: 6px 0 0; line-height: 1.5; }
+/* A hint that captions a button inline (Queue scheduler stop, Connections
+   check-now / install-browser) sits on the button's text baseline by default
+   and reads as sinking; center it on the control instead. */
+form .btn + .hint { vertical-align: middle; }
 
 .form-grid {
   display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
   gap: var(--s3); margin: var(--s3) 0;
 }
 .form-grid .wide { grid-column: 1 / -1; }
+/* A cell holding only a checkbox (Queue / Board "Plan only") would otherwise
+   float at the top of its grid cell, aligned with the neighbouring labels.
+   Pin it to the input row instead: bottom-anchored, lifted half the
+   (38px input − 17px checkbox) difference so it centers on the controls. */
+.form-grid > div:has(> label.check:only-child) { align-self: end; padding-bottom: 10px; }
 
 /* ---- tables -------------------------------------------------------------- */
 

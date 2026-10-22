@@ -241,3 +241,51 @@ def test_theme_control_and_stylesheet(client: TestClient) -> None:
     css = client.get("/static/style.css").text
     assert ':root[data-theme="oled"]' in css and ':root[data-theme="solarized"]' in css
     assert ':root[data-theme="high-contrast"]' in css and "prefers-color-scheme: light" in css
+
+
+# ---- UI-01: Queue page polish (issue #115) -------------------------------------
+# Regression tests for the spacing/border defects found on the Queue page. CSS
+# rules are asserted as served substrings (the same pattern as
+# test_table_scroll_utility_css); the template assertion pins the Note-column
+# fix that stopped the items table overflowing its container and slicing the
+# Remove buttons at the table's right edge.
+
+
+def test_queue_polish_section_heading_in_panel_head_css(client: TestClient) -> None:
+    css = client.get("/static/style.css").text
+    # h2.section keeps its standalone margins, but inside a .panel-head row the
+    # heading is a flex item: the row owns the spacing so the heading stays
+    # centered with its action buttons (Queue "Items", Learning "Lessons").
+    assert ".panel-head h2.section { margin: 0; }" in css
+
+
+def test_queue_polish_toolbar_paragraph_css(client: TestClient) -> None:
+    css = client.get("/static/style.css").text
+    # A <p> directly in a toolbar row is a flex item, not prose: the base p
+    # bottom margin would lift it off the row's vertical center.
+    assert ".panel-head > p, .actions > p { margin: 0; }" in css
+
+
+def test_queue_polish_inline_hint_css(client: TestClient) -> None:
+    css = client.get("/static/style.css").text
+    # A .hint captioning a button inline sat on the button's text baseline and
+    # read as sinking; it is centered on the control instead.
+    assert "form .btn + .hint { vertical-align: middle; }" in css
+
+
+def test_queue_polish_form_grid_checkbox_css(client: TestClient) -> None:
+    css = client.get("/static/style.css").text
+    # A form-grid cell holding only a checkbox ("Plan only") bottom-anchors to
+    # the input row instead of floating at the top with the labels.
+    assert ".form-grid > div:has(> label.check:only-child)" in css
+
+
+def test_queue_items_note_column_has_no_wrap_floor(client: TestClient) -> None:
+    added = _post(client, "/queue/add", {"idea": "polish item", "priority": "high"})
+    assert added.status_code == 303
+    html = client.get("/queue").text
+    assert ">Note</th>" in html and ">Actions</th>" in html
+    # The Note column's 12em .wrap floor pushed the 8-column items table 18px
+    # past its container, slicing the Remove buttons at the table's right edge.
+    assert '<td class="wrap small">' not in html
+    assert '<td class="small"></td>' in html  # the empty note cell still renders

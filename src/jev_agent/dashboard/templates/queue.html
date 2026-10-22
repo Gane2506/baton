@@ -147,7 +147,7 @@
       <td class="mono">{% if r.item.run_id %}<a href="/runs/{{ r.item.run_id }}">{{ r.item.run_id }}</a>{% else %}-{% endif %}</td>
       <td class="wrap">{{ r.item.idea }}</td>
       <td class="small">{{ r.flags }}</td>
-      <td class="wrap small">{{ r.item.note or "" }}</td>
+      <td class="small">{{ r.item.note or "" }}</td>
       <td>
         <div class="actions">
         {% if r.movable %}
