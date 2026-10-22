@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% from "macros.html" import csrf_input, icon with context %}
+{% block title %}Delete design system {{ name }}?{% endblock %}
+{% block content %}
+<div class="focus-page">
+  <section class="panel">
+    <h1>Delete design system {{ name }}?</h1>
+    <p>This deletes the library design system <strong>{{ name }}</strong>
+    (v{{ version }}, source {{ source }}).{% if active %} It is the
+    <strong>active</strong> system for this repo — the repo keeps its own installed
+    copy, which is unaffected.{% endif %}
+    This cannot be undone.</p>
+    <div class="actions">
+      <form class="inline" method="post" action="/design-systems/delete">
+        {{ csrf_input() }}
+        <input type="hidden" name="name" value="{{ name }}">
+        <input type="hidden" name="confirm" value="yes">
+        <button class="btn btn-danger" type="submit">{{ icon("i-remove", "sm") }}Delete design system</button>
+      </form>
+      <a class="btn btn-secondary" href="/design-systems/{{ name | urlencode }}">Keep it</a>
+    </div>
+  </section>
+</div>
+{% endblock %}

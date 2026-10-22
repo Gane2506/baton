@@ -88,7 +88,23 @@ from jev_agent.core.chat import (
     list_design_library,
     parse_design_system,
 )
-from jev_agent.core.design_system import get_design_system
+from jev_agent.core.design_library import (
+    delete_library_system,
+    export_tokens_css,
+    export_tokens_tailwind,
+    export_tokens_w3c,
+    library_system_path,
+    list_library,
+    load_library_system,
+    save_library_system,
+    validate_library_name,
+)
+from jev_agent.core.design_system import (
+    META_JSON,
+    design_dir,
+    get_design_system,
+    save_design_system,
+)
 from jev_agent.core.kpi import DiffStat, diff_stat
 from jev_agent.core.learning import LearningError, learning_status
 from jev_agent.core.lease import RunInUseError
@@ -173,6 +189,7 @@ NAV = (
     ("/chats", "Chats"),
     ("/learning", "Learning"),
     ("/profiles", "Profiles"),
+    ("/design-systems", "Design Systems"),
     ("/tools", "Tools"),
     ("/connections", "Connections"),
     ("/spend", "Spend"),
@@ -967,6 +984,122 @@ class Dashboard:
         else:
             self.flash(request, "ok", message)
         return self.back("/profiles")
+
+    # ---- pages/actions: design systems (the user-level library) ----------------------------
+
+    def design_systems_page(self, request: Request) -> Response:
+        """The design library: the saved systems, their sources and versions (Tier 0)."""
+        return self.page(request, "design_systems.html", _design_systems_view)
+
+    def design_system_page(self, request: Request) -> Response:
+        """One library system: its tokens and system markdown, read-only (Tier 0)."""
+        name = request.path_params["name"]
+        try:
+            validate_library_name(name)
+        except ValueError:
+            raise HTTPException(404, "no such design system") from None
+        return self.page(
+            request, "design_system.html", lambda repo: _design_system_view(repo, name)
+        )
+
+    async def design_systems_action(self, request: Request) -> Response:
+        """Dispatch the library's POST actions: use, clone, export, delete."""
+        action: str = request.path_params["action"]
+        if action == "use":
+            return await self.act(request, "/design-systems", _design_system_use)
+        if action == "clone":
+            return await self.act(request, "/design-systems", _design_system_clone)
+        if action == "export":
+            return await self.design_system_export(request)
+        if action == "delete":
+            return await self.design_system_delete(request)
+        raise HTTPException(404, "no such action")
+
+    async def design_system_export(self, request: Request) -> Response:
+        """`jev design export` (Tier 0: read-only): the system's tokens as a download."""
+        form = await checked_form(request)
+        name = (_text(form, "name") or "").strip()
+        fmt = (_text(form, "format") or "w3c").strip().lower()
+        to = f"/design-systems/{name}" if name else "/design-systems"
+        try:
+            system_name = validate_library_name(name)
+        except ValueError as exc:
+            self.flash(request, "error", str(exc))
+            return self.back("/design-systems")
+
+        def build() -> tuple[str, str, str]:
+            system = load_library_system(system_name)
+            if system is None:
+                raise JevError(f'no design system named "{system_name}" in the library')
+            if fmt == "w3c":
+                text = json.dumps(export_tokens_w3c(system.tokens), indent=2) + "\n"
+                return f"{system_name}.tokens.json", "application/json", text
+            if fmt == "tailwind":
+                return (
+                    f"{system_name}.tailwind.js",
+                    "text/javascript",
+                    export_tokens_tailwind(system.tokens),
+                )
+            if fmt == "css":
+                return f"{system_name}.css", "text/css", export_tokens_css(system.tokens)
+            raise JevError(f'unknown export format "{fmt}": choose w3c, tailwind or css')
+
+        try:
+            filename, media_type, text = await run_in_threadpool(build)
+        except (JevError, ValueError) as exc:
+            self.flash(request, "error", str(exc))
+            return self.back(to)
+        return Response(
+            text,
+            media_type=f"{media_type}; charset=utf-8",
+            headers={
+                "Content-Disposition": f'attachment; filename="{filename}"',
+                "X-Content-Type-Options": "nosniff",
+            },
+        )
+
+    async def design_system_delete(self, request: Request) -> Response:
+        """Two steps (Tier 2), like `learning_delete`: the first POST shows a confirmation
+        page; only `confirm=yes` deletes the library system."""
+        form = await checked_form(request)
+        name = (_text(form, "name") or "").strip()
+        to = "/design-systems"
+        try:
+            system_name = validate_library_name(name)
+        except ValueError as exc:
+            self.flash(request, "error", str(exc))
+            return self.back(to)
+        if form.get("confirm") != "yes":
+
+            def describe() -> dict[str, Any]:
+                system = load_library_system(system_name)
+                if system is None:
+                    raise JevError(f'no design system named "{system_name}" in the library')
+                return {
+                    "name": system_name,
+                    "version": system.version,
+                    "source": _meta_text(_library_meta(system_name), "source"),
+                    "active": _repo_design_source(self.settings.root) == f"library:{system_name}",
+                }
+
+            try:
+                info = await run_in_threadpool(describe)
+            except (JevError, ValueError) as exc:
+                self.flash(request, "error", str(exc))
+                return self.back(to)
+            return self.render(request, "confirm_design_system_delete.html", **info)
+
+        def delete() -> None:
+            if not delete_library_system(system_name):
+                raise JevError(f'could not delete "{system_name}" from the library')
+
+        try:
+            await run_in_threadpool(delete)
+        except (JevError, ValueError) as exc:
+            self.flash(request, "error", str(exc))
+        else:
+            self.flash(request, "ok", f'deleted "{system_name}" from the design library')
+        return self.back(to)
 
     def fleet_fragment(self, request: Request) -> Response:
         """The fleet table alone, for live.js polling and `JevShell.mountPane("terminal",
@@ -2426,6 +2559,133 @@ def _learning_forget(repo: views.Repo, form: FormData) -> str:
     return f"retired {lesson.id} from {lesson.profile}"
 
 
+# ---- design systems (the user-level library, ~/.jev/design-systems/) ------------------------
+
+
+def _library_meta(name: str) -> dict[str, object]:
+    """A library system's meta.json extras; {} when it cannot be read.
+
+    Corrupt files are the library's own concern (`load_library_system` warns); the
+    dashboard stays readable even when one system is broken, like `design list`.
+    """
+    try:
+        raw = json.loads((library_system_path(name) / META_JSON).read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError, AttributeError):
+        return {}
+    return dict(raw) if isinstance(raw, dict) else {}
+
+
+def _meta_text(meta: dict[str, object], key: str) -> str:
+    value = meta.get(key)
+    return str(value) if isinstance(value, str) and value else "-"
+
+
+def _repo_design_source(root: Path) -> str | None:
+    """The repo's installed design system's `source` (`library:<name>` after `use`)."""
+    try:
+        raw = json.loads((design_dir(root) / META_JSON).read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError, AttributeError):
+        return None
+    source = raw.get("source") if isinstance(raw, dict) else None
+    return str(source) if isinstance(source, str) else None
+
+
+def _design_systems_view(repo: views.Repo) -> dict[str, Any]:
+    """The library's systems for the list page, with the repo's active one marked."""
+    active = _repo_design_source(repo.root)
+    systems = []
+    for name in list_library():
+        meta = _library_meta(name)
+        systems.append(
+            {
+                "name": name,
+                "source": _meta_text(meta, "source"),
+                "app_type": _meta_text(meta, "app_type"),
+                "stack": _meta_text(meta, "stack"),
+                "version": meta.get("version", "-"),
+                "updated": meta.get("updated_at", "-"),
+                "active": active == f"library:{name}",
+            }
+        )
+    return {"systems": systems}
+
+
+def _design_system_view(repo: views.Repo, name: str) -> dict[str, Any]:
+    """One library system for the detail page: tokens and the system markdown."""
+    system = load_library_system(name)
+    if system is None:
+        raise NotFoundError(f'no design system named "{name}" in the library')
+    meta = _library_meta(name)
+    tokens = system.tokens if isinstance(system.tokens, dict) else {}
+    sections = (
+        ("Colors", tokens.get("colors")),
+        ("Type scale", tokens.get("type_scale")),
+        ("Spacing", tokens.get("spacing")),
+        ("Radii", tokens.get("radii")),
+    )
+    token_sections = [
+        {
+            "title": title,
+            "items": sorted(section.items()) if isinstance(section, dict) else [],
+        }
+        for title, section in sections
+    ]
+    return {
+        "name": name,
+        "source": _meta_text(meta, "source"),
+        "app_type": _meta_text(meta, "app_type"),
+        "stack": _meta_text(meta, "stack"),
+        "version": system.version,
+        "updated": system.updated_at,
+        "token_sections": token_sections,
+        "markdown_html": render_markdown(system.markdown),
+        "active": _repo_design_source(repo.root) == f"library:{name}",
+    }
+
+
+def _design_system_extras(name: str) -> dict[str, object]:
+    """The library meta extras a `use`/`clone` carries over (mirrors `design_cmds`)."""
+    meta = _library_meta(name)
+    return {key: meta[key] for key in ("app_type", "stack") if isinstance(meta.get(key), str)}
+
+
+def _design_system_use(repo: views.Repo, form: FormData) -> str:
+    """`jev design use <name>` (Tier 1): install the library system into the repo."""
+    name = validate_library_name((_text(form, "name") or "").strip())
+    system = load_library_system(name)
+    if system is None:
+        raise JevError(f'no design system named "{name}" in the library')
+    version = save_design_system(
+        repo.root,
+        system.markdown,
+        dict(system.tokens),
+        meta_extra={"source": f"library:{name}", **_design_system_extras(name)},
+    )
+    return f'installed "{name}" as the repo design system v{version}'
+
+
+def _design_system_clone(repo: views.Repo, form: FormData) -> str:
+    """`jev design clone <name> <new_name>` (Tier 1): copy a library system."""
+    name = validate_library_name((_text(form, "name") or "").strip())
+    new_name = validate_library_name((_text(form, "new_name") or "").strip())
+    system = load_library_system(name)
+    if system is None:
+        raise JevError(f'no design system named "{name}" in the library')
+    if library_system_path(new_name).exists():
+        raise JevError(f'a design system named "{new_name}" already exists in the library')
+    version = save_library_system(
+        new_name,
+        system.markdown,
+        dict(system.tokens),
+        meta_extra={
+            "name": new_name,
+            "source": f"clone:{name}",
+            **_design_system_extras(name),
+        },
+    )
+    return f'cloned "{name}" to "{new_name}" (library v{version})'
+
+
 # ---- command palette (issue #88) ------------------------------------------------------------
 
 
@@ -2445,6 +2705,7 @@ def palette_registry(csrf_token: str) -> dict[str, Any]:
         ("Chats", "/chats"),
         ("Learning: profiles, lessons, Laya tuning", "/learning#laya"),
         ("Profiles: workspace profiles", "/profiles"),
+        ("Design systems: the design library", "/design-systems"),
         ("Tools: MCP, skills and plugins", "/tools"),
         ("Tools: model browser", "/tools#models"),
         ("Tools: quality checks", "/tools#quality-checks"),
@@ -2548,6 +2809,9 @@ def create_app(
         Route("/fleet/addendum", dash.fleet_addendum, methods=["POST"]),
         Route("/profiles", dash.profiles_page),
         Route("/profiles/use", dash.profiles_use, methods=["POST"]),
+        Route("/design-systems", dash.design_systems_page),
+        Route("/design-systems/{name}", dash.design_system_page),
+        Route("/design-systems/{action}", dash.design_systems_action, methods=["POST"]),
         Route("/tools", dash.tools_page),
         Route("/connections", dash.connections_page),
         Route("/connections/live", dash.connections_live),
