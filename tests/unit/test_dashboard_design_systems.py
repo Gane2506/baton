@@ -65,11 +65,13 @@ def _csrf(client: TestClient) -> str:
 
 def _post(client: TestClient, url: str, data: dict[str, str] | None = None) -> httpx.Response:
     """POST with a valid CSRF token, following redirects so flashes are visible."""
-    return client.post(
+    response = client.post(
         url,
         data={"csrf_token": _csrf(client), **(data or {})},
         follow_redirects=True,
     )
+    assert isinstance(response, httpx.Response)
+    return response
 
 
 def _visible(response: httpx.Response) -> str:
