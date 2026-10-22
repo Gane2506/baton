@@ -128,11 +128,13 @@ def _csrf(client: TestClient) -> str:
 
 
 def _post(client: TestClient, data: dict[str, str]) -> httpx.Response:
-    return client.post(
+    response = client.post(
         "/ui-style",
         data={**data, "csrf_token": _csrf(client)},
         follow_redirects=False,
     )
+    assert isinstance(response, httpx.Response)
+    return response
 
 
 def test_picker_rendered_with_sixteen_options(client: TestClient) -> None:
