@@ -117,14 +117,15 @@
          control. The options are server-rendered from the style registry; the
          select auto-submits via static/ui-style.js (a plain POST fallback keeps
          it working without JavaScript). #}
-      <form class="theme-pick" method="post" action="/ui-style" id="ui-style-form">
+      <form method="post" action="/ui-style" id="ui-style-form">
         {{ csrf_input() }}
-        <label for="ui-style">Style</label>
-        <select id="ui-style" name="style">
-          {% for style in ui_style_options | default([], true) %}
-          <option value="{{ style.slug }}"{% if style.slug == ui_style %} selected{% endif %} title="{{ style.blurb }}">{{ style.label }}</option>
-          {% endfor %}
-        </select>
+        <label class="theme-pick" for="ui-style">Style
+          <select id="ui-style" name="style">
+            {% for style in ui_style_options | default([], true) %}
+            <option value="{{ style.slug }}"{% if style.slug == ui_style %} selected{% endif %} title="{{ style.blurb }}">{{ style.label }}</option>
+            {% endfor %}
+          </select>
+        </label>
       </form>
       <div>{{ root }}</div>
     </div>

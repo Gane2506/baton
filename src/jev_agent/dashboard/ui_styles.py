@@ -5,12 +5,14 @@ single source of truth: the sidebar picker, the `data-ui-style` attribute on
 `<html>`, and `static/ui-styles.css` all key off these slugs.
 
 Persistence: the choice lives in the user's own config file
-(`~/.config/jev/config.toml`, `[dashboard] ui_style`), written with the same
-atomic `settings.write_value` the settings editor uses, so it survives
-restarts. Reading never raises: a missing, unreadable or corrupt file falls
-back to the default, because a cosmetic preference must never take down page
-rendering (the settings page still surfaces a corrupt config through its own
-read path).
+(`~/.config/jev/config.toml`, `[dashboard] ui_style` — a first-class
+`DashboardConfig` section of the config schema), written with the same atomic
+`settings.write_value` the settings editor uses, so it survives restarts. The
+dashboard reads the user file directly (never the merged repo config), so a
+repo's `jev.toml` cannot override the user's own display choice. Reading never
+raises: a missing, unreadable or corrupt file falls back to the default,
+because a cosmetic preference must never take down page rendering (the
+settings page still surfaces a corrupt config through its own read path).
 """
 
 from __future__ import annotations

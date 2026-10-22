@@ -95,6 +95,22 @@ def test_read_unknown_stored_value_is_default(tmp_path: Path) -> None:
     assert ui_styles.read_ui_style(config) == "bento"
 
 
+# ---- config schema ---------------------------------------------------------------
+
+
+def test_dashboard_section_is_a_first_class_config_key(tmp_path: Path) -> None:
+    """`[dashboard] ui_style` validates; the dashboard reads the user file only."""
+    from jev_agent.config import load_config
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "jev.toml").write_text("", encoding="utf-8")
+    user = tmp_path / "user.toml"
+    user.write_text('[dashboard]\nui_style = "cyberpunk"\n', encoding="utf-8")
+    assert load_config(repo, user).dashboard.ui_style == "cyberpunk"
+    assert load_config(repo, tmp_path / "missing.toml").dashboard.ui_style == "bento"
+
+
 # ---- dashboard route -----------------------------------------------------------
 
 

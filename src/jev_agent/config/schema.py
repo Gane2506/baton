@@ -1286,6 +1286,22 @@ class CacheSettings(_Strict):
     )
 
 
+class DashboardConfig(_Strict):
+    """`[dashboard]`: the web dashboard's own display preferences (workstream UI-02).
+
+    Per-user, per-machine settings; the dashboard reads them from the user
+    config file only, so a repo's `jev.toml` can never override the user's own
+    choice. An unknown `ui_style` falls back to the default in the dashboard
+    (a typo must not white-screen every page).
+    """
+
+    ui_style: str = Field(
+        default="bento",
+        description="The dashboard's UI style: one of the 16 styles in the sidebar "
+        "picker (default Bento Grid).",
+    )
+
+
 class JevConfig(_Strict):
     dispatcher: DispatcherConfig = Field(
         default_factory=DispatcherConfig, description="Who makes the decisions."
@@ -1350,6 +1366,10 @@ class JevConfig(_Strict):
     cache: CacheSettings = Field(
         default_factory=CacheSettings,
         description="Exact-match cache for decisions and role outputs (issue #10).",
+    )
+    dashboard: DashboardConfig = Field(
+        default_factory=DashboardConfig,
+        description="The web dashboard's own display preferences (issue #116).",
     )
 
     @property
