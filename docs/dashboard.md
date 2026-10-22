@@ -148,9 +148,26 @@ to paste. It is the fastest way to check whether a `jev` command has a dashboard
 Pages follow your OS light/dark setting and work on narrow screens. Nothing is loaded from
 other origins: no CDN, no web fonts, no analytics. The scripts are small and vendored:
 `static/live.js` (live regions and confirmation prompts), `static/app.js` (the shell's
-collapsible panes and resize handles), `static/theme.js` (theme profiles), and
-`static/conn.js` (the sidebar connection-status slot); without
-JavaScript every page still works (reload to refresh).
+collapsible panes and resize handles), `static/theme.js` (theme profiles),
+`static/ui-style.js` (the UI style picker), and `static/conn.js` (the sidebar
+connection-status slot); without JavaScript every page still works (reload to refresh).
+
+## UI styles
+
+The sidebar's **Style** picker (next to Theme) switches the dashboard between 16 UI styles:
+Minimalism, Flat Design 2.0, Skeuomorphism, Neumorphism, Glassmorphism, Claymorphism,
+**Bento Grid** (the default), Cards-Based UI, Split-Screen Design, Brutalism, Neo-Brutalism,
+Bauhaus Style, Hand-Drawn, Cyberpunk, Y2K/Vaporwave and Pixel Art UI. Each is a full design
+language (borders, shadows, radii, typography, density), not a palette swap, and all share
+one mechanism: the server renders `data-ui-style` on `<html>` and `static/ui-styles.css`
+keys every style off that attribute, orthogonal to the `data-theme` color profiles.
+
+The choice persists server-side in your user config (`[dashboard] ui_style` in
+`~/.config/jev/config.toml`), so it survives restarts and follows you across repos. A few
+in the wild: [Brutalism](images/dashboard-style-brutalism.png),
+[Cyberpunk](images/dashboard-style-cyberpunk.png),
+[Skeuomorphism](images/dashboard-style-skeuomorphism.png),
+[Y2K](images/dashboard-style-y2k.png).
 
 | Run | Queue |
 | --- | --- |

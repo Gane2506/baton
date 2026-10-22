@@ -868,6 +868,9 @@ details.panel[open] > summary { margin-bottom: var(--s3); }
   margin-bottom: var(--s2); font-size: var(--text-xs); font-weight: 600; color: var(--muted);
 }
 .theme-pick select { width: auto; height: var(--control-h-sm); padding: 0 8px; font-size: var(--text-xs); }
+/* The style picker lists 16 styles, so its button would squeeze the "Style"
+   label into a wrap; cap the button (the dropdown still shows full names). */
+#ui-style { max-width: 136px; }
 
 /* ---- settings editor rows ---------------------------------------------------------------- */
 
