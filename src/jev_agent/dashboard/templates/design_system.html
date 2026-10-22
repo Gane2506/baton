@@ -1,0 +1,75 @@
+{% extends "base.html" %}
+{% from "macros.html" import badge, csrf_input with context %}
+{% block title %}Design system {{ name }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div class="titles">
+    <h1>{{ name }} {% if active %}{{ badge("active", "ok") }}{% endif %}</h1>
+    <p class="lede">Library design system v{{ version }} · updated {{ updated | time }} ·
+    source <span class="mono">{{ source }}</span>{% if app_type != "-" %} · {{ app_type }}{% endif %}{% if stack != "-" %} · {{ stack }}{% endif %}</p>
+  </div>
+  <div class="actions">
+    {% if not active %}
+    <form class="inline" method="post" action="/design-systems/use">
+      {{ csrf_input() }}<input type="hidden" name="name" value="{{ name }}">
+      <button class="btn btn-sm btn-primary" type="submit">Use for this repo</button>
+    </form>
+    {% endif %}
+    <form class="inline" method="post" action="/design-systems/delete">
+      {{ csrf_input() }}<input type="hidden" name="name" value="{{ name }}">
+      <button class="btn btn-sm btn-danger" type="submit">Delete</button>
+    </form>
+  </div>
+</div>
+
+<section class="panel">
+  <div class="panel-head"><h2>Tokens</h2></div>
+  {% for section in token_sections %}
+  <h3>{{ section.title }}</h3>
+  {% if section["items"] %}
+  <div class="table-wrap"><table>
+    <thead><tr><th>Token</th><th>Value</th></tr></thead>
+    <tbody>
+    {% for key, value in section["items"] %}
+      <tr><td class="mono">{{ key }}</td><td class="mono">{{ value }}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table></div>
+  {% else %}
+  <p class="small muted">No {{ section.title | lower }} tokens.</p>
+  {% endif %}
+  {% endfor %}
+</section>
+
+<section class="panel">
+  <div class="panel-head"><h2>Library actions</h2></div>
+  <form method="post" action="/design-systems/clone">
+    {{ csrf_input() }}
+    <input type="hidden" name="name" value="{{ name }}">
+    <label for="clone-name">Clone to a new name (fresh version history)</label>
+    <div class="actions">
+      <input id="clone-name" name="new_name" type="text" placeholder="my-copy" required
+             pattern="[A-Za-z0-9][A-Za-z0-9_-]{0,63}" autocomplete="off">
+      <button class="btn btn-sm btn-secondary" type="submit">Clone</button>
+    </div>
+  </form>
+  <form method="post" action="/design-systems/export">
+    {{ csrf_input() }}
+    <input type="hidden" name="name" value="{{ name }}">
+    <label for="export-format">Export tokens for other toolchains</label>
+    <div class="actions">
+      <select id="export-format" name="format">
+        <option value="w3c">W3C design tokens (JSON)</option>
+        <option value="tailwind">Tailwind theme (JS)</option>
+        <option value="css">CSS custom properties</option>
+      </select>
+      <button class="btn btn-sm btn-secondary" type="submit">Download</button>
+    </div>
+  </form>
+</section>
+
+<section class="panel markdown">
+  <div class="panel-head"><h2>System</h2></div>
+  {{ markdown_html }}
+</section>
+{% endblock %}

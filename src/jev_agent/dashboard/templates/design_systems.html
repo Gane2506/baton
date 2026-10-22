@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+{% from "macros.html" import badge, csrf_input with context %}
+{% block title %}Design systems{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div class="titles">
+    <h1>Design systems</h1>
+    <p class="lede">The design library (<code>~/.jev/design-systems/</code>): named,
+    versioned systems any repo can adopt with <code>jev design use &lt;name&gt;</code>
+    — including ones reverse-engineered with <code>jev design reverse</code>.</p>
+  </div>
+</div>
+
+{% if systems %}
+<div class="table-wrap"><table>
+  <thead><tr><th>System</th><th>Source</th><th>App type</th><th>Stack</th><th>Version</th><th>Updated</th><th><span class="sr-only">actions</span></th></tr></thead>
+  <tbody>
+  {% for s in systems %}
+    <tr>
+      <td class="mono"><a href="/design-systems/{{ s.name | urlencode }}">{{ s.name }}</a>{% if s.active %} {{ badge("active", "ok") }}{% endif %}</td>
+      <td class="small">{{ s.source }}</td>
+      <td class="small">{{ s.app_type }}</td>
+      <td class="small">{{ s.stack }}</td>
+      <td class="small">v{{ s.version }}</td>
+      <td class="small">{{ s.updated | time }}</td>
+      <td>
+        {% if not s.active %}
+        <form class="inline" method="post" action="/design-systems/use">
+          {{ csrf_input() }}<input type="hidden" name="name" value="{{ s.name }}">
+          <button class="btn btn-sm btn-secondary" type="submit">Use</button>
+        </form>
+        {% endif %}
+        <form class="inline" method="post" action="/design-systems/delete">
+          {{ csrf_input() }}<input type="hidden" name="name" value="{{ s.name }}">
+          <button class="btn btn-sm btn-danger" type="submit">Delete</button>
+        </form>
+      </td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table></div>
+{% else %}
+<div class="empty">
+  <div class="title">No design systems in the library</div>
+  <p>Reverse-engineer one from a website or screenshots with
+  <code>jev design reverse &lt;url&gt;</code>, or build one with the interactive
+  wizard: <code>jev design new</code>.</p>
+</div>
+{% endif %}
+{% endblock %}

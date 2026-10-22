@@ -64,6 +64,8 @@ SHOTS = [
     Shot("dashboard-chats.png", "/chats"),
     Shot("dashboard-tools.png", "/tools", height=1400),
     Shot("dashboard-connections.png", "/connections", height=1600),
+    Shot("dashboard-design-systems.png", "/design-systems"),
+    Shot("dashboard-design-system.png", "/design-systems/acme-brand", height=1400),
 ]
 QUALITY = "dashboard-quality.png"  # the run page's "Quality review" section only
 
@@ -94,6 +96,27 @@ def run(args: list[str], demo: Path, env: dict[str, str]) -> str:
 def seed(demo: Path, env: dict[str, str]) -> None:
     run([sys.executable, "-c", capture.JEV, "init"], demo, env)
     print(run([sys.executable, str(HERE / "seed_demo.py"), str(demo)], demo, env).strip())
+    seed_library(demo, env)
+
+
+def seed_library(demo: Path, env: dict[str, str]) -> None:
+    """One design system in the scratch library (`$HOME/.jev/design-systems/`), so the
+    design-systems page and its detail view have something to show."""
+    snippet = (
+        "from jev_agent.core.design_library import save_library_system\n"
+        "save_library_system(\n"
+        "    'acme-brand',\n"
+        "    '# Acme Brand\\n\\nA warm, confident marketing system.\\n\\n"
+        "## Components\\n\\nButtons, cards and the marketing nav.\\n',\n"
+        "    {'colors': {'primary': '#e8590c', 'ink': '#1a1b1e'},\n"
+        "     'type_scale': {'base': 16, 'lg': 20},\n"
+        "     'spacing': {'sm': 8, 'md': 16},\n"
+        "     'radii': {'md': 8}},\n"
+        "    {'name': 'acme-brand', 'source': 'wizard',\n"
+        "     'app_type': 'marketing', 'stack': 'Next.js'},\n"
+        ")\n"
+    )
+    run([sys.executable, "-c", snippet], demo, env)
 
 
 # ---- the dashboard ---------------------------------------------------------------------------
