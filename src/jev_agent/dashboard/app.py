@@ -13,6 +13,7 @@ import json
 import math
 import os
 import shutil
+import sqlite3
 import subprocess
 import threading
 import time
@@ -135,6 +136,7 @@ from jev_agent.core.store import (
     DecisionRecord,
     NotFoundError,
     ShippedPrRecord,
+    StoreError,
     TaskRecord,
 )
 from jev_agent.core.workspace import (
@@ -2876,13 +2878,8 @@ _CHAT_SUGGESTIONS: tuple[str, ...] = (
 def _git_branch(root: Path) -> str:
     """Current git branch of the repo root; "" when git cannot tell."""
     try:
-        proc = subprocess.run(
-            ["git", "-C", str(root), "rev-parse", "--abbrev-ref", "HEAD"],
-            capture_output=True,
-            text=True,
-            timeout=5,
-        )
-    except Exception:
+        proc = run_git(["rev-parse", "--abbrev-ref", "HEAD"], root, GIT_QUICK_TIMEOUT_S)
+    except (OSError, subprocess.SubprocessError):
         return ""
     branch = proc.stdout.strip()
     return branch if proc.returncode == 0 and branch else ""
@@ -2901,7 +2898,7 @@ def _chat_starters(repo: views.Repo) -> list[str]:
     starters = list(_CHAT_SUGGESTIONS)
     try:
         queued = repo.store.list_queue()
-    except Exception:
+    except (sqlite3.Error, StoreError):
         queued = []
     if queued:
         n = len(queued)
@@ -2909,7 +2906,7 @@ def _chat_starters(repo: views.Repo) -> list[str]:
         starters.insert(0, f"Review the {n} queued item{plural} waiting in the queue")
     try:
         runs = repo.store.list_runs()
-    except Exception:
+    except (sqlite3.Error, StoreError):
         runs = []
     if runs:
         last = runs[0]
