@@ -894,6 +894,8 @@ class Dashboard:
                 # "no model for the api backend" error.
                 "api_model_needed": api_ok and not repo.config.workers.api.default_model,
                 "api_model_options": API_MODEL_OPTIONS,
+                # The submenu shows the same filtered list as the page.
+                "submenu_chats": rows[:12],
                 # The New chat form's design-system picker, like `profiles` above.
                 "design_systems": list_design_library(),
                 "has_repo_design_system": get_design_system(repo.root) is not None,
