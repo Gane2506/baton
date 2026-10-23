@@ -751,7 +751,7 @@ def test_chats_new_form_guiding_notice_without_backend(
 def test_chats_new_form_no_notice_with_backend_ready(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A ready backend: no guidance block, and the worker option is selectable."""
+    """A ready backend: no 'no backend' guidance block, and the worker option is selectable."""
     monkeypatch.setattr(
         chat,
         "backend_readiness",
@@ -763,7 +763,6 @@ def test_chats_new_form_no_notice_with_backend_ready(
     page = client.get("/chats")
     assert page.status_code == 200
     assert "No chat backend is set up yet" not in page.text
-    assert 'class="notice"' not in page.text
     assert 'value="api" selected' in page.text
 
 
@@ -1525,3 +1524,23 @@ def test_select_chevron_rule_in_stylesheet(client: TestClient) -> None:
     assert "padding-right: 34px" in css
     assert "linear-gradient(45deg" in css
     assert "linear-gradient(135deg" in css
+
+
+def test_chats_api_model_picker_shows_when_no_default_model(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """API key set but no default model: the inline picker appears (issue #149)."""
+    monkeypatch.setattr(
+        chat,
+        "backend_readiness",
+        lambda config: {
+            "api": (True, "OPENROUTER_API_KEY is set"),
+            "claude_code": (False, "claude is not on PATH"),
+        },
+    )
+    page = client.get("/chats")
+    assert page.status_code == 200
+    # The picker notice appears; the raw "no model" error never does.
+    assert "Pick your API model" in page.text
+    assert 'action="/chats/api-model"' in page.text
+    assert "no model for the api backend" not in page.text
