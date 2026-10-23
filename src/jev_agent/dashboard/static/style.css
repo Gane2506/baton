@@ -491,6 +491,23 @@ pre code { background: none; padding: 0; }
 .provider .panel-head { justify-content: flex-start; margin-bottom: var(--s2); }
 .provider .panel-head h3 { margin: 0; }
 
+/* Prominent API key provider cards (issue #153): grid of cards, each with a
+   direct inline Add when the key is unset (disappear-when-set). */
+.provider-cards {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: var(--s3); margin-bottom: var(--s4);
+}
+.provider-card {
+  border: 1px solid var(--border); border-radius: var(--radius-panel);
+  padding: var(--s3); background: var(--surface);
+}
+.provider-card-head {
+  display: flex; align-items: center; justify-content: space-between; gap: var(--s2);
+  margin-bottom: var(--s1);
+}
+.provider-card .small.muted { margin: 0 0 var(--s2); }
+.subsection { font-size: var(--text-sm); font-weight: 600; margin: var(--s4) 0 var(--s2); color: var(--muted); }
+
 h2.section { font-size: var(--text-lg); margin: var(--s6) 0 var(--s3); }
 h2.section:first-child { margin-top: 0; }
 /* Inside a .panel-head row the section heading is a flex item, not a standalone
