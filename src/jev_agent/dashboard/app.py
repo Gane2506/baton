@@ -21,7 +21,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Literal, cast
 from urllib.parse import quote, urlsplit
 
 from jinja2 import Environment, PackageLoader
@@ -195,23 +195,80 @@ from jev_agent.servers.ssh import (
 
 STATIC_DIR = Path(__file__).parent / "static"
 
-NAV = (
-    ("/", "Board"),
-    ("/queue", "Queue"),
-    ("/artifacts", "Artifacts"),
-    ("/agents", "Agents"),
-    ("/fleet", "Fleet"),
-    ("/chats", "Chats"),
-    ("/learning", "Learning"),
-    ("/profiles", "Profiles"),
-    ("/design-systems", "Design Systems"),
-    ("/design-studio", "Design Studio"),
-    ("/tools", "Tools"),
-    ("/connections", "Connections"),
-    ("/spend", "Spend"),
-    ("/kpis", "KPIs"),
-    ("/settings", "Settings"),
-    ("/diagnostics", "Diagnostics"),
+
+@dataclass(frozen=True)
+class NavChild:
+    """One entry in a nav parent's submenu panel.
+
+    `method="get"` renders a plain link; `method="post"` renders a small
+    CSRF-protected form (for actions like "New chat", which create server-side
+    state and are POST-only routes).
+    """
+
+    href: str
+    label: str
+    method: Literal["get", "post"] = "get"
+
+
+@dataclass(frozen=True)
+class NavItem:
+    """One sidebar entry. Entries with `children` render as a toggle button that
+    opens a submenu panel adjacent to the collapsed sidebar instead of a plain
+    link, so any section can adopt a submenu by declaring its children here."""
+
+    href: str
+    label: str
+    children: tuple[NavChild, ...] = ()
+
+    def _href_active(self, href: str, path: str) -> bool:
+        if href == "/":
+            return path == "/" or path.startswith("/runs/")
+        return path == href or path.startswith(href)
+
+    def is_active(self, path: str) -> bool:
+        """Whether this entry's page (or one of its descendants) is current."""
+        return self._href_active(self.href, path)
+
+    def child_active(self, child: NavChild, path: str) -> bool:
+        """Whether a submenu child matches the current path."""
+        return self._href_active(child.href, path)
+
+    def submenu_open(self, path: str) -> bool:
+        """Whether the submenu panel renders open for this path: only on the
+        parent's own page or a declared child's exact page. Deeper pages under
+        a child's prefix (e.g. a chat detail view) keep the parent highlighted
+        via is_active() but do not auto-open the panel."""
+        if not self.children:
+            return False
+        if path == self.href:
+            return True
+        return any(path == child.href for child in self.children)
+
+
+NAV: tuple[NavItem, ...] = (
+    NavItem("/", "Board"),
+    NavItem("/queue", "Queue"),
+    NavItem("/artifacts", "Artifacts"),
+    NavItem("/agents", "Agents"),
+    NavItem("/fleet", "Fleet"),
+    NavItem(
+        "/chats",
+        "Chats",
+        children=(
+            NavChild("/chats", "All chats"),
+            NavChild("/chats/new", "New chat", method="post"),
+        ),
+    ),
+    NavItem("/learning", "Learning"),
+    NavItem("/profiles", "Profiles"),
+    NavItem("/design-systems", "Design Systems"),
+    NavItem("/design-studio", "Design Studio"),
+    NavItem("/tools", "Tools"),
+    NavItem("/connections", "Connections"),
+    NavItem("/spend", "Spend"),
+    NavItem("/kpis", "KPIs"),
+    NavItem("/settings", "Settings"),
+    NavItem("/diagnostics", "Diagnostics"),
 )
 
 
@@ -607,6 +664,9 @@ class Dashboard:
             # the default), so a broken preference cannot break page rendering.
             ui_style=ui_styles.read_ui_style(),
             ui_style_options=ui_styles.UI_STYLES,
+            # Two-level nav: when a submenu is open for the current path, the
+            # sidebar renders icon-collapsed server-side (base.html body class).
+            nav_collapsed=any(item.submenu_open(request.url.path) for item in NAV),
             palette_registry=palette_registry(request.state.csrf),
             refresh_ms=int(self.settings.refresh_s * 1000),
             root=self.settings.root,

@@ -445,4 +445,20 @@
   .shell.app-shell .theme-pick {
     margin-bottom: var(--s2, 8px);
   }
+  /* Two-level nav inside the drawer: the submenu panel renders inline beneath
+     its parent toggle (not as a desktop flyout), and the drawer never takes
+     the icon-collapsed width. */
+  .shell.app-shell .submenu-panel {
+    position: static;
+    width: auto;
+    border-right: 0;
+    border-left: 2px solid var(--border, ButtonBorder);
+    margin: 2px 0 6px var(--s3, 12px);
+    padding: var(--s2, 8px) 0 var(--s2, 8px) var(--s2, 8px);
+    box-shadow: none;
+    z-index: auto;
+  }
+  .shell.app-shell .nav-parent .nav-chevron {
+    margin-left: auto;
+  }
 }
