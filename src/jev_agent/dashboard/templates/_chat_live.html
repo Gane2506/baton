@@ -80,6 +80,14 @@
 <h2 class="section">Transcript</h2>
 <div class="turns">
 {% for e in entries %}
+  {% if e.kind == "skills" %}
+  <div class="skills-found" data-turn-id="{{ e.id or loop.index }}">
+    <div class="skills-found-head">{{ icon("i-spark", "sm") }}<span>Found {{ (e.titles.split("; ") | length) if e.titles else 0 }} relevant skill{{ "s" if (e.titles.split("; ") | length) != 1 else "" }}</span></div>
+    <div class="skills-found-list">
+      {% for t in e.titles.split("; ") %}<span class="chip chip--skill">{{ t }}</span>{% endfor %}
+    </div>
+  </div>
+  {% else %}
   <div class="turn turn--{% if e.kind == 'user' %}user{% elif e.kind == 'assistant' %}assistant{% else %}other{% endif %}" data-turn-id="{{ e.id or loop.index }}">
     <div class="turn-head">
       <span class="turn-who">{{ "You" if e.kind == "user" else ("Baton" if e.kind == "assistant" else "System") }}</span>
@@ -96,6 +104,7 @@
     {% set assistant_html = e.body_html if e.kind == "assistant" and e.body_html is defined and e.body_html else none %}
     <div class="turn-body{% if assistant_html %} markdown{% endif %}">{% if assistant_html %}{{ assistant_html }}{% else %}{{ e.text }}{% endif %}</div>
   </div>
+  {% endif %}
 {% else %}
 <div class="empty"><div class="title">The transcript is empty</div><p>Send the first message to begin.</p></div>
 {% endfor %}
