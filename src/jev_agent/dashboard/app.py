@@ -291,7 +291,7 @@ def _usd(value: float | None) -> str:
     return "-" if value is None else f"${value:.2f}"
 
 
-def _time(value: datetime | str | None) -> str:
+def _time(value: datetime | str | float | int | None) -> str:
     if value is None:
         return "-"
     if isinstance(value, str):
@@ -299,6 +299,8 @@ def _time(value: datetime | str | None) -> str:
             return format_time(datetime.fromisoformat(value))
         except ValueError:
             return value
+    if isinstance(value, (float, int)):
+        return format_time(datetime.fromtimestamp(value, tz=UTC))
     return format_time(value)
 
 
