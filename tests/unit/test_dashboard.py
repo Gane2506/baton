@@ -1509,3 +1509,19 @@ def test_approve_warn_carries_the_warning_into_confirmation(
         assert "is over 80% of the run budget" in match.group(1)
         _post(client, f"/runs/{run_id}/approve")
     assert calls.calls == [(repo, run_id, "approve")]
+
+
+def test_select_chevron_rule_in_stylesheet(client: TestClient) -> None:
+    """Every native select gets the custom chevron: no cramped native arrow.
+
+    Guards the global rule in style.css — appearance:none, gradient chevron
+    layers with a theme-aware CSS variable color, and right padding clearing
+    the chevron (issue #130).
+    """
+    css = client.get("/static/style.css").text
+    assert "select, select:disabled {" in css
+    assert "--select-chevron:" in css
+    assert "appearance: none" in css
+    assert "padding-right: 34px" in css
+    assert "linear-gradient(45deg" in css
+    assert "linear-gradient(135deg" in css
