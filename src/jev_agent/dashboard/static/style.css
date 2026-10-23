@@ -562,6 +562,10 @@ h2.section:first-child { margin-top: 0; }
 .btn:disabled, button:disabled, .button:disabled { opacity: 0.45; cursor: not-allowed; transform: none; }
 
 form.inline { display: inline-flex; }
+/* Inline key-add form beside a key badge (Connections decision route): compact,
+   disappears once the key is set. */
+form.key-add { align-items: center; gap: var(--s1); margin-left: var(--s2); vertical-align: middle; }
+form.key-add .key-input { width: 220px; height: var(--control-h-sm); font-size: var(--text-xs); }
 .actions { display: flex; flex-wrap: wrap; gap: var(--s2); align-items: center; }
 /* A paragraph sitting directly in a toolbar row (Queue "Show all" toggle, KPIs
    sync note, Learning status line) is a flex item, not prose: the base p
