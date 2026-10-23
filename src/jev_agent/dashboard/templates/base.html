@@ -133,7 +133,7 @@
             <div class="submenu-chat{% if path == "/chats/" + meta.chat_id %} active{% endif %}">
               <a href="/chats/{{ meta.chat_id }}" class="submenu-chat-main">
                 <span class="submenu-chat-title">{{ title or "Untitled chat" }}</span>
-                <span class="submenu-chat-meta">{{ meta.backend }} · {{ meta.turns }} turns · {{ meta.spent_usd | usd }}</span>
+                <span class="submenu-chat-meta">{{ meta.backend }} · {{ meta.turns }} turns · ${{ "%.2f"|format(meta.spent_usd) }}</span>
               </a>
               <span class="submenu-chat-actions">
                 <a href="/chats/{{ meta.chat_id }}" class="submenu-chat-btn" title="Continue">Continue</a>
