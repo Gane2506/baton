@@ -11,6 +11,7 @@ itself is fixed (`servers.browser.install_argv()`); no request can change it.
 
 from __future__ import annotations
 
+import contextlib
 import os
 import shutil
 import subprocess
@@ -49,7 +50,7 @@ def _platform_search_dirs() -> list[Path]:
     if sys.platform == "win32":
         appdata = Path(os.environ.get("APPDATA", ""))
         localappdata = Path(os.environ.get("LOCALAPPDATA", ""))
-        program_files = Path(os.environ.get("ProgramFiles", r"C:\Program Files"))
+        program_files = Path(os.environ.get("PROGRAMFILES", r"C:\Program Files"))
         return [
             appdata / "npm",
             program_files / "nodejs",
@@ -65,12 +66,10 @@ def _platform_search_dirs() -> list[Path]:
     # nvm version dirs: ~/.nvm/versions/node/vXX.YY.ZZ/bin
     nvm_root = home / ".nvm" / "versions" / "node"
     if nvm_root.is_dir():
-        try:
+        with contextlib.suppress(OSError):
             candidates.extend(
                 sorted((nvm_root / d / "bin" for d in os.listdir(nvm_root)), reverse=True)
             )
-        except OSError:
-            pass
     return candidates
 
 
@@ -93,6 +92,7 @@ def resolve_executable(name: str) -> str | None:
         except OSError:
             continue
     return None
+
 
 _LOG_FILENAME = "browser-install.log"
 _LOG_TAIL_LINES = 30
