@@ -46,9 +46,9 @@ else
   _psz=$(vm_stat 2>/dev/null | awk '/page size of/{print $8}'); _psz=${_psz:-4096}
   _mem_bytes=$(sysctl -n hw.memsize 2>/dev/null || echo 0)
   _total_mb=$(( _mem_bytes / 1048576 ))
-  _free=$(vm_stat 2>/dev/null | awk '/Pages free:/{gsub(/\./,"",$3); print $3}')
+  _free=$(vm_stat 2>/dev/null | awk '/Pages free:/{gsub(/[.]/,"",$3); print $3}')
   _free=${_free:-0}
-  _inact=$(vm_stat 2>/dev/null | awk '/Pages inactive:/{gsub(/\./,"",$3); print $3}')
+  _inact=$(vm_stat 2>/dev/null | awk '/Pages inactive:/{gsub(/[.]/,"",$3); print $3}')
   _inact=${_inact:-0}
   _avail_mb=$(( (_free + _inact) * _psz / 1048576 ))
   _used_mb=$(( _total_mb - _avail_mb ))
