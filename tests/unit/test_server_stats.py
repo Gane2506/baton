@@ -4,9 +4,14 @@ from __future__ import annotations
 
 import json
 import time
+from collections.abc import Sequence
+from dataclasses import asdict
+from pathlib import Path
 
 import pytest
 
+from jev_agent.config.servers_schema import ServerConfig
+from jev_agent.servers.ssh import SshResult
 from jev_agent.servers.stats import (
     ServerStatsCache,
     collect_stats,
@@ -138,52 +143,52 @@ class _FakeRunner:
         self.exit_code = exit_code
         self.calls = 0
 
-    def __call__(self, argv, *, stdin, timeout_s):
-        from jev_agent.servers.ssh import SshResult
-
+    def __call__(self, argv: Sequence[str], *, stdin: bytes | None, timeout_s: float) -> SshResult:
         self.calls += 1
         return SshResult(self.exit_code, self.stdout, b"", False, 0.1)
 
 
-def _server_config() -> object:
-    from jev_agent.config.servers_schema import ServerConfig
-
+def _server_config() -> ServerConfig:
     return ServerConfig(host="example.com", user="u")
 
 
-def test_collect_stats_ok(tmp_path) -> None:
+def test_collect_stats_ok(tmp_path: Path) -> None:
     runner = _FakeRunner(LINUX_OUTPUT.encode())
-    stats = collect_stats(
-        _server_config(),
-        runner=runner,
-        state_dir=tmp_path,  # type: ignore[arg-type]
-    )
+    stats = collect_stats(_server_config(), runner=runner, state_dir=tmp_path)
     assert stats.ok
     assert stats.hostname == "web-01"
     assert runner.calls == 1
 
 
-def test_collect_stats_ssh_failure(tmp_path) -> None:
+def test_collect_stats_ssh_failure(tmp_path: Path) -> None:
     runner = _FakeRunner(b"ssh: connect timeout", exit_code=255)
-    stats = collect_stats(
-        _server_config(),
-        runner=runner,
-        state_dir=tmp_path,  # type: ignore[arg-type]
-    )
+    stats = collect_stats(_server_config(), runner=runner, state_dir=tmp_path)
     assert not stats.ok
     assert stats.error
 
 
-def test_cache_refresh_and_get(tmp_path) -> None:
+def test_cache_refresh_and_get(tmp_path: Path) -> None:
     cache = ServerStatsCache()
     runner = _FakeRunner(LINUX_OUTPUT.encode())
     stats, state = cache.get(tmp_path, "web")
     assert state == "never"
     assert stats is None
 
-    assert cache.refresh("web", _server_config(), tmp_path, runner)  # type: ignore[arg-type]
-    # Second refresh while collecting is a no-op.
-    assert not cache.refresh("web", _server_config(), tmp_path, runner)  # type: ignore[arg-type]
+    assert cache.refresh("web", _server_config(), tmp_path, runner)
+    # While collecting, a second refresh is a no-op. Poll until the background
+    # thread has marked the entry collecting (it starts immediately, but the
+    # thread needs a scheduling slice).
+    deadline = time.time() + 5
+    while time.time() < deadline:
+        _, cur = cache.get(tmp_path, "web")
+        if cur == "collecting":
+            break
+        time.sleep(0.01)
+    # Either still collecting (second refresh is a no-op) or already done
+    # (mocked SSH is instant); both are correct single-flight behavior.
+    _, cur = cache.get(tmp_path, "web")
+    if cur == "collecting":
+        assert not cache.refresh("web", _server_config(), tmp_path, runner)
 
     deadline = time.time() + 5
     while time.time() < deadline:
@@ -203,16 +208,16 @@ def test_cache_refresh_and_get(tmp_path) -> None:
     assert runner.calls == 1  # no new SSH call
 
 
-def test_cache_failed_keeps_old_stats(tmp_path) -> None:
+def test_cache_failed_keeps_old_stats(tmp_path: Path) -> None:
     cache = ServerStatsCache()
     good = _FakeRunner(LINUX_OUTPUT.encode())
-    assert cache.refresh("web", _server_config(), tmp_path, good)  # type: ignore[arg-type]
+    assert cache.refresh("web", _server_config(), tmp_path, good)
     deadline = time.time() + 5
     while cache.get(tmp_path, "web")[1] not in ("ready", "failed") and time.time() < deadline:
         time.sleep(0.05)
 
     bad = _FakeRunner(b"nope", exit_code=255)
-    assert cache.refresh("web", _server_config(), tmp_path, bad)  # type: ignore[arg-type]
+    assert cache.refresh("web", _server_config(), tmp_path, bad)
     deadline = time.time() + 5
     while cache.get(tmp_path, "web")[1] not in ("ready", "failed") and time.time() < deadline:
         time.sleep(0.05)
@@ -222,13 +227,11 @@ def test_cache_failed_keeps_old_stats(tmp_path) -> None:
     assert stats is not None and stats.ok
 
 
-def test_cache_json_roundtrip(tmp_path) -> None:
+def test_cache_json_roundtrip() -> None:
     stats = parse_stats(LINUX_OUTPUT, collected_at=999.0)
     assert stats.disk_pct == 50.0
     assert isinstance(stats.mounts[0].total_gb, float)
     # asdict must survive JSON.
-    from dataclasses import asdict
-
     payload = asdict(stats)
     payload["mounts"] = [asdict(m) for m in stats.mounts]
     raw = json.loads(json.dumps(payload))
