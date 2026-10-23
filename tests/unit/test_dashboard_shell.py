@@ -10,6 +10,7 @@ from __future__ import annotations
 import re
 from collections.abc import Iterator
 from pathlib import Path
+from typing import Any, cast
 
 import httpx
 import pytest
@@ -64,7 +65,7 @@ def _say(client: TestClient, chat_id: str, text: str) -> None:
         follow_redirects=False,
     )
     assert response.status_code == 303
-    dashboard = client.app.state.dashboard
+    dashboard = cast(Any, client.app).state.dashboard
     job = dashboard.chat_runner.wait(chat_id)
     assert job is not None and job.state == "finished"
 
