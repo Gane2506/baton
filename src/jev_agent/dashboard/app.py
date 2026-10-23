@@ -74,7 +74,7 @@ from jev_agent.app.quality import review_text
 from jev_agent.app.queue import QueueOptions
 from jev_agent.app.runs import RunOptions, require_ship_enabled
 from jev_agent.config import STATE_DIRNAME, ConfigError
-from jev_agent.config.loader import default_user_config_path
+from jev_agent.config.loader import default_user_config_path, trusts
 from jev_agent.config.schema import BEGINNER_FIELDS, JevConfig, JevSettings, ShipMode
 from jev_agent.config.servers_schema import ServerConfig
 from jev_agent.core.benchmarks import DEFAULT_LAST, format_value
@@ -1566,7 +1566,7 @@ class Dashboard:
                 "entities": ents,
                 "user_only": settings.USER_ONLY,
                 "settings": self.settings,
-                "repo_trusted": settings.trusts(repo.config, repo.root),
+                "repo_trusted": trusts(repo.config, repo.root),
             }
 
         return self.page(request, "connections.html", build)
