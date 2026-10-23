@@ -256,6 +256,9 @@
           <span class="hint">1-click: runs <code>claude setup-token</code>, shows the browser link here,
           and saves the token automatically.</span>
         </form>
+        {% else %}
+        <div class="flash warn" role="note">{{ icon("i-alert", "sm") }}<span>The <code>claude</code> CLI is not installed. Install it first, then sign in:</span></div>
+        <p class="small mono">npm install -g @anthropic-ai/claude-code</p>
         {% endif %}
         <details class="disclosure">
           <summary>Or paste a token manually</summary>
