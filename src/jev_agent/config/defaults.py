@@ -299,4 +299,8 @@ DEFAULT_CONFIG_TOML = """\
 # trust itself, so an active [trust] table here would fail to load.
 # [trust]
 # repos = []                       # e.g. ["/home/you/work/proj"]; "*" trusts every repository
+
+# Dashboard display preferences (per-user, per-machine: read from your user config only).
+# [dashboard]
+# ui_style = "bento"               # one of the 16 UI styles; "bento" is the default
 """
