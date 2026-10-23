@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "macros.html" import csrf_input with context %}
+{% from "macros.html" import csrf_input, icon with context %}
 {% block title %}Reverse a design system{% endblock %}
 {% block content %}
 <div class="page-head">
@@ -14,6 +14,29 @@
     <a class="btn btn-secondary" href="/design-studio">Design Studio</a>
   </div>
 </div>
+
+{% if api_model_needed %}
+<div class="notice" role="note">
+  {{ icon("i-info", "sm") }}
+  <div>
+    <p class="notice-title">Pick your API model</p>
+    <p>The reverse designer needs an API model, and none is set yet. Choose one — it is
+    saved to your user config and applies immediately.</p>
+    <form method="post" action="/chats/api-model" class="field-row">
+      {{ csrf_input() }}
+      <input type="hidden" name="next" value="/design-studio/reverse">
+      <div class="field-control">
+        <input type="text" name="model" list="api-models-reverse" required autocomplete="off"
+               placeholder="e.g. anthropic/claude-sonnet-4" aria-label="API model">
+        <datalist id="api-models-reverse">
+          {% for m in api_model_options %}<option value="{{ m }}">{% endfor %}
+        </datalist>
+      </div>
+      <div class="field-actions"><button type="submit" class="btn btn-primary btn-sm">Save model</button></div>
+    </form>
+  </div>
+</div>
+{% endif %}
 
 {% if busy %}
 <div class="empty">

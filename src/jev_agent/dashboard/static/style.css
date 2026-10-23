@@ -408,6 +408,38 @@ pre code { background: none; padding: 0; }
 }
 .submenu-link.active .icon { color: var(--accent); }
 
+/* Saved chats in the Chats submenu (issue #149): information-dense rows for
+   the narrow 232px panel. Title + meta line, compact Continue/Delete. */
+.submenu-chats { margin-top: var(--s3); border-top: 1px solid var(--border); padding-top: var(--s2); }
+.submenu-chats-head {
+  font-size: var(--fs-11); font-weight: 600; text-transform: uppercase; letter-spacing: 0.09em;
+  color: var(--faint); padding: 0 var(--s3); margin-bottom: var(--s1);
+}
+.submenu-chat {
+  display: flex; flex-direction: column; gap: 2px;
+  padding: 7px var(--s3); border-radius: var(--radius-control);
+}
+.submenu-chat:hover { background: var(--surface-2); }
+.submenu-chat.active { background: var(--accent-soft); box-shadow: inset 3px 0 0 var(--accent); }
+.submenu-chat-main { text-decoration: none; color: inherit; display: block; min-width: 0; }
+.submenu-chat-title {
+  display: block; font-size: var(--text-sm); font-weight: 500; color: var(--fg);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.submenu-chat-meta {
+  display: block; font-size: var(--fs-11); color: var(--faint);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.submenu-chat-actions { display: flex; gap: 6px; align-items: center; }
+.submenu-chat-btn {
+  font-size: var(--fs-11); font-weight: 500; padding: 2px 8px;
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+  background: transparent; color: var(--muted); text-decoration: none; cursor: pointer;
+  font-family: inherit;
+}
+.submenu-chat-btn:hover { border-color: var(--accent); color: var(--accent); }
+.submenu-chat-btn.danger:hover { border-color: var(--danger); color: var(--danger); }
+
 @media (min-width: 1081px) {
   /* Icon-only sidebar while a submenu panel is open. Labels hide, rows center
      their icons, and the footer collapses away; plain `title` attributes on the
