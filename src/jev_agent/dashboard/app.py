@@ -747,6 +747,8 @@ class Dashboard:
     ) -> Response:
         """Check the form (CSRF), run `action` against the repo in a thread, flash its message
         (or the error), and redirect to `to`."""
+        from jev_agent.app import settings as settings_app
+
         form = await checked_form(request)
 
         def work() -> str:
@@ -767,7 +769,12 @@ class Dashboard:
         ) as exc:
             self.flash(request, "error", str(exc))
         else:
-            self.flash(request, "ok", message)
+            # Trust gate blocked the save: offer one-click trust (issue #158).
+            if settings_app.TRUST_GATE_MARKER in message:
+                clean = message.replace(settings_app.TRUST_GATE_MARKER, "").strip()
+                self.flash(request, "trust", clean)
+            else:
+                self.flash(request, "ok", message)
         return self.back(to)
 
     # ---- pages -----------------------------------------------------------------------------
@@ -1561,6 +1568,7 @@ class Dashboard:
                 "entities": ents,
                 "user_only": settings.USER_ONLY,
                 "settings": self.settings,
+                "repo_trusted": settings.trusts(repo.config, repo.root),
             }
 
         return self.page(request, "connections.html", build)
@@ -1662,6 +1670,28 @@ class Dashboard:
             return f"{name} removed from the secrets file."
 
         return await self.act(request, "/connections", remove)
+
+    async def connections_trust_repo(self, request: Request) -> Response:
+        """Trust the current repo for guarded config keys (POST, issue #158).
+
+        One-click trust: adds the repo to `[trust] repos` in the user config.
+        The `next` form field controls where to return (defaults to /connections).
+        """
+
+        def trust(repo: views.Repo, form: FormData) -> str:
+            from jev_agent.app import settings as settings_app
+
+            err = settings_app.trust_repo(self.settings.root)
+            if err:
+                # Strip the marker for display; the button already handled it.
+                return err.replace(settings_app.TRUST_GATE_MARKER, "").strip()
+            return f"Trusted {self.settings.root}; repo config changes now apply."
+
+        back = str(request.query_params.get("next", "/connections"))
+        # Only allow relative paths to avoid open redirects.
+        if not back.startswith("/"):
+            back = "/connections"
+        return await self.act(request, back, trust)
 
     async def claude_oauth_token_save(self, request: Request) -> Response:
         """Save a pasted `claude setup-token` OAuth token to the secrets file (POST).
@@ -3534,6 +3564,7 @@ def create_app(
         ),
         Route("/connections/keys/add", dash.connections_key_add, methods=["POST"]),
         Route("/connections/keys/remove", dash.connections_key_remove, methods=["POST"]),
+        Route("/connections/trust", dash.connections_trust_repo, methods=["POST"]),
         Route(
             "/connections/providers/claude/oauth-token",
             dash.claude_oauth_token_save,

@@ -33,6 +33,10 @@ from jev_agent.config.loader import (
     default_user_config_path,
     trusts,
 )
+
+# Marker prefix for the trust-gate error from save(). The dashboard detects this
+# to offer an inline "Trust this repo" button (issue #158).
+TRUST_GATE_MARKER = "TRUST_GATE:"
 from jev_agent.config.schema import JevConfig
 
 # The sections the editor shows, in order. The path names a table; the model behind it comes
@@ -494,10 +498,10 @@ def save(
         if changed and not trusts(JevConfig.model_validate(user_new), root):
             listed = ", ".join(sorted(changed))
             return (
-                f"{listed}: these keys change a repository's jev.toml only when you trust it "
-                f"(they decide where API keys go, which commands run and which tools agents "
-                f"get). Add the repo under Trust below, or save this to the user config "
-                f"({user_path}) instead."
+                f"{TRUST_GATE_MARKER} {listed}: these keys change a repository's jev.toml "
+                f"only when you trust it (they decide where API keys go, which commands run "
+                f"and which tools agents get). Add the repo under Trust below, or save this "
+                f"to the user config ({user_path}) instead."
             )
     target_snapshot = repo_snapshot if target == "repo" else _user_snapshot
     try:
@@ -510,6 +514,30 @@ def save(
     except OSError as exc:
         return f"{path}: could not be written: {exc}"
     return None
+
+
+def trust_repo(root: Path) -> str | None:
+    """Add `root` to `[trust] repos` in the user config (issue #158).
+
+    One-click trust from the dashboard: no terminal, no manual TOML editing.
+    Returns an error string, or None on success (already trusted counts as success).
+    """
+    resolved = str(root.resolve())
+    user_path = default_user_config_path()
+
+    def mutate(layer: dict[str, Any]) -> None:
+        trust = layer.get("trust")
+        if not isinstance(trust, dict):
+            trust = {}
+            layer["trust"] = trust
+        repos = trust.get("repos")
+        if not isinstance(repos, list):
+            repos = []
+            trust["repos"] = repos
+        if resolved not in repos and "*" not in repos:
+            repos.append(resolved)
+
+    return save(root, "user", mutate, None)
 
 
 def _validate_or_none(merged: dict[str, Any]) -> JevConfig | None:
