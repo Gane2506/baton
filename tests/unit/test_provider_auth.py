@@ -9,7 +9,7 @@ import json
 import shutil
 import threading
 import time
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -484,7 +484,7 @@ class FakeSetupTokenProcess:
         def flush(self) -> None:
             pass
 
-    def _generate(self):  # type: ignore[no-untyped-def]
+    def _generate(self) -> Iterator[str]:
         yield from self._lines
         while not self._stop.is_set():
             if self._code_received.wait(timeout=0.05):
