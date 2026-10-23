@@ -575,7 +575,9 @@ def learning_view(repo: Repo, profile: str | None, include_retired: bool) -> Lea
                 assert isinstance(ids, list)
                 if not set(ids).issubset(covered):
                     proposed_skills.append(p)
-        except Exception:
+        except LearningError:
+            # The skills table may not exist yet (old database): no skills to show.
+            pass
             pass
     return LearningView(
         status, profiles, selected, lessons, repo.learning.shared_path, skills, proposed_skills
