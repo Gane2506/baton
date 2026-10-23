@@ -159,7 +159,7 @@
 
 <h2 class="section" id="models">Models</h2>
 <section class="panel" aria-label="Models browser">
-  <p class="hint">The OpenRouter catalog <code>jev models list</code> reads — what the api worker
+  <p class="hint">The OpenRouter model catalog — what the api worker
   can run. Pick a model id while editing the Agents page; the copy button puts it on the clipboard.</p>
   {% if models_warning %}<p class="flash warn small" role="note">{{ models_warning }}</p>{% endif %}
   {% if models_listing %}
@@ -187,10 +187,10 @@
     </tbody>
   </table></div>
   <p class="hint" id="models-empty" hidden>No models match the filter.</p>
-  <p class="hint">List fetched {{ "%.1f" % models_listing.fetched_hours_ago }}h ago; refresh it with
-  <code>jev models list --refresh</code>. Free models are rate-limited and run on the api worker only.</p>
+  <p class="hint">List fetched {{ "%.1f" % models_listing.fetched_hours_ago }}h ago.
+  Free models are rate-limited and run on the api worker only.</p>
   {% else %}
-  <div class="empty"><div class="title">No model list yet</div><p>Run <code>jev models list --refresh</code> once to fetch the catalog.</p></div>
+  <div class="empty"><div class="title">No model list yet</div><p>The model catalog hasn't been fetched yet.</p></div>
   {% endif %}
 </section>
 

@@ -5,7 +5,7 @@
 <div class="page-head">
   <div class="titles">
     <h1>KPIs</h1>
-    <p class="lede">This repo's runs, and the pull requests <code>jev ship</code> opened.</p>
+    <p class="lede">This repo's runs, and the pull requests shipped from them.</p>
   </div>
   <div class="actions">
     <form class="inline" method="post" action="/kpis/sync">
@@ -46,12 +46,11 @@
 <section class="panel">
   <div class="empty">
     <div class="title">No shipped pull requests yet</div>
-    <p>KPIs start with <code>jev ship RUN_ID</code>: it pushes a DONE run's result branch and opens
-    a GitHub pull request with your <code>gh</code> login (the run page has a <strong>Ship as PR</strong>
-    button too). <code>jev ship sync --all</code> then reads each PR's state, reviews and CI back for
-    this page and <code>jev kpi</code>.</p>
+    <p>KPIs start on a run page's <strong>Ship as PR</strong> button: it pushes a DONE run's
+    result branch and opens a GitHub pull request. <strong>Sync from GitHub</strong> above
+    then reads each PR's state, reviews and CI back for this page.</p>
   </div>
-  {% if not k.ship_enabled %}<p class="hint">Shipping is off in this repo: set <code>[ship] enabled = true</code> in jev.toml. See docs/ship.md.</p>{% endif %}
+  {% if not k.ship_enabled %}<p class="hint">Shipping is off in this repo: turn it on in <a href="/settings#s-ship">Settings → Ship (GitHub)</a>.</p>{% endif %}
 </section>
 {% else %}
 {% set s = k.summary %}
@@ -102,7 +101,7 @@ red points: worse than 1.5x (rates: 15 points past) the median of the PRs before
 {% for t in k.trends %}
   <section class="panel trend-card{% if t.regressed %} regressed{% endif %}">
     <h3>{{ t.kpi.label }}{% if t.latest %} <span class="muted small">latest {{ t.kpi.format(t.latest.value) }}</span>{% endif %}</h3>
-    {{ trend_chart_svg(t, "No data yet (sync with jev ship sync --all).") }}
+    {{ trend_chart_svg(t, "No data yet (use Sync from GitHub above).") }}
   </section>
 {% endfor %}
 </div>

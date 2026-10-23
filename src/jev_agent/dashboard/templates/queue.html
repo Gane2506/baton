@@ -5,7 +5,7 @@
 <div class="page-head">
   <div class="titles">
     <h1>Queue</h1>
-    <p class="lede">Ideas waiting for <code>jev scheduler</code>, in the order it takes them.</p>
+    <p class="lede">Ideas waiting for the scheduler, in the order it takes them.</p>
   </div>
 </div>
 
@@ -26,7 +26,7 @@
       <span class="hint">Finishes the current item first.</span>
     </form>
   {% elif sched.owner == "external" %}
-    <p class="small muted">Started outside this dashboard (<code>jev scheduler start</code> in a terminal) —
+    <p class="small muted">Started outside this dashboard —
     it keeps running if the dashboard stops. Stop it where it was started.</p>
   {% else %}
     <p class="small muted">Works through the queue, running agent workers for each idea.</p>
@@ -89,7 +89,7 @@
 
 <section class="panel">
   <h2>Recurring</h2>
-  <p class="lede">Tasks the scheduler runs on a schedule (<code>jev queue add --repeat</code>).</p>
+  <p class="lede">Tasks the scheduler runs on a schedule.</p>
   {% if q.recurring %}
   <div class="table-wrap"><table>
     <thead><tr><th>Brief</th><th>Schedule</th><th>Next run</th><th>Status</th><th>Actions</th></tr></thead>
@@ -121,7 +121,7 @@
     </tbody>
   </table></div>
   {% else %}
-  <p class="muted">No recurring tasks. Create one: <code>jev queue add "idea" --repeat daily@09:30</code>.</p>
+  <p class="muted">No recurring tasks.</p>
   {% endif %}
 </section>
 
@@ -169,6 +169,6 @@
   </tbody>
 </table></div>
 {% else %}
-<div class="empty"><div class="title">The queue is empty</div><p>Add an idea above; the scheduler takes them one at a time, or run one directly with <code>jev run</code>.</p></div>
+<div class="empty"><div class="title">The queue is empty</div><p>Add an idea above; the scheduler takes them one at a time.</p></div>
 {% endif %}
 {% endblock %}
