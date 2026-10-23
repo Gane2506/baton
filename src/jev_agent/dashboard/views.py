@@ -58,6 +58,14 @@ from jev_agent.core.lease import describe_holder, live_holder
 from jev_agent.core.migrations import SchemaVersionError
 from jev_agent.core.models import RunState, TaskState
 from jev_agent.core.pipeline import STOPPED
+from jev_agent.core.provider_auth import (
+    ANTHROPIC_API_KEY_ENV,
+    CLAUDE_OAUTH_TOKEN_ENV,
+    OPENAI_API_KEY_ENV,
+    ProviderAuth,
+    claude_code_auth,
+    codex_auth,
+)
 from jev_agent.core.queue import effective_status, queue_counts, run_states
 from jev_agent.core.recurrence import describe, local_timezone_name, parse_schedule
 from jev_agent.core.scheduler import LockInfo, scheduler_lock, spent_today
@@ -1214,6 +1222,9 @@ def env_var_names(config: JevConfig) -> list[str]:
     """Variable names the config points at — the datalist for the add-key form.
     The test hook is excluded; it is not a real key."""
     names = [config.dispatcher.jev.api_key_env, config.workers.api.api_key_env]
+    # Provider auth the Connections page manages directly (subscription OAuth
+    # tokens + API-key fallbacks for the claude/codex CLI workers).
+    names += [CLAUDE_OAUTH_TOKEN_ENV, ANTHROPIC_API_KEY_ENV, OPENAI_API_KEY_ENV]
     for _name, server in config.tools.mcp.items():
         names += list(server.env_from)
         if server.bearer_token_env:
@@ -1255,6 +1266,16 @@ def env_vars(config: JevConfig) -> list[EnvVar]:
             name in from_file,
         )
         for name, uses in seen.items()
+    ]
+
+
+def cli_providers(config: JevConfig) -> list[ProviderAuth]:
+    """Claude Code + Codex auth status for the Connections page (names only)."""
+    claude = config.workers.claude_code
+    codex = config.workers.codex
+    return [
+        claude_code_auth(command=claude.command, bare=claude.bare),
+        codex_auth(command=codex.command),
     ]
 
 

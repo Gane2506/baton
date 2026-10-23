@@ -25,6 +25,7 @@
   var slot = document.getElementById("conn-status");
   var url = slot ? slot.getAttribute("data-conn-live") : null;
   var data = null; // the last poll result; the slot keeps showing it on failure
+  var lastFlowState = null; // the codex device flow's last seen state
 
   function aggregate() {
     if (!data || !data.ok) {
@@ -91,6 +92,43 @@
     var summary = document.getElementById("conn-summary");
     if (summary) {
       summary.textContent = json.label;
+    }
+    updateProviders(json);
+  }
+
+  function updateProviders(json) {
+    // The connections page's provider badges, refreshed from the same poll.
+    // Names and set/not-set only; values never travel this endpoint.
+    if (json.providers) {
+      var byProvider = {};
+      json.providers.forEach(function (p) {
+        byProvider[p.provider] = p;
+      });
+      document.querySelectorAll("[data-provider-auth]").forEach(function (wrap) {
+        var p = byProvider[wrap.getAttribute("data-provider-auth")];
+        var badgeEl = wrap.querySelector(".badge");
+        if (!p || !badgeEl) {
+          return;
+        }
+        badgeEl.textContent = p.label;
+        var cls =
+          p.auth === "none" ? "s-warn" : p.auth === "api_key" ? "s-info" : "s-ok";
+        badgeEl.className = "badge " + cls;
+      });
+    }
+    // A finished device flow changes which card the server renders, so reload
+    // once when it leaves the waiting state while the waiting box is showing.
+    var flow = json.codex_flow;
+    if (flow && flow.state !== lastFlowState) {
+      lastFlowState = flow.state;
+      if (
+        (flow.state === "done" ||
+          flow.state === "failed" ||
+          flow.state === "cancelled") &&
+        document.getElementById("codex-flow-waiting")
+      ) {
+        window.location.reload();
+      }
     }
   }
 

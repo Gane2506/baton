@@ -125,7 +125,11 @@ to paste. It is the fastest way to check whether a `jev` command has a dashboard
   plus the **Browser** panel: the doctor's browser check and the **Install browser** button,
   which asks for confirmation naming the exact command, then runs the install in the
   background (one at a time; stoppable; the output tail shows on the page). Installing on a
-  server stays in the terminal (`jev browser install --server NAME`).
+  server stays in the terminal (`jev browser install --server NAME`). The **Providers**
+  section covers the `claude` / `codex` CLI workers' own logins: each card shows which
+  auth is active — Claude/ChatGPT subscription login (OAuth) or API key — with the
+  subscription flow as the primary path (paste a `claude setup-token` token for Claude
+  Code; device code flow for Codex) and API-key entry as fallback.
 - **Settings** (`/settings`): a list of sections on the left (sticky on wide windows) and an
   editor for common settings in this repository's `jev.toml`: `[dispatcher] primary`, the
   budgets (`per_run_usd`, `per_task_usd`, `max_task_attempts`), `[approval]
@@ -271,6 +275,33 @@ variable with the same name always wins over the file. Keys saved this way show 
 *Remove* button; keys that come from your real environment show as "Set
 (environment)" and are managed outside jev. Values are never rendered, logged, or
 echoed back anywhere.
+
+### Connecting Claude Code and Codex with your subscription
+
+The `claude_code` and `codex` workers shell out to the `claude` / `codex` CLIs, which
+authenticate with your **subscription** (OAuth) or an API key — whichever the
+environment offers. The Connections page's **Providers** section shows, per provider,
+which auth is active (names only, never values):
+
+- **Claude Code**: the primary path is your Claude subscription. On a machine with a
+  browser run `claude setup-token`, approve the sign-in, and paste the one-year
+  `sk-ant-oat01-…` token it prints into the card's form. It is saved to
+  `~/.jev/secrets.env` like any other key and takes effect immediately. If the `claude`
+  CLI is already signed in on the dashboard machine (`~/.claude/.credentials.json`),
+  workers reuse that login and there is nothing to paste. Note: `[workers.claude_code]
+  bare = true` needs `ANTHROPIC_API_KEY` — bare mode does not read the OAuth token.
+- **Codex**: the primary path is your ChatGPT subscription via the device code flow.
+  **Sign in with ChatGPT** spawns `codex login --device-auth` in the background; the
+  card shows the link and the one-time code (expires in 15 minutes). Approve it in your
+  browser and the CLI stores its own `~/.codex/auth.json` — jev never sees or stores
+  the tokens. The page polls while you approve and re-renders when the sign-in
+  completes (or fails); **Cancel sign-in** stops a pending flow.
+
+API keys stay as fallback: `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` in the Keys section
+below. For Claude Code an API key outranks the subscription login (and is billed per
+token); the card says which one is active. Workers inherit the dashboard/CLI process
+environment, so anything saved here is visible to the next worker run — verified by
+`tests/unit/test_provider_auth.py` ("auth present → the worker's env has it").
 
 ### On a VPS: use an SSH tunnel
 
