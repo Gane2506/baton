@@ -178,6 +178,7 @@ from jev_agent.dashboard.design_studio import (
     validate_step,
     wizard_context,
 )
+from jev_agent.dashboard.errors import friendly_error as _friendly_error
 from jev_agent.dashboard.preview import (
     PreviewBridge,
     PreviewError,
@@ -767,7 +768,7 @@ class Dashboard:
             ShipError,
             ValueError,
         ) as exc:
-            self.flash(request, "error", str(exc))
+            self.flash(request, "error", _friendly_error(exc))
         else:
             # Trust gate blocked the save: offer one-click trust (issue #158).
             if settings.TRUST_GATE_MARKER in message:
@@ -1145,7 +1146,7 @@ class Dashboard:
         try:
             message = await run_in_threadpool(use)
         except (JevError, ConfigError, ProfileError) as exc:
-            self.flash(request, "error", str(exc))
+            self.flash(request, "error", _friendly_error(exc))
         else:
             self.flash(request, "ok", message)
         return self.back("/profiles")
@@ -2218,7 +2219,7 @@ class Dashboard:
                 request_changes, self.settings.root, run_id, notes
             )
         except (JevError, ConfigError, NotFoundError, PipelineError, RunInUseError) as exc:
-            self.flash(request, "error", str(exc))
+            self.flash(request, "error", _friendly_error(exc))
             return self.back(to)
         if not has_workers:
             self.flash(request, "ok", "changes recorded; set up a worker, then resume the run")
@@ -2242,7 +2243,10 @@ class Dashboard:
         try:
             ready = await run_in_threadpool(plan)
         except (JevError, ShipError, NotFoundError, ConfigError) as exc:
-            self.flash(request, "error", str(exc))
+            message = _friendly_error(exc)
+            if isinstance(exc, ShipError) and message.startswith("gh "):
+                message += " Make sure the GitHub CLI is installed and signed in, then try again."
+            self.flash(request, "error", message)
             return self.back(to)
         if form.get("confirm") != "yes":
             return self.render(
@@ -2274,7 +2278,7 @@ class Dashboard:
         try:
             await run_in_threadpool(remove)
         except (ChatError, ConfigError) as exc:
-            self.flash(request, "error", str(exc))
+            self.flash(request, "error", _friendly_error(exc))
             return self.back("/chats")
         self.flash(request, "ok", f"deleted chat {chat_id}")
         return self.back("/chats")
@@ -2312,6 +2316,9 @@ class Dashboard:
             # /chats handles it; point there instead.
             if "no model for the api backend" in message:
                 message = "pick an API model first — use the picker at the top of this page."
+            else:
+                hint = "check the Settings page" if isinstance(exc, ConfigError) else ""
+                message = _friendly_error(exc, hint=hint)
             self.flash(request, "error", message)
             return self.back("/chats")
         # Minimal new-chat flow: if the user typed a first message, send it
@@ -2349,8 +2356,10 @@ class Dashboard:
 
         try:
             message = await run_in_threadpool(save)
-        except (ValueError, OSError, ConfigError) as exc:
+        except ValueError as exc:
             self.flash(request, "error", str(exc))
+        except (OSError, ConfigError) as exc:
+            self.flash(request, "error", _friendly_error(exc, hint="check the Settings page"))
         else:
             self.flash(request, "ok", message)
         return self.back(to)
@@ -2417,6 +2426,8 @@ class Dashboard:
             # could still hit this — keep the message actionable, not raw.
             if "no brief yet" in message:
                 message = "write a brief first (the Write brief button above), then plan or run."
+            else:
+                message = _friendly_error(exc)
             self.flash(request, "error", message)
             return self.back(to)
         verb = "plan-only run" if plan_only else "run"
@@ -2445,6 +2456,8 @@ class Dashboard:
             message = str(exc)
             if "no brief yet" in message:
                 message = "write a brief first (the Write brief button above), then queue it."
+            else:
+                message = _friendly_error(exc)
             self.flash(request, "error", message)
             return self.back(to)
         self.flash(request, "ok", f"queued item {item_id} from the chat's brief")
@@ -2480,7 +2493,7 @@ class Dashboard:
         try:
             text = await run_in_threadpool(last_user_text)
         except (ChatError, ConfigError, JevError) as exc:
-            self.flash(request, "error", str(exc))
+            self.flash(request, "error", _friendly_error(exc))
             return self.back(to)
         if text is None:
             self.flash(request, "error", "nothing to retry yet: no user message in this chat")
@@ -2619,7 +2632,7 @@ class Dashboard:
                 profile=profile,
             )
         except JevError as exc:
-            self.flash(request, "error", str(exc))
+            self.flash(request, "error", _friendly_error(exc))
             return self.back("/")
 
         def start() -> str:
@@ -2650,7 +2663,7 @@ class Dashboard:
             RunInUseError,
             ValueError,
         ) as exc:
-            self.flash(request, "error", str(exc))
+            self.flash(request, "error", _friendly_error(exc))
             return self.back("/")
         self.flash(request, "ok", f"run {run_id} started; it shows on the board")
         return self.back(f"/runs/{run_id}")
@@ -2760,7 +2773,7 @@ class Dashboard:
             try:
                 info = await run_in_threadpool(preview)
             except (JevError, ConfigError) as exc:
-                self.flash(request, "error", str(exc))
+                self.flash(request, "error", _friendly_error(exc))
                 return self.back(to)
             if self.scheduler_runner.status().owner is not None:
                 self.flash(request, "error", "a scheduler is already running")
@@ -2770,7 +2783,7 @@ class Dashboard:
         try:
             await run_in_threadpool(self.scheduler_runner.start)
         except (SchedulerLocked, PipelineError, JevError, ConfigError) as exc:
-            self.flash(request, "error", str(exc))
+            self.flash(request, "error", _friendly_error(exc))
         else:
             self.flash(request, "ok", "scheduler started; it stops when the dashboard stops")
         return self.back(to)
@@ -2801,7 +2814,7 @@ class Dashboard:
             try:
                 queued = await run_in_threadpool(count)
             except (JevError, ConfigError) as exc:
-                self.flash(request, "error", str(exc))
+                self.flash(request, "error", _friendly_error(exc))
                 return self.back(to)
             if queued == 0:
                 self.flash(request, "ok", "the queue is already empty")
@@ -2815,7 +2828,7 @@ class Dashboard:
         try:
             deleted = await run_in_threadpool(clear)
         except (JevError, ConfigError) as exc:
-            self.flash(request, "error", str(exc))
+            self.flash(request, "error", _friendly_error(exc))
         else:
             self.flash(request, "ok", f"removed {deleted} queued item(s)")
         return self.back(to)
@@ -2858,7 +2871,7 @@ class Dashboard:
             try:
                 lessons = await run_in_threadpool(count)
             except (JevError, LearningError) as exc:
-                self.flash(request, "error", str(exc))
+                self.flash(request, "error", _friendly_error(exc))
                 return self.back("/learning")
             return self.render(request, "confirm_flush.html", profile=name, lessons=lessons)
 
@@ -2869,7 +2882,7 @@ class Dashboard:
         try:
             deleted = await run_in_threadpool(flush)
         except (JevError, LearningError) as exc:
-            self.flash(request, "error", str(exc))
+            self.flash(request, "error", _friendly_error(exc))
         else:
             self.flash(request, "ok", f"deleted {deleted} lesson(s) from {name}")
         return self.back(f"/learning?profile={name}")
@@ -2893,7 +2906,7 @@ class Dashboard:
             try:
                 info = await run_in_threadpool(describe)
             except (JevError, LearningError) as exc:
-                self.flash(request, "error", str(exc))
+                self.flash(request, "error", _friendly_error(exc))
                 return self.back("/learning")
             return self.render(request, "confirm_learning_delete.html", profile=name, **info)
 
@@ -2904,7 +2917,7 @@ class Dashboard:
         try:
             await run_in_threadpool(delete)
         except (JevError, LearningError) as exc:
-            self.flash(request, "error", str(exc))
+            self.flash(request, "error", _friendly_error(exc))
         else:
             self.flash(request, "ok", f"deleted profile {name}")
         return self.back("/learning")
@@ -2941,7 +2954,7 @@ class Dashboard:
         try:
             message = await run_in_threadpool(apply)
         except (JevError, LearningError, ConfigError) as exc:
-            self.flash(request, "error", str(exc))
+            self.flash(request, "error", _friendly_error(exc))
         else:
             self.flash(request, "ok", message)
         return self.back(f"/learning?profile={name}")
@@ -2960,7 +2973,7 @@ class Dashboard:
         try:
             message = await run_in_threadpool(reset)
         except (JevError, LearningError, ConfigError) as exc:
-            self.flash(request, "error", str(exc))
+            self.flash(request, "error", _friendly_error(exc))
         else:
             self.flash(request, "ok", message)
         return self.back(f"/learning?profile={name}")
@@ -2969,62 +2982,6 @@ class Dashboard:
 def _text(form: FormData, name: str) -> str | None:
     value = form.get(name)
     return value.strip() if isinstance(value, str) else None
-
-
-# ---- actionable error text (standard #4) ---------------------------------------------------
-# Backend exceptions keep their CLI-flavoured text (the CLI needs it); these rules
-# translate the known jargon into what the dashboard user can actually do, in the UI,
-# when the text reaches a flash. A rule is (match, replacement): a match at the start
-# of the message replaces the whole message, otherwise the matched part is swapped in
-# place. New jargon goes here so every flash site benefits at once.
-_ERROR_REWRITES: tuple[tuple[str, str], ...] = (
-    (
-        "No workers are available",
-        "No workers are available — turn on Claude Code, Codex, or the API backend "
-        "on the Connections page, then try again.",
-    ),
-    (
-        "no model for the api backend",
-        "The API backend needs a default model — pick one with the model picker, then try again.",
-    ),
-    (
-        "; set it or use the claude_code backend",
-        " — add it on the Connections page, or pick the Claude Code backend instead.",
-    ),
-    (
-        " CLI is not on PATH; install it or use the api backend",
-        " CLI wasn't found — install it, then retry, or switch to the API backend.",
-    ),
-    (
-        "`jev chat --list` shows saved chats",
-        "the Chats page lists your saved chats.",
-    ),
-    (
-        "--learning and --no-learning cannot be used together",
-        "Pick one learning option, not both, then try again.",
-    ),
-    (
-        "set `[ship] remote`",
-        "set a ship remote under Settings → Ship",
-    ),
-)
-
-
-def _friendly_error(exc: BaseException, hint: str = "") -> str:
-    """User-facing text for a caught exception: backend jargon rewritten into dashboard
-    actions, plus an optional `hint` naming where the fix lives ("check the Settings
-    page"). Never raises; falls back to the exception class name on an empty message."""
-    message = str(exc).strip() or type(exc).__name__
-    for match, replacement in _ERROR_REWRITES:
-        if message.startswith(match):
-            message = replacement
-            break
-        if match in message:
-            message = message.replace(match, replacement)
-            break
-    if hint and hint not in message:
-        message = f"{message} — {hint}"
-    return message
 
 
 def _back_target(request: Request) -> str:

@@ -1433,7 +1433,7 @@ def test_queue_form_ship_choice(client: TestClient, planned: tuple[Path, str]) -
     repo, _ = planned
     assert "ask me first (--ask-before-ship)" in client.get("/queue").text
     _post(client, "/queue/add", {"idea": "auto idea", "ship_mode": "merge"})
-    assert "needs shipping on" in client.get("/queue").text
+    assert "needs shipping turned on" in client.get("/queue").text
     (repo / "jev.toml").write_text('[dispatcher]\nprimary = "jev"\n[ship]\nenabled = true\n')
     _trust(repo)  # `[ship]` is a guarded key (trust gate, audit 2026-10-16)
     _post(client, "/queue/add", {"idea": "auto idea", "ship_mode": "merge"})

@@ -32,6 +32,7 @@ from jev_agent.config.schema import ShipMode
 from jev_agent.core.pipeline import PipelineError
 from jev_agent.core.ship import Gh, prepare_ship
 from jev_agent.core.ship import execute_ship as ship_now
+from jev_agent.dashboard.errors import friendly_error
 
 RunAction = Literal["approve", "resume", "ship", "stop", "start"]
 
@@ -194,7 +195,7 @@ class RunLauncher:
             job.message = STOPPED_MESSAGE
             job.state = "failed"
         except Exception as exc:  # shown on the run page; the run keeps its saved state
-            job.message = str(exc) or type(exc).__name__
+            job.message = friendly_error(exc)
             job.state = "failed"
         finally:
             job.finished_at = datetime.now(UTC)
@@ -297,7 +298,7 @@ class ChatRunner:
             job.message = STOPPED_MESSAGE
             job.state = "failed"
         except Exception as exc:  # shown on the chat page; the transcript keeps its state
-            job.message = str(exc) or type(exc).__name__
+            job.message = friendly_error(exc)
             job.state = "failed"
         finally:
             job.finished_at = datetime.now(UTC)

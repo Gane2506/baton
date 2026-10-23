@@ -37,6 +37,7 @@ from jev_agent.app.design_reverse import (
     checked_reverse_target,
     run_reverse,
 )
+from jev_agent.dashboard.errors import friendly_error
 
 __all__ = [
     "MAX_UPLOADS",
@@ -245,7 +246,10 @@ class ReverseRunner:
         except Exception as exc:  # surfaced on the status page; nothing is saved
             with self._guard:
                 self._state = "failed"
-                self._message = str(exc) or type(exc).__name__
+                self._message = friendly_error(
+                    exc,
+                    hint="try again, or retry with the other input (URL vs PNG screenshots)",
+                )
                 self._finished_at = datetime.now(UTC)
         else:
             with self._guard:
