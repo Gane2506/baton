@@ -572,7 +572,8 @@ class _DoneProc:
 def _installer_with(client: TestClient, fixture_repo: Path, proc: object) -> BrowserInstallRunner:
     def fake_spawn(argv: list[str], log: Path) -> object:
         log.write_bytes(b"fake install output\n")
-        assert argv[0] == "npx"  # the fixed installer command, never from the request
+        # the fixed installer command (resolved to an absolute path), never from the request
+        assert Path(argv[0]).name in ("npx", "npx.exe")
         return proc
 
     dash = _dashboard(client)
