@@ -67,6 +67,8 @@ SHOTS = [
     Shot("dashboard-design-systems.png", "/design-systems"),
     Shot("dashboard-design-system.png", "/design-systems/acme-brand", height=1400),
     Shot("design-studio.png", "/design-studio"),
+    Shot("design-studio-wizard.png", "/design-studio/new/purpose", height=1200),
+    Shot("design-studio-reverse.png", "/design-studio/reverse"),
 ]
 QUALITY = "dashboard-quality.png"  # the run page's "Quality review" section only
 NO_BACKEND_CHAT = "dashboard-chats-no-backend.png"  # the New chat form's guiding empty state

@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+{% from "macros.html" import csrf_input with context %}
+{% block title %}Reverse a design system{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div class="titles">
+    <h1>Reverse a design system</h1>
+    <p class="lede">Extract a design system into the library from a website URL or
+    PNG screenshots — the web form of <code>jev design reverse</code>. The designer
+    extracts <code>tokens.json</code> plus the system markdown from the evidence,
+    then it is saved as a named, versioned library system.</p>
+  </div>
+  <div class="actions">
+    <a class="btn btn-secondary" href="/design-studio">Design Studio</a>
+  </div>
+</div>
+
+{% if busy %}
+<div class="empty">
+  <div class="title">A reverse is already running</div>
+  <p>Only one reverse runs at a time.
+  <a href="/design-studio/reverse/status">Watch its progress</a> — you can start
+  another one when it finishes.</p>
+</div>
+{% endif %}
+
+<form method="post" action="/design-studio/reverse" enctype="multipart/form-data"{% if busy %} aria-disabled="true"{% endif %}>
+  {{ csrf_input() }}
+  <section class="panel">
+    <div class="panel-head"><h2>From a website</h2></div>
+    <label for="reverse-url">Website URL</label>
+    <input id="reverse-url" name="url" type="url" placeholder="https://example.com"
+           autocomplete="off" inputmode="url"{% if busy %} disabled{% endif %}>
+    <p class="hint">Only public http(s) sites. Localhost, LAN hosts, link-local and
+    cloud-metadata addresses are refused, redirects included.</p>
+  </section>
+
+  <section class="panel">
+    <div class="panel-head"><h2>From screenshots</h2></div>
+    <label for="reverse-shots">PNG screenshots</label>
+    <input id="reverse-shots" name="screenshots" type="file" accept=".png,image/png"
+           multiple{% if busy %} disabled{% endif %}>
+    <p class="hint">Up to 8 PNG files, 10MB each. Files are checked by their contents,
+    not their extension. Give a URL <em>or</em> screenshots, not both.</p>
+  </section>
+
+  <section class="panel">
+    <div class="panel-head"><h2>Library name</h2></div>
+    <label for="reverse-name">Name <span class="muted">(optional)</span></label>
+    <input id="reverse-name" name="name" type="text" placeholder="defaults to the site host or image name"
+           pattern="[A-Za-z0-9][A-Za-z0-9_-]{0,63}" autocomplete="off"{% if busy %} disabled{% endif %}>
+    <p class="hint">Letters, digits, <code>_</code> and <code>-</code>, 1–64 characters,
+    starting with a letter or digit.</p>
+    <div class="actions" style="margin-top: var(--s3)">
+      <button class="btn btn-primary" type="submit"{% if busy %} disabled{% endif %}>Reverse into the library</button>
+    </div>
+  </section>
+</form>
+{% endblock %}

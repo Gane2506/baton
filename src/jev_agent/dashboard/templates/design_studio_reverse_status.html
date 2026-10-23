@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% block title %}Reverse status{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div class="titles">
+    <h1>Reverse status</h1>
+    <p class="lede">The reverse runs in the background — the designer call can take a
+    few minutes. This page updates on its own; the result links to the new library
+    system when it is done.</p>
+  </div>
+  <div class="actions">
+    <a class="btn btn-secondary" href="/design-studio/reverse">New reverse</a>
+  </div>
+</div>
+
+<div id="reverse-live" data-live="/design-studio/reverse/live" data-live-every="3000">
+  {% include "_design_studio_reverse_live.html" %}
+</div>
+{% endblock %}

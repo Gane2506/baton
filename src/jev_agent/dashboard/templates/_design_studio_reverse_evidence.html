@@ -1,0 +1,39 @@
+{# The evidence summary shown under a finished reverse. `summary` and `outcome`
+   come from the status view. #}
+<section class="panel">
+  <div class="panel-head"><h2>Evidence</h2></div>
+  {% if summary.kind == "url" %}
+  <div class="table-wrap"><table>
+    <tbody>
+      {% if summary.title %}<tr><th scope="row">Page title</th><td>{{ summary.title }}</td></tr>{% endif %}
+      {% if summary.theme_color %}<tr><th scope="row">Theme color</th><td class="mono">{{ summary.theme_color }}</td></tr>{% endif %}
+      {% if summary.fonts %}
+      <tr><th scope="row">Fonts</th><td>{% for font in summary.fonts %}<div class="mono small">{{ font }}</div>{% endfor %}</td></tr>
+      {% endif %}
+      {% if summary.top_colors %}
+      <tr><th scope="row">Top colors</th><td>{% for color, count in summary.top_colors %}<div class="mono small">{{ color }} <span class="muted">&times;{{ count }}</span></div>{% endfor %}</td></tr>
+      {% endif %}
+    </tbody>
+  </table></div>
+  {% if summary.styles %}
+  <h3>Inline styles (excerpt)</h3>
+  <pre class="small mono">{{ summary.styles }}</pre>
+  {% endif %}
+  {% else %}
+  {% for shot in summary.shots %}
+  <h3>{{ shot.name }}</h3>
+  {% if shot.palette %}
+  <div class="table-wrap"><table>
+    <thead><tr><th>Color</th><th>Coverage</th></tr></thead>
+    <tbody>
+    {% for hex, pct in shot.palette %}
+      <tr><td class="mono"><span class="swatch" style="background: {{ hex }}"></span>{{ hex }}</td><td class="mono">{{ pct }}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table></div>
+  {% else %}
+  <p class="small muted">No dominant colors extracted.</p>
+  {% endif %}
+  {% endfor %}
+  {% endif %}
+</section>

@@ -28,7 +28,7 @@ from jinja2 import Environment, PackageLoader
 from markupsafe import Markup, escape
 from starlette.applications import Starlette
 from starlette.concurrency import run_in_threadpool
-from starlette.datastructures import FormData
+from starlette.datastructures import FormData, UploadFile
 from starlette.exceptions import HTTPException
 from starlette.middleware import Middleware
 from starlette.requests import Request
@@ -100,6 +100,7 @@ from jev_agent.core.design_library import (
     save_library_system,
     validate_library_name,
 )
+from jev_agent.core.design_reverse import is_url_target
 from jev_agent.core.design_system import (
     META_JSON,
     design_dir,
@@ -143,6 +144,13 @@ from jev_agent.core.workspace import (
 )
 from jev_agent.dashboard import studio_decisions, ui_styles, views
 from jev_agent.dashboard.browser_install import BrowserInstallBusy, BrowserInstallRunner
+from jev_agent.dashboard.design_reverse import (
+    ReverseBusy,
+    ReverseExecutor,
+    ReverseRunner,
+    ReverseUploadError,
+    save_png_uploads,
+)
 from jev_agent.dashboard.design_studio import (
     STUDIO_STEPS,
     StudioWizard,
@@ -595,12 +603,22 @@ class Dashboard:
     _MAX_FLASHES_PER_SESSION = 30
     _FLASH_SESSION_TTL_S = 6 * 3600
 
-    def __init__(self, settings: DashboardSettings, launcher: RunLauncher) -> None:
+    def __init__(
+        self,
+        settings: DashboardSettings,
+        launcher: RunLauncher,
+        reverse_executor: ReverseExecutor | None = None,
+    ) -> None:
         self.settings = settings
         self.launcher = launcher
         self.chat_runner = ChatRunner()
         self.scheduler_runner = SchedulerRunner(settings.root, launcher)
         self.browser_installer = BrowserInstallRunner(settings.root)
+        self.reverse_runner = (
+            ReverseRunner(settings.root, executor=reverse_executor)
+            if reverse_executor is not None
+            else ReverseRunner(settings.root)
+        )
         self.codex_flow = CodexDeviceFlow()
         self.started_at = datetime.now(UTC)  # the About panel's uptime
         self.env = _environment()
@@ -641,6 +659,7 @@ class Dashboard:
         # the in-flight item's run, which lets the scheduler thread exit promptly.
         self.scheduler_runner.stop()
         self.browser_installer.shutdown()
+        self.reverse_runner.shutdown()
         self.codex_flow.shutdown()
         return [
             *self.launcher.shutdown(timeout),
@@ -1259,6 +1278,99 @@ class Dashboard:
         else:
             self.flash(request, "ok", f'deleted "{system_name}" from the design library')
         return self.back(to)
+
+    # ---- pages/actions: design studio reverse (workstream DS-02, issue #124) ------
+
+    def design_reverse_page(self, request: Request) -> Response:
+        """The reverse entry form (Tier 0): a website URL xor PNG screenshots."""
+        return self.render(
+            request,
+            "design_studio_reverse.html",
+            busy=self.reverse_runner.busy(),
+        )
+
+    async def design_reverse_start(self, request: Request) -> Response:
+        """Validate the reverse submission, then run the job in the background.
+
+        The URL path keeps the CLI's SSRF guards (`fetch_url_evidence` refuses
+        non-public hosts); uploads are PNG-sniffed and capped before the job
+        starts. The designer worker call itself runs in the runner's thread.
+        """
+        form = await checked_form(request)
+        to = "/design-studio/reverse"
+
+        def fail(message: str) -> Response:
+            self.flash(request, "error", message)
+            return self.back(to)
+
+        url = (_text(form, "url") or "").strip()
+        name = (_text(form, "name") or "").strip()
+        has_uploads = any(
+            isinstance(value, UploadFile) and (value.filename or "").strip()
+            for value in form.getlist("screenshots")
+        )
+        if self.reverse_runner.busy():
+            return fail("a design reverse is already running; wait for it to finish.")
+        if url and has_uploads:
+            return fail("pass either one URL or only .png screenshots, not both.")
+        if not url and not has_uploads:
+            return fail("give a website URL or at least one .png screenshot.")
+        if url and not is_url_target(url):
+            return fail(f"{url}: only http(s) URLs are supported.")
+        if name:
+            try:
+                validate_library_name(name)
+            except ValueError as exc:
+                return fail(str(exc))
+
+        tmpdir: Path | None = None
+        screenshots: tuple[Path, ...] = ()
+        target = url
+        if has_uploads:
+            try:
+                saved = await save_png_uploads(form)
+            except ReverseUploadError as exc:
+                return fail(str(exc))
+            tmpdir = saved.tmpdir
+            screenshots = saved.paths
+            target = ", ".join(path.name for path in screenshots)
+        try:
+            self.reverse_runner.start(
+                url=url or None,
+                screenshots=screenshots,
+                name=name,
+                tmpdir=tmpdir,
+                target=target,
+            )
+        except ReverseBusy:
+            if tmpdir is not None:
+                shutil.rmtree(tmpdir, ignore_errors=True)
+            return fail("a design reverse is already running; wait for it to finish.")
+        self.flash(
+            request,
+            "ok",
+            f"reverse started for {target}; this page updates on its own",
+        )
+        return self.back("/design-studio/reverse/status")
+
+    def design_reverse_status(self, request: Request) -> Response:
+        """The progress page; its live region polls `design_reverse_live`."""
+        return self.render(
+            request, "design_studio_reverse_status.html", **self._reverse_live_context()
+        )
+
+    def design_reverse_live(self, request: Request) -> Response:
+        """The live fragment the status page refreshes every few seconds."""
+        return self.render(
+            request, "_design_studio_reverse_live.html", **self._reverse_live_context()
+        )
+
+    def _reverse_live_context(self) -> dict[str, Any]:
+        """The context for the status page and its live fragment."""
+        status = self.reverse_runner.status()
+        outcome = status.outcome
+        summary = _reverse_evidence_summary(outcome.evidence) if outcome else None
+        return {"status": status, "summary": summary}
 
     def fleet_fragment(self, request: Request) -> Response:
         """The fleet table alone, for live.js polling and `JevShell.mountPane("terminal",
@@ -2900,6 +3012,60 @@ def _design_system_extras(name: str) -> dict[str, object]:
     return {key: meta[key] for key in ("app_type", "stack") if isinstance(meta.get(key), str)}
 
 
+def _reverse_evidence_summary(evidence: dict[str, object]) -> dict[str, Any]:
+    """The reverse evidence dict shaped for `_design_studio_reverse_evidence.html`.
+
+    Only plain data crosses into the template: strings, counts and (hex,
+    coverage) pairs. Unknown shapes read as empty rather than raising, so a
+    future evidence format cannot break the status page.
+    """
+    if evidence.get("kind") == "url":
+        raw = evidence.get("url_evidence")
+        url_evidence = raw if isinstance(raw, dict) else {}
+        colors = url_evidence.get("colors")
+        top_colors = (
+            [(str(color), count) for color, count in list(colors.items())[:12]]
+            if isinstance(colors, dict)
+            else []
+        )
+        fonts = url_evidence.get("fonts")
+        title = url_evidence.get("title")
+        theme_color = url_evidence.get("theme_color")
+        styles = url_evidence.get("styles")
+        return {
+            "kind": "url",
+            "title": title if isinstance(title, str) else None,
+            "theme_color": theme_color if isinstance(theme_color, str) else None,
+            "fonts": [str(font) for font in fonts] if isinstance(fonts, list) else [],
+            "top_colors": top_colors,
+            "styles": str(styles)[:600] if isinstance(styles, str) else "",
+        }
+    shots = evidence.get("screenshots")
+    summaries = []
+    if isinstance(shots, list):
+        for shot in shots:
+            if not isinstance(shot, dict):
+                continue
+            palette = shot.get("palette")
+            entries = []
+            if isinstance(palette, list):
+                for entry in palette:
+                    if (
+                        isinstance(entry, (list, tuple))
+                        and len(entry) == 2
+                        and isinstance(entry[0], str)
+                    ):
+                        entries.append((entry[0], f"{float(entry[1]):.0%}"))
+            path = shot.get("path")
+            summaries.append(
+                {
+                    "name": Path(str(path)).name if isinstance(path, str) else "screenshot",
+                    "palette": entries,
+                }
+            )
+    return {"kind": "screenshots", "shots": summaries}
+
+
 def _design_system_use(repo: views.Repo, form: FormData) -> str:
     """`jev design use <name>` (Tier 1): install the library system into the repo."""
     name = validate_library_name((_text(form, "name") or "").strip())
@@ -3007,14 +3173,16 @@ def create_app(
     settings: DashboardSettings,
     *,
     executor: Executor = execute_run,
+    reverse_executor: ReverseExecutor | None = None,
 ) -> Starlette:
     """Build the app. Raises `DashboardConfigError` for a non-loopback host without a token.
-    `executor` runs approve/resume jobs (tests pass a fake one)."""
+    `executor` runs approve/resume jobs (tests pass a fake one); `reverse_executor`
+    runs design-studio reverse jobs (tests pass a fake one)."""
     settings.check()
     from jev_agent.core.secrets import load_secrets
 
     load_secrets()  # ~/.jev/secrets.env: real environment always wins
-    dash = Dashboard(settings, RunLauncher(settings.root, executor))
+    dash = Dashboard(settings, RunLauncher(settings.root, executor), reverse_executor)
     routes = [
         Route("/", dash.board_page),
         Route("/fragments/board", dash.board_fragment),
@@ -3069,6 +3237,10 @@ def create_app(
         # The generate POST is registered before the generic step POST so it wins.
         Route("/design-studio/new/generate", dash.design_studio_generate, methods=["POST"]),
         Route("/design-studio/new/{step}", dash.design_studio_step, methods=["POST"]),
+        Route("/design-studio/reverse", dash.design_reverse_page),
+        Route("/design-studio/reverse", dash.design_reverse_start, methods=["POST"]),
+        Route("/design-studio/reverse/status", dash.design_reverse_status),
+        Route("/design-studio/reverse/live", dash.design_reverse_live),
         Route("/tools", dash.tools_page),
         Route("/connections", dash.connections_page),
         Route("/connections/live", dash.connections_live),
