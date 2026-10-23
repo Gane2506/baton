@@ -517,6 +517,26 @@ def _wait_for_claude(flow: pa.ClaudeSetupTokenFlow, state: str, timeout_s: float
         time.sleep(0.02)
 
 
+def _wait_for_claude_status(
+    flow: pa.ClaudeSetupTokenFlow,
+    predicate: Callable[[pa.ClaudeSetupTokenStatus], bool],
+    timeout_s: float = 10.0,
+) -> pa.ClaudeSetupTokenStatus:
+    """Poll until ``predicate(status)`` holds; return the settled status.
+
+    The watcher's state flip and its field updates (url, code_prompt) land in
+    separate loop iterations, so asserting on fields right after the state
+    changes is a thread-timing race. Wait for the full expected condition.
+    """
+    deadline = time.monotonic() + timeout_s
+    status = flow.status()
+    while not predicate(status):
+        assert time.monotonic() < deadline, "timed out waiting for flow status"
+        time.sleep(0.02)
+        status = flow.status()
+    return status
+
+
 def _setup_token_lines() -> list[str]:
     return [
         "To authenticate, visit:\n",
@@ -549,10 +569,17 @@ def test_setup_token_flow_waiting_then_done(
     )
     try:
         flow.start(command="claude", timeout_s=30.0)
-        _wait_for_claude(flow, "waiting")
-        status = flow.status()
-        assert status.url is not None and "claude.ai/oauth/authorize" in status.url
-        assert status.code_prompt is True
+        # The URL line flips the state to "waiting" before the "> " prompt line
+        # lands, so wait for the full settled condition, not just the state.
+        _wait_for_claude_status(
+            flow,
+            lambda s: (
+                s.state == "waiting"
+                and s.url is not None
+                and "claude.ai/oauth/authorize" in s.url
+                and s.code_prompt is True
+            ),
+        )
         # The user approves in the browser and pastes the browser code.
         # Retry briefly: the watcher thread may still be settling into "waiting".
         submitted = False
