@@ -74,6 +74,7 @@ from jev_agent.app.quality import review_text
 from jev_agent.app.queue import QueueOptions
 from jev_agent.app.runs import RunOptions, require_ship_enabled
 from jev_agent.config import STATE_DIRNAME, ConfigError
+from jev_agent.config.loader import default_user_config_path
 from jev_agent.config.schema import BEGINNER_FIELDS, JevConfig, JevSettings, ShipMode
 from jev_agent.config.servers_schema import ServerConfig
 from jev_agent.core.benchmarks import DEFAULT_LAST, format_value
@@ -1303,6 +1304,7 @@ class Dashboard:
 
     def design_reverse_page(self, request: Request) -> Response:
         """The reverse entry form (Tier 0): a website URL xor PNG screenshots."""
+
         def build(repo: views.Repo) -> dict[str, Any]:
             api_ok, _ = chat.backend_readiness(repo.config)
             return {
@@ -2164,7 +2166,7 @@ class Dashboard:
             # A model id is `provider/name`; keep it simple and safe.
             if not all(c.isalnum() or c in "-_./:" for c in model):
                 raise ValueError("that doesn't look like a model id")
-            user_path = settings.default_user_config_path()
+            user_path = default_user_config_path()
             settings.write_value(user_path, "workers.api.default_model", model)
             return f"API model set to {model}; it applies immediately."
 
