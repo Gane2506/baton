@@ -263,9 +263,7 @@ def parse_setup_token_output(text: str) -> tuple[str | None, bool]:
         return url_match.group(0), bool(_CODE_PROMPT.search(clean))
     # Fall back to any URL: older/newer CLI wordings still print exactly one.
     generic = _URL.search(clean)
-    return (
-        (generic.group(0), bool(_CODE_PROMPT.search(clean))) if generic else (None, False)
-    )
+    return (generic.group(0), bool(_CODE_PROMPT.search(clean))) if generic else (None, False)
 
 
 def extract_setup_token(text: str) -> str | None:
@@ -469,9 +467,7 @@ class ClaudeSetupTokenFlow:
 
     # -- dashboard API ---------------------------------------------------------
 
-    def start(
-        self, command: str = "claude", timeout_s: float = 600.0
-    ) -> ClaudeSetupTokenStatus:
+    def start(self, command: str = "claude", timeout_s: float = 600.0) -> ClaudeSetupTokenStatus:
         """Spawn the setup-token flow. Raises DeviceFlowBusy / DeviceFlowError."""
         with self._lock:
             if self._status.state in ("starting", "waiting"):
