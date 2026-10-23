@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import io
 import zipfile
+from typing import Any
 
 import pytest
 
@@ -29,7 +30,15 @@ from jev_agent.core.design_showcase import (
 )
 from jev_agent.core.design_showcase_html import render_showcase
 
-_TOKENS = {"design_tokens": rich_tokens(vibe_for_keywords("elegant"), "both")}
+_TOKENS: dict[str, Any] = {
+    "design_tokens": rich_tokens(vibe_for_keywords("elegant"), "both")
+}
+
+
+def _rich() -> dict[str, Any]:
+    tokens = _TOKENS["design_tokens"]
+    assert isinstance(tokens, dict)
+    return tokens
 
 
 # ---------------------------------------------------------------------------
@@ -54,7 +63,7 @@ def test_vibe_for_keywords_maps_free_text() -> None:
 
 
 def test_rich_tokens_has_full_structure() -> None:
-    tokens = _TOKENS["design_tokens"]
+    tokens = _rich()
     assert set(tokens) >= {"vibe", "colors", "typography", "spacing", "radii", "shadows", "motion"}
     light = tokens["colors"]["light"]
     dark = tokens["colors"]["dark"]
@@ -78,7 +87,7 @@ def test_rich_tokens_has_full_structure() -> None:
 
 
 def test_rich_tokens_typography_hierarchy() -> None:
-    typo = _TOKENS["design_tokens"]["typography"]
+    typo = _rich()["typography"]
     assert set(typo) >= {
         "display_xl",
         "display_lg",
@@ -95,7 +104,7 @@ def test_rich_tokens_typography_hierarchy() -> None:
 
 
 def test_rich_tokens_scales_present() -> None:
-    tokens = _TOKENS["design_tokens"]
+    tokens = _rich()
     assert len(tokens["spacing"]) >= 8
     assert len(tokens["radii"]) >= 5
     assert len(tokens["shadows"]) >= 4
@@ -109,7 +118,7 @@ def test_rich_tokens_scales_present() -> None:
 
 def test_render_showcase_contains_all_sections() -> None:
     profile = vibe_for_keywords("bold")
-    html = render_showcase("demo", profile, _TOKENS["design_tokens"], "both")
+    html = render_showcase("demo", profile, _rich(), "both")
     for section in ("Palette", "Typography", "Components", "Foundations"):
         assert section in html
     assert "dark" in html.lower() and "light" in html.lower()
@@ -117,14 +126,14 @@ def test_render_showcase_contains_all_sections() -> None:
 
 def test_render_showcase_embeds_vibe_name() -> None:
     profile = vibe_for_keywords("brutalist")
-    html = render_showcase("demo", profile, _TOKENS["design_tokens"], "light")
+    html = render_showcase("demo", profile, _rich(), "light")
     assert profile.name in html
 
 
 def test_render_showcase_theme_toggle_only_when_both() -> None:
     profile = vibe_for_keywords("minimal")
-    both = render_showcase("demo", profile, _TOKENS["design_tokens"], "both")
-    light = render_showcase("demo", profile, _TOKENS["design_tokens"], "light")
+    both = render_showcase("demo", profile, _rich(), "both")
+    light = render_showcase("demo", profile, _rich(), "light")
     assert 'id="themeToggle"' in both
     assert 'id="themeToggle"' not in light
 
