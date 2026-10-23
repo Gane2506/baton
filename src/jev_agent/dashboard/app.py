@@ -22,7 +22,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
-from urllib.parse import urlsplit
+from urllib.parse import quote, urlsplit
 
 from jinja2 import Environment, PackageLoader
 from markupsafe import Markup, escape
@@ -143,6 +143,15 @@ from jev_agent.core.workspace import (
 )
 from jev_agent.dashboard import ui_styles, views
 from jev_agent.dashboard.browser_install import BrowserInstallBusy, BrowserInstallRunner
+from jev_agent.dashboard.design_studio import (
+    STUDIO_STEPS,
+    StudioWizard,
+    WizardError,
+    first_incomplete_step,
+    generate_from_state,
+    validate_step,
+    wizard_context,
+)
 from jev_agent.dashboard.preview import (
     PreviewBridge,
     PreviewError,
@@ -196,6 +205,7 @@ NAV = (
     ("/learning", "Learning"),
     ("/profiles", "Profiles"),
     ("/design-systems", "Design Systems"),
+    ("/design-studio", "Design Studio"),
     ("/tools", "Tools"),
     ("/connections", "Connections"),
     ("/spend", "Spend"),
@@ -540,6 +550,7 @@ class Dashboard:
         self._flash_lock = threading.Lock()
         self._flashes: dict[str, list[tuple[str, str]]] = {}
         self._flash_seen: dict[str, float] = {}  # session -> last flash (monotonic)
+        self.studio_wizard = StudioWizard()  # the Design Studio's wizard answers
 
     # ---- helpers ---------------------------------------------------------------------------
 
@@ -1028,6 +1039,65 @@ class Dashboard:
         if action == "delete":
             return await self.design_system_delete(request)
         raise HTTPException(404, "no such action")
+
+    # ---- pages/actions: the Design Studio (issue #124) -----------------------------------
+
+    def design_studio_page(self, request: Request) -> Response:
+        """The studio landing: two entry cards — a new system, or reverse a site."""
+        return self.render(request, "design_studio.html")
+
+    def design_studio_start(self, request: Request) -> Response:
+        """Begin (or restart) the new-system wizard at its first step."""
+        self.studio_wizard.clear(request.state.session)
+        return self.back("/design-studio/new/purpose")
+
+    def design_studio_step_page(self, request: Request) -> Response:
+        """One wizard step: the stepper plus this step's single question."""
+        step: str = request.path_params["step"]
+        if step not in STUDIO_STEPS:
+            raise HTTPException(404, "no such wizard step")
+        state = self.studio_wizard.get(request.state.session)
+        incomplete = first_incomplete_step(state)
+        if incomplete is not None and STUDIO_STEPS.index(incomplete) < STUDIO_STEPS.index(step):
+            return self.back(f"/design-studio/new/{incomplete}")
+        return self.render(request, "design_studio_wizard.html", **wizard_context(state, step))
+
+    async def design_studio_step(self, request: Request) -> Response:
+        """A wizard step's answer: validated before advancing (never a 500)."""
+        step: str = request.path_params["step"]
+        if step not in STUDIO_STEPS or step == "generate":
+            raise HTTPException(404, "no such wizard step")
+        form = await checked_form(request)
+        state = self.studio_wizard.get(request.state.session)
+        entered = {key: value.strip() for key, value in form.items() if isinstance(value, str)}
+        try:
+            answers = validate_step(step, form, state)
+        except WizardError as exc:
+            return self.render(
+                request,
+                "design_studio_wizard.html",
+                **wizard_context(state, step, entered=entered, error=str(exc)),
+            )
+        self.studio_wizard.put(request.state.session, step, answers)
+        next_step = STUDIO_STEPS[STUDIO_STEPS.index(step) + 1]
+        return self.back(f"/design-studio/new/{next_step}")
+
+    async def design_studio_generate(self, request: Request) -> Response:
+        """The wizard's final step: run the kit, save to the library, show the system."""
+        await checked_form(request)
+        state = self.studio_wizard.get(request.state.session)
+        try:
+            name = await run_in_threadpool(generate_from_state, state)
+        except WizardError as exc:
+            # Only reachable as a race (the Brand step rejects taken names) or a
+            # forged POST: send the visitor to the first incomplete step — or back
+            # to Brand for the name race — with the reason, never a traceback.
+            self.flash(request, "error", str(exc))
+            incomplete = first_incomplete_step(state)
+            return self.back(f"/design-studio/new/{incomplete or 'brand'}")
+        self.studio_wizard.clear(request.state.session)
+        self.flash(request, "ok", f'"{name}" created in the design library')
+        return self.back(f"/design-systems/{quote(name, safe='')}")
 
     async def design_system_export(self, request: Request) -> Response:
         """`jev design export` (Tier 0: read-only): the system's tokens as a download."""
@@ -2918,6 +2988,12 @@ def create_app(
         Route("/design-systems", dash.design_systems_page),
         Route("/design-systems/{name}", dash.design_system_page),
         Route("/design-systems/{action}", dash.design_systems_action, methods=["POST"]),
+        Route("/design-studio", dash.design_studio_page),
+        Route("/design-studio/new", dash.design_studio_start),
+        Route("/design-studio/new/{step}", dash.design_studio_step_page),
+        # The generate POST is registered before the generic step POST so it wins.
+        Route("/design-studio/new/generate", dash.design_studio_generate, methods=["POST"]),
+        Route("/design-studio/new/{step}", dash.design_studio_step, methods=["POST"]),
         Route("/tools", dash.tools_page),
         Route("/connections", dash.connections_page),
         Route("/connections/live", dash.connections_live),

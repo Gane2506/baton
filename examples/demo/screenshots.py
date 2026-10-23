@@ -66,6 +66,7 @@ SHOTS = [
     Shot("dashboard-connections.png", "/connections", height=1600),
     Shot("dashboard-design-systems.png", "/design-systems"),
     Shot("dashboard-design-system.png", "/design-systems/acme-brand", height=1400),
+    Shot("design-studio.png", "/design-studio"),
 ]
 QUALITY = "dashboard-quality.png"  # the run page's "Quality review" section only
 
@@ -202,6 +203,23 @@ def shoot_quality(browser: Browser, url: str, out: Path) -> None:
     page.context.close()
 
 
+def shoot_studio_wizard(browser: Browser, base: str, out: Path) -> None:
+    """Drive the studio wizard to its Stack step, then capture that step.
+
+    The wizard keeps its answers server-side per session, so the shots script
+    walks the real flow like a visitor would: Purpose -> App type -> Stack.
+    """
+    page = open_page(browser, base + "/design-studio/new", 900, dark=False)
+    page.fill("#ws-product", "Acme Analytics")
+    page.click('form[action="/design-studio/new/purpose"] button[type="submit"]')
+    page.wait_for_selector('input[name="app_type"]')
+    page.check('input[name="app_type"][value="dashboard"]')
+    page.click('form[action="/design-studio/new/app_type"] button[type="submit"]')
+    page.wait_for_selector('input[name="stack"]')
+    page.screenshot(path=out)
+    page.context.close()
+
+
 def shoot_dashboard(base: str, run_id: str, out_dir: Path, chrome: Path | None) -> None:
     with sync_playwright() as pw:
         browser = launch(pw, chrome)
@@ -213,6 +231,8 @@ def shoot_dashboard(base: str, run_id: str, out_dir: Path, chrome: Path | None) 
                 page.screenshot(path=out_dir / shot.file)
                 page.context.close()
                 print(f"{shot.file}: {shot.path.format(run=run_id)}")
+            shoot_studio_wizard(browser, base, out_dir / "design-studio-wizard.png")
+            print("design-studio-wizard.png: /design-studio/new (walked to the Stack step)")
             shoot_quality(browser, f"{base}/runs/{run_id}", out_dir / QUALITY)
             print(f"{QUALITY}: /runs/{run_id} (quality review)")
         finally:

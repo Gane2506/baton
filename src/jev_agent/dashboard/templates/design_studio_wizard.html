@@ -1,0 +1,167 @@
+{% extends "base.html" %}
+{% from "macros.html" import badge, csrf_input, icon with context %}
+{# The Design Studio's new-system wizard (issue #124): a guided stepper, one
+   question per step, structurally distinct from the chat interface. #}
+{% block title %}Design Studio — {{ wizard_steps[wizard_step_index].label }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div class="titles">
+    <h1>Design Studio</h1>
+    <p class="lede">A new design system, five guided questions.</p>
+  </div>
+  <div class="actions">
+    <a class="btn btn-ghost" href="/design-studio">Exit wizard</a>
+  </div>
+</div>
+
+<ol class="studio-stepper" aria-label="Wizard progress">
+  {% for s in wizard_steps %}
+  <li class="step{% if s.current %} is-current{% elif s.done %} is-done{% endif %}"
+      {% if s.current %}aria-current="step"{% endif %}>
+    <span class="step-num">{% if s.done %}{{ icon("i-check") }}{% else %}{{ s.index }}{% endif %}</span>
+    <span class="step-label">{{ s.label }}</span>
+  </li>
+  {% endfor %}
+</ol>
+
+{% if error %}
+<div class="flash error" role="alert">{{ error }}</div>
+{% endif %}
+
+{% set v = answers[wizard_step] %}
+<div class="studio-step panel">
+  {% if wizard_step == "purpose" %}
+  <h2>What product is this for?</h2>
+  <p class="lede">Start with the name — the studio builds the system around it.</p>
+  <form method="post" action="/design-studio/new/purpose">
+    {{ csrf_input() }}
+    <div class="field-row">
+      <label for="ws-product">Product name</label>
+      <div class="field-control">
+        <input type="text" id="ws-product" name="product" required maxlength="120"
+               value="{{ v.get('product', '') }}" placeholder="e.g. Acme Analytics"
+               autocomplete="off" autofocus>
+      </div>
+      <div class="field-actions"></div>
+    </div>
+    <div class="studio-nav">
+      <button type="submit" class="btn btn-primary">Continue</button>
+    </div>
+  </form>
+
+  {% elif wizard_step == "app_type" %}
+  <h2>What kind of product is it?</h2>
+  <p class="lede">This shapes the tokens the studio generates.</p>
+  <form method="post" action="/design-studio/new/app_type">
+    {{ csrf_input() }}
+    <div class="radio-cards" role="radiogroup" aria-label="App type">
+      {% for key, desc in app_types.items() %}
+      <label class="radio-card">
+        <input type="radio" name="app_type" value="{{ key }}"
+               {% if v.get('app_type') == key %}checked{% endif %} required>
+        <span class="radio-card-title">{{ key | capitalize }}</span>
+        <span class="radio-card-desc">{{ desc }}</span>
+      </label>
+      {% endfor %}
+    </div>
+    <div class="studio-nav">
+      <a class="btn btn-secondary" href="/design-studio/new/purpose">Back</a>
+      <button type="submit" class="btn btn-primary">Continue</button>
+    </div>
+  </form>
+
+  {% elif wizard_step == "stack" %}
+  <h2>Which stack will it ship on?</h2>
+  <p class="lede">For {{ stack_app_type_label }} — the first option is the studio's
+  recommendation.</p>
+  <form method="post" action="/design-studio/new/stack">
+    {{ csrf_input() }}
+    <div class="radio-cards" role="radiogroup" aria-label="Stack">
+      {% for option in stack_options %}
+      <label class="radio-card">
+        <input type="radio" name="stack" value="{{ option }}"
+               {% if v.get('stack', stack_recommended) == option %}checked{% endif %} required>
+        <span class="radio-card-title">{{ option }}
+          {% if option == stack_recommended %}{{ badge("Recommended", "ok") }}{% endif %}
+        </span>
+      </label>
+      {% endfor %}
+    </div>
+    <div class="studio-nav">
+      <a class="btn btn-secondary" href="/design-studio/new/app_type">Back</a>
+      <button type="submit" class="btn btn-primary">Continue</button>
+    </div>
+  </form>
+
+  {% elif wizard_step == "brand" %}
+  <h2>How should it feel?</h2>
+  <p class="lede">The name goes in your library; the vibe shapes the palette.</p>
+  <form method="post" action="/design-studio/new/brand">
+    {{ csrf_input() }}
+    <div class="field-row">
+      <label for="ws-name">System name
+        <span class="hint">Letters, digits, <code>_</code> and <code>-</code>, starting with a letter or digit.</span>
+      </label>
+      <div class="field-control">
+        <input type="text" id="ws-name" name="name" required maxlength="64"
+               value="{{ v.get('name', '') }}" placeholder="e.g. acme-brand"
+               autocomplete="off" pattern="[A-Za-z0-9][A-Za-z0-9_-]{0,63}">
+      </div>
+      <div class="field-actions"></div>
+    </div>
+    <div class="field-row">
+      <label for="ws-vibe">Vibe keywords
+        <span class="hint">Optional free text — the studio reads it into a color palette.</span>
+      </label>
+      <div class="field-control">
+        <input type="text" id="ws-vibe" name="vibe" maxlength="200"
+               value="{{ v.get('vibe', '') }}" placeholder="e.g. warm, confident, playful"
+               autocomplete="off">
+      </div>
+      <div class="field-actions"></div>
+    </div>
+    <div class="field-row">
+      <label>Theme</label>
+      <div class="field-control">
+        <div class="radio-inline" role="radiogroup" aria-label="Theme">
+          {% for theme in themes %}
+          <label class="radio-pill">
+            <input type="radio" name="theme" value="{{ theme }}"
+                   {% if v.get('theme', 'both') == theme %}checked{% endif %}>
+            <span>{{ theme | capitalize }}</span>
+          </label>
+          {% endfor %}
+        </div>
+      </div>
+      <div class="field-actions"></div>
+    </div>
+    <div class="studio-nav">
+      <a class="btn btn-secondary" href="/design-studio/new/stack">Back</a>
+      <button type="submit" class="btn btn-primary">Continue</button>
+    </div>
+  </form>
+
+  {% elif wizard_step == "generate" %}
+  <h2>Ready to generate?</h2>
+  <p class="lede">The studio will build the full kit and save it to your library.</p>
+  <dl class="studio-summary">
+    <div><dt>Product</dt><dd>{{ answers.purpose.get('product', '') }}</dd></div>
+    <div><dt>App type</dt><dd>{{ answers.app_type.get('app_type', '') | capitalize }}</dd></div>
+    <div><dt>Stack</dt><dd>{{ answers.stack.get('stack', '') }}</dd></div>
+    <div><dt>System name</dt><dd class="mono">{{ answers.brand.get('name', '') }}</dd></div>
+    <div><dt>Vibe</dt><dd>{{ answers.brand.get('vibe', '') or "—" }}</dd></div>
+    <div><dt>Theme</dt><dd>{{ answers.brand.get('theme', '') | capitalize }}</dd></div>
+  </dl>
+  <p class="hint">Generates <code>tokens.json</code>, <code>design-system.md</code>,
+  <code>meta.json</code>, a logo mark and favicons under
+  <code>~/.jev/design-systems/{{ answers.brand.get('name', '') }}/</code>.</p>
+  <form method="post" action="/design-studio/new/generate">
+    {{ csrf_input() }}
+    <div class="studio-nav">
+      <a class="btn btn-secondary" href="/design-studio/new/brand">Back</a>
+      <button type="submit" class="btn btn-primary">{{ icon("i-check") }} Create design system</button>
+    </div>
+  </form>
+  {% endif %}
+</div>
+{% endblock %}

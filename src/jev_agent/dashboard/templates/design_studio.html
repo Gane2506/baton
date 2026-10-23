@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% from "macros.html" import icon with context %}
+{% block title %}Design Studio{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div class="titles">
+    <h1>Design Studio</h1>
+    <p class="lede">A standalone creation space for design systems — guided and visual,
+    separate from the chat. Start one from scratch, or capture the look of an
+    existing site.</p>
+  </div>
+  <div class="actions">
+    <a class="btn btn-secondary" href="/design-systems">Browse the library</a>
+  </div>
+</div>
+
+<div class="studio-cards">
+  <a class="studio-card" href="/design-studio/new">
+    <div class="studio-card-icon">{{ icon("i-plus") }}</div>
+    <h2>New design system</h2>
+    <p>Answer five guided questions — purpose, app type, stack, brand, generate —
+    and the studio builds a complete kit: design tokens, system markdown, logo
+    mark and favicons, saved to your library.</p>
+    <span class="studio-card-cta"><span class="btn btn-primary">Start the wizard</span></span>
+  </a>
+  <a class="studio-card" href="/design-studio/reverse">
+    <div class="studio-card-icon">{{ icon("i-search") }}</div>
+    <h2>Reverse from URL or screenshots</h2>
+    <p>Point the studio at a website or drop in screenshots and it extracts the
+    palette, type and spacing into a design system you can refine and reuse.</p>
+    <span class="studio-card-cta"><span class="btn btn-secondary">Open reverse</span></span>
+  </a>
+</div>
+
+<p class="hint">Systems the studio creates land in the same library as
+<code>jev design new</code> (<code>~/.jev/design-systems/</code>) and are ready
+for <code>jev design use &lt;name&gt;</code>.</p>
+{% endblock %}
