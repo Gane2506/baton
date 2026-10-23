@@ -11,6 +11,7 @@ itself is fixed (`servers.browser.install_argv()`); no request can change it.
 
 from __future__ import annotations
 
+import shutil
 import subprocess
 import threading
 from collections.abc import Callable
