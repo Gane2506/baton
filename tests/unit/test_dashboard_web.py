@@ -172,7 +172,9 @@ def test_chat_actions_refuse_without_a_brief(client: TestClient) -> None:
     chat_id = _new_chat(client)
     assert _post(client, f"/chats/{chat_id}/start", {"action": "run"}).status_code == 303
     page = client.get(f"/chats/{chat_id}")
-    assert "no brief yet" in page.text
+    # The user-facing message must guide, never leak the raw backend phrasing.
+    assert "write a brief first" in page.text
+    assert "no brief yet" not in page.text
 
 
 @pytest.mark.parametrize("budget", ["inf", "nan", "-1", "0"])

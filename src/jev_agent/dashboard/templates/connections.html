@@ -12,6 +12,18 @@
   </div>
 </div>
 
+{% if not repo_trusted %}
+<section class="panel" aria-label="Repository trust" style="border-left: 4px solid var(--warn);">
+  <h2>{{ icon("i-shield", "sm") }} Repository not trusted</h2>
+  <p class="small">This repo's <code>jev.toml</code> cannot change guarded keys (servers, API key routing,
+  agent tools) until you trust it. Trusting is per-machine and stored in your user config.</p>
+  <form method="post" action="/connections/trust?next=/connections" class="inline">
+    {{ csrf_input() }}
+    <button type="submit" class="btn btn-primary">Trust this repo</button>
+  </form>
+</section>
+{% endif %}
+
 <section class="panel" aria-label="Server reachability">
   <h2>Servers <span class="muted">·</span> <span id="conn-summary" data-conn="{{ agg_state }}">{{ agg_label }}</span></h2>
   {% if servers %}

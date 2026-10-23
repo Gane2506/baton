@@ -50,6 +50,7 @@ from jev_agent.core.learning import (
     LearningStatus,
     Lesson,
     Profile,
+    Skill,
     learning_status,
     normalize_module_ref,
     split_module_ref,
@@ -546,6 +547,8 @@ class LearningView:
     selected: str | None
     lessons: list[Lesson]
     shared_path: Path
+    skills: list[Skill]  # the profile's learned skills
+    proposed_skills: list[dict[str, object]]  # skill proposals awaiting approval
 
 
 def learning_view(repo: Repo, profile: str | None, include_retired: bool) -> LearningView:
@@ -557,7 +560,28 @@ def learning_view(repo: Repo, profile: str | None, include_retired: bool) -> Lea
         profile if profile in names else (status.profile if status.profile in names else None)
     )
     lessons = repo.learning.lessons(selected, include_retired) if selected else []
-    return LearningView(status, profiles, selected, lessons, repo.learning.shared_path)
+    skills: list[Skill] = []
+    proposed_skills: list[dict[str, object]] = []
+    if selected:
+        try:
+            db = repo.learning.db_for(selected)
+            skills = db.list_skills(selected)
+            # Only propose skills for lessons not already covered by a skill.
+            covered: set[str] = {lid for s in skills for lid in s.lesson_ids}
+            all_proposals = db.propose_skills(selected)
+            proposed_skills = []
+            for p in all_proposals:
+                ids = p["lesson_ids"]
+                assert isinstance(ids, list)
+                if not set(ids).issubset(covered):
+                    proposed_skills.append(p)
+        except LearningError:
+            # The skills table may not exist yet (old database): no skills to show.
+            pass
+            pass
+    return LearningView(
+        status, profiles, selected, lessons, repo.learning.shared_path, skills, proposed_skills
+    )
 
 
 @dataclass

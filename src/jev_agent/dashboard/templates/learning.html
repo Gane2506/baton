@@ -218,7 +218,29 @@
       <td class="num">{{ l.uses }}</td>
       <td class="wrap">{{ l.text }}</td>
       <td class="small mono">{% if l.source_run %}<a href="/runs/{{ l.source_run }}">{{ l.source_run }}</a>{% if l.source_task %} {{ l.source_task }}{% endif %}{% endif %}</td>
-      <td>{% if not l.retired %}<form class="inline" method="post" action="/learning/forget" data-confirm="Retire lesson {{ l.id }}? It will never be used again.">{{ csrf_input() }}<input type="hidden" name="lesson" value="{{ l.id }}"><button class="btn btn-sm btn-secondary" type="submit">Forget</button></form>{% endif %}</td>
+      <td><div class="actions">
+        {% if not l.retired %}
+        <details class="disclosure inline">
+          <summary class="btn btn-sm btn-secondary">Edit</summary>
+          <form method="post" action="/learning/edit" class="panel">
+            {{ csrf_input() }}
+            <input type="hidden" name="lesson" value="{{ l.id }}">
+            <label class="small">Text
+              <textarea name="text" rows="3" maxlength="300" required>{{ l.text }}</textarea>
+            </label>
+            <label class="small">Roles (comma-separated)
+              <input type="text" name="roles" value="{{ l.roles | join(', ') }}">
+            </label>
+            <label class="small">Tags (comma-separated)
+              <input type="text" name="tags" value="{{ l.tags | join(', ') }}">
+            </label>
+            <button class="btn btn-sm btn-primary" type="submit">Save</button>
+          </form>
+        </details>
+        <form class="inline" method="post" action="/learning/forget" data-confirm="Retire lesson {{ l.id }}? It will never be used again.">{{ csrf_input() }}<input type="hidden" name="lesson" value="{{ l.id }}"><button class="btn btn-sm btn-secondary" type="submit">Forget</button></form>
+        <form class="inline" method="post" action="/learning/delete-lesson" data-confirm="Permanently delete lesson {{ l.id }}? This cannot be undone.">{{ csrf_input() }}<input type="hidden" name="lesson" value="{{ l.id }}"><button class="btn btn-sm btn-danger" type="submit">Delete</button></form>
+        {% endif %}
+      </div></td>
     </tr>
   {% endfor %}
   </tbody>
@@ -226,6 +248,56 @@
 {% else %}
 <div class="empty"><div class="title">No lessons</div><p>This profile has not learned anything yet.</p></div>
 {% endif %}
+{% endif %}
+{% endif %}
+
+{% if lv.selected %}
+<h2 class="section">Skills from learning</h2>
+<p class="hint">Skills distilled from this profile's lessons. Approve a proposal to add it to the skills library.</p>
+{% if lv.proposed_skills %}
+<h3 class="small">Proposed skills</h3>
+<div class="table-wrap"><table>
+  <thead><tr><th>Skill</th><th>Description</th><th>From lessons</th><th><span class="sr-only">actions</span></th></tr></thead>
+  <tbody>
+  {% for p in lv.proposed_skills %}
+    <tr>
+      <td><strong>{{ p.name }}</strong></td>
+      <td class="wrap small">{{ p.description }}</td>
+      <td class="small mono">{{ p.lesson_ids | join(", ") }}</td>
+      <td><form class="inline" method="post" action="/learning/approve-skill">{{ csrf_input() }}
+        <input type="hidden" name="profile" value="{{ lv.selected }}">
+        <input type="hidden" name="name" value="{{ p.name }}">
+        <input type="hidden" name="description" value="{{ p.description }}">
+        <input type="hidden" name="lesson_ids" value="{{ p.lesson_ids | join(',') }}">
+        <button class="btn btn-sm btn-primary" type="submit">Approve</button>
+      </form></td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table></div>
+{% else %}
+<p class="muted small">No new skill proposals. Skills are proposed when 2+ lessons share a tag.</p>
+{% endif %}
+{% if lv.skills %}
+<h3 class="small">Learned skills ({{ lv.skills | length }})</h3>
+<div class="table-wrap"><table>
+  <thead><tr><th>Skill</th><th>Description</th><th>Source</th><th>From lessons</th><th><span class="sr-only">actions</span></th></tr></thead>
+  <tbody>
+  {% for s in lv.skills %}
+    <tr>
+      <td><strong>{{ s.name }}</strong></td>
+      <td class="wrap small">{{ s.description }}</td>
+      <td>{{ badge(s.source, "ok" if s.source == "learned" else "pending") }}</td>
+      <td class="small mono">{{ s.lesson_ids | join(", ") }}</td>
+      <td><form class="inline" method="post" action="/learning/delete-skill" data-confirm="Delete skill '{{ s.name }}'?">{{ csrf_input() }}
+        <input type="hidden" name="profile" value="{{ lv.selected }}">
+        <input type="hidden" name="skill_id" value="{{ s.id }}">
+        <button class="btn btn-sm btn-danger" type="submit">Delete</button>
+      </form></td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table></div>
 {% endif %}
 {% endif %}
 {% endblock %}

@@ -9,10 +9,12 @@
     source <span class="mono">{{ source }}</span>{% if app_type != "-" %} · {{ app_type }}{% endif %}{% if stack != "-" %} · {{ stack }}{% endif %}</p>
   </div>
   <div class="actions">
+    <a class="btn btn-sm btn-primary" href="/design-systems/{{ name }}/showcase" target="_blank" rel="noopener">Preview showcase</a>
+    <a class="btn btn-sm btn-secondary" href="/design-systems/{{ name }}/code">Get reusable elements</a>
     {% if not active %}
     <form class="inline" method="post" action="/design-systems/use">
       {{ csrf_input() }}<input type="hidden" name="name" value="{{ name }}">
-      <button class="btn btn-sm btn-primary" type="submit">Use for this repo</button>
+      <button class="btn btn-sm btn-secondary" type="submit">Use for this repo</button>
     </form>
     {% endif %}
     <form class="inline" method="post" action="/design-systems/delete">

@@ -74,7 +74,7 @@ from jev_agent.app.quality import review_text
 from jev_agent.app.queue import QueueOptions
 from jev_agent.app.runs import RunOptions, require_ship_enabled
 from jev_agent.config import STATE_DIRNAME, ConfigError
-from jev_agent.config.loader import default_user_config_path
+from jev_agent.config.loader import default_user_config_path, trusts
 from jev_agent.config.schema import BEGINNER_FIELDS, JevConfig, JevSettings, ShipMode
 from jev_agent.config.servers_schema import ServerConfig
 from jev_agent.core.benchmarks import DEFAULT_LAST, format_value
@@ -90,6 +90,14 @@ from jev_agent.core.chat import (
     list_design_library,
     parse_design_system,
 )
+from jev_agent.core.design_codegen import (
+    CODEGEN_TARGETS,
+    bundle_zip,
+    component_catalog,
+    generate_files,
+    target_for_stack,
+    validate_target,
+)
 from jev_agent.core.design_library import (
     delete_library_system,
     export_tokens_css,
@@ -102,6 +110,8 @@ from jev_agent.core.design_library import (
     validate_library_name,
 )
 from jev_agent.core.design_reverse import is_url_target
+from jev_agent.core.design_showcase import VIBE_PROFILES, rich_tokens, vibe_for_keywords
+from jev_agent.core.design_showcase_html import render_showcase
 from jev_agent.core.design_system import (
     META_JSON,
     design_dir,
@@ -291,7 +301,7 @@ def _usd(value: float | None) -> str:
     return "-" if value is None else f"${value:.2f}"
 
 
-def _time(value: datetime | str | None) -> str:
+def _time(value: datetime | str | float | int | None) -> str:
     if value is None:
         return "-"
     if isinstance(value, str):
@@ -299,6 +309,8 @@ def _time(value: datetime | str | None) -> str:
             return format_time(datetime.fromisoformat(value))
         except ValueError:
             return value
+    if isinstance(value, (float, int)):
+        return format_time(datetime.fromtimestamp(value, tz=UTC))
     return format_time(value)
 
 
@@ -755,7 +767,12 @@ class Dashboard:
         ) as exc:
             self.flash(request, "error", str(exc))
         else:
-            self.flash(request, "ok", message)
+            # Trust gate blocked the save: offer one-click trust (issue #158).
+            if settings.TRUST_GATE_MARKER in message:
+                clean = message.replace(settings.TRUST_GATE_MARKER, "").strip()
+                self.flash(request, "trust", clean)
+            else:
+                self.flash(request, "ok", message)
         return self.back(to)
 
     # ---- pages -----------------------------------------------------------------------------
@@ -1139,6 +1156,97 @@ class Dashboard:
             request, "design_system.html", lambda repo: _design_system_view(repo, name)
         )
 
+    # ---- Design Studio outputs: showcase + reusable elements (issue #155) ----------
+
+    async def design_showcase_page(self, request: Request) -> Response:
+        """The system's showcase gallery: standalone stunning preview page.
+
+        Serves the saved ``showcase.html``; older systems (saved before the
+        showcase existed) get it rendered on demand from their stored tokens.
+        """
+        name = request.path_params["name"]
+        try:
+            system_name = validate_library_name(name)
+        except ValueError:
+            raise HTTPException(404, "no such design system") from None
+
+        def build() -> str:
+            system = load_library_system(system_name)
+            if system is None:
+                raise NotFoundError(f'no design system named "{system_name}"')
+            saved = library_system_path(system_name) / "showcase.html"
+            if saved.is_file():
+                return saved.read_text(encoding="utf-8")
+            meta = _library_meta(system_name)
+            tokens = system.tokens if isinstance(system.tokens, dict) else {}
+            rich = tokens.get("design_tokens")
+            profile_key = _meta_text(meta, "vibe_profile")
+            profile = VIBE_PROFILES.get(profile_key) or vibe_for_keywords(
+                _meta_text(meta, "vibe") or _meta_text(meta, "product_name")
+            )
+            theme = _meta_text(meta, "theme") or "both"
+            if not isinstance(rich, dict):
+                rich = rich_tokens(profile, theme)
+            return render_showcase(system_name, profile, rich, theme)
+
+        try:
+            html = await run_in_threadpool(build)
+        except NotFoundError as exc:
+            raise HTTPException(404, str(exc)) from None
+        return Response(
+            html,
+            media_type="text/html; charset=utf-8",
+            headers={"X-Content-Type-Options": "nosniff"},
+        )
+
+    def design_code_page(self, request: Request) -> Response:
+        """Get reusable elements: per-component code with copy buttons (Tier 0)."""
+        name = request.path_params["name"]
+        try:
+            validate_library_name(name)
+        except ValueError:
+            raise HTTPException(404, "no such design system") from None
+        target = validate_target(request.query_params.get("target", ""))
+        if not target or "target" not in request.query_params:
+            meta = _library_meta(name)
+            target = target_for_stack(_meta_text(meta, "stack"))
+        return self.page(
+            request,
+            "design_system_code.html",
+            lambda repo: _design_system_code_view(repo, name, target),
+        )
+
+    async def design_code_download(self, request: Request) -> Response:
+        """Download all generated component files as a zip (Tier 0: read-only)."""
+        name = request.path_params["name"]
+        target = validate_target(request.query_params.get("target", "html-css"))
+        try:
+            system_name = validate_library_name(name)
+        except ValueError as exc:
+            self.flash(request, "error", str(exc))
+            return self.back("/design-systems")
+
+        def build() -> bytes:
+            system = load_library_system(system_name)
+            if system is None:
+                raise JevError(f'no design system named "{system_name}" in the library')
+            tokens = system.tokens if isinstance(system.tokens, dict) else {}
+            return bundle_zip(target, system_name, tokens)
+
+        try:
+            data = await run_in_threadpool(build)
+        except JevError as exc:
+            self.flash(request, "error", str(exc))
+            return self.back(f"/design-systems/{system_name}")
+        return Response(
+            data,
+            media_type="application/zip",
+            headers={
+                "Content-Disposition": f'attachment; filename="{system_name}-{target}.zip"',
+                "X-Content-Type-Options": "nosniff",
+            },
+        )
+
     async def design_systems_action(self, request: Request) -> Response:
         """Dispatch the library's POST actions: use, clone, export, delete."""
         action: str = request.path_params["action"]
@@ -1468,6 +1576,7 @@ class Dashboard:
                 "entities": ents,
                 "user_only": settings.USER_ONLY,
                 "settings": self.settings,
+                "repo_trusted": trusts(repo.config, repo.root),
             }
 
         return self.page(request, "connections.html", build)
@@ -1569,6 +1678,26 @@ class Dashboard:
             return f"{name} removed from the secrets file."
 
         return await self.act(request, "/connections", remove)
+
+    async def connections_trust_repo(self, request: Request) -> Response:
+        """Trust the current repo for guarded config keys (POST, issue #158).
+
+        One-click trust: adds the repo to `[trust] repos` in the user config.
+        The `next` form field controls where to return (defaults to /connections).
+        """
+
+        def trust(repo: views.Repo, form: FormData) -> str:
+            err = settings.trust_repo(self.settings.root)
+            if err:
+                # Strip the marker for display; the button already handled it.
+                return err.replace(settings.TRUST_GATE_MARKER, "").strip()
+            return f"Trusted {self.settings.root}; repo config changes now apply."
+
+        back = str(request.query_params.get("next", "/connections"))
+        # Only allow relative paths to avoid open redirects.
+        if not back.startswith("/"):
+            back = "/connections"
+        return await self.act(request, back, trust)
 
     async def claude_oauth_token_save(self, request: Request) -> Response:
         """Save a pasted `claude setup-token` OAuth token to the secrets file (POST).
@@ -1924,7 +2053,12 @@ class Dashboard:
             )
 
         error, message = await run_in_threadpool(job)
-        self.flash(request, "error" if error else "ok", error or message)
+        # Trust gate blocked the save: offer one-click trust (issue #158).
+        if error and settings.TRUST_GATE_MARKER in error:
+            clean = error.replace(settings.TRUST_GATE_MARKER, "").strip()
+            self.flash(request, "trust", clean)
+        else:
+            self.flash(request, "error" if error else "ok", error or message)
         return self.back(to)
 
     async def settings_entity(self, request: Request) -> Response:
@@ -1981,7 +2115,12 @@ class Dashboard:
             )
 
         error = await run_in_threadpool(job)
-        self.flash(request, "error" if error else "ok", error or f"saved {section}.{name}")
+        # Trust gate blocked the save: offer one-click trust (issue #158).
+        if error and settings.TRUST_GATE_MARKER in error:
+            clean = error.replace(settings.TRUST_GATE_MARKER, "").strip()
+            self.flash(request, "trust", clean)
+        else:
+            self.flash(request, "error" if error else "ok", error or f"saved {section}.{name}")
         return self.back(to)
 
     # ---- actions: runs ---------------------------------------------------------------------
@@ -2252,7 +2391,12 @@ class Dashboard:
             RunInUseError,
             ValueError,
         ) as exc:
-            self.flash(request, "error", str(exc))
+            message = str(exc)
+            # The UI disables these buttons without a brief, but a crafted POST
+            # could still hit this — keep the message actionable, not raw.
+            if "no brief yet" in message:
+                message = "write a brief first (the Write brief button above), then plan or run."
+            self.flash(request, "error", message)
             return self.back(to)
         verb = "plan-only run" if plan_only else "run"
         self.flash(request, "ok", f"{verb} {run_id} started from the chat's brief")
@@ -2277,7 +2421,10 @@ class Dashboard:
             QueueError,
             ValueError,
         ) as exc:
-            self.flash(request, "error", str(exc))
+            message = str(exc)
+            if "no brief yet" in message:
+                message = "write a brief first (the Write brief button above), then queue it."
+            self.flash(request, "error", message)
             return self.back(to)
         self.flash(request, "ok", f"queued item {item_id} from the chat's brief")
         return self.back("/queue")
@@ -2666,6 +2813,10 @@ class Dashboard:
             "enable": _learning_enable,
             "disable": _learning_disable,
             "forget": _learning_forget,
+            "edit": _learning_edit,
+            "delete-lesson": _learning_delete_lesson,
+            "approve-skill": _learning_approve_skill,
+            "delete-skill": _learning_delete_skill,
         }
         handler = handlers.get(action)
         if handler is None:
@@ -3082,6 +3233,69 @@ def _learning_forget(repo: views.Repo, form: FormData) -> str:
     return f"retired {lesson.id} from {lesson.profile}"
 
 
+def _learning_edit(repo: views.Repo, form: FormData) -> str:
+    """Edit a lesson's text, roles, and tags (issue #161)."""
+    from jev_agent.core.learning import LearningError
+
+    lesson_ref = _text(form, "lesson") or ""
+    text = _text(form, "text") or ""
+    roles = [r.strip() for r in (_text(form, "roles") or "").split(",") if r.strip()]
+    tags = [t.strip() for t in (_text(form, "tags") or "").split(",") if t.strip()]
+    try:
+        db, lesson = repo.learning.find_lesson(lesson_ref)
+    except LearningError as exc:
+        return f"error: {exc}"
+    db.update_lesson(lesson.profile, lesson.number, text, roles, tags)
+    return f"updated {lesson.id}"
+
+
+def _learning_delete_lesson(repo: views.Repo, form: FormData) -> str:
+    """Permanently delete a lesson (issue #161)."""
+    from jev_agent.core.learning import LearningError
+
+    lesson_ref = _text(form, "lesson") or ""
+    try:
+        db, lesson = repo.learning.find_lesson(lesson_ref)
+    except LearningError as exc:
+        return f"error: {exc}"
+    db.delete_lesson(lesson.profile, lesson.number)
+    return f"deleted {lesson.id} from {lesson.profile}"
+
+
+def _learning_approve_skill(repo: views.Repo, form: FormData) -> str:
+    """Approve a proposed skill: add it to the skills library (issue #161)."""
+    from jev_agent.core.learning import LearningError
+
+    profile = _text(form, "profile") or ""
+    name = _text(form, "name") or ""
+    description = _text(form, "description") or ""
+    raw_ids = _text(form, "lesson_ids") or ""
+    lesson_ids = [lid.strip() for lid in raw_ids.split(",") if lid.strip()]
+    try:
+        db = repo.learning.db_for(profile)
+    except LearningError as exc:
+        return f"error: {exc}"
+    try:
+        skill = db.add_skill(profile, name, description, lesson_ids, source="learned")
+    except LearningError as exc:
+        return f"error: {exc}"
+    return f"created skill '{skill.name}' from {len(lesson_ids)} lesson(s)"
+
+
+def _learning_delete_skill(repo: views.Repo, form: FormData) -> str:
+    """Delete a skill (issue #161)."""
+    from jev_agent.core.learning import LearningError
+
+    profile = _text(form, "profile") or ""
+    skill_id = _text(form, "skill_id") or ""
+    try:
+        db = repo.learning.db_for(profile)
+        db.delete_skill(profile, int(skill_id))
+    except (LearningError, ValueError) as exc:
+        return f"error: {exc}"
+    return f"deleted skill {skill_id} from {profile}"
+
+
 # ---- design systems (the user-level library, ~/.jev/design-systems/) ------------------------
 
 
@@ -3163,6 +3377,36 @@ def _design_system_view(repo: views.Repo, name: str) -> dict[str, Any]:
         "token_sections": token_sections,
         "markdown_html": render_markdown(system.markdown),
         "active": _repo_design_source(repo.root) == f"library:{name}",
+    }
+
+
+def _design_system_code_view(repo: views.Repo, name: str, target: str) -> dict[str, Any]:
+    """The "Get reusable elements" page: generated component files with copy buttons."""
+    system = load_library_system(name)
+    if system is None:
+        raise NotFoundError(f'no design system named "{name}" in the library')
+    tokens = system.tokens if isinstance(system.tokens, dict) else {}
+    files = generate_files(target, name, tokens)
+    catalog = component_catalog(target)
+    entries = [
+        {
+            "filename": item["filename"],
+            "title": item["title"],
+            "description": item["description"],
+            "code": files.get(item["filename"], ""),
+            "lines": files.get(item["filename"], "").count("\n") + 1,
+        }
+        for item in catalog
+    ]
+    return {
+        "name": name,
+        "target": target,
+        "targets": [
+            {"key": key, "label": info["label"], "description": info["description"]}
+            for key, info in CODEGEN_TARGETS.items()
+        ],
+        "entries": entries,
+        "stack": _meta_text(_library_meta(name), "stack"),
     }
 
 
@@ -3391,6 +3635,9 @@ def create_app(
         Route("/profiles/use", dash.profiles_use, methods=["POST"]),
         Route("/design-systems", dash.design_systems_page),
         Route("/design-systems/{name}", dash.design_system_page),
+        Route("/design-systems/{name}/showcase", dash.design_showcase_page),
+        Route("/design-systems/{name}/code", dash.design_code_page),
+        Route("/design-systems/{name}/code/download", dash.design_code_download),
         Route("/design-systems/{action}", dash.design_systems_action, methods=["POST"]),
         Route("/design-studio", dash.design_studio_page),
         Route("/design-studio/new", dash.design_studio_start),
@@ -3413,6 +3660,7 @@ def create_app(
         ),
         Route("/connections/keys/add", dash.connections_key_add, methods=["POST"]),
         Route("/connections/keys/remove", dash.connections_key_remove, methods=["POST"]),
+        Route("/connections/trust", dash.connections_trust_repo, methods=["POST"]),
         Route(
             "/connections/providers/claude/oauth-token",
             dash.claude_oauth_token_save,
