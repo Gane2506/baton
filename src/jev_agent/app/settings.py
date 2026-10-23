@@ -523,7 +523,6 @@ def trust_repo(root: Path) -> str | None:
     Returns an error string, or None on success (already trusted counts as success).
     """
     resolved = str(root.resolve())
-    user_path = default_user_config_path()
 
     def mutate(layer: dict[str, Any]) -> None:
         trust = layer.get("trust")
