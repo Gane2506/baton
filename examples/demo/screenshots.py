@@ -248,6 +248,8 @@ def shoot_submenu(browser: Browser, base: str, out_dir: Path) -> None:
     with restore.expect_response("**/ui-style"):
         restore.select_option("#ui-style", "bento")
     restore.context.close()
+
+
 def shoot_no_backend_chat(base: str, out_dir: Path, chrome: Path | None) -> None:
     """The /chats New chat form with no backend ready: the guiding empty state.
 
