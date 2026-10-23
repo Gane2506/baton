@@ -651,6 +651,20 @@ td .mono, td.mono { font-size: var(--fs-12); }
 .flash.warn { border-color: color-mix(in srgb, var(--warn) 50%, transparent); background: color-mix(in srgb, var(--warn) 12%, transparent); }
 .flash.error { border-color: color-mix(in srgb, var(--bad) 50%, transparent); background: color-mix(in srgb, var(--bad) 8%, transparent); color: var(--bad); }
 
+/* ---- notices (calm guidance; never an error) ----------------------------------- */
+
+.notice {
+  display: flex; align-items: flex-start; gap: var(--s2);
+  padding: 12px 14px; border-radius: 10px; margin-bottom: var(--s4);
+  border: 1px solid color-mix(in srgb, var(--info) 40%, transparent);
+  background: color-mix(in srgb, var(--info) 7%, transparent);
+  font-size: var(--fs-13);
+}
+.notice .icon { margin-top: 2px; color: var(--info); flex-shrink: 0; }
+.notice p { margin: 0; }
+.notice .notice-title { font-weight: 600; margin-bottom: var(--s1); }
+.notice a { font-weight: 600; }
+
 /* ---- empty states -------------------------------------------------------- */
 
 .empty {

@@ -23,6 +23,7 @@ import pytest
 from starlette.testclient import TestClient
 from typer.testing import CliRunner
 
+from jev_agent.app import chat
 from jev_agent.cli import dashboard_cmd
 from jev_agent.cli.app import app as cli_app
 from jev_agent.cli.wiring import FAKE_WORKERS_ENV
@@ -709,6 +710,61 @@ def test_chats_pages(client: TestClient, planned: tuple[Path, str]) -> None:
     assert client.get("/chats/c-20990101-000000-0000").status_code == 404
     assert client.get("/chats/..%2F..%2Fstate.db").status_code == 404
     assert client.get("/chats/nonsense").status_code == 404
+
+
+def test_chats_new_form_guiding_notice_without_backend(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No backend ready: the New chat form guides, never leads with a red error."""
+    monkeypatch.setattr(
+        chat,
+        "backend_readiness",
+        lambda config: {
+            "api": (False, "OPENROUTER_API_KEY is unset"),
+            "claude_code": (False, "claude is not on PATH"),
+        },
+    )
+    page = client.get("/chats")
+    assert page.status_code == 200
+    assert "No chat backend is set up yet" in page.text
+    assert 'class="notice"' in page.text
+    assert 'href="/connections"' in page.text
+    assert "Claude Code" in page.text
+    assert "Codex" in page.text
+    # The red error wall is gone…
+    assert "flash error" not in page.text
+    assert "No chat backend is ready" not in page.text
+    # …and the form keeps every field with the same behavior.
+    assert 'action="/chats/new"' in page.text
+    for field in (
+        'name="worker"',
+        'name="model"',
+        'name="learning"',
+        'name="design_system"',
+        'name="profile"',
+        'name="budget_usd"',
+    ):
+        assert field in page.text
+    assert "Create chat" in page.text
+
+
+def test_chats_new_form_no_notice_with_backend_ready(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A ready backend: no guidance block, and the worker option is selectable."""
+    monkeypatch.setattr(
+        chat,
+        "backend_readiness",
+        lambda config: {
+            "api": (True, "OPENROUTER_API_KEY is set"),
+            "claude_code": (False, "claude is not on PATH"),
+        },
+    )
+    page = client.get("/chats")
+    assert page.status_code == 200
+    assert "No chat backend is set up yet" not in page.text
+    assert 'class="notice"' not in page.text
+    assert 'value="api" selected' in page.text
 
 
 def test_spend_page(client: TestClient, planned: tuple[Path, str]) -> None:
