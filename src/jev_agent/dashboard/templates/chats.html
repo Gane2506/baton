@@ -15,6 +15,28 @@
 {% set cc_ok, cc_note = backends["claude_code"] %}
 <section class="panel">
   <h2>New chat</h2>
+  {% if api_model_needed %}
+  <div class="notice" role="note">
+    {{ icon("i-info", "sm") }}
+    <div>
+      <p class="notice-title">Pick your API model</p>
+      <p>The API backend is ready but has no default model yet. Choose one — it is
+      saved to your user config and applies immediately.</p>
+      <form method="post" action="/chats/api-model" class="field-row">
+        {{ csrf_input() }}
+        <input type="hidden" name="next" value="/chats">
+        <div class="field-control">
+          <input type="text" name="model" list="api-models" required autocomplete="off"
+                 placeholder="e.g. anthropic/claude-sonnet-4" aria-label="API model">
+          <datalist id="api-models">
+            {% for m in api_model_options %}<option value="{{ m }}">{% endfor %}
+          </datalist>
+        </div>
+        <div class="field-actions"><button type="submit" class="btn btn-primary btn-sm">Save model</button></div>
+      </form>
+    </div>
+  </div>
+  {% endif %}
   {% if not (api_ok or cc_ok) %}
   <div class="notice" role="note">
     {{ icon("i-info", "sm") }}
