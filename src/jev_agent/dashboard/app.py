@@ -2798,6 +2798,10 @@ class Dashboard:
             "enable": _learning_enable,
             "disable": _learning_disable,
             "forget": _learning_forget,
+            "edit": _learning_edit,
+            "delete-lesson": _learning_delete_lesson,
+            "approve-skill": _learning_approve_skill,
+            "delete-skill": _learning_delete_skill,
         }
         handler = handlers.get(action)
         if handler is None:
@@ -3212,6 +3216,69 @@ def _learning_disable(repo: views.Repo, form: FormData) -> str:
 def _learning_forget(repo: views.Repo, form: FormData) -> str:
     lesson = learning_forget(repo.learning, _text(form, "lesson") or "")
     return f"retired {lesson.id} from {lesson.profile}"
+
+
+def _learning_edit(repo: views.Repo, form: FormData) -> str:
+    """Edit a lesson's text, roles, and tags (issue #161)."""
+    from jev_agent.core.learning import LearningError
+
+    lesson_ref = _text(form, "lesson") or ""
+    text = _text(form, "text") or ""
+    roles = [r.strip() for r in (_text(form, "roles") or "").split(",") if r.strip()]
+    tags = [t.strip() for t in (_text(form, "tags") or "").split(",") if t.strip()]
+    try:
+        db, lesson = repo.learning.find_lesson(lesson_ref)
+    except LearningError as exc:
+        return f"error: {exc}"
+    db.update_lesson(lesson.profile, lesson.number, text, roles, tags)
+    return f"updated {lesson.id}"
+
+
+def _learning_delete_lesson(repo: views.Repo, form: FormData) -> str:
+    """Permanently delete a lesson (issue #161)."""
+    from jev_agent.core.learning import LearningError
+
+    lesson_ref = _text(form, "lesson") or ""
+    try:
+        db, lesson = repo.learning.find_lesson(lesson_ref)
+    except LearningError as exc:
+        return f"error: {exc}"
+    db.delete_lesson(lesson.profile, lesson.number)
+    return f"deleted {lesson.id} from {lesson.profile}"
+
+
+def _learning_approve_skill(repo: views.Repo, form: FormData) -> str:
+    """Approve a proposed skill: add it to the skills library (issue #161)."""
+    from jev_agent.core.learning import LearningError
+
+    profile = _text(form, "profile") or ""
+    name = _text(form, "name") or ""
+    description = _text(form, "description") or ""
+    raw_ids = _text(form, "lesson_ids") or ""
+    lesson_ids = [lid.strip() for lid in raw_ids.split(",") if lid.strip()]
+    try:
+        db = repo.learning.db_for(profile)
+    except LearningError as exc:
+        return f"error: {exc}"
+    try:
+        skill = db.add_skill(profile, name, description, lesson_ids, source="learned")
+    except LearningError as exc:
+        return f"error: {exc}"
+    return f"created skill '{skill.name}' from {len(lesson_ids)} lesson(s)"
+
+
+def _learning_delete_skill(repo: views.Repo, form: FormData) -> str:
+    """Delete a skill (issue #161)."""
+    from jev_agent.core.learning import LearningError
+
+    profile = _text(form, "profile") or ""
+    skill_id = _text(form, "skill_id") or ""
+    try:
+        db = repo.learning.db_for(profile)
+        db.delete_skill(profile, int(skill_id))
+    except (LearningError, ValueError) as exc:
+        return f"error: {exc}"
+    return f"deleted skill {skill_id} from {profile}"
 
 
 # ---- design systems (the user-level library, ~/.jev/design-systems/) ------------------------
