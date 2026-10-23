@@ -110,7 +110,10 @@ def test_claude_card_offers_replace_when_connected(
 ) -> None:
     monkeypatch.setenv(pa.CLAUDE_OAUTH_TOKEN_ENV, FAKE_TOKEN)
     html = client.get("/connections").text
-    assert "Replace the saved token" in html
+    # Established login: just a Set badge, no buttons or forms (disappear-when-done).
+    assert "Signed in with your Claude subscription" in html
+    assert "Sign in with Claude" not in html
+    assert "Replace the saved token" not in html
     assert FAKE_TOKEN not in html
 
 
@@ -177,6 +180,93 @@ def test_codex_device_start_without_cli_flashes_error(
     monkeypatch.setattr(shutil, "which", lambda cmd: None)
     response = client.post(
         "/connections/providers/codex/device/start",
+        data={"csrf_token": _csrf(client)},
+        follow_redirects=True,
+    )
+    assert response.status_code == 200
+    assert "not on PATH" in response.text
+
+
+# --- Claude setup-token flow ------------------------------------------------------
+
+
+@pytest.fixture
+def claude_waiting_flow(monkeypatch: pytest.MonkeyPatch) -> pa.ClaudeSetupTokenStatus:
+    """The dashboard's Claude flow, faked at the class level: already waiting."""
+
+    def fake_start(
+        self: pa.ClaudeSetupTokenFlow, command: str = "claude", timeout_s: float = 600.0
+    ) -> pa.ClaudeSetupTokenStatus:
+        return fake_status(self)
+
+    def fake_status(self: pa.ClaudeSetupTokenFlow) -> pa.ClaudeSetupTokenStatus:
+        return pa.ClaudeSetupTokenStatus(
+            state="waiting",
+            url="https://claude.ai/oauth/authorize?code=true",
+            code_prompt=True,
+            detail="open the link in your browser",
+        )
+
+    monkeypatch.setattr(pa.ClaudeSetupTokenFlow, "start", fake_start)
+    monkeypatch.setattr(pa.ClaudeSetupTokenFlow, "status", fake_status)
+    return fake_status(None)  # type: ignore[arg-type]
+
+
+def test_claude_setup_token_start_shows_url(
+    client: TestClient, claude_waiting_flow: pa.ClaudeSetupTokenStatus
+) -> None:
+    response = _post(client, "/connections/providers/claude/setup-token/start", {})
+    assert response.status_code == 303
+    page = client.get("/connections").text
+    assert "https://claude.ai/oauth/authorize?code=true" in page
+    assert "waiting for browser approval" in page
+    assert 'action="/connections/providers/claude/setup-token/cancel"' in page
+    assert 'action="/connections/providers/claude/setup-token/code"' in page
+
+
+def test_claude_setup_token_cancel(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    cancelled: list[bool] = []
+
+    def fake_cancel(self: pa.ClaudeSetupTokenFlow) -> bool:
+        cancelled.append(True)
+        return True
+
+    monkeypatch.setattr(pa.ClaudeSetupTokenFlow, "cancel", fake_cancel)
+    monkeypatch.setattr(
+        pa.ClaudeSetupTokenFlow,
+        "status",
+        lambda self: pa.ClaudeSetupTokenStatus(state="idle"),
+    )
+    response = _post(client, "/connections/providers/claude/setup-token/cancel", {})
+    assert response.status_code == 303
+    assert cancelled == [True]
+
+
+def test_claude_setup_token_code_forwards(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    submitted: list[str] = []
+
+    def fake_submit(self: pa.ClaudeSetupTokenFlow, code: str) -> bool:
+        submitted.append(code)
+        return True
+
+    monkeypatch.setattr(pa.ClaudeSetupTokenFlow, "submit_code", fake_submit)
+    response = _post(
+        client, "/connections/providers/claude/setup-token/code", {"code": "browser-123"}
+    )
+    assert response.status_code == 303
+    assert submitted == ["browser-123"]
+
+
+def test_claude_setup_token_start_without_cli_flashes_error(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import shutil
+
+    monkeypatch.setattr(shutil, "which", lambda cmd: None)
+    response = client.post(
+        "/connections/providers/claude/setup-token/start",
         data={"csrf_token": _csrf(client)},
         follow_redirects=True,
     )
