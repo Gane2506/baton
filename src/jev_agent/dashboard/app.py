@@ -141,7 +141,7 @@ from jev_agent.core.workspace import (
     run_git,
     start_ref,
 )
-from jev_agent.dashboard import ui_styles, views
+from jev_agent.dashboard import studio_decisions, ui_styles, views
 from jev_agent.dashboard.browser_install import BrowserInstallBusy, BrowserInstallRunner
 from jev_agent.dashboard.design_studio import (
     STUDIO_STEPS,
@@ -1139,8 +1139,23 @@ class Dashboard:
                 **wizard_context(state, step, entered=entered, error=str(exc)),
             )
         self.studio_wizard.put(request.state.session, step, answers)
+        if step == "app_type":
+            await self._refresh_stack_recommendation(request.state.session, state, answers)
         next_step = STUDIO_STEPS[STUDIO_STEPS.index(step) + 1]
         return self.back(f"/design-studio/new/{next_step}")
+
+    async def _refresh_stack_recommendation(
+        self, session: str, state: dict[str, dict[str, str]], answers: dict[str, str]
+    ) -> None:
+        """Ask Jev+Laya for this session's stack pick, once, and cache it.
+
+        The Stack step only reads the cache, so re-rendering the page never re-asks.
+        The decision service falls back to the static default on any AI failure, so
+        this never raises and the wizard never hard-fails for lack of AI.
+        """
+        purpose = (state.get("purpose") or {}).get("product", "")
+        rec = await studio_decisions.recommend_stack(purpose, answers["app_type"])
+        self.studio_wizard.put(session, studio_decisions.STACK_REC_KEY, rec.to_state())
 
     async def design_studio_generate(self, request: Request) -> Response:
         """The wizard's final step: run the kit, save to the library, show the system."""

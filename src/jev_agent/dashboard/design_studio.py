@@ -33,6 +33,11 @@ from jev_agent.core.design_library import (
     validate_library_name,
 )
 from jev_agent.core.logo import generate_mark, mark_template, mark_to_png, mark_to_svg
+from jev_agent.dashboard.studio_decisions import (
+    STACK_REC_KEY,
+    StackRecommendation,
+    default_recommendation,
+)
 
 STUDIO_STEPS: tuple[str, ...] = ("purpose", "app_type", "stack", "brand", "generate")
 """The wizard's steps in order (mirrors the stepper labels on the page)."""
@@ -58,17 +63,19 @@ def _str(values: Mapping[str, object], key: str) -> str:
     return value.strip() if isinstance(value, str) else ""
 
 
-def stack_options(app_type: str) -> tuple[list[str], str]:
+def stack_options(app_type: str, recommendation: str | None = None) -> tuple[list[str], str]:
     """The stack choices for `app_type`: the ordered list and the recommended one.
 
-    Today the recommendation is the design kit's static default (the first
-    entry of `STACKS[app_type]`, like the CLI wizard's). DS-03 upgrades this
-    step to a real Jev+Laya decision: that workstream swaps the recommendation
-    source behind this function while keeping the (ordered list, recommended)
-    shape, so the wizard page and its tests do not change.
+    The recommendation comes first. DS-03: the wizard passes the cached Jev+Laya
+    pick as `recommendation`; without one (or when it is not a listed stack) the
+    recommendation is the design kit's static default — the first entry of
+    `STACKS[app_type]`, like the CLI wizard's.
     """
     stacks = list(STACKS[app_type])
-    return stacks, stacks[0]
+    first = stacks[0]
+    if recommendation is not None and recommendation in stacks:
+        first = recommendation
+    return [first, *(s for s in stacks if s != first)], first
 
 
 class StudioWizard:
@@ -312,9 +319,19 @@ def wizard_context(
     }
     if step == "stack":
         app_type = session_state["app_type"]["app_type"]
-        options, recommended = stack_options(app_type)
+        # The Jev+Laya pick, decided once when the App type step was submitted and
+        # cached in the wizard state; without a cache the static default applies.
+        cached = StackRecommendation.from_state(session_state.get(STACK_REC_KEY))
+        rec = cached or default_recommendation(app_type, "not_asked")
+        options, recommended = stack_options(app_type, cached.stack if cached else None)
         context["stack_options"] = options
         context["stack_recommended"] = recommended
         context["stack_app_type"] = app_type
         context["stack_app_type_label"] = APP_TYPES[app_type]
+        context["stack_rec"] = {
+            "source": rec.source,
+            "rationale": rec.rationale,
+            "laya_agreed": rec.laya_agreed,
+            "laya_margin": (f"{rec.laya_margin:.1f}" if rec.laya_margin is not None else ""),
+        }
     return context

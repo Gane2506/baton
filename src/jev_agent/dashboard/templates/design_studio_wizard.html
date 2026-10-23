@@ -74,6 +74,21 @@
   <h2>Which stack will it ship on?</h2>
   <p class="lede">For {{ stack_app_type_label }} — the first option is the studio's
   recommendation.</p>
+  {% if stack_rec %}
+  <div class="studio-rec" role="note" aria-label="Stack recommendation">
+    <div class="studio-rec-head">
+      {% if stack_rec.source == "jev" %}
+      {{ badge("Jev recommended", "ok") }}
+      {% if stack_rec.laya_agreed %}
+      <span class="studio-rec-laya">Laya agreed{% if stack_rec.laya_margin %} · +{{ stack_rec.laya_margin }}{% endif %}</span>
+      {% endif %}
+      {% else %}
+      {{ badge("Default recommendation", "idle") }}
+      {% endif %}
+    </div>
+    <p class="studio-rec-why">{{ stack_rec.rationale }}</p>
+  </div>
+  {% endif %}
   <form method="post" action="/design-studio/new/stack">
     {{ csrf_input() }}
     <div class="radio-cards" role="radiogroup" aria-label="Stack">
