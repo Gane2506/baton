@@ -16,7 +16,18 @@
 <section class="panel">
   <h2>New chat</h2>
   {% if not (api_ok or cc_ok) %}
-  <p class="flash error">{{ icon("i-alert", "sm") }}<span>No chat backend is ready: {{ api_note }}; {{ cc_note }}. Set a key or install a CLI.</span></p>
+  <div class="notice" role="note">
+    {{ icon("i-info", "sm") }}
+    <div>
+      <p class="notice-title">No chat backend is set up yet</p>
+      <p>Starting a chat needs one connected backend. On the
+      <a href="/connections">Connections</a> page you can sign in to
+      <strong>Claude Code</strong> with your Claude subscription (native OAuth &mdash; paste
+      the token from <code>claude setup-token</code>), sign in to <strong>Codex</strong> with
+      your ChatGPT subscription (device-code flow), or add an API key under Keys. Then come
+      back here and create your chat.</p>
+    </div>
+  </div>
   {% endif %}
   <form method="post" action="/chats/new">
     {{ csrf_input() }}
