@@ -180,6 +180,24 @@ LESSON_GRAPH_V1 = """
         FROM lessons WHERE source_run IS NOT NULL;
 """
 
+# Skills distilled from lessons (issue #161). A skill is a reusable, named capability
+# derived from one or more lessons. `source` is "learned" for auto-created skills,
+# "manual" for user-created ones. `lesson_ids` is a JSON list of the lesson display
+# ids (e.g. ["L3", "L7"]) the skill was distilled from.
+LEARNED_SKILLS_V1 = """
+    CREATE TABLE learned_skills (
+        id          INTEGER PRIMARY KEY,
+        profile     TEXT NOT NULL REFERENCES learning_profiles (name) ON DELETE CASCADE,
+        name        TEXT NOT NULL,
+        description TEXT NOT NULL,
+        source      TEXT NOT NULL DEFAULT 'learned'
+                    CHECK (source IN ('learned', 'manual')),
+        lesson_ids  TEXT NOT NULL DEFAULT '[]',
+        created_at  TEXT NOT NULL,
+        UNIQUE (profile, name)
+    );
+"""
+
 MIGRATIONS: list[str] = [
     # 1: initial schema
     """
@@ -527,6 +545,8 @@ MIGRATIONS: list[str] = [
     """
     ALTER TABLE runs ADD COLUMN design_system TEXT;
     """,
+    # 20: skills distilled from lessons (issue #161).
+    LEARNED_SKILLS_V1,
 ]
 
 SCHEMA_VERSION = len(MIGRATIONS)
@@ -540,6 +560,8 @@ SHARED_MIGRATIONS: list[str] = [
     PROFILE_LAYA_WEIGHTS,
     # 4: the queryable lesson graph: module nodes, lesson edges, FTS over lessons.
     LESSON_GRAPH_V1,
+    # 5: skills learned from lessons (issue #161).
+    LEARNED_SKILLS_V1,
 ]
 
 

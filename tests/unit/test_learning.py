@@ -521,3 +521,98 @@ def test_shared_migration_rebuilds_lessons_without_reusing_ids(tmp_path: Path) -
         assert db.list_lessons("a", include_retired=True) == []  # still cascades
     finally:
         db.conn.close()
+
+
+def test_update_lesson_edits_text_roles_tags(learning: Learning) -> None:
+    learning.create("default")
+    db = learning.db_for("default")
+    lesson = db.add_lesson("default", "original text", ["coder"], ["python"])
+    db.update_lesson("default", lesson.number, "updated text", ["reviewer"], ["rust", "cli"])
+    updated = db.get_lesson(lesson.number)
+    assert updated is not None
+    assert updated.text == "updated text"
+    assert updated.roles == ("reviewer",)
+    assert updated.tags == ("rust", "cli")
+
+
+def test_update_lesson_rejects_empty_text(learning: Learning) -> None:
+    learning.create("default")
+    db = learning.db_for("default")
+    lesson = db.add_lesson("default", "original", ["coder"], [])
+    with pytest.raises(LearningError):
+        db.update_lesson("default", lesson.number, "  ", ["coder"], [])
+
+
+def test_update_lesson_rejects_unknown(learning: Learning) -> None:
+    learning.create("default")
+    db = learning.db_for("default")
+    with pytest.raises(LearningError):
+        db.update_lesson("default", 999, "text", [], [])
+
+
+def test_delete_lesson_removes_row(learning: Learning) -> None:
+    learning.create("default")
+    db = learning.db_for("default")
+    lesson = db.add_lesson("default", "to delete", ["coder"], [])
+    db.delete_lesson("default", lesson.number)
+    assert db.get_lesson(lesson.number) is None
+
+
+def test_delete_lesson_rejects_unknown(learning: Learning) -> None:
+    learning.create("default")
+    db = learning.db_for("default")
+    with pytest.raises(LearningError):
+        db.delete_lesson("default", 999)
+
+
+def test_add_and_list_skills(learning: Learning) -> None:
+    learning.create("default")
+    db = learning.db_for("default")
+    db.add_lesson("default", "prefer dark mode", ["coder"], ["ui"])
+    db.add_lesson("default", "dark backgrounds for dashboards", ["coder"], ["ui"])
+    skill = db.add_skill("default", "Dark Mode UI", "Prefer dark mode for UIs", ["L1", "L2"])
+    assert skill.name == "Dark Mode UI"
+    assert skill.source == "learned"
+    assert skill.lesson_ids == ("L1", "L2")
+    skills = db.list_skills("default")
+    assert len(skills) == 1
+    assert skills[0].name == "Dark Mode UI"
+
+
+def test_add_skill_rejects_duplicate_name(learning: Learning) -> None:
+    learning.create("default")
+    db = learning.db_for("default")
+    db.add_skill("default", "My Skill", "desc", [])
+    with pytest.raises(LearningError):
+        db.add_skill("default", "My Skill", "other desc", [])
+
+
+def test_delete_skill(learning: Learning) -> None:
+    learning.create("default")
+    db = learning.db_for("default")
+    skill = db.add_skill("default", "Temp", "desc", [])
+    db.delete_skill("default", skill.id)
+    assert db.list_skills("default") == []
+
+
+def test_propose_skills_groups_by_tag(learning: Learning) -> None:
+    learning.create("default")
+    db = learning.db_for("default")
+    db.add_lesson("default", "use dark backgrounds", ["coder"], ["ui"])
+    db.add_lesson("default", "dark mode for dashboards", ["coder"], ["ui"])
+    db.add_lesson("default", "always run tests", ["coder"], ["testing"])
+    db.add_lesson("default", "test before merge", ["coder"], ["testing"])
+    db.add_lesson("default", "unrelated lesson", ["coder"], ["other"])
+    proposals = db.propose_skills("default")
+    # "ui" and "testing" both have 2 lessons; "other" has 1 (no proposal)
+    assert len(proposals) == 2
+    tags = {p["tag"] for p in proposals}
+    assert tags == {"ui", "testing"}
+    for p in proposals:
+        assert len(p["lesson_ids"]) == 2
+
+
+def test_propose_skills_empty_when_no_lessons(learning: Learning) -> None:
+    learning.create("default")
+    db = learning.db_for("default")
+    assert db.propose_skills("default") == []
