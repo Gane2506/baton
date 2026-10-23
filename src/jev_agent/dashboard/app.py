@@ -1101,9 +1101,19 @@ class Dashboard:
                     )
                 except ProfileError as exc:
                     raise NotFoundError(str(exc)) from exc
+            repo_raw, user_raw, _ = settings.read_layers(repo.root)
+            profile_add = next(
+                (
+                    e
+                    for e in settings.entity_sections(repo.config, repo_raw, user_raw)
+                    if e.path == "profiles"
+                ),
+                None,
+            )
             return {
                 "profiles": app_profiles.list_profiles(repo.config, repo.state_dir, sources),
                 "detail": detail,
+                "profile_add": profile_add,
             }
 
         return self.page(request, "profiles.html", build)
@@ -2059,6 +2069,11 @@ class Dashboard:
         target = _text(form, "target") or "repo"
         name = _text(form, "name") or ""
         to = "/" + settings.page_of(section) + "#" + settings.anchor_of(section)
+        return_to = _text(form, "return_to") or ""
+        if return_to.startswith("/") and not return_to.startswith("//") and "\\" not in return_to:
+            # Same-origin path the posting page asked to land on (e.g. /profiles);
+            # never an absolute or protocol-relative URL.
+            to = return_to
         if not section or not name:
             self.flash(request, "error", "a table and a name are required")
             return self.back("/settings")

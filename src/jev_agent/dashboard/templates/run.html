@@ -94,7 +94,7 @@
 {% if v.review_html %}
 <section class="card markdown">{{ v.review_html }}</section>
 {% else %}
-<div class="empty"><div class="title">No quality gate has run for this run</div><p>Level: {{ run.quality_level }}. Set <code>[quality] level</code> or pass <code>--quality</code> to gate work with checks and an AI review.</p></div>
+<div class="empty"><div class="title">No quality gate has run for this run</div><p>Level: {{ run.quality_level }}. Pick a quality level on the <a href="/">Board</a> or <a href="/queue">Queue</a> page when starting a run — or set a default in <a href="/settings#s-quality">Settings</a> — to gate work with checks and an AI review.</p></div>
 {% endif %}
 
 <h2 class="section">Files</h2>

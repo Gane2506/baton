@@ -942,7 +942,10 @@ def test_spend_page_empty_state_teaches(empty_client: TestClient) -> None:
     assert "No spend in the last 30 days" in text  # under the chart
     assert "<svg" in text  # the 30-day axis still renders
     assert "No runs yet" in text
-    assert "Start one with" in text and "jev run" in text
+    # Browser-first (issue #171): the empty state points at the dashboard's own
+    # Board/Queue pages, never at CLI commands.
+    assert "Start one from the" in text and 'href="/queue"' in text
+    assert "jev run" not in text
 
 
 def test_settings_never_renders_secret_values(
@@ -1170,8 +1173,12 @@ def _shipped(repo: Path, run_id: str, number: int, **sync: object) -> None:
 def test_kpis_page_empty_state(client: TestClient) -> None:
     text = client.get("/kpis").text
     assert 'href="/kpis" class="active"' in text
-    assert "No shipped pull requests yet" in text and "jev ship RUN_ID" in text
-    assert "enabled = true" in text  # shipping is off by default
+    # Browser-first (issue #171): the empty state points at the dashboard's own
+    # Ship as PR / Sync from GitHub buttons, never at CLI commands.
+    assert "No shipped pull requests yet" in text and "Ship as PR" in text
+    assert "Sync from GitHub" in text
+    assert "jev ship RUN_ID" not in text and "jev ship sync" not in text
+    assert "/settings#s-ship" in text  # shipping is off by default
 
 
 def test_kpis_page_lists_prs_cards_and_trends(

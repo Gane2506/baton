@@ -8,8 +8,8 @@
     <p>The scheduler works through the <strong>{{ queued }} queued idea{{ "s" if queued != 1 }}</strong>,
     running agent workers for each one — <strong>that spends real money</strong>.
     Spent today (UTC, all runs): <strong>{{ spent_today | usd }}</strong>.</p>
-    <p>This starts the dashboard's own scheduler: it dies when the dashboard stops (a terminal's
-    <code>jev scheduler start</code> keeps going). You can stop it any time from the Queue page;
+    <p>This starts the dashboard's own scheduler: it dies when the dashboard stops (a scheduler
+    started outside the dashboard keeps going). You can stop it any time from the Queue page;
     stopping finishes the current item first.</p>
     <div class="actions">
       <form class="inline" method="post" action="/queue/scheduler/start">

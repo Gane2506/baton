@@ -108,12 +108,15 @@ def test_nav_link_renders_and_is_active(client: TestClient, home: Path, fixture_
 # ---- list page -----------------------------------------------------------------------------
 
 
-def test_empty_state_points_at_cli(client: TestClient, home: Path) -> None:
+def test_empty_state_points_at_studio(client: TestClient, home: Path) -> None:
     page = client.get("/design-systems")
     assert page.status_code == 200
     assert "No design systems in the library" in page.text
-    assert "jev design reverse" in page.text
-    assert "jev design new" in page.text
+    # Browser-first (issue #171): the empty state points at the Design studio page,
+    # never at CLI commands.
+    assert 'href="/design-studio"' in page.text
+    assert "jev design reverse" not in page.text
+    assert "jev design new" not in page.text
 
 
 def test_list_shows_systems_with_metadata(client: TestClient, home: Path) -> None:

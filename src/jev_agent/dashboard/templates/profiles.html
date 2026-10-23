@@ -1,12 +1,12 @@
 {% extends "base.html" %}
-{% from "macros.html" import badge, csrf_input with context %}
+{% from "macros.html" import badge, csrf_input, field_label, icon with context %}
 {% block title %}Profiles{% endblock %}
 {% block content %}
 <div class="page-head">
   <div class="titles">
     <h1>Profiles</h1>
     <p class="lede">Workspace profiles: which servers, browser access, learning and quality level
-    each run gets (<code>jev profile list</code>, <code>show</code>, <code>use</code>).</p>
+    each run gets.</p>
   </div>
   {% if profiles | selectattr("is_default") | list | length %}
   <div class="actions">
@@ -44,7 +44,53 @@
   </tbody>
 </table></div>
 {% else %}
-<div class="empty"><div class="title">No workspace profiles</div><p>Define them in <code>jev.toml</code> under <code>[profiles.NAME]</code>.</p></div>
+<div class="empty"><div class="title">No workspace profiles</div><p>Create your first one below.</p></div>
+{% endif %}
+
+{% if profile_add %}
+<section class="panel" aria-label="New profile">
+  <details class="disclosure"{% if not profiles %} open{% endif %}>
+    <summary>{{ icon("i-plus", "sm") }} New profile</summary>
+    <form method="post" action="/settings/entity">
+      {{ csrf_input() }}
+      <input type="hidden" name="section" value="profiles">
+      <input type="hidden" name="action" value="add">
+      <input type="hidden" name="keys" value="{{ profile_add.add_fields | map(attribute='key') | join(',') }}">
+      <input type="hidden" name="kinds" value="{{ profile_add.add_fields | map(attribute='kind') | join(',') }}">
+      <input type="hidden" name="return_to" value="/profiles">
+      <div class="form-grid">
+        <div>
+          {{ field_label("name", "new-profile-name") }}
+          <input type="text" id="new-profile-name" name="name" required pattern="[A-Za-z0-9][A-Za-z0-9_-]*">
+        </div>
+        <div>
+          {{ field_label("save_to", "new-profile-target") }}
+          <select id="new-profile-target" name="target">
+            <option value="repo">repo jev.toml</option>
+            <option value="user">user config</option>
+          </select>
+        </div>
+        {% for f in profile_add.add_fields %}
+        <div>
+          {{ field_label(f.key, "np-" ~ f.key) }}
+          {% if f.kind == "list" %}
+          <textarea id="np-{{ f.key }}" name="f_{{ f.key }}" rows="2" placeholder="one per line"></textarea>
+          {% elif f.kind == "enum" or f.kind == "bool" %}
+          <select id="np-{{ f.key }}" name="f_{{ f.key }}">
+            <option value="">Use default</option>
+            {% for c in f.choices %}<option value="{{ c }}">{{ c }}</option>{% endfor %}
+            {% if f.kind == "bool" %}<option value="true">On</option><option value="false">Off</option>{% endif %}
+          </select>
+          {% else %}
+          <input id="np-{{ f.key }}" type="text" name="f_{{ f.key }}" placeholder="{{ f.text }}">
+          {% endif %}
+        </div>
+        {% endfor %}
+      </div>
+      <button class="btn btn-primary" type="submit">Add profile</button>
+    </form>
+  </details>
+</section>
 {% endif %}
 
 {% if detail %}

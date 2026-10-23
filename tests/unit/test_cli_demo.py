@@ -177,7 +177,9 @@ def _render_base(demo: bool) -> str:
 
 def test_dashboard_banner_marks_demo_repos() -> None:
     assert "Demo data" in _render_base(True)
-    assert "jev demo reset" in _render_base(True)
+    # Browser-first (issue #171): the banner is informational only, no CLI instruction.
+    assert "jev demo reset" not in _render_base(True)
+    assert "for trying things out" in _render_base(True)
     assert "Demo data" not in _render_base(False)
 
 
