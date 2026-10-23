@@ -307,6 +307,46 @@
 
 <section class="panel" aria-label="Key health">
   <h2>Keys <span class="muted">·</span> names only, never values</h2>
+  {# Prominent provider cards (issue #153): the user should see immediately where
+     to add API keys — no hunting in collapsed disclosures. Each card shows the
+     provider, its set status, and a direct inline Add when unset
+     (disappear-when-set, like the decision-route keys). #}
+  <div class="provider-cards">
+    {% set _providers = [
+      ("OpenRouter", "OPENROUTER_API_KEY", "Chat + Jev decisions via OpenRouter"),
+      ("Anthropic", "ANTHROPIC_API_KEY", "Claude Code workers fallback (billed per token)"),
+      ("OpenAI", "OPENAI_API_KEY", "Codex workers fallback (billed per token)"),
+      ("TypeSafe", "TYPESAFE_API_KEY", "Native Jev decisions"),
+    ] %}
+    {% for _title, _name, _desc in _providers %}
+    {% set _v = env_vars | selectattr("name", "equalto", _name) | first %}
+    <div class="provider-card">
+      <div class="provider-card-head">
+        <strong>{{ _title }}</strong>
+        {{ badge(_name ~ ": set", "ok") if _v and _v.is_set else badge(_name ~ ": not set", "warn") }}
+      </div>
+      <p class="small muted">{{ _desc }}</p>
+      {% if not _v or not _v.is_set %}
+      <form method="post" action="/connections/keys/add" class="field-row">
+        {{ csrf_input() }}
+        <input type="hidden" name="name" value="{{ _name }}">
+        <div class="field-control">
+          <input type="password" name="value" required autocomplete="new-password"
+                 placeholder="Paste your {{ _title }} API key" aria-label="{{ _title }} API key">
+        </div>
+        <div class="field-actions"><button type="submit" class="btn btn-primary btn-sm">Add key</button></div>
+      </form>
+      {% elif _v.from_secrets %}
+      <form method="post" action="/connections/keys/remove" class="inline">
+        {{ csrf_input() }}
+        <input type="hidden" name="name" value="{{ _name }}">
+        <button type="submit" class="btn btn-sm btn-danger">Remove</button>
+      </form>
+      {% endif %}
+    </div>
+    {% endfor %}
+  </div>
+  <h3 class="subsection">All keys</h3>
   <div class="table-wrap"><table>
     <thead><tr><th>Variable</th><th>Used for</th><th>Status</th><th><span class="sr-only">actions</span></th></tr></thead>
     <tbody>
