@@ -220,6 +220,35 @@ def shoot_studio_wizard(browser: Browser, base: str, out: Path) -> None:
     page.context.close()
 
 
+def shoot_submenu(browser: Browser, base: str, out_dir: Path) -> None:
+    """Two-level nav states: the Chats submenu open with the sidebar collapsed
+    to icon-only. `/chats` renders the panel open server-side; the closed state
+    is covered by the existing `dashboard-chats.png`. Captured in the default
+    Bento style plus two contrasting styles (brutalism, cyberpunk) so the
+    collapsed state is proven intentional across the style system. The style
+    picker applies instantly and persists via a background POST; the style is
+    restored to Bento afterwards so later shots are unaffected."""
+    variants = [
+        ("bento", "dashboard-nav-submenu.png", False),
+        ("brutalism", "dashboard-nav-submenu-brutalism.png", False),
+        ("cyberpunk", "dashboard-nav-submenu-cyberpunk.png", True),
+    ]
+    for slug, file, dark in variants:
+        if slug != "bento":
+            picker = open_page(browser, base + "/", 900, dark=False)
+            with picker.expect_response("**/ui-style"):
+                picker.select_option("#ui-style", slug)
+            picker.context.close()
+        page = open_page(browser, base + "/chats", 900, dark=dark)
+        page.screenshot(path=out_dir / file)
+        page.context.close()
+        print(f"{file}: /chats (submenu open, style {slug})")
+    restore = open_page(browser, base + "/", 900, dark=False)
+    with restore.expect_response("**/ui-style"):
+        restore.select_option("#ui-style", "bento")
+    restore.context.close()
+
+
 def shoot_dashboard(base: str, run_id: str, out_dir: Path, chrome: Path | None) -> None:
     with sync_playwright() as pw:
         browser = launch(pw, chrome)
@@ -233,6 +262,7 @@ def shoot_dashboard(base: str, run_id: str, out_dir: Path, chrome: Path | None) 
                 print(f"{shot.file}: {shot.path.format(run=run_id)}")
             shoot_studio_wizard(browser, base, out_dir / "design-studio-wizard.png")
             print("design-studio-wizard.png: /design-studio/new (walked to the Stack step)")
+            shoot_submenu(browser, base, out_dir)
             shoot_quality(browser, f"{base}/runs/{run_id}", out_dir / QUALITY)
             print(f"{QUALITY}: /runs/{run_id} (quality review)")
         finally:

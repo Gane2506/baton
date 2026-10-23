@@ -89,8 +89,8 @@ def _repo_meta(repo: Path) -> dict[str, object]:
 
 
 def test_nav_lists_design_systems() -> None:
-    assert ("/design-systems", "Design Systems") in NAV
-    hrefs = [href for href, _ in NAV]
+    assert any(item.href == "/design-systems" and item.label == "Design Systems" for item in NAV)
+    hrefs = [item.href for item in NAV]
     assert len(hrefs) == len(set(hrefs)), "duplicate href in dashboard NAV"
 
 

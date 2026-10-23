@@ -55,15 +55,29 @@
     display: none;
   }
   .chat-fullscreen .sidebar .sidebar-new,
-  .chat-fullscreen .sidebar nav a {
+  .chat-fullscreen .sidebar nav a,
+  .chat-fullscreen .sidebar nav button.nav-parent {
     font-size: 0;
     justify-content: center;
     padding-left: 0;
     padding-right: 0;
   }
   .chat-fullscreen .sidebar .sidebar-new .icon,
-  .chat-fullscreen .sidebar nav a .icon {
+  .chat-fullscreen .sidebar nav a .icon,
+  .chat-fullscreen .sidebar nav button.nav-parent .icon {
     margin: 0;
+  }
+  .chat-fullscreen .sidebar nav button.nav-parent span,
+  .chat-fullscreen .sidebar nav button.nav-parent .nav-chevron {
+    display: none;
+  }
+  /* A submenu opened from the chat rail hugs the 56px rail; when the drawer
+     (#sidebar-toggle) expands the sidebar, it hugs the full width instead. */
+  .chat-fullscreen .submenu-panel {
+    left: 56px;
+  }
+  .chat-fullscreen.nav-open .submenu-panel {
+    left: var(--sidebar-w, 236px);
   }
   .chat-fullscreen .sidebar .conn-status {
     justify-content: center;
@@ -81,9 +95,14 @@
     display: revert;
   }
   .chat-fullscreen.nav-open .sidebar .sidebar-new,
-  .chat-fullscreen.nav-open .sidebar nav a {
+  .chat-fullscreen.nav-open .sidebar nav a,
+  .chat-fullscreen.nav-open .sidebar nav button.nav-parent {
     font-size: revert;
     justify-content: flex-start;
+  }
+  .chat-fullscreen.nav-open .sidebar nav button.nav-parent span,
+  .chat-fullscreen.nav-open .sidebar nav button.nav-parent .nav-chevron {
+    display: revert;
   }
 }
 

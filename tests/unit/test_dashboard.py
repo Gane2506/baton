@@ -168,7 +168,7 @@ def _launcher(client: TestClient) -> RunLauncher:
 def test_nav_has_no_duplicate_entries() -> None:
     from jev_agent.dashboard.app import NAV
 
-    hrefs = [href for href, _ in NAV]
+    hrefs = [item.href for item in NAV]
     assert len(hrefs) == len(set(hrefs)), "duplicate href in dashboard NAV"
 
 

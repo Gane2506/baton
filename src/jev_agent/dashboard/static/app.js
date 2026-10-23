@@ -423,4 +423,118 @@
       isOpen: isOpen,
     };
   })();
+
+  /* ---- two-level nav: submenu panels ----------------------------------------
+   * A nav entry with children ([data-submenu-toggle]) opens its panel
+   * (aria-controls) adjacent to the sidebar; the sidebar collapses to
+   * icon-only via body.submenu-open (desktop only — see style.css). Escape
+   * closes the open panel and returns focus to its toggle; clicking the
+   * toggle again closes it; navigating to a non-child page is a full page
+   * load, so the server renders the closed state. The Escape listener runs in
+   * the capture phase so it wins over the mobile drawer's own Escape handler
+   * when both a panel and the drawer are open.
+   */
+
+  (function () {
+    var sidebar = document.getElementById("app-sidebar");
+    var toggles = Array.prototype.slice.call(
+      document.querySelectorAll("[data-submenu-toggle]")
+    );
+    if (!sidebar || !toggles.length) {
+      return;
+    }
+    var DESKTOP = window.matchMedia("(min-width: 1081px)");
+
+    function panelFor(toggle) {
+      var id = toggle.getAttribute("aria-controls");
+      return id ? document.getElementById(id) : null;
+    }
+
+    function isOpenToggle(toggle) {
+      return toggle.getAttribute("aria-expanded") === "true";
+    }
+
+    function openSubmenu(toggle) {
+      toggles.forEach(function (other) {
+        if (other !== toggle && isOpenToggle(other)) {
+          closeSubmenu(other, false);
+        }
+      });
+      var panel = panelFor(toggle);
+      if (!panel) {
+        return;
+      }
+      toggle.setAttribute("aria-expanded", "true");
+      panel.hidden = false;
+      if (DESKTOP.matches) {
+        document.body.classList.add("submenu-open");
+      }
+      var first = panel.querySelector("a, button");
+      if (first) {
+        first.focus();
+      }
+      document.dispatchEvent(
+        new CustomEvent("jev:submenu", { detail: { open: true } })
+      );
+    }
+
+    function closeSubmenu(toggle, refocus) {
+      var panel = panelFor(toggle);
+      if (!panel || panel.hidden) {
+        return;
+      }
+      toggle.setAttribute("aria-expanded", "false");
+      panel.hidden = true;
+      document.body.classList.remove("submenu-open");
+      if (refocus) {
+        toggle.focus();
+      }
+      document.dispatchEvent(
+        new CustomEvent("jev:submenu", { detail: { open: false } })
+      );
+    }
+
+    toggles.forEach(function (toggle) {
+      toggle.addEventListener("click", function () {
+        if (isOpenToggle(toggle)) {
+          closeSubmenu(toggle, false);
+        } else {
+          openSubmenu(toggle);
+        }
+      });
+      toggle.addEventListener("keydown", function (event) {
+        if (event.key === "ArrowDown" || event.key === "ArrowRight") {
+          event.preventDefault();
+          openSubmenu(toggle);
+        }
+      });
+    });
+
+    document.addEventListener(
+      "keydown",
+      function (event) {
+        if (event.key !== "Escape") {
+          return;
+        }
+        var opened = toggles.filter(isOpenToggle);
+        if (opened.length) {
+          event.stopPropagation();
+          closeSubmenu(opened[0], true);
+        }
+      },
+      true
+    );
+
+    // A same-page click on a plain nav link closes any open panel. (Full page
+    // loads reset server-side anyway.)
+    sidebar.addEventListener("click", function (event) {
+      var target = event.target;
+      if (target instanceof Element && target.closest("[data-submenu-toggle]")) {
+        return;
+      }
+      toggles.forEach(function (toggle) {
+        closeSubmenu(toggle, false);
+      });
+    });
+  })();
 })();
