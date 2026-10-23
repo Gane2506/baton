@@ -1,0 +1,34 @@
+{# The reverse status fragment, polled by live.js into #reverse-live. #}
+{% if status.state == "running" %}
+<section class="panel">
+  <div class="panel-head"><h2>Reversing&hellip;</h2></div>
+  <p>Extracting a design system from <span class="mono">{{ status.target }}</span>.
+  Gathering evidence, then the designer extracts the tokens.</p>
+  <p class="small muted">Started {{ status.started_at | time }}. You can leave this
+  page — the job keeps running.</p>
+</section>
+{% elif status.state == "done" and status.outcome %}
+<section class="panel">
+  <div class="panel-head"><h2>Reversed into the library</h2></div>
+  <p>{{ status.message }}</p>
+  <div class="actions">
+    <a class="btn btn-primary" href="/design-systems/{{ status.outcome.name | urlencode }}">Open {{ status.outcome.name }}</a>
+    <a class="btn btn-secondary" href="/design-studio/reverse">Reverse another</a>
+  </div>
+</section>
+{% include "_design_studio_reverse_evidence.html" %}
+{% elif status.state == "failed" %}
+<section class="panel">
+  <div class="panel-head"><h2>Reverse failed</h2></div>
+  <p>{{ status.message }}</p>
+  <div class="actions">
+    <a class="btn btn-primary" href="/design-studio/reverse">Try again</a>
+  </div>
+</section>
+{% else %}
+<div class="empty">
+  <div class="title">No reverse has run yet</div>
+  <p>Start one from a website URL or PNG screenshots:
+  <a href="/design-studio/reverse">reverse a design system</a>.</p>
+</div>
+{% endif %}

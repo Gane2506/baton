@@ -16,7 +16,6 @@ from __future__ import annotations
 import asyncio
 import json
 import sys
-from importlib.resources import files
 from pathlib import Path
 from typing import Annotated
 
@@ -26,6 +25,8 @@ from rich.markup import escape
 from rich.prompt import Prompt
 from rich.table import Table
 
+from jev_agent.app.design_reverse import extract_with_designer
+from jev_agent.app.errors import JevError
 from jev_agent.cli.repo import RepoOption
 from jev_agent.cli.wiring import NO_WORKERS_MESSAGE, cli_context, fail, repo_context
 from jev_agent.core.design_kit import (
@@ -52,9 +53,7 @@ from jev_agent.core.design_reverse import (
     fetch_url_evidence,
     is_url_target,
     palette_from_png,
-    parse_extraction_output,
     suggest_library_name,
-    validate_extraction_tokens,
 )
 from jev_agent.core.design_system import (
     META_JSON,
@@ -67,11 +66,10 @@ from jev_agent.core.design_system import (
     render_for_prompt,
     save_design_system,
 )
-from jev_agent.core.harness import DEFAULT_TIMEOUT_S, Halt, Harness, with_prompt_addendum
+from jev_agent.core.harness import DEFAULT_TIMEOUT_S, Halt
 from jev_agent.core.logo import generate_mark, mark_template, mark_to_png, mark_to_svg
 from jev_agent.core.models import DesignDoc
 from jev_agent.dispatch.requests import DEFAULT_EFFORT, DEFAULT_MODEL
-from jev_agent.roles.render import PromptError, render_prompt
 from jev_agent.roles.schemas import ROLE_SCHEMAS
 from jev_agent.workers.base import WorkerJob
 from jev_agent.workers.registry import WorkerNotAvailable
@@ -513,20 +511,8 @@ def export(
 
 
 # ---- reverse-engineering an existing product into the library -----------------------------
-
-
-def _extract_prompt(h: Harness, brief_text: str) -> str:
-    """Render the designer's extraction template (roles/designer/extract.md).
-
-    Mirrors `Harness.prompt` but loads extract.md instead of the role's prompt.md:
-    the reverse flow extracts a system from evidence rather than designing screens.
-    """
-    extract_md = Path(str(files("jev_agent.roles").joinpath("designer", "extract.md")))
-    try:
-        text = render_prompt("designer", extract_md, brief=brief_text, lessons=[])
-    except PromptError as exc:
-        raise fail(str(exc)) from exc
-    return with_prompt_addendum(text, h.config.roles.designer.prompt_addendum)
+# The extraction itself lives in `app.design_reverse` (shared with the dashboard);
+# the CLI keeps its own evidence gathering and converts `JevError` to `fail()`.
 
 
 @design_app.command("reverse")
@@ -611,59 +597,10 @@ def reverse(
     with cli_context(repo) as ctx:
         if not ctx.has_workers:
             raise fail(NO_WORKERS_MESSAGE)
-        h = ctx.pipeline.h
-        options = h.options("designer")
-        if not options.workers:
-            raise fail(
-                "no available worker for role designer: enable one of its workers in "
-                "config (`jev doctor` shows which are usable)"
-            )
-        prompt = _extract_prompt(h, brief)
-        assignment = h.assignment(
-            "designer",
-            {
-                "worker": options.workers[0],
-                "model": DEFAULT_MODEL,
-                "effort": DEFAULT_EFFORT,
-            },
-        )
         try:
-            worker = h.workers.get(assignment.worker)
-        except WorkerNotAvailable as exc:
+            tokens, markdown = extract_with_designer(ctx.pipeline.h, ctx.root, brief)
+        except JevError as exc:
             raise fail(str(exc)) from exc
-        timeout = (
-            getattr(getattr(h.config.workers, assignment.worker, None), "timeout_s", 0)
-            or DEFAULT_TIMEOUT_S
-        )
-        design_dir(ctx.root).mkdir(parents=True, exist_ok=True)
-        job = WorkerJob(
-            role="designer",
-            prompt=prompt,
-            workdir=ctx.root,
-            log_path=design_dir(ctx.root) / "designer-reverse.log",
-            model=assignment.model,
-            effort=assignment.effort,
-            timeout_s=timeout,
-            output_schema=None,  # plain-text reply: a ```tokens.json fence + markdown
-            attempt=1,
-        )
-        output = asyncio.run(worker.run(job))
-        if output.result.status != "success":
-            raise fail(
-                "the designer produced no extraction: "
-                f"{output.result.summary or output.result.status}"
-            )
-        summary = output.result.summary or ""
-        try:
-            tokens, markdown = parse_extraction_output(summary)
-        except ValueError as exc:
-            raise fail(str(exc)) from exc
-        try:
-            tokens = validate_extraction_tokens(tokens)
-        except ValueError as exc:
-            raise fail(
-                f"the designer's tokens failed validation and nothing was saved: {exc}"
-            ) from exc
         source = f"reverse:{target[0]}" if from_url else "reverse:screenshots"
         version = save_library_system(
             system_name,
