@@ -255,8 +255,14 @@ class Harness:
                 self.config.cache.semantic.decision_threshold,
             )
             if self.cache.semantic_mode == "serve" and candidates:
-                entry, _ = candidates[0]  # explicitly opted in; exact match missed
-                served_semantic = True
+                # Re-fetch through the hit-counting path: a served semantic hit
+                # must count in stats/saved_usd/LRU exactly like an exact hit.
+                # The entry can only have expired between the scan and this fetch
+                # (tiny TOCTOU window) — then fall through to the live dispatcher.
+                served = self.cache.get_entry(candidates[0][0].key_hash)
+                if served is not None:
+                    entry = served
+                    served_semantic = True
             elif self.cache.semantic_mode == "shadow":
                 shadow = candidates  # measure only, never serve
         # The request goes on the event log first (its own transaction: no snapshot
