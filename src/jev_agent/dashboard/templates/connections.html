@@ -176,6 +176,30 @@
   {% endfor %}
 </section>
 
+<section class="panel" aria-label="TypeSafe">
+  <h2>TypeSafe <span class="muted">·</span> native Jev API key</h2>
+  <p class="small">The native TypeSafe backend for Jev decisions
+  (<code>https://api.typesafe.ai/v1</code>). Set <code>TYPESAFE_API_KEY</code> here to use it
+  instead of OpenRouter. The value is never shown — only whether it is set.</p>
+  {% set ts_key = env_vars | selectattr("name", "equalto", "TYPESAFE_API_KEY") | first %}
+  <p>{{ badge("TYPESAFE_API_KEY: set", "ok") if ts_key and ts_key.is_set else badge("TYPESAFE_API_KEY: not set", "warn") }}</p>
+  <details class="disclosure"{% if not ts_key or not ts_key.is_set %} open{% endif %}>
+    <summary>{{ "Replace the saved key" if ts_key and ts_key.is_set else "Add TypeSafe API key" }}</summary>
+    <form method="post" action="/connections/keys/add" class="field-row">
+      {{ csrf_input() }}
+      <input type="hidden" name="name" value="TYPESAFE_API_KEY">
+      <div class="field-control">
+        <input type="password" name="value" required autocomplete="new-password"
+               placeholder="Paste your TypeSafe API key" aria-label="TypeSafe API key">
+      </div>
+      <div class="field-actions"><button type="submit" class="btn btn-primary btn-sm">Save key</button></div>
+    </form>
+  </details>
+  <p class="hint">Saved to <code>~/.jev/secrets.env</code> (mode 600) and in effect immediately.
+  To actually route through TypeSafe, set <code>base_url = "https://api.typesafe.ai/v1"</code> and
+  <code>api_key_env = "TYPESAFE_API_KEY"</code> under <code>[dispatcher.jev]</code>.</p>
+</section>
+
 <section class="panel" aria-label="Key health">
   <h2>Keys <span class="muted">·</span> names only, never values</h2>
   <div class="table-wrap"><table>
