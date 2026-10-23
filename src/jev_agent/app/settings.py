@@ -329,6 +329,18 @@ def _at(raw: dict[str, Any], path: str) -> tuple[bool, Any]:
     return True, node
 
 
+def layer_sets_laya_weights(raw: dict[str, Any]) -> bool:
+    """Whether one raw config layer pins `[dispatcher.laya] weights`.
+
+    The Learning page needs the per-layer answer: the effective config's
+    `model_fields_set` cannot tell a repo `jev.toml` pin from a user-config one,
+    and the two need different UI (only the repo pin needs moving aside before a
+    user-config save can take effect).
+    """
+    found, _ = _at(raw, "dispatcher.laya.weights")
+    return found
+
+
 def _attr_at(config: BaseModel, path: str) -> Any:
     node: Any = config
     for part in path.split("."):

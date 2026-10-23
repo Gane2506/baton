@@ -361,6 +361,142 @@ def test_apply_laya_selection_renormalizes() -> None:
     assert untouched == current
 
 
+# ---- laya weights editor (issue #167) ------------------------------------------------------------
+
+
+def _laya_weights_form(**overrides: str) -> dict[str, str]:
+    weights = {
+        "correctness": "0.30",
+        "safety": "0.20",
+        "simplicity": "0.15",
+        "maintainability": "0.15",
+        "tool_fit": "0.10",
+        "user_preference": "0.10",
+    }
+    weights.update(overrides)
+    return {f"w_{name}": value for name, value in weights.items()}
+
+
+def test_learning_page_shows_the_weights_editor(client: TestClient) -> None:
+    _post(client, "/learning/create", {"name": "tune-me"})
+    text = client.get("/learning?profile=tune-me").text
+    assert 'id="laya-weights-form"' in text
+    assert 'action="/learning/laya/weights"' in text
+    for criterion in (
+        "correctness",
+        "safety",
+        "simplicity",
+        "maintainability",
+        "tool_fit",
+        "user_preference",
+    ):
+        assert f'name="w_{criterion}"' in text
+    assert 'id="laya-weights-sum"' in text
+    assert 'id="laya-weights-save"' in text
+    assert '<script src="/static/laya-weights.js"' in text
+    # The current weights pre-fill the inputs.
+    assert 'value="0.30"' in text
+
+
+def test_laya_weights_save_round_trip(client: TestClient, fixture_repo: Path) -> None:
+    from jev_agent.config.loader import default_user_config_path, load_config
+
+    _post(client, "/learning/create", {"name": "tune-me"})
+    response = _post(
+        client,
+        "/learning/laya/weights",
+        {"profile": "tune-me", **_laya_weights_form(correctness="0.40", safety="0.10")},
+    )
+    assert response.status_code == 303
+    assert "saved the Laya weights to your user config" in _follow(client, response).text
+    # The user config holds the new weights, next to the pre-existing content.
+    assert 'primary = "rules"' in default_user_config_path().read_text()
+    config = load_config(fixture_repo)
+    assert config.dispatcher.laya.weights["correctness"] == 0.40
+    assert config.dispatcher.laya.weights["safety"] == 0.10
+    assert abs(sum(config.dispatcher.laya.weights.values()) - 1.0) < 1e-9
+    # The page reports the user config as the source; the editor stays visible.
+    page = client.get("/learning?profile=tune-me").text
+    assert "user config</span>" in page
+    assert 'id="laya-weights-form"' in page
+    assert "<code>jev.toml</code> pins" not in page
+
+
+def test_laya_weights_save_rejects_a_bad_sum(client: TestClient) -> None:
+    from jev_agent.config.loader import default_user_config_path
+
+    _post(client, "/learning/create", {"name": "tune-me"})
+    response = _post(
+        client,
+        "/learning/laya/weights",
+        {"profile": "tune-me", **_laya_weights_form(correctness="0.10")},  # sums to 0.80
+    )
+    assert response.status_code == 303
+    assert "must add up to 1" in _follow(client, response).text
+    assert "laya" not in default_user_config_path().read_text()
+
+
+def test_laya_weights_save_rejects_a_non_number(client: TestClient) -> None:
+    _post(client, "/learning/create", {"name": "tune-me"})
+    response = _post(
+        client,
+        "/learning/laya/weights",
+        {"profile": "tune-me", **_laya_weights_form(safety="lots")},
+    )
+    assert response.status_code == 303
+    assert "is not a number" in _follow(client, response).text
+
+
+def test_laya_weights_save_moves_a_repo_pin_aside(client: TestClient, fixture_repo: Path) -> None:
+    from jev_agent.config.loader import default_user_config_path, load_config
+
+    (fixture_repo / "jev.toml").write_text(
+        "[dispatcher.laya.weights]\n"
+        "correctness = 0.50\nsafety = 0.10\nsimplicity = 0.10\n"
+        "maintainability = 0.10\ntool_fit = 0.10\nuser_preference = 0.10\n"
+    )
+    _post(client, "/learning/create", {"name": "tune-me"})
+    assert "<code>jev.toml</code> pins" in client.get("/learning?profile=tune-me").text
+    response = _post(
+        client, "/learning/laya/weights", {"profile": "tune-me", **_laya_weights_form()}
+    )
+    assert response.status_code == 303
+    followed = _follow(client, response).text
+    assert "removed the [dispatcher.laya] weights pin" in followed
+    # The repo pin is gone, so the user config now wins: the saved weights are effective.
+    assert "weights" not in (fixture_repo / "jev.toml").read_text()
+    assert default_user_config_path().read_text().count("[dispatcher.laya.weights]") == 1
+    config = load_config(fixture_repo)
+    assert config.dispatcher.laya.weights["correctness"] == 0.30
+    # The jev.toml warning is gone; the source is the user config.
+    page = client.get("/learning?profile=tune-me").text
+    assert "<code>jev.toml</code> pins" not in page
+    assert "user config</span>" in page
+
+
+def test_laya_view_reports_the_user_config_source(client: TestClient) -> None:
+    from jev_agent.config.loader import default_user_config_path
+
+    default_user_config_path().write_text(
+        '[dispatcher]\nprimary = "rules"\n[dispatcher.laya.weights]\n'
+        "correctness = 0.34\nsafety = 0.22\nsimplicity = 0.11\n"
+        "maintainability = 0.11\ntool_fit = 0.11\nuser_preference = 0.11\n"
+    )
+    _post(client, "/learning/create", {"name": "tune-me"})
+    page = client.get("/learning?profile=tune-me").text
+    assert "user config</span>" in page
+    # The editor is offered (the weights live in the user config, editable here),
+    # and the tune table explains itself against the user config, not jev.toml.
+    assert 'id="laya-weights-form"' in page
+    assert "Your user config pins the" in page
+    assert "<code>jev.toml</code> pins" not in page
+
+
+def test_laya_weights_save_needs_csrf(client: TestClient) -> None:
+    response = client.post("/learning/laya/weights", data={"profile": "x"}, follow_redirects=False)
+    assert response.status_code == 403
+
+
 def test_diagnostics_page_renders_doctor_checks(client: TestClient) -> None:
     response = client.get("/diagnostics")
     assert response.status_code == 200
