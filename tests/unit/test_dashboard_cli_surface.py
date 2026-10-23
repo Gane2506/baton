@@ -18,6 +18,7 @@ import pytest
 from starlette.testclient import TestClient
 
 from jev_agent.cli.wiring import FAKE_WORKERS_ENV
+from jev_agent.config import load_config
 from jev_agent.core.scheduler import scheduler_lock
 from jev_agent.core.store import ShippedPrRecord, Store
 from jev_agent.dashboard.app import create_app
@@ -415,6 +416,7 @@ def test_tools_page_without_a_model_cache(client: TestClient) -> None:
     text = client.get("/tools").text
     assert 'id="models"' in text
     assert "No model list yet" in text
+    assert "jev models list --refresh" not in text  # browser-first: no CLI instruction
     assert 'id="quality-checks"' in text
     assert "ai-review" in text  # the synthetic gate row, like the CLI
     assert "jev mcp servers" in text
@@ -465,6 +467,55 @@ def test_profiles_page_empty_state(client: TestClient) -> None:
     text = client.get("/profiles").text
     assert "No workspace profiles" in text
     assert 'href="/profiles"' in text  # in the Agents nav group
+    # Browser-first (issue #171): no config-file instruction; the page offers a form.
+    assert "Define them in" not in text
+    assert "New profile" in text
+    assert 'name="return_to" value="/profiles"' in text
+
+
+def test_profiles_add_from_profiles_page(client: TestClient, fixture_repo: Path) -> None:
+    added = _post(
+        client,
+        "/settings/entity",
+        {
+            "section": "profiles",
+            "action": "add",
+            "name": "web",
+            "target": "user",
+            "keys": "description,browser",
+            "kinds": "str,bool",
+            "f_description": "added from the dashboard",
+            "f_browser": "true",
+            "return_to": "/profiles",
+        },
+    )
+    assert added.status_code == 303
+    assert added.headers["location"] == "/profiles"
+    config = load_config(fixture_repo)
+    assert config.profiles["web"].description == "added from the dashboard"
+    assert config.profiles["web"].browser is True
+    assert "saved profiles.web" in _follow(client, added).text
+    assert "web" in client.get("/profiles").text
+
+
+def test_entity_return_to_ignores_absolute_urls(client: TestClient) -> None:
+    for i, evil in enumerate(("https://evil.example.com/x", "//evil.example.com/x")):
+        response = _post(
+            client,
+            "/settings/entity",
+            {
+                "section": "profiles",
+                "action": "add",
+                "name": f"bad{i}",
+                "target": "user",
+                "keys": "",
+                "kinds": "",
+                "return_to": evil,
+            },
+        )
+        assert response.status_code == 303
+        # Falls back to the section's own page, never the forged URL.
+        assert response.headers["location"] == "/connections#s-profiles"
 
 
 def test_profiles_list_show_and_use(client: TestClient, fixture_repo: Path, tmp_path: Path) -> None:

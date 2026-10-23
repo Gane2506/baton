@@ -80,7 +80,7 @@ def test_shared_migration_is_v4_and_backfills(tmp_path: Path) -> None:
         )
     db = LessonDB.open_shared(path)
     try:
-        assert db.conn.execute("PRAGMA user_version").fetchone()[0] == 4
+        assert db.conn.execute("PRAGMA user_version").fetchone()[0] == 5
         assert db.graph_ready()
         # FTS backfilled: the old lesson is searchable.
         assert [

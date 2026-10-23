@@ -52,7 +52,7 @@
 {{ empty(
   "No artifacts" + (" match these filters" if kind or chat_id or q else " yet"),
   "Artifacts appear here as runs produce plans, diffs, and test reports." +
-  (" Try clearing the filters." if kind or chat_id or q else " Start a run with <code>jev run \"your idea\"</code> and its work products will show up here.")
+  (" Try clearing the filters." if kind or chat_id or q else " Start a run from the Board or Queue page and its work products will show up here.")
 ) }}
 {% endif %}
 {% endblock %}
