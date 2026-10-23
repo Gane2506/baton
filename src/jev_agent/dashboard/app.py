@@ -90,6 +90,14 @@ from jev_agent.core.chat import (
     list_design_library,
     parse_design_system,
 )
+from jev_agent.core.design_codegen import (
+    CODEGEN_TARGETS,
+    bundle_zip,
+    component_catalog,
+    generate_files,
+    target_for_stack,
+    validate_target,
+)
 from jev_agent.core.design_library import (
     delete_library_system,
     export_tokens_css,
@@ -102,6 +110,8 @@ from jev_agent.core.design_library import (
     validate_library_name,
 )
 from jev_agent.core.design_reverse import is_url_target
+from jev_agent.core.design_showcase import VIBE_PROFILES, rich_tokens, vibe_for_keywords
+from jev_agent.core.design_showcase_html import render_showcase
 from jev_agent.core.design_system import (
     META_JSON,
     design_dir,
@@ -1129,6 +1139,97 @@ class Dashboard:
             raise HTTPException(404, "no such design system") from None
         return self.page(
             request, "design_system.html", lambda repo: _design_system_view(repo, name)
+        )
+
+    # ---- Design Studio outputs: showcase + reusable elements (issue #155) ----------
+
+    async def design_showcase_page(self, request: Request) -> Response:
+        """The system's showcase gallery: standalone stunning preview page.
+
+        Serves the saved ``showcase.html``; older systems (saved before the
+        showcase existed) get it rendered on demand from their stored tokens.
+        """
+        name = request.path_params["name"]
+        try:
+            system_name = validate_library_name(name)
+        except ValueError:
+            raise HTTPException(404, "no such design system") from None
+
+        def build() -> str:
+            system = load_library_system(system_name)
+            if system is None:
+                raise NotFoundError(f'no design system named "{system_name}"')
+            saved = library_system_path(system_name) / "showcase.html"
+            if saved.is_file():
+                return saved.read_text(encoding="utf-8")
+            meta = _library_meta(system_name)
+            tokens = system.tokens if isinstance(system.tokens, dict) else {}
+            rich = tokens.get("design_tokens")
+            profile_key = _meta_text(meta, "vibe_profile")
+            profile = VIBE_PROFILES.get(profile_key) or vibe_for_keywords(
+                _meta_text(meta, "vibe") or _meta_text(meta, "product_name")
+            )
+            theme = _meta_text(meta, "theme") or "both"
+            if not isinstance(rich, dict):
+                rich = rich_tokens(profile, theme)
+            return render_showcase(system_name, profile, rich, theme)
+
+        try:
+            html = await run_in_threadpool(build)
+        except NotFoundError as exc:
+            raise HTTPException(404, str(exc)) from None
+        return Response(
+            html,
+            media_type="text/html; charset=utf-8",
+            headers={"X-Content-Type-Options": "nosniff"},
+        )
+
+    def design_code_page(self, request: Request) -> Response:
+        """Get reusable elements: per-component code with copy buttons (Tier 0)."""
+        name = request.path_params["name"]
+        try:
+            validate_library_name(name)
+        except ValueError:
+            raise HTTPException(404, "no such design system") from None
+        target = validate_target(request.query_params.get("target", ""))
+        if not target or "target" not in request.query_params:
+            meta = _library_meta(name)
+            target = target_for_stack(_meta_text(meta, "stack"))
+        return self.page(
+            request,
+            "design_system_code.html",
+            lambda repo: _design_system_code_view(repo, name, target),
+        )
+
+    async def design_code_download(self, request: Request) -> Response:
+        """Download all generated component files as a zip (Tier 0: read-only)."""
+        name = request.path_params["name"]
+        target = validate_target(request.query_params.get("target", "html-css"))
+        try:
+            system_name = validate_library_name(name)
+        except ValueError as exc:
+            self.flash(request, "error", str(exc))
+            return self.back("/design-systems")
+
+        def build() -> bytes:
+            system = load_library_system(system_name)
+            if system is None:
+                raise JevError(f'no design system named "{system_name}" in the library')
+            tokens = system.tokens if isinstance(system.tokens, dict) else {}
+            return bundle_zip(target, system_name, tokens)
+
+        try:
+            data = await run_in_threadpool(build)
+        except JevError as exc:
+            self.flash(request, "error", str(exc))
+            return self.back(f"/design-systems/{system_name}")
+        return Response(
+            data,
+            media_type="application/zip",
+            headers={
+                "Content-Disposition": f'attachment; filename="{system_name}-{target}.zip"',
+                "X-Content-Type-Options": "nosniff",
+            },
         )
 
     async def design_systems_action(self, request: Request) -> Response:
@@ -3153,6 +3254,36 @@ def _design_system_view(repo: views.Repo, name: str) -> dict[str, Any]:
     }
 
 
+def _design_system_code_view(repo: views.Repo, name: str, target: str) -> dict[str, Any]:
+    """The "Get reusable elements" page: generated component files with copy buttons."""
+    system = load_library_system(name)
+    if system is None:
+        raise NotFoundError(f'no design system named "{name}" in the library')
+    tokens = system.tokens if isinstance(system.tokens, dict) else {}
+    files = generate_files(target, name, tokens)
+    catalog = component_catalog(target)
+    entries = [
+        {
+            "filename": item["filename"],
+            "title": item["title"],
+            "description": item["description"],
+            "code": files.get(item["filename"], ""),
+            "lines": files.get(item["filename"], "").count("\n") + 1,
+        }
+        for item in catalog
+    ]
+    return {
+        "name": name,
+        "target": target,
+        "targets": [
+            {"key": key, "label": info["label"], "description": info["description"]}
+            for key, info in CODEGEN_TARGETS.items()
+        ],
+        "entries": entries,
+        "stack": _meta_text(_library_meta(name), "stack"),
+    }
+
+
 def _design_system_extras(name: str) -> dict[str, object]:
     """The library meta extras a `use`/`clone` carries over (mirrors `design_cmds`)."""
     meta = _library_meta(name)
@@ -3378,6 +3509,9 @@ def create_app(
         Route("/profiles/use", dash.profiles_use, methods=["POST"]),
         Route("/design-systems", dash.design_systems_page),
         Route("/design-systems/{name}", dash.design_system_page),
+        Route("/design-systems/{name}/showcase", dash.design_showcase_page),
+        Route("/design-systems/{name}/code", dash.design_code_page),
+        Route("/design-systems/{name}/code/download", dash.design_code_download),
         Route("/design-systems/{action}", dash.design_systems_action, methods=["POST"]),
         Route("/design-studio", dash.design_studio_page),
         Route("/design-studio/new", dash.design_studio_start),
