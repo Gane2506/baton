@@ -141,8 +141,8 @@ def test_validate_step_unknown() -> None:
 
 
 def test_nav_lists_design_studio() -> None:
-    assert ("/design-studio", "Design Studio") in NAV
-    hrefs = [href for href, _ in NAV]
+    assert any(item.href == "/design-studio" and item.label == "Design Studio" for item in NAV)
+    hrefs = [item.href for item in NAV]
     assert len(hrefs) == len(set(hrefs)), "duplicate href in dashboard NAV"
 
 

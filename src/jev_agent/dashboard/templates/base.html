@@ -21,7 +21,10 @@
 <script src="/static/preview.js" defer></script>
 {% block extra_head %}{% endblock %}
 </head>
-<body class="{% block body_class %}{% endblock %}">
+{# Two-level nav: `submenu-open` collapses the sidebar to icon-only whenever a
+   submenu panel is open for the current path (set server-side; app.js toggles
+   it client-side when the user opens/closes a panel in place). #}
+<body class="{% block body_class %}{% endblock %}{% if nav_collapsed | default(false) %} submenu-open{% endif %}">
 <a class="skip" href="#main">Skip to content</a>
 
 {# One icon family (lucide, ISC) inlined as symbols. Stroke comes from .icon. #}
@@ -48,6 +51,7 @@
   <symbol id="i-up" viewBox="0 0 24 24"><path d="m5 12 7-7 7 7"/><path d="M12 19V5"/></symbol>
   <symbol id="i-down" viewBox="0 0 24 24"><path d="M12 5v14"/><path d="m19 12-7 7-7-7"/></symbol>
   <symbol id="i-right" viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"/></symbol>
+  <symbol id="i-chevron" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></symbol>
   <symbol id="i-left" viewBox="0 0 24 24"><path d="m15 18-6-6 6-6"/></symbol>
   <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></symbol>
   <symbol id="i-branch" viewBox="0 0 24 24"><path d="M15 6a9 9 0 0 0-9 9V3"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/></symbol>
@@ -97,8 +101,33 @@
       {% for group, hrefs in groups.items() %}
       <div class="nav-group">
         <div class="nav-label">{{ group }}</div>
-        {% for href, label in nav if href in hrefs %}
-        <a href="{{ href }}"{% if path == href or (href != "/" and path.startswith(href)) or (href == "/" and path.startswith("/runs/")) %} class="active" aria-current="page"{% endif %}><svg class="icon" aria-hidden="true"><use href="#{{ icons[href] }}"></use></svg><span>{{ label }}</span></a>
+        {% for item in nav if item.href in hrefs %}
+        {% if item.children %}
+        {# Two-level nav: a parent with children renders a toggle button; its
+           submenu panel sits adjacent to the sidebar (fixed overlay on desktop,
+           inline inside the drawer on narrow screens). Add children to the
+           NavItem in app.py to give any other section the same treatment. #}
+        {% set submenu_id = "submenu-" + (item.href[1:] or "root") %}
+        <button type="button" class="nav-parent{% if item.is_active(path) %} active{% endif %}" data-submenu-toggle
+                aria-expanded="{{ 'true' if item.submenu_open(path) else 'false' }}" aria-controls="{{ submenu_id }}"
+                title="{{ item.label }}"><svg class="icon" aria-hidden="true"><use href="#{{ icons[item.href] }}"></use></svg><span>{{ item.label }}</span><svg class="icon nav-chevron" aria-hidden="true"><use href="#i-chevron"></use></svg></button>
+        <div class="submenu-panel" id="{{ submenu_id }}" role="navigation" aria-label="{{ item.label }} submenu"{% if not item.submenu_open(path) %} hidden{% endif %}>
+          <div class="submenu-title">{{ item.label }}</div>
+          {% for child in item.children %}
+          {% if child.method == "post" %}
+          <form class="submenu-form" method="post" action="{{ child.href }}">
+            {{ csrf_input() }}
+            <input type="hidden" name="worker" value="api">
+            <button type="submit" class="submenu-link"><svg class="icon" aria-hidden="true"><use href="#i-plus"></use></svg><span>{{ child.label }}</span></button>
+          </form>
+          {% else %}
+          <a href="{{ child.href }}" class="submenu-link{% if item.child_active(child, path) %} active{% endif %}"{% if item.child_active(child, path) %} aria-current="page"{% endif %}><svg class="icon" aria-hidden="true"><use href="#{{ icons[item.href] }}"></use></svg><span>{{ child.label }}</span></a>
+          {% endif %}
+          {% endfor %}
+        </div>
+        {% else %}
+        <a href="{{ item.href }}"{% if item.is_active(path) %} class="active" aria-current="page"{% endif %} title="{{ item.label }}"><svg class="icon" aria-hidden="true"><use href="#{{ icons[item.href] }}"></use></svg><span>{{ item.label }}</span></a>
+        {% endif %}
         {% endfor %}
       </div>
       {% endfor %}

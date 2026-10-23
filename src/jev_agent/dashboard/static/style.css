@@ -342,6 +342,98 @@ pre code { background: none; padding: 0; }
 }
 .sidebar nav a.active .icon { color: var(--accent); }
 
+/* ---- two-level nav: submenu panels + icon-collapsed sidebar -----------------
+   A nav entry with children renders a toggle button instead of a link. Opening
+   it shows the submenu panel adjacent to the sidebar while the sidebar itself
+   collapses to icon-only (body.submenu-open). Everything keys off theme
+   variables so the collapsed state looks intentional in every UI style. The
+   collapse only applies on wide screens: inside the mobile drawer (see the
+   shell.css drawer rules) the panel renders inline and the drawer keeps its
+   full width. */
+
+/* Parent toggle: the same row treatment as a nav link, as a button. */
+.sidebar nav button.nav-parent {
+  display: flex; align-items: center; gap: 10px; width: 100%;
+  padding: 9px var(--s3); margin: 2px 0;
+  border: 0; border-radius: var(--radius-control);
+  background: transparent; color: var(--muted);
+  font-family: inherit; font-size: var(--text-sm); font-weight: 500; text-align: left;
+  cursor: pointer;
+  transition: background-color 120ms ease, color 120ms ease;
+}
+.sidebar nav button.nav-parent:hover { background: var(--surface-2); color: var(--fg); }
+.sidebar nav button.nav-parent.active {
+  background: var(--accent-soft); color: var(--accent); font-weight: 600;
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+.sidebar nav button.nav-parent.active .icon { color: var(--accent); }
+.nav-parent .nav-chevron {
+  margin-left: auto; width: 14px; height: 14px; flex: none;
+  transition: transform 150ms ease;
+}
+.nav-parent[aria-expanded="true"] .nav-chevron { transform: rotate(180deg); }
+
+/* The panel: a fixed flyout hugging the sidebar's left edge. left resolves to
+   the collapsed sidebar width while body.submenu-open is set. */
+.submenu-panel {
+  position: fixed; z-index: 40;
+  top: 0; bottom: 0; left: var(--sidebar-w);
+  width: 232px;
+  display: flex; flex-direction: column; gap: 2px;
+  padding: var(--s5) var(--s3);
+  background: var(--surface);
+  border-right: 1px solid var(--border);
+  box-shadow: 8px 0 24px rgb(0 0 0 / 0.08);
+  overflow-y: auto;
+}
+.submenu-panel[hidden] { display: none; }
+.submenu-title {
+  font-size: var(--fs-11); font-weight: 600; text-transform: uppercase; letter-spacing: 0.09em;
+  color: var(--faint); padding: 0 var(--s3); margin: 0 0 var(--s2);
+}
+.submenu-form { margin: 0; }
+.submenu-link {
+  display: flex; align-items: center; gap: 10px; width: 100%;
+  padding: 9px var(--s3); margin: 0;
+  border: 0; border-radius: var(--radius-control);
+  background: transparent; color: var(--muted);
+  font-family: inherit; font-size: var(--text-sm); font-weight: 500; text-align: left;
+  text-decoration: none; cursor: pointer;
+  transition: background-color 120ms ease, color 120ms ease;
+}
+.submenu-link:hover { background: var(--surface-2); color: var(--fg); }
+.submenu-link.active {
+  background: var(--accent-soft); color: var(--accent); font-weight: 600;
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+.submenu-link.active .icon { color: var(--accent); }
+
+@media (min-width: 1081px) {
+  /* Icon-only sidebar while a submenu panel is open. Labels hide, rows center
+     their icons, and the footer collapses away; plain `title` attributes on the
+     rows (see base.html) provide the tooltips. */
+  body.submenu-open { --sidebar-w: 60px; }
+  body.submenu-open .sidebar { padding: var(--s4) var(--s2); }
+  body.submenu-open .sidebar .brand { justify-content: center; padding: 0; }
+  body.submenu-open .sidebar .brand .name,
+  body.submenu-open .sidebar .brand .ver,
+  body.submenu-open .sidebar .nav-label,
+  /* Direct rows only (child combinator): the submenu panel lives inside the
+     nav too, but its own labels must stay visible. */
+  body.submenu-open .sidebar .nav-group > a span,
+  body.submenu-open .sidebar .nav-group > button.nav-parent span,
+  body.submenu-open .sidebar .nav-group > button.nav-parent .nav-chevron,
+  body.submenu-open .sidebar-new span,
+  body.submenu-open .sidebar-new kbd,
+  body.submenu-open .sidebar-foot { display: none; }
+  body.submenu-open .sidebar .nav-group > a,
+  body.submenu-open .sidebar .nav-group > button.nav-parent {
+    justify-content: center; padding-left: 0; padding-right: 0;
+  }
+  body.submenu-open .sidebar-new-form { margin: 0; }
+  body.submenu-open .sidebar-new { padding-left: 0; padding-right: 0; }
+}
+
 .sidebar-foot {
   border-top: 1px solid var(--border); padding: var(--s3) var(--s2) 0;
   font-family: var(--mono); font-size: var(--fs-11); color: var(--faint);
@@ -650,6 +742,20 @@ td .mono, td.mono { font-size: var(--fs-12); }
 .flash.ok { border-color: color-mix(in srgb, var(--ok) 50%, transparent); background: color-mix(in srgb, var(--ok) 8%, transparent); }
 .flash.warn { border-color: color-mix(in srgb, var(--warn) 50%, transparent); background: color-mix(in srgb, var(--warn) 12%, transparent); }
 .flash.error { border-color: color-mix(in srgb, var(--bad) 50%, transparent); background: color-mix(in srgb, var(--bad) 8%, transparent); color: var(--bad); }
+
+/* ---- notices (calm guidance; never an error) ----------------------------------- */
+
+.notice {
+  display: flex; align-items: flex-start; gap: var(--s2);
+  padding: 12px 14px; border-radius: 10px; margin-bottom: var(--s4);
+  border: 1px solid color-mix(in srgb, var(--info) 40%, transparent);
+  background: color-mix(in srgb, var(--info) 7%, transparent);
+  font-size: var(--fs-13);
+}
+.notice .icon { margin-top: 2px; color: var(--info); flex-shrink: 0; }
+.notice p { margin: 0; }
+.notice .notice-title { font-weight: 600; margin-bottom: var(--s1); }
+.notice a { font-weight: 600; }
 
 /* ---- empty states -------------------------------------------------------- */
 
