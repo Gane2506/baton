@@ -205,6 +205,7 @@ from jev_agent.servers.ssh import (
     control_dir,
     run_process,
 )
+from jev_agent.servers.stats import ServerStatsCache
 
 STATIC_DIR = Path(__file__).parent / "static"
 
@@ -626,6 +627,7 @@ class Dashboard:
         )
         self.codex_flow = CodexDeviceFlow()
         self.claude_flow = ClaudeSetupTokenFlow()
+        self.server_stats = ServerStatsCache()
         self.started_at = datetime.now(UTC)  # the About panel's uptime
         self.env = _environment()
         self._flash_lock = threading.Lock()
@@ -1407,6 +1409,17 @@ class Dashboard:
             _, _, secs, ents = settings.page_view(repo.config, repo_raw, user_raw, "connections")
             servers = _connection_servers(repo.config, repo.state_dir)
             state, label = _conn_aggregate(servers)
+            # Server health stats: cached, never blocks rendering. Kick off a
+            # background collection for servers that have never been sampled.
+            server_stats: dict[str, dict[str, Any]] = {}
+            for s in servers:
+                stats, st = self.server_stats.get(repo.state_dir, s.name)
+                if st == "never" and s.state != "unreachable":
+                    cfg = repo.config.servers.get(s.name)
+                    if cfg is not None:
+                        self.server_stats.refresh(s.name, cfg, repo.state_dir, ssh_runner)
+                        st = "collecting"
+                server_stats[s.name] = {"stats": stats, "state": st}
             return {
                 "servers": servers,
                 "agg_state": state,
@@ -1419,6 +1432,7 @@ class Dashboard:
                 "key_names": views.env_var_names(repo.config),
                 "browser_check": views.browser_check(repo),
                 "browser_install": self.browser_installer.status(),
+                "server_stats": server_stats,
                 # the settings editor, unchanged from the old connections page
                 "sections": secs,
                 "entities": ents,
@@ -1481,6 +1495,20 @@ class Dashboard:
 
         def refresh(repo: views.Repo, form: FormData) -> str:
             return _refresh_servers(repo.config, repo.state_dir)
+
+        return await self.act(request, "/connections", refresh)
+
+    async def server_stats_refresh(self, request: Request) -> Response:
+        """Re-collect one server's health stats in the background (POST)."""
+
+        def refresh(repo: views.Repo, form: FormData) -> str:
+            name = request.path_params.get("name", "")
+            cfg = repo.config.servers.get(name)
+            if cfg is None:
+                return f"unknown server {name!r}"
+            if self.server_stats.refresh(name, cfg, repo.state_dir, ssh_runner):
+                return f"collecting stats for {name}…"
+            return f"already collecting stats for {name}"
 
         return await self.act(request, "/connections", refresh)
 
@@ -3294,6 +3322,11 @@ def create_app(
         Route("/connections", dash.connections_page),
         Route("/connections/live", dash.connections_live),
         Route("/connections/refresh", dash.connections_refresh, methods=["POST"]),
+        Route(
+            "/connections/servers/{name}/stats/refresh",
+            dash.server_stats_refresh,
+            methods=["POST"],
+        ),
         Route("/connections/keys/add", dash.connections_key_add, methods=["POST"]),
         Route("/connections/keys/remove", dash.connections_key_remove, methods=["POST"]),
         Route(
