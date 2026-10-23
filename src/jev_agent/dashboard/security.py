@@ -18,6 +18,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import ipaddress
+import os
 import secrets
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
@@ -79,7 +80,8 @@ class DashboardSettings:
     # Host header names accepted on loopback; None: the loopback names. Tests add theirs.
     allowed_hosts: frozenset[str] | None = None
     refresh_s: float = 3.0  # how often live parts of pages reload
-    # Signs CSRF tokens; a fresh one per process, so restarting invalidates old forms.
+    # Signs CSRF tokens; persisted via `load_or_create_secret()` so restarts don't
+    # invalidate open pages' forms. Falls back to per-process when unwritable.
     secret: bytes = field(default_factory=lambda: secrets.token_bytes(32), repr=False)
 
     @property
@@ -117,6 +119,37 @@ def token_matches(given: str | None, expected: str) -> bool:
 
 def csrf_token(settings: DashboardSettings, session: str) -> str:
     return hmac.new(settings.secret, session.encode(), hashlib.sha256).hexdigest()
+
+
+_SECRET_FILENAME = "dashboard-secret"
+_SECRET_BYTES = 32
+
+
+def load_or_create_secret() -> bytes:
+    """The CSRF signing secret, persisted across restarts.
+
+    Stored at `~/.jev/dashboard-secret` (mode 600). A fresh secret per process
+    invalidates every open page's forms on restart — persisting it means a
+    restart (update, reboot) doesn't break forms the user already has open.
+    """
+    path = Path.home() / ".jev" / _SECRET_FILENAME
+    try:
+        data = path.read_bytes()
+        if len(data) == _SECRET_BYTES:
+            return data
+    except OSError:
+        pass
+    secret = secrets.token_bytes(_SECRET_BYTES)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        # Write atomically with restrictive permissions from the start.
+        tmp = path.with_suffix(".tmp")
+        tmp.write_bytes(secret)
+        os.chmod(tmp, 0o600)
+        tmp.replace(path)
+    except OSError:
+        pass  # fall back to the in-memory secret; forms just won't survive restart
+    return secret
 
 
 class SecurityMiddleware(BaseHTTPMiddleware):
