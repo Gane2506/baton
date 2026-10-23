@@ -13,6 +13,7 @@ import json
 import math
 import os
 import shutil
+import sqlite3
 import subprocess
 import threading
 import time
@@ -146,6 +147,7 @@ from jev_agent.core.store import (
     DecisionRecord,
     NotFoundError,
     ShippedPrRecord,
+    StoreError,
     TaskRecord,
 )
 from jev_agent.core.workspace import (
@@ -944,6 +946,7 @@ class Dashboard:
             meta, entries = views.chat_transcript(repo, chat_id)
             if meta is None and not entries:
                 raise NotFoundError(f"no chat {chat_id}")
+            approval_cards = _approval_cards(repo, meta) if meta is not None else []
             return {
                 "chat_id": chat_id,
                 "meta": meta,
@@ -957,8 +960,16 @@ class Dashboard:
                 # the redesigned chat page: the conversation rail, pending approvals, the
                 # empty-state suggestions, the run step timeline, and the composer picker.
                 "rail_chats": views.chats(repo, "")[:30],
-                "approval_cards": _approval_cards(repo, meta) if meta is not None else [],
+                # Smart rail: chats grouped by recency with a rich status per chat
+                # (issue #156) — the flat rail_chats stays for other consumers.
+                "rail_groups": _rail_groups(self.chat_runner, repo, chat_id, approval_cards),
+                "approval_cards": approval_cards,
                 "suggestions": list(_CHAT_SUGGESTIONS) if not entries else [],
+                # Repo-aware starters + greeting for the serene empty state.
+                "starters": _chat_starters(repo) if not entries else [],
+                "greeting": _chat_greeting(repo.root.name) if not entries else "",
+                # Persistent compact context: repo, branch, backend, model (issue #156).
+                "context_bar": _chat_context_bar(repo, meta),
                 "step_blocks": _step_blocks(repo, meta) if meta is not None else [],
                 "backends": chat.backend_readiness(repo.config),
             }
@@ -2303,7 +2314,17 @@ class Dashboard:
                 message = "pick an API model first — use the picker at the top of this page."
             self.flash(request, "error", message)
             return self.back("/chats")
-        self.flash(request, "ok", f"chat {chat_id} created; say what you want to build")
+        # Minimal new-chat flow: if the user typed a first message, send it
+        # right away — type + Enter just works, no second step.
+        first_text = _text(form, "text") or ""
+
+        def first_turn() -> str:
+            return chat.turn(self.settings.root, chat_id, first_text)
+
+        if first_text and self.chat_runner.start(chat_id, first_turn):
+            self.flash(request, "ok", f"chat {chat_id} created; replying…")
+        else:
+            self.flash(request, "ok", f"chat {chat_id} created; say what you want to build")
         return self.back(f"/chats/{chat_id}")
 
     async def chats_api_model(self, request: Request) -> Response:
@@ -3071,6 +3092,116 @@ _CHAT_SUGGESTIONS: tuple[str, ...] = (
     "Explain what run 20261014-3f1a changed",
     "Review the open pull requests",
 )
+
+
+def _git_branch(root: Path) -> str:
+    """Current git branch of the repo root; "" when git cannot tell."""
+    try:
+        proc = run_git(["rev-parse", "--abbrev-ref", "HEAD"], root, GIT_QUICK_TIMEOUT_S)
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    branch = proc.stdout.strip()
+    return branch if proc.returncode == 0 and branch else ""
+
+
+def _chat_greeting(repo_name: str) -> str:
+    """Warm empty-state greeting, aware of the time of day and the repo."""
+    hour = datetime.now().hour
+    part = "morning" if hour < 12 else "afternoon" if hour < 18 else "evening"
+    return f"Good {part} — what should we build in {repo_name} today?"
+
+
+def _chat_starters(repo: views.Repo) -> list[str]:
+    """Repo-aware empty-state starters: the static prompts plus live context
+    (queued work, the latest run) so the empty state feels alive, not blank."""
+    starters = list(_CHAT_SUGGESTIONS)
+    try:
+        queued = repo.store.list_queue()
+    except (sqlite3.Error, StoreError):
+        queued = []
+    if queued:
+        n = len(queued)
+        plural = "s" if n != 1 else ""
+        starters.insert(0, f"Review the {n} queued item{plural} waiting in the queue")
+    try:
+        runs = repo.store.list_runs()
+    except (sqlite3.Error, StoreError):
+        runs = []
+    if runs:
+        last = runs[0]
+        state = str(getattr(last.state, "name", last.state)).replace("_", " ").lower()
+        starters.append(f"Check on run {last.id} ({state})")
+    return starters[:6]
+
+
+# Rail status keys → pill labels. "running" pulses; "needs-you" is the
+# attention state (a run waiting on the person); the rest stay quiet.
+_RAIL_STATUS_LABELS = {
+    "running": "Running",
+    "needs-you": "Needs you",
+    "queued": "Queued",
+    "briefed": "Briefed",
+}
+
+
+def _rail_chat_status(runner: Any, meta: ChatMeta, *, needs_you: bool) -> str:
+    if runner.busy(meta.chat_id):
+        return "running"
+    if needs_you:
+        return "needs-you"
+    if meta.queue_items:
+        return "queued"
+    if meta.brief:
+        return "briefed"
+    return ""
+
+
+def _rail_groups(
+    runner: Any, repo: views.Repo, chat_id: str, approval_cards: list[dict[str, Any]]
+) -> list[tuple[str, list[tuple[ChatMeta, str, str, str]]]]:
+    """Rail chats grouped by recency (Today / Yesterday / This week / Older),
+    each with a status key + label. Newest chat first inside every bucket."""
+    buckets: dict[str, list[tuple[ChatMeta, str, str, str]]] = {
+        "Today": [],
+        "Yesterday": [],
+        "This week": [],
+        "Older": [],
+    }
+    today = datetime.now(UTC).date()
+    for meta, title in views.chats(repo, "")[:30]:
+        try:
+            updated = datetime.fromisoformat(meta.updated_at)
+            if updated.tzinfo is None:
+                updated = updated.replace(tzinfo=UTC)
+            age_days = (today - updated.date()).days
+        except ValueError:
+            age_days = 10**6
+        key = (
+            "Today"
+            if age_days <= 0
+            else "Yesterday"
+            if age_days == 1
+            else "This week"
+            if age_days < 7
+            else "Older"
+        )
+        status = _rail_chat_status(
+            runner, meta, needs_you=bool(approval_cards) and meta.chat_id == chat_id
+        )
+        buckets[key].append((meta, title, status, _RAIL_STATUS_LABELS.get(status, "")))
+    return [(key, items) for key, items in buckets.items() if items]
+
+
+def _chat_context_bar(repo: views.Repo, meta: ChatMeta | None) -> dict[str, str]:
+    """The quiet persistent context strip: repo · branch · backend · model."""
+    backend = meta.backend if meta is not None else ""
+    return {
+        "repo": repo.root.name,
+        "branch": _git_branch(repo.root),
+        "backend": {"api": "OpenRouter API"}.get(backend, "Claude Code") if backend else "",
+        "model": meta.model if meta is not None and meta.model else "default model",
+        "profile": meta.profile if meta is not None and meta.profile else "",
+    }
 
 
 # Curated OpenRouter model ids for the API model picker (issue #149). Shown when

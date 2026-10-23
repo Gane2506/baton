@@ -24,13 +24,22 @@
       </form>
       <button id="rail-toggle" type="button" class="icon-btn" aria-expanded="true" aria-controls="chat-rail" aria-label="Collapse conversation list">{{ icon("i-left", "sm") }}</button>
     </div>
-    {% if rail_chats is defined and rail_chats %}
+    {% if rail_groups is defined and rail_groups %}
+    {# Smart rail (issue #156): chats grouped by recency with a rich status
+       pill per chat — Running / Needs you / Queued / Briefed — instead of a
+       flat list with bare dots. #}
     <nav class="rail-list" aria-label="Saved chats">
-      {% for cmeta, ctitle in rail_chats %}
+      {% for heading, items in rail_groups %}
+      <p class="rail-heading">{{ heading }}</p>
+      {% for cmeta, ctitle, cstatus, clabel in items %}
       <a href="/chats/{{ cmeta.chat_id }}" class="rail-item{% if cmeta.chat_id == chat_id %} rail-item--active{% endif %}"{% if cmeta.chat_id == chat_id %} aria-current="page"{% endif %}>
-        <span class="rail-item-title">{{ ctitle or "Untitled chat" }}</span>
+        <span class="rail-item-top">
+          <span class="rail-item-title">{{ ctitle or "Untitled chat" }}</span>
+          {% if cstatus %}<span class="status-pill status-{{ cstatus }}">{{ clabel }}</span>{% endif %}
+        </span>
         <span class="rail-item-sub"><span class="mono">{{ cmeta.chat_id }}</span> · {{ cmeta.updated_at | time }}</span>
       </a>
+      {% endfor %}
       {% endfor %}
     </nav>
     {% else %}
@@ -38,7 +47,7 @@
     {% endif %}
   </aside>
 
-  <div id="chat-main">
+  <div id="chat-main"{% if not entries %} data-empty="true"{% endif %}>
     <header id="chat-header">
       <button id="sidebar-toggle" type="button" class="icon-btn" aria-expanded="false" aria-controls="app-shell" aria-label="Expand sidebar">{{ icon("i-right", "sm") }}</button>
       <h1 class="chat-title">
@@ -51,17 +60,10 @@
     <p class="chat-facts muted small">Design system: {{ design_system_label }}</p>
     {% endif %}
 
+    {% if entries %}
     <div id="chat-transcript" data-live="/chats/{{ chat_id }}/live" data-live-every="{{ refresh_ms }}" aria-label="Chat transcript" role="log" aria-live="polite">
       {% include "_chat_live.html" %}
     </div>
-
-    {% if suggestions is defined and suggestions and not entries %}
-    <div id="suggestion-chips" role="group" aria-label="Suggested prompts">
-      {% for s in suggestions %}
-      <button type="button" class="chip" data-chip-text="{{ s }}">{{ s }}</button>
-      {% endfor %}
-    </div>
-    {% endif %}
 
     <div id="action-bar" role="group" aria-label="Turn this chat into work">
       {# Brief-gated actions (issue: "no brief yet" confusion): Plan/Run/Queue need
@@ -74,29 +76,34 @@
       <form class="inline" method="post" action="/chats/{{ chat_id }}/queue">{{ csrf_input() }}<button type="submit" class="btn btn-sm btn-secondary"{% if busy or not has_brief %} disabled{% endif %}{% if not has_brief %} title="Write a brief first"{% endif %}>Queue it</button></form>
     </div>
 
-    <form id="chat-composer" method="post" action="/chats/{{ chat_id }}/send">
-      {{ csrf_input() }}
-      <div class="composer-row">
-        {% if backends is defined and backends %}
-        <select id="composer-backend" name="worker" aria-label="Chat backend">
-          {% if backends is mapping %}
-            {% for name, pair in backends.items() %}
-          <option value="{{ name }}"{% if not pair[0] %} disabled{% endif %}{% if meta and meta.backend == name %} selected{% endif %} title="{{ pair[1] }}">{{ "OpenRouter API" if name == "api" else "Claude Code" }}</option>
-            {% endfor %}
-          {% else %}
-            {% for name, note, ok in backends %}
-          <option value="{{ name }}"{% if not ok %} disabled{% endif %}{% if meta and meta.backend == name %} selected{% endif %} title="{{ note }}">{{ "OpenRouter API" if name == "api" else "Claude Code" }}</option>
-            {% endfor %}
-          {% endif %}
-        </select>
-        {% endif %}
-        <label class="sr-only" for="composer-text">Message</label>
-        <textarea id="composer-text" name="text" rows="2" required placeholder="Message Baton…" aria-label="Message Baton"></textarea>
-        <button id="composer-stop" class="btn btn-secondary" type="button"{% if not busy %} hidden{% endif %}>{{ icon("i-stop", "sm") }}<span>Stop</span></button>
-        <button id="composer-send" class="btn btn-primary" type="submit"{% if busy %} disabled{% endif %}>{{ icon("i-up", "sm") }}<span>Send</span></button>
+    {% include "_chat_composer.html" %}
+    {% else %}
+    {# Serene empty state (issue #156): a warm greeting, the composer centered
+       in vast whitespace, repo-aware starters — no forms, no errors, no
+       clutter. The action bar stays hidden until the first message exists. #}
+    <div class="empty-hero">
+      <p class="empty-kicker">New chat</p>
+      <h2 class="empty-title">{{ greeting }}</h2>
+      {% include "_chat_composer.html" %}
+      {% if starters %}
+      <div id="suggestion-chips" class="empty-chips" role="group" aria-label="Suggested starters">
+        {% for s in starters %}
+        <button type="button" class="chip" data-chip-text="{{ s }}">{{ s }}</button>
+        {% endfor %}
       </div>
-      {% if busy %}<p class="muted small composer-status"><span class="pulse" aria-hidden="true"></span>waiting for the model…</p>{% endif %}
-    </form>
+      {% endif %}
+    </div>
+    {% endif %}
+
+    {# Persistent compact context (issue #156): repo, branch, backend, model —
+       always visible in a quiet strip, never blocking the input. #}
+    <footer class="context-strip" aria-label="Chat context">
+      <span class="ctx-item ctx-repo">{{ context_bar.repo }}</span>
+      {% if context_bar.branch %}<span class="ctx-sep" aria-hidden="true">·</span><span class="ctx-item mono">{{ context_bar.branch }}</span>{% endif %}
+      {% if context_bar.backend %}<span class="ctx-sep" aria-hidden="true">·</span><span class="ctx-item">{{ context_bar.backend }}</span>{% endif %}
+      <span class="ctx-sep" aria-hidden="true">·</span><span class="ctx-item ctx-model">{{ context_bar.model }}</span>
+      {% if context_bar.profile %}<span class="ctx-sep" aria-hidden="true">·</span><span class="ctx-item">{{ context_bar.profile }}</span>{% endif %}
+    </footer>
   </div>
 
   {% include "_workpanel.html" %}

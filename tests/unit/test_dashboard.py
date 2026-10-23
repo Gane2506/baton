@@ -734,8 +734,11 @@ def test_chats_new_form_guiding_notice_without_backend(
     # The red error wall is gone…
     assert "flash error" not in page.text
     assert "No chat backend is ready" not in page.text
-    # …and the form keeps every field with the same behavior.
+    # …and the form keeps every field with the same behavior: the minimal row
+    # (task input + backend + model + Start) plus the Advanced section.
     assert 'action="/chats/new"' in page.text
+    assert 'name="text"' in page.text and "Describe a task or ask a question" in page.text
+    assert 'class="advanced-details"' in page.text
     for field in (
         'name="worker"',
         'name="model"',
@@ -745,7 +748,7 @@ def test_chats_new_form_guiding_notice_without_backend(
         'name="budget_usd"',
     ):
         assert field in page.text
-    assert "Create chat" in page.text
+    assert ">Start<" in page.text
 
 
 def test_chats_new_form_no_notice_with_backend_ready(

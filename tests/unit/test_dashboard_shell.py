@@ -10,6 +10,7 @@ from __future__ import annotations
 import re
 from collections.abc import Iterator
 from pathlib import Path
+from typing import Any, cast
 
 import httpx
 import pytest
@@ -57,6 +58,18 @@ def _new_chat(client: TestClient) -> str:
     return response.headers["location"].rsplit("/", 1)[1]
 
 
+def _say(client: TestClient, chat_id: str, text: str) -> None:
+    response: httpx.Response = client.post(
+        f"/chats/{chat_id}/send",
+        data={"text": text, "csrf_token": _csrf(client)},
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+    dashboard = cast(Any, client.app).state.dashboard
+    job = dashboard.chat_runner.wait(chat_id)
+    assert job is not None and job.state == "finished"
+
+
 def test_shell_frame_has_sidebar_conn_and_no_global_panes(client: TestClient) -> None:
     page = client.get("/")
     assert page.status_code == 200
@@ -97,28 +110,40 @@ def test_chat_page_is_fullscreen_conversational_control_plane(client: TestClient
     page = client.get(f"/chats/{chat_id}")
     assert page.status_code == 200
     html = page.text
-    # Fullscreen layout contract: rail, main column, work panel.
+    # A brand-new chat is the serene empty state (issue #156): greeting, hero,
+    # centered composer, starters, quiet context strip — no transcript or
+    # action bar until the first message exists.
+    assert 'data-empty="true"' in html
     for dom_id in (
         "chat-layout",
         "chat-rail",
         "rail-toggle",
         "chat-main",
-        "chat-transcript",
-        "action-bar",
         "chat-composer",
         "composer-text",
         "composer-send",
+        "suggestion-chips",
         "work-panel",
         "work-tabs",
         "sidebar-toggle",
     ):
         assert f'id="{dom_id}"' in html, dom_id
     assert "chat-fullscreen" in html
-    # Transcript still fed by the existing live.js polling pattern.
-    assert f'data-live="/chats/{chat_id}/live"' in html
-    # No-JS fallback: plain POST forms for send and the four actions.
+    assert "empty-hero" in html
+    assert "context-strip" in html
+    assert 'id="chat-transcript"' not in html
+    assert 'id="action-bar"' not in html
+    # No-JS fallback: the composer is still a plain POST form.
     assert f'action="/chats/{chat_id}/send"' in html
     assert '<textarea id="composer-text" name="text"' in html
+
+    # Once the conversation starts, the full control plane appears: transcript
+    # fed by the live.js polling pattern, plus the four action forms.
+    _say(client, chat_id, "hello control plane")
+    html = client.get(f"/chats/{chat_id}").text
+    for dom_id in ("chat-transcript", "action-bar"):
+        assert f'id="{dom_id}"' in html, dom_id
+    assert f'data-live="/chats/{chat_id}/live"' in html
     for action in ("brief", "start", "queue"):
         assert f'action="/chats/{chat_id}/{action}"' in html
     # The polling fragment still renders the transcript.

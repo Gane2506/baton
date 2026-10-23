@@ -51,47 +51,58 @@
     </div>
   </div>
   {% endif %}
-  <form method="post" action="/chats/new">
+  <form method="post" action="/chats/new" class="new-chat-form">
     {{ csrf_input() }}
-    <div class="form-grid">
-      <div>
-        <label for="worker">Backend</label>
-        <select id="worker" name="worker">
-          <option value="api"{% if not api_ok %} disabled{% endif %}{% if api_ok %} selected{% endif %}>OpenRouter API · {{ api_note }}</option>
-          <option value="claude_code"{% if not cc_ok %} disabled{% endif %}{% if not api_ok and cc_ok %} selected{% endif %}>Claude Code · {{ cc_note }}</option>
-        </select>
-      </div>
-      <div>
-        <label for="model">Model</label>
-        <input type="text" id="model" name="model" placeholder="worker default">
-      </div>
-      <div>
-        <label for="learning">Learning</label>
-        <select id="learning" name="learning">
-          <option value="" title="from jev.toml">Use default</option>
-          <option value="none">none</option>
-          {% for p in profiles %}<option value="{{ p.name }}">{{ p.name }} ({{ p.scope }})</option>{% endfor %}
-        </select>
-      </div>
-      <div>
-        <label for="design_system">Design System</label>
-        <select id="design_system" name="design_system">
-          <option value="none">None</option>
-          {% if has_repo_design_system %}<option value="repo">Repo design system</option>{% endif %}
-          {% for name in design_systems %}<option value="library:{{ name }}">Library: {{ name }}</option>{% endfor %}
-        </select>
-      </div>
-      <div>
-        <label for="profile">Workspace profile</label>
-        <input type="text" id="profile" name="profile" placeholder="(optional)" maxlength="80">
-      </div>
-      <div>
-        <label for="budget_usd">Budget (USD)</label>
-        <input type="number" id="budget_usd" name="budget_usd" min="0.01" step="0.01" value="1.00">
-      </div>
+    {# Minimal main flow (user directive): one input, an environment picker,
+       Start. Everything else lives under Advanced with sensible defaults. #}
+    <div class="new-chat-main">
+      <label class="sr-only" for="nc-text">Describe a task or ask a question</label>
+      <input type="text" id="nc-text" name="text" maxlength="600" autocomplete="off"
+             placeholder="Describe a task or ask a question…" aria-label="Describe a task or ask a question">
+      <label class="sr-only" for="nc-worker">Backend</label>
+      <select id="nc-worker" name="worker" class="env-select" aria-label="Backend">
+        <option value="api"{% if not api_ok %} disabled{% endif %}{% if api_ok %} selected{% endif %}>OpenRouter</option>
+        <option value="claude_code"{% if not cc_ok %} disabled{% endif %}{% if not api_ok and cc_ok %} selected{% endif %}>Claude Code</option>
+      </select>
+      <label class="sr-only" for="nc-model">Model (optional)</label>
+      <input type="text" id="nc-model" name="model" class="env-model" list="nc-models"
+             autocomplete="off" placeholder="Model" aria-label="Model (optional)">
+      <datalist id="nc-models">
+        {% for m in api_model_options %}<option value="{{ m }}">{% endfor %}
+      </datalist>
+      <button class="btn btn-primary" type="submit">{{ icon("i-plus", "sm") }}<span>Start</span></button>
     </div>
-    <button class="btn btn-primary" type="submit">{{ icon("i-plus", "sm") }}Create chat</button>
-    <p class="hint">The chat's spend is its own: it is capped by this budget and counts toward no run.</p>
+    <details class="advanced-details">
+      <summary>Advanced</summary>
+      <div class="form-grid">
+        <div>
+          <label for="learning">Learning</label>
+          <select id="learning" name="learning">
+            <option value="" title="from jev.toml">Use default</option>
+            <option value="none">none</option>
+            {% for p in profiles %}<option value="{{ p.name }}">{{ p.name }} ({{ p.scope }})</option>{% endfor %}
+          </select>
+        </div>
+        <div>
+          <label for="design_system">Design System</label>
+          <select id="design_system" name="design_system">
+            <option value="none">None</option>
+            {% if has_repo_design_system %}<option value="repo">Repo design system</option>{% endif %}
+            {% for name in design_systems %}<option value="library:{{ name }}">Library: {{ name }}</option>{% endfor %}
+          </select>
+        </div>
+        <div>
+          <label for="profile">Workspace profile</label>
+          <input type="text" id="profile" name="profile" placeholder="(optional)" maxlength="80">
+        </div>
+        <div>
+          <label for="budget_usd">Budget (USD)</label>
+          <input type="number" id="budget_usd" name="budget_usd" min="0.01" step="0.01" value="1.00">
+        </div>
+      </div>
+    </details>
+    <p class="hint">Type and hit Enter — the chat is created and your message is sent.
+    The chat's spend is its own: it is capped by the budget and counts toward no run.</p>
   </form>
 </section>
 

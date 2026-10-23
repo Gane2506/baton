@@ -177,6 +177,77 @@ def test_chat_actions_refuse_without_a_brief(client: TestClient) -> None:
     assert "no brief yet" not in page.text
 
 
+def test_empty_chat_is_a_serene_state(client: TestClient, fixture_repo: Path) -> None:
+    """Issue #156: a brand-new chat shows the greeting, the centered composer
+    and repo-aware starters — and no action bar, no raw errors, no clutter."""
+    chat_id = _new_chat(client)
+    page = client.get(f"/chats/{chat_id}")
+    assert page.status_code == 200
+    assert 'data-empty="true"' in page.text
+    assert "what should we build in" in page.text  # the warm greeting
+    assert 'class="empty-hero"' in page.text
+    assert 'id="chat-composer"' in page.text  # the one real input
+    assert 'id="action-bar"' not in page.text  # hidden until the first message
+    assert "no model for the api backend" not in page.text
+    assert "no brief yet" not in page.text
+    # The quiet persistent context strip: repo, backend, model.
+    assert 'class="context-strip"' in page.text
+    assert fixture_repo.name in page.text
+
+
+def test_chat_with_messages_has_no_empty_hero(client: TestClient) -> None:
+    """Once the conversation starts, the transcript + action bar take over and
+    the context strip stays visible."""
+    chat_id = _new_chat(client)
+    _say(client, chat_id, "hello from the web")
+    page = client.get(f"/chats/{chat_id}")
+    assert 'data-empty="true"' not in page.text
+    assert 'class="empty-hero"' not in page.text
+    assert 'id="chat-transcript"' in page.text
+    assert 'id="action-bar"' in page.text
+    assert 'class="context-strip"' in page.text
+
+
+def test_rail_groups_chats_by_recency_with_status(client: TestClient) -> None:
+    """Issue #156: the rail groups chats (Today heading) and shows a rich
+    status pill — a briefed chat reads 'Briefed' instead of a bare dot."""
+    chat_id = _new_chat(client)
+    _say(client, chat_id, "please add a search box")
+    _brief(client, chat_id)
+    page = client.get(f"/chats/{chat_id}")
+    assert '<p class="rail-heading">Today</p>' in page.text
+    assert "status-briefed" in page.text and ">Briefed<" in page.text
+
+
+def test_new_chat_form_is_minimal_with_advanced_collapsed(client: TestClient) -> None:
+    """The 6-field wall is gone: one task input + environment picker + Start in
+    the main flow; budget/learning/design-system/profile hide under Advanced."""
+    page = client.get("/chats")
+    assert page.status_code == 200
+    assert 'placeholder="Describe a task or ask a question…"' in page.text
+    assert 'id="nc-worker"' in page.text and 'id="nc-model"' in page.text
+    assert ">Start<" in page.text
+    # Advanced options still exist, but collapsed — not in the main flow.
+    assert '<details class="advanced-details">' in page.text
+    advanced = page.text.split('<details class="advanced-details">', 1)[1]
+    for field in ('name="learning"', 'name="design_system"', 'name="profile"', 'name="budget_usd"'):
+        assert field in advanced
+
+
+def test_new_chat_with_first_message_sends_it(client: TestClient) -> None:
+    """Type + Enter just works: the chat is created and the first message is
+    already being answered — no second step."""
+    response = _post(
+        client, "/chats/new", {"worker": "api", "budget_usd": "1.00", "text": "hello new chat"}
+    )
+    assert response.status_code == 303
+    chat_id = response.headers["location"].rsplit("/", 1)[1]
+    job = _dashboard(client).chat_runner.wait(chat_id)
+    assert job is not None and job.state == "finished"
+    page = client.get(f"/chats/{chat_id}")
+    assert "(fake model) You said: hello new chat" in page.text
+
+
 @pytest.mark.parametrize("budget", ["inf", "nan", "-1", "0"])
 def test_new_chat_refuses_a_budget_that_is_not_a_finite_amount(
     client: TestClient, fixture_repo: Path, budget: str
