@@ -747,8 +747,6 @@ class Dashboard:
     ) -> Response:
         """Check the form (CSRF), run `action` against the repo in a thread, flash its message
         (or the error), and redirect to `to`."""
-        from jev_agent.app import settings as settings_app
-
         form = await checked_form(request)
 
         def work() -> str:
@@ -770,8 +768,8 @@ class Dashboard:
             self.flash(request, "error", str(exc))
         else:
             # Trust gate blocked the save: offer one-click trust (issue #158).
-            if settings_app.TRUST_GATE_MARKER in message:
-                clean = message.replace(settings_app.TRUST_GATE_MARKER, "").strip()
+            if settings.TRUST_GATE_MARKER in message:
+                clean = message.replace(settings.TRUST_GATE_MARKER, "").strip()
                 self.flash(request, "trust", clean)
             else:
                 self.flash(request, "ok", message)
@@ -1679,12 +1677,10 @@ class Dashboard:
         """
 
         def trust(repo: views.Repo, form: FormData) -> str:
-            from jev_agent.app import settings as settings_app
-
-            err = settings_app.trust_repo(self.settings.root)
+            err = settings.trust_repo(self.settings.root)
             if err:
                 # Strip the marker for display; the button already handled it.
-                return err.replace(settings_app.TRUST_GATE_MARKER, "").strip()
+                return err.replace(settings.TRUST_GATE_MARKER, "").strip()
             return f"Trusted {self.settings.root}; repo config changes now apply."
 
         back = str(request.query_params.get("next", "/connections"))
