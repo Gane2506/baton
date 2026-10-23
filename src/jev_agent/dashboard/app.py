@@ -74,7 +74,7 @@ from jev_agent.app.quality import review_text
 from jev_agent.app.queue import QueueOptions
 from jev_agent.app.runs import RunOptions, require_ship_enabled
 from jev_agent.config import STATE_DIRNAME, ConfigError
-from jev_agent.config.loader import default_user_config_path
+from jev_agent.config.loader import default_user_config_path, trusts
 from jev_agent.config.schema import BEGINNER_FIELDS, JevConfig, JevSettings, ShipMode
 from jev_agent.config.servers_schema import ServerConfig
 from jev_agent.core.benchmarks import DEFAULT_LAST, format_value
@@ -767,7 +767,12 @@ class Dashboard:
         ) as exc:
             self.flash(request, "error", str(exc))
         else:
-            self.flash(request, "ok", message)
+            # Trust gate blocked the save: offer one-click trust (issue #158).
+            if settings.TRUST_GATE_MARKER in message:
+                clean = message.replace(settings.TRUST_GATE_MARKER, "").strip()
+                self.flash(request, "trust", clean)
+            else:
+                self.flash(request, "ok", message)
         return self.back(to)
 
     # ---- pages -----------------------------------------------------------------------------
@@ -1561,6 +1566,7 @@ class Dashboard:
                 "entities": ents,
                 "user_only": settings.USER_ONLY,
                 "settings": self.settings,
+                "repo_trusted": trusts(repo.config, repo.root),
             }
 
         return self.page(request, "connections.html", build)
@@ -1662,6 +1668,26 @@ class Dashboard:
             return f"{name} removed from the secrets file."
 
         return await self.act(request, "/connections", remove)
+
+    async def connections_trust_repo(self, request: Request) -> Response:
+        """Trust the current repo for guarded config keys (POST, issue #158).
+
+        One-click trust: adds the repo to `[trust] repos` in the user config.
+        The `next` form field controls where to return (defaults to /connections).
+        """
+
+        def trust(repo: views.Repo, form: FormData) -> str:
+            err = settings.trust_repo(self.settings.root)
+            if err:
+                # Strip the marker for display; the button already handled it.
+                return err.replace(settings.TRUST_GATE_MARKER, "").strip()
+            return f"Trusted {self.settings.root}; repo config changes now apply."
+
+        back = str(request.query_params.get("next", "/connections"))
+        # Only allow relative paths to avoid open redirects.
+        if not back.startswith("/"):
+            back = "/connections"
+        return await self.act(request, back, trust)
 
     async def claude_oauth_token_save(self, request: Request) -> Response:
         """Save a pasted `claude setup-token` OAuth token to the secrets file (POST).
@@ -2017,7 +2043,12 @@ class Dashboard:
             )
 
         error, message = await run_in_threadpool(job)
-        self.flash(request, "error" if error else "ok", error or message)
+        # Trust gate blocked the save: offer one-click trust (issue #158).
+        if error and settings.TRUST_GATE_MARKER in error:
+            clean = error.replace(settings.TRUST_GATE_MARKER, "").strip()
+            self.flash(request, "trust", clean)
+        else:
+            self.flash(request, "error" if error else "ok", error or message)
         return self.back(to)
 
     async def settings_entity(self, request: Request) -> Response:
@@ -2069,7 +2100,12 @@ class Dashboard:
             )
 
         error = await run_in_threadpool(job)
-        self.flash(request, "error" if error else "ok", error or f"saved {section}.{name}")
+        # Trust gate blocked the save: offer one-click trust (issue #158).
+        if error and settings.TRUST_GATE_MARKER in error:
+            clean = error.replace(settings.TRUST_GATE_MARKER, "").strip()
+            self.flash(request, "trust", clean)
+        else:
+            self.flash(request, "error" if error else "ok", error or f"saved {section}.{name}")
         return self.back(to)
 
     # ---- actions: runs ---------------------------------------------------------------------
@@ -3542,6 +3578,7 @@ def create_app(
         ),
         Route("/connections/keys/add", dash.connections_key_add, methods=["POST"]),
         Route("/connections/keys/remove", dash.connections_key_remove, methods=["POST"]),
+        Route("/connections/trust", dash.connections_trust_repo, methods=["POST"]),
         Route(
             "/connections/providers/claude/oauth-token",
             dash.claude_oauth_token_save,
