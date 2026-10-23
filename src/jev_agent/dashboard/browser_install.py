@@ -21,7 +21,12 @@ from pathlib import Path
 
 from jev_agent.servers.browser import install_argv
 
-__all__ = ["BrowserInstallBusy", "BrowserInstallError", "BrowserInstallRunner", "BrowserInstallStatus"]
+__all__ = [
+    "BrowserInstallBusy",
+    "BrowserInstallError",
+    "BrowserInstallRunner",
+    "BrowserInstallStatus",
+]
 
 _LOG_FILENAME = "browser-install.log"
 _LOG_TAIL_LINES = 30

@@ -143,7 +143,11 @@ from jev_agent.core.workspace import (
     start_ref,
 )
 from jev_agent.dashboard import studio_decisions, ui_styles, views
-from jev_agent.dashboard.browser_install import BrowserInstallBusy, BrowserInstallError, BrowserInstallRunner
+from jev_agent.dashboard.browser_install import (
+    BrowserInstallBusy,
+    BrowserInstallError,
+    BrowserInstallRunner,
+)
 from jev_agent.dashboard.design_reverse import (
     ReverseBusy,
     ReverseExecutor,
