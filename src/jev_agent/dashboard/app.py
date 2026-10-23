@@ -2043,7 +2043,12 @@ class Dashboard:
             )
 
         error, message = await run_in_threadpool(job)
-        self.flash(request, "error" if error else "ok", error or message)
+        # Trust gate blocked the save: offer one-click trust (issue #158).
+        if error and settings.TRUST_GATE_MARKER in error:
+            clean = error.replace(settings.TRUST_GATE_MARKER, "").strip()
+            self.flash(request, "trust", clean)
+        else:
+            self.flash(request, "error" if error else "ok", error or message)
         return self.back(to)
 
     async def settings_entity(self, request: Request) -> Response:
@@ -2095,7 +2100,12 @@ class Dashboard:
             )
 
         error = await run_in_threadpool(job)
-        self.flash(request, "error" if error else "ok", error or f"saved {section}.{name}")
+        # Trust gate blocked the save: offer one-click trust (issue #158).
+        if error and settings.TRUST_GATE_MARKER in error:
+            clean = error.replace(settings.TRUST_GATE_MARKER, "").strip()
+            self.flash(request, "trust", clean)
+        else:
+            self.flash(request, "error" if error else "ok", error or f"saved {section}.{name}")
         return self.back(to)
 
     # ---- actions: runs ---------------------------------------------------------------------
