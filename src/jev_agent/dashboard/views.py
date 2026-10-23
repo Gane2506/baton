@@ -31,7 +31,9 @@ from jev_agent.app.format import format_answers, learning_line, quality_line
 from jev_agent.app.models import ModelListing
 from jev_agent.app.quality import CheckRow, check_rows, review_text
 from jev_agent.app.queue import item_flags
+from jev_agent.app.settings import layer_sets_laya_weights, read_layers
 from jev_agent.config import STATE_DIRNAME, JevConfig, load_config
+from jev_agent.config.schema import DEFAULT_LAYA_WEIGHTS, LAYA_CRITERIA
 from jev_agent.core.benchmarks import DEFAULT_LAST, Summary, Trend, summarize, trends
 from jev_agent.core.budget import (
     CostEstimate,
@@ -590,13 +592,18 @@ class LayaView:
 
     profiles: list[str]  # the profile selector's options
     profile: str | None  # the profile the suggestion is for (None: no profiles exist)
-    source: str  # where the current weights come from: jev.toml, defaults, profile NAME
-    configured: bool  # jev.toml pins the weights: applying is disabled
+    source: (
+        str  # where the current weights come from: jev.toml, user config, defaults, profile NAME
+    )
+    configured: bool  # some config layer sets the weights: tune-applying is disabled
+    repo_pinned: bool  # the repo's jev.toml pins the weights (needs moving aside to edit)
     tuned: bool  # the profile has tuned weights: resetting is offered
     passed: int
     failed: int
     suggestion: Suggestion | None  # None when there is nothing to suggest
     reason: str  # why there is no suggestion
+    current: dict[str, float]  # the effective weights, for the editor
+    criteria: tuple[str, ...]  # the six criteria, in canonical order
 
 
 def laya_view(repo: Repo, name: str | None) -> LayaView:
@@ -606,22 +613,53 @@ def laya_view(repo: Repo, name: str | None) -> LayaView:
     status = learning_status(repo.store, repo.config)
     target = name if name in profiles else (status.profile if status.profile in profiles else None)
     if target is None:
-        return LayaView(profiles, None, "defaults", False, False, 0, 0, None, "no profiles yet")
+        return LayaView(
+            profiles,
+            None,
+            "defaults",
+            False,
+            False,
+            False,
+            0,
+            0,
+            None,
+            "no profiles yet",
+            dict(DEFAULT_LAYA_WEIGHTS),
+            tuple(LAYA_CRITERIA),
+        )
+    # `configured` mirrors the runtime (`harness.laya_weights`): any config layer that
+    # sets the weights makes profile-tuned weights ineffective, so tune suggestions
+    # cannot be applied. `repo_pinned` is the narrower per-layer answer the editor
+    # needs: only a repo jev.toml pin must be moved aside before a user-config save
+    # can take effect (defaults < user config < repo jev.toml).
     configured = "weights" in repo.config.dispatcher.laya.model_fields_set
+    repo_raw, user_raw, _user_path = read_layers(repo.root)
+    repo_pinned = layer_sets_laya_weights(repo_raw)
+    user_set = layer_sets_laya_weights(user_raw)
     tuned_weights = None if configured else repo.learning.laya_weights(target)
     current = repo.config.dispatcher.laya.weights if tuned_weights is None else tuned_weights
-    source = "jev.toml" if configured else ("defaults" if tuned_weights is None else target)
+    if repo_pinned:
+        source = "jev.toml"
+    elif tuned_weights is not None:
+        source = target
+    elif user_set:
+        source = "user config"
+    else:
+        source = "defaults"
     result = suggest(collect_samples(repo.store), current, MIN_OUTCOMES)
     return LayaView(
         profiles=profiles,
         profile=target,
         source=source,
         configured=configured,
+        repo_pinned=repo_pinned,
         tuned=tuned_weights is not None,
         passed=result.passed,
         failed=result.failed,
         suggestion=result if result.weights is not None else None,
         reason=result.reason or "",
+        current=dict(current),
+        criteria=tuple(LAYA_CRITERIA),
     )
 
 
