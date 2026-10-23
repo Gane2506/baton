@@ -554,7 +554,14 @@ def test_setup_token_flow_waiting_then_done(
         assert status.url is not None and "claude.ai/oauth/authorize" in status.url
         assert status.code_prompt is True
         # The user approves in the browser and pastes the browser code.
-        assert flow.submit_code("browser-code-123") is True
+        # Retry briefly: the watcher thread may still be settling into "waiting".
+        submitted = False
+        deadline = time.monotonic() + 5.0
+        while not submitted and time.monotonic() < deadline:
+            submitted = flow.submit_code("browser-code-123")
+            if not submitted:
+                time.sleep(0.02)
+        assert submitted is True
         assert procs[0].stdin_writes == ["browser-code-123\n"]
         # The CLI prints the token; the flow saves it and reports done.
         procs[0].release.set()  # let wait() return after the token lines
