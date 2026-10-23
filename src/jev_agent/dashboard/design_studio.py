@@ -32,6 +32,8 @@ from jev_agent.core.design_library import (
     save_library_system,
     validate_library_name,
 )
+from jev_agent.core.design_showcase import VIBE_PROFILES, rich_tokens, vibe_for_keywords
+from jev_agent.core.design_showcase_html import render_showcase
 from jev_agent.core.logo import generate_mark, mark_template, mark_to_png, mark_to_svg
 from jev_agent.dashboard.studio_decisions import (
     STACK_REC_KEY,
@@ -193,7 +195,7 @@ def _validate_stack(
 
 
 def _validate_brand(form: Mapping[str, object]) -> dict[str, str]:
-    """Step 4: the brand — system name (validated), vibe keywords, theme."""
+    """Step 4: the brand — system name (validated), vibe profile + keywords, theme."""
     name = _str(form, "name")
     try:
         validate_library_name(name)
@@ -204,13 +206,16 @@ def _validate_brand(form: Mapping[str, object]) -> dict[str, str]:
             f'a design system named "{name}" already exists in the library — '
             "pick a different name (the studio only creates new systems)"
         )
+    vibe_profile = _str(form, "vibe_profile")
+    if vibe_profile and vibe_profile not in VIBE_PROFILES:
+        raise WizardError("Pick one of the listed vibes.")
     vibe = _str(form, "vibe")
     if len(vibe) > _MAX_VIBE_LEN:
         raise WizardError(f"Keep the vibe keywords under {_MAX_VIBE_LEN} characters.")
     theme = _str(form, "theme") or "both"
     if theme not in THEMES:
         raise WizardError("Pick a theme: light, dark, or both.")
-    return {"name": name, "vibe": vibe, "theme": theme}
+    return {"name": name, "vibe": vibe, "vibe_profile": vibe_profile, "theme": theme}
 
 
 def generate_from_state(state: Mapping[str, Mapping[str, str]]) -> str:
@@ -244,6 +249,11 @@ def generate_from_state(state: Mapping[str, Mapping[str, str]]) -> str:
 
     palette = palette_for_vibe(vibe)
     tokens = tokens_for_app_type(app_type, palette, theme)
+    # Rich tokens (issue #155): the full design-token set — ramps, dark pairs,
+    # typography, shadows, motion — merged under "design_tokens" so legacy
+    # consumers (exports, prompts) keep reading the flat keys untouched.
+    vibe_profile = VIBE_PROFILES.get(brand.get("vibe_profile", "")) or vibe_for_keywords(vibe)
+    tokens["design_tokens"] = rich_tokens(vibe_profile, theme)
     markdown = design_system_markdown(name, app_type, stack, palette, theme)
     seed = f"{name}:{product}"
     template = mark_template(seed)
@@ -254,12 +264,19 @@ def generate_from_state(state: Mapping[str, Mapping[str, str]]) -> str:
         "source": "studio",
         "product_name": product,
         "theme": theme,
+        "vibe": vibe,
+        "vibe_profile": vibe_profile.key,
         "logo_template": template,
     }
     save_library_system(name, markdown, tokens, meta_extra=meta_extra)
 
-    mark = generate_mark(seed, palette)
+    # Showcase gallery (issue #155): a stunning standalone preview saved
+    # alongside the system.
+    showcase_html = render_showcase(name, vibe_profile, tokens["design_tokens"], theme)  # type: ignore[arg-type]
     system_path = library_system_path(name)
+    (system_path / "showcase.html").write_bytes(showcase_html.encode("utf-8"))
+
+    mark = generate_mark(seed, palette)
     assets: dict[str, bytes] = {
         "logo.svg": mark_to_svg(mark, 512).encode("utf-8"),
         "favicon.svg": mark_to_svg(mark, 64).encode("utf-8"),
@@ -315,6 +332,10 @@ def wizard_context(
         },
         "app_types": APP_TYPES,
         "themes": THEMES,
+        "vibe_profiles": [
+            {"key": p.key, "name": p.name, "tagline": p.tagline, "description": p.description}
+            for p in VIBE_PROFILES.values()
+        ],
         **extra,
     }
     if step == "stack":
