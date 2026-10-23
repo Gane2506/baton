@@ -3038,6 +3038,8 @@ def _chat_context_bar(repo: views.Repo, meta: ChatMeta | None) -> dict[str, str]
         "model": meta.model if meta is not None and meta.model else "default model",
         "profile": meta.profile if meta is not None and meta.profile else "",
     }
+
+
 # Curated OpenRouter model ids for the API model picker (issue #149). Shown when
 # the API backend is usable but `[workers.api] default_model` is unset; the user
 # picks one (or types their own) and it is saved to the user config. Kept short
