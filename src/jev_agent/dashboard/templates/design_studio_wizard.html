@@ -125,8 +125,26 @@
       <div class="field-actions"></div>
     </div>
     <div class="field-row">
+      <label>Vibe
+        <span class="hint">Pick the aesthetic — the whole system (palette, type, shape, motion) follows it.</span>
+      </label>
+      <div class="field-control">
+        <div class="vibe-grid" role="radiogroup" aria-label="Vibe">
+          {% for vp in vibe_profiles %}
+          <label class="vibe-card{% if v.get('vibe_profile', 'minimal') == vp.key %} selected{% endif %}">
+            <input type="radio" name="vibe_profile" value="{{ vp.key }}"
+                   {% if v.get('vibe_profile', 'minimal') == vp.key %}checked{% endif %}>
+            <span class="vibe-name">{{ vp.name }}</span>
+            <span class="vibe-tagline">{{ vp.tagline }}</span>
+          </label>
+          {% endfor %}
+        </div>
+      </div>
+      <div class="field-actions"></div>
+    </div>
+    <div class="field-row">
       <label for="ws-vibe">Vibe keywords
-        <span class="hint">Optional free text — the studio reads it into a color palette.</span>
+        <span class="hint">Optional free text to fine-tune — e.g. "warm, confident".</span>
       </label>
       <div class="field-control">
         <input type="text" id="ws-vibe" name="vibe" maxlength="200"
