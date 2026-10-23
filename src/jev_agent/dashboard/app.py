@@ -711,6 +711,10 @@ class Dashboard:
         try:
             with views.open_repo(self.settings.root) as repo:
                 context = build(repo)
+                # Chats submenu (issue #149): the nav panel lists recent chats, so
+                # every page carries them. Capped for the narrow submenu width.
+                if "submenu_chats" not in context:
+                    context["submenu_chats"] = views.chats(repo, "")[:12]
         except ConfigError as exc:
             return self.render(request, "error.html", 500, title="Config error", message=str(exc))
         except JevError as exc:
@@ -874,6 +878,8 @@ class Dashboard:
 
         def build(repo: views.Repo) -> dict[str, Any]:
             rows = views.chats(repo, query)
+            backends = chat.backend_readiness(repo.config)
+            api_ok, _ = backends["api"]
             return {
                 "chats": rows,
                 "q": query.strip(),
@@ -881,7 +887,12 @@ class Dashboard:
                     meta.chat_id for meta, _ in rows if self.chat_runner.busy(meta.chat_id)
                 },
                 "profiles": repo.learning.profiles(),
-                "backends": chat.backend_readiness(repo.config),
+                "backends": backends,
+                # API model picker (issue #149): the API backend is usable but no
+                # default model is set — show an inline picker instead of the raw
+                # "no model for the api backend" error.
+                "api_model_needed": api_ok and not repo.config.workers.api.default_model,
+                "api_model_options": API_MODEL_OPTIONS,
                 # The New chat form's design-system picker, like `profiles` above.
                 "design_systems": list_design_library(),
                 "has_repo_design_system": get_design_system(repo.root) is not None,
@@ -1292,11 +1303,16 @@ class Dashboard:
 
     def design_reverse_page(self, request: Request) -> Response:
         """The reverse entry form (Tier 0): a website URL xor PNG screenshots."""
-        return self.render(
-            request,
-            "design_studio_reverse.html",
-            busy=self.reverse_runner.busy(),
-        )
+        def build(repo: views.Repo) -> dict[str, Any]:
+            api_ok, _ = chat.backend_readiness(repo.config)
+            return {
+                "busy": self.reverse_runner.busy(),
+                # API model picker (issue #149): same as the chats page.
+                "api_model_needed": api_ok and not repo.config.workers.api.default_model,
+                "api_model_options": API_MODEL_OPTIONS,
+            }
+
+        return self.page(request, "design_studio_reverse.html", build)
 
     async def design_reverse_start(self, request: Request) -> Response:
         """Validate the reverse submission, then run the job in the background.
@@ -2122,10 +2138,43 @@ class Dashboard:
         try:
             chat_id = await run_in_threadpool(create)
         except (ChatError, ConfigError, LearningError, ValueError) as exc:
-            self.flash(request, "error", str(exc))
+            message = str(exc)
+            # Never show the raw "no model" error (issue #149) — the picker on
+            # /chats handles it; point there instead.
+            if "no model for the api backend" in message:
+                message = "pick an API model first — use the picker at the top of this page."
+            self.flash(request, "error", message)
             return self.back("/chats")
         self.flash(request, "ok", f"chat {chat_id} created; say what you want to build")
         return self.back(f"/chats/{chat_id}")
+
+    async def chats_api_model(self, request: Request) -> Response:
+        """Save the API backend's default model (issue #149).
+
+        The picker posts here; the model goes to the *user* config so it works
+        across repos. After saving, the picker disappears (disappear-when-done).
+        """
+        form = await checked_form(request)
+        to = _text(form, "next") or "/chats"
+        model = (_text(form, "model") or "").strip()
+
+        def save() -> str:
+            if not model:
+                raise ValueError("pick a model first")
+            # A model id is `provider/name`; keep it simple and safe.
+            if not all(c.isalnum() or c in "-_./:" for c in model):
+                raise ValueError("that doesn't look like a model id")
+            user_path = settings.default_user_config_path()
+            settings.write_value(user_path, "workers.api.default_model", model)
+            return f"API model set to {model}; it applies immediately."
+
+        try:
+            message = await run_in_threadpool(save)
+        except (ValueError, OSError, ConfigError) as exc:
+            self.flash(request, "error", str(exc))
+        else:
+            self.flash(request, "ok", message)
+        return self.back(to)
 
     async def chat_send(self, request: Request) -> Response:
         chat_id: str = request.path_params["chat_id"]
@@ -2854,6 +2903,21 @@ _CHAT_SUGGESTIONS: tuple[str, ...] = (
 )
 
 
+# Curated OpenRouter model ids for the API model picker (issue #149). Shown when
+# the API backend is usable but `[workers.api] default_model` is unset; the user
+# picks one (or types their own) and it is saved to the user config. Kept short
+# and recognizable — the full catalog needs an API key to fetch.
+API_MODEL_OPTIONS: tuple[str, ...] = (
+    "anthropic/claude-sonnet-4",
+    "anthropic/claude-3.5-sonnet",
+    "openai/gpt-4o",
+    "openai/gpt-4o-mini",
+    "google/gemini-2.0-flash-001",
+    "deepseek/deepseek-chat",
+    "meta-llama/llama-3.1-405b-instruct",
+)
+
+
 def _safe_diff_stat(root: Path, base: str, head: str) -> DiffStat | None:
     """`git diff --shortstat base..head` as numbers; None when git cannot tell."""
     try:
@@ -3285,6 +3349,7 @@ def create_app(
         Route("/learning/{action}", dash.learning_action, methods=["POST"]),
         Route("/chats", dash.chats_page),
         Route("/chats/new", dash.chats_new, methods=["POST"]),
+        Route("/chats/api-model", dash.chats_api_model, methods=["POST"]),
         Route("/chats/{chat_id}", dash.chat_page),
         Route("/chats/{chat_id}/live", dash.chat_fragment),
         Route("/chats/{chat_id}/send", dash.chat_send, methods=["POST"]),

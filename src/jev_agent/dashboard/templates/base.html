@@ -124,6 +124,27 @@
           <a href="{{ child.href }}" class="submenu-link{% if item.child_active(child, path) %} active{% endif %}"{% if item.child_active(child, path) %} aria-current="page"{% endif %}><svg class="icon" aria-hidden="true"><use href="#{{ icons[item.href] }}"></use></svg><span>{{ child.label }}</span></a>
           {% endif %}
           {% endfor %}
+          {# Saved chats live in the Chats submenu (issue #149): an
+             information-dense list, compact for the narrow panel. #}
+          {% if item.href == "/chats" and submenu_chats is defined and submenu_chats %}
+          <div class="submenu-chats">
+            <div class="submenu-chats-head">Recent</div>
+            {% for meta, title in submenu_chats %}
+            <div class="submenu-chat{% if path == "/chats/" + meta.chat_id %} active{% endif %}">
+              <a href="/chats/{{ meta.chat_id }}" class="submenu-chat-main">
+                <span class="submenu-chat-title">{{ title or "Untitled chat" }}</span>
+                <span class="submenu-chat-meta">{{ meta.backend }} · {{ meta.turns }} turns · {{ meta.spent_usd | usd }}</span>
+              </a>
+              <span class="submenu-chat-actions">
+                <a href="/chats/{{ meta.chat_id }}" class="submenu-chat-btn" title="Continue">Continue</a>
+                <form class="inline" method="post" action="/chats/{{ meta.chat_id }}/delete" data-confirm="Delete chat {{ meta.chat_id }}?">
+                  {{ csrf_input() }}<button class="submenu-chat-btn danger" type="submit" title="Delete">Delete</button>
+                </form>
+              </span>
+            </div>
+            {% endfor %}
+          </div>
+          {% endif %}
         </div>
         {% else %}
         <a href="{{ item.href }}"{% if item.is_active(path) %} class="active" aria-current="page"{% endif %} title="{{ item.label }}"><svg class="icon" aria-hidden="true"><use href="#{{ icons[item.href] }}"></use></svg><span>{{ item.label }}</span></a>
