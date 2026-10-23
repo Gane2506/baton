@@ -8,7 +8,6 @@ import time
 import pytest
 
 from jev_agent.servers.stats import (
-    ServerStats,
     ServerStatsCache,
     collect_stats,
     parse_stats,
@@ -139,7 +138,7 @@ class _FakeRunner:
         self.exit_code = exit_code
         self.calls = 0
 
-    def __call__(self, argv, *, stdin, timeout_s):  # noqa: ANN001, ANN002, ANN003
+    def __call__(self, argv, *, stdin, timeout_s):
         from jev_agent.servers.ssh import SshResult
 
         self.calls += 1
@@ -152,26 +151,30 @@ def _server_config() -> object:
     return ServerConfig(host="example.com", user="u")
 
 
-def test_collect_stats_ok(tmp_path) -> None:  # noqa: ANN001
+def test_collect_stats_ok(tmp_path) -> None:
     runner = _FakeRunner(LINUX_OUTPUT.encode())
     stats = collect_stats(
-        _server_config(), runner=runner, state_dir=tmp_path  # type: ignore[arg-type]
+        _server_config(),
+        runner=runner,
+        state_dir=tmp_path,  # type: ignore[arg-type]
     )
     assert stats.ok
     assert stats.hostname == "web-01"
     assert runner.calls == 1
 
 
-def test_collect_stats_ssh_failure(tmp_path) -> None:  # noqa: ANN001
+def test_collect_stats_ssh_failure(tmp_path) -> None:
     runner = _FakeRunner(b"ssh: connect timeout", exit_code=255)
     stats = collect_stats(
-        _server_config(), runner=runner, state_dir=tmp_path  # type: ignore[arg-type]
+        _server_config(),
+        runner=runner,
+        state_dir=tmp_path,  # type: ignore[arg-type]
     )
     assert not stats.ok
     assert stats.error
 
 
-def test_cache_refresh_and_get(tmp_path) -> None:  # noqa: ANN001
+def test_cache_refresh_and_get(tmp_path) -> None:
     cache = ServerStatsCache()
     runner = _FakeRunner(LINUX_OUTPUT.encode())
     stats, state = cache.get(tmp_path, "web")
@@ -200,7 +203,7 @@ def test_cache_refresh_and_get(tmp_path) -> None:  # noqa: ANN001
     assert runner.calls == 1  # no new SSH call
 
 
-def test_cache_failed_keeps_old_stats(tmp_path) -> None:  # noqa: ANN001
+def test_cache_failed_keeps_old_stats(tmp_path) -> None:
     cache = ServerStatsCache()
     good = _FakeRunner(LINUX_OUTPUT.encode())
     assert cache.refresh("web", _server_config(), tmp_path, good)  # type: ignore[arg-type]
@@ -219,7 +222,7 @@ def test_cache_failed_keeps_old_stats(tmp_path) -> None:  # noqa: ANN001
     assert stats is not None and stats.ok
 
 
-def test_cache_json_roundtrip(tmp_path) -> None:  # noqa: ANN001
+def test_cache_json_roundtrip(tmp_path) -> None:
     stats = parse_stats(LINUX_OUTPUT, collected_at=999.0)
     assert stats.disk_pct == 50.0
     assert isinstance(stats.mounts[0].total_gb, float)

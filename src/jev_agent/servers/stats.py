@@ -9,6 +9,7 @@ depends on locale-specific prose. Values are numbers where possible; the raw
 
 from __future__ import annotations
 
+import contextlib
 import json
 import re
 import threading
@@ -35,15 +36,19 @@ echo '==HOST=='; hostname 2>/dev/null || echo unknown
 echo '==OS=='; uname -sr 2>/dev/null || echo unknown
 echo '==UPTIME=='; uptime 2>/dev/null || echo unknown
 echo '==CORES=='; (nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 1) | tr -d ' '
-echo '==LOAD=='; (cat /proc/loadavg 2>/dev/null | awk '{print $1, $2, $3}'; sysctl -n vm.loadavg 2>/dev/null | tr -d '{}') | head -1
+echo '==LOAD=='
+(cat /proc/loadavg 2>/dev/null | awk '{print $1, $2, $3}'
+ sysctl -n vm.loadavg 2>/dev/null | tr -d '{}') | head -1
 echo '==MEM=='
 if command -v free >/dev/null 2>&1; then
   free -m | awk 'NR==2 {printf "%d %d %d\\n", $2, $3, $7}'
 else
   _psz=$(vm_stat 2>/dev/null | awk '/page size of/{print $8}'); _psz=${_psz:-4096}
   _total_mb=$(($(sysctl -n hw.memsize 2>/dev/null || echo 0) / 1048576)
-  _free=$(vm_stat 2>/dev/null | awk '/Pages free:/{gsub(/\\./,"",$3); print $3}'); _free=${_free:-0}
-  _inact=$(vm_stat 2>/dev/null | awk '/Pages inactive:/{gsub(/\\./,"",$3); print $3}'); _inact=${_inact:-0}
+  _free=$(vm_stat 2>/dev/null | awk '/Pages free:/{gsub(/\\./,"",$3); print $3}')
+  _free=${_free:-0}
+  _inact=$(vm_stat 2>/dev/null | awk '/Pages inactive:/{gsub(/\\./,"",$3); print $3}')
+  _inact=${_inact:-0}
   _avail_mb=$(( (_free + _inact) * _psz / 1048576 ))
   _used_mb=$(( _total_mb - _avail_mb ))
   echo "$_total_mb $_used_mb $_avail_mb"
@@ -54,7 +59,8 @@ if ps -eo pcpu --no-headers >/dev/null 2>&1; then
 else
   ps -Ao %cpu 2>/dev/null | awk 'NR>1 {s+=$1} END {printf "%.1f\\n", s+0}'
 fi
-echo '==DISK=='; df -Pk 2>/dev/null | awk 'NR>1 && $1 !~ /^(tmpfs|devtmpfs|udev)$/ {print $1, $2, $3, $4, $5, $6}'
+echo '==DISK=='
+df -Pk 2>/dev/null | awk 'NR>1 && $1 !~ /^(tmpfs|devtmpfs|udev)$/ {print $1, $2, $3, $4, $5, $6}'
 echo '==TOPCPU=='
 if ps -eo comm,pcpu,pmem --sort=-pcpu >/dev/null 2>&1; then
   ps -eo comm,pcpu,pmem --sort=-pcpu 2>/dev/null | head -9
@@ -209,6 +215,7 @@ def parse_stats(output: str, *, collected_at: float = 0.0) -> ServerStats:
         cores = 1
 
     load_parts = _first_line(sections, "LOAD").split()
+
     def _load(i: int) -> float:
         try:
             return float(load_parts[i])
@@ -218,14 +225,12 @@ def parse_stats(output: str, *, collected_at: float = 0.0) -> ServerStats:
     mem_parts = _first_line(sections, "MEM").split()
     mem_total_mb, mem_used_mb, mem_avail_mb = 0.0, 0.0, 0.0
     if len(mem_parts) >= 3:
-        try:
+        with contextlib.suppress(ValueError):
             mem_total_mb, mem_used_mb, mem_avail_mb = (
                 float(mem_parts[0]),
                 float(mem_parts[1]),
                 float(mem_parts[2]),
             )
-        except ValueError:
-            pass
     mem_total_gb = round(mem_total_mb / 1024, 1)
     mem_used_gb = round(mem_used_mb / 1024, 1)
     mem_avail_gb = round(mem_avail_mb / 1024, 1)
@@ -269,9 +274,7 @@ def collect_stats(
     from jev_agent.servers.ssh import SshTransport, time_limited
 
     transport = SshTransport(server, sockets=state_dir / "ssh", runner=runner)
-    result = transport.run(
-        time_limited(STATS_SCRIPT, timeout_s), timeout_s=timeout_s + 15
-    )
+    result = transport.run(time_limited(STATS_SCRIPT, timeout_s), timeout_s=timeout_s + 15)
     if not result.ok:
         detail = result.stderr.decode("utf-8", errors="replace").strip()[:200]
         if result.timed_out:
@@ -369,8 +372,6 @@ class ServerStatsCache:
                     state="ready" if stats.ok else "failed",
                 )
 
-        thread = threading.Thread(
-            target=_work, name=f"server-stats-{name}", daemon=True
-        )
+        thread = threading.Thread(target=_work, name=f"server-stats-{name}", daemon=True)
         thread.start()
         return True
