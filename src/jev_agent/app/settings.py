@@ -33,11 +33,11 @@ from jev_agent.config.loader import (
     default_user_config_path,
     trusts,
 )
+from jev_agent.config.schema import JevConfig
 
 # Marker prefix for the trust-gate error from save(). The dashboard detects this
 # to offer an inline "Trust this repo" button (issue #158).
 TRUST_GATE_MARKER = "TRUST_GATE:"
-from jev_agent.config.schema import JevConfig
 
 # The sections the editor shows, in order. The path names a table; the model behind it comes
 # from a default `JevConfig` instance, so nothing here names a config class.
