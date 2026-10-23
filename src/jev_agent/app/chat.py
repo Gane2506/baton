@@ -43,6 +43,7 @@ from jev_agent.core.chat import (
 from jev_agent.core.learning import Learning
 from jev_agent.core.pipeline import PipelineError
 from jev_agent.core.queue import add_idea
+from jev_agent.core.skills import describe_for_prompt, find_skills
 from jev_agent.core.store import Store
 
 
@@ -193,7 +194,18 @@ def turn(root: Path, chat_id: str, text: str) -> str:
     """One message to the model (runs in a `ChatRunner` job); returns a one-line outcome."""
     with hold_chat(root, chat_id), open_repo(root) as repo:
         session = session_for(root, repo, chat_id)
-        reply = run_job_coroutine(session.say(text))
+        # Find-skills pass: match the message against Baton's skill registry so the
+        # model knows what Baton can do, and the UI can show what was found.
+        skill_matches = find_skills(text)
+        sent = text
+        if skill_matches:
+            session.record(
+                "skills",
+                "; ".join(m.skill.name for m in skill_matches),
+                titles="; ".join(m.skill.title for m in skill_matches),
+            )
+            sent = f"[Skills found: {describe_for_prompt(skill_matches)}]\n\n{text}"
+        reply = run_job_coroutine(session.say(sent))
         spent = session.meta.spent_usd
     if reply.ok:
         return f"replied; the chat has spent ${spent:.2f}"
