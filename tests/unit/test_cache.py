@@ -441,6 +441,33 @@ async def test_decide_shadow_mode_measures_without_serving(
     assert len(rows) == 1 and rows[0][0] == 1  # same answers: agreement logged
 
 
+@pytest.mark.asyncio
+async def test_decide_semantic_serve_counts_hit_in_stats(
+    store: Store, run_id: str, tmp_path: Path
+) -> None:
+    """A semantically served decision must account exactly like an exact hit:
+    hit_count, saved dollars, and LRU recency (regression: serve-mode hits came
+    from `Cache.similar()`'s scan, which never counted them, so `jev cache stats`
+    and the dashboard underreported every semantic hit)."""
+    config = JevConfig.model_validate(
+        {"cache": {"semantic": {"enabled": True, "mode": "serve", "decision_threshold": 0.90}}}
+    )
+    notes = "the quick brown fox jumps over the lazy dog " * 10
+    variant = _req(state={"notes": notes.replace("lazy", "sleepy", 1)})
+    live_req = _req(state={"notes": notes})
+    stub = _StubDispatcher(_decision())
+    harness = _harness(store, tmp_path, GuardedDispatcher(stub), config=config)
+    await harness.decide(run_id, None, variant)  # stored, with run_id provenance
+    assert stub.calls == 1
+    decision = await harness.decide(run_id, None, live_req)  # near-dup: semantic serve
+    assert stub.calls == 1  # no live call for the near-duplicate
+    assert decision.details.get("semantic_match") is True
+    stats = store.cache_stats()
+    assert stats.hits == 1
+    assert stats.saved_usd == pytest.approx(0.0003)
+    assert store.cache_saved_by_run() == {run_id: pytest.approx(0.0003)}
+
+
 # ---- Harness.run_worker ---------------------------------------------------------------
 
 
