@@ -143,7 +143,11 @@ from jev_agent.core.workspace import (
     start_ref,
 )
 from jev_agent.dashboard import studio_decisions, ui_styles, views
-from jev_agent.dashboard.browser_install import BrowserInstallBusy, BrowserInstallRunner
+from jev_agent.dashboard.browser_install import (
+    BrowserInstallBusy,
+    BrowserInstallError,
+    BrowserInstallRunner,
+)
 from jev_agent.dashboard.design_reverse import (
     ReverseBusy,
     ReverseExecutor,
@@ -1563,6 +1567,8 @@ class Dashboard:
         try:
             await run_in_threadpool(self.browser_installer.start)
         except BrowserInstallBusy as exc:
+            self.flash(request, "error", str(exc))
+        except BrowserInstallError as exc:
             self.flash(request, "error", str(exc))
         else:
             self.flash(request, "ok", "browser install started; its progress shows below")

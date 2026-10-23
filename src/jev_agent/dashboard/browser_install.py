@@ -11,6 +11,7 @@ itself is fixed (`servers.browser.install_argv()`); no request can change it.
 
 from __future__ import annotations
 
+import shutil
 import subprocess
 import threading
 from collections.abc import Callable
@@ -20,7 +21,12 @@ from pathlib import Path
 
 from jev_agent.servers.browser import install_argv
 
-__all__ = ["BrowserInstallBusy", "BrowserInstallRunner", "BrowserInstallStatus"]
+__all__ = [
+    "BrowserInstallBusy",
+    "BrowserInstallError",
+    "BrowserInstallRunner",
+    "BrowserInstallStatus",
+]
 
 _LOG_FILENAME = "browser-install.log"
 _LOG_TAIL_LINES = 30
@@ -28,6 +34,10 @@ _LOG_TAIL_LINES = 30
 
 class BrowserInstallBusy(RuntimeError):
     """An install is already running."""
+
+
+class BrowserInstallError(RuntimeError):
+    """The install could not be started (e.g. `npx` not on PATH)."""
 
 
 @dataclass(frozen=True)
@@ -107,14 +117,21 @@ class BrowserInstallRunner:
     # ---- control -----------------------------------------------------------------
 
     def start(self) -> None:
-        """Start the install in a background thread; `BrowserInstallBusy` when one runs."""
+        """Start the install in a background thread; `BrowserInstallBusy` when one runs,
+        `BrowserInstallError` when the installer cannot be started."""
         with self._guard:
             if self._state == "running":
                 raise BrowserInstallBusy("a browser install is already running")
+            argv = install_argv()
+            if shutil.which(argv[0]) is None:
+                raise BrowserInstallError(
+                    f"`{argv[0]}` not found on PATH; install Node.js (which provides npx) "
+                    "and restart the dashboard so it picks up the new PATH"
+                )
             log = self._log_path()
             log.parent.mkdir(parents=True, exist_ok=True)
             log.write_bytes(b"")  # a fresh log per install
-            proc = self._spawn(install_argv(), log)
+            proc = self._spawn(argv, log)
             self._proc = proc
             self._state = "running"
             self._message = ""
