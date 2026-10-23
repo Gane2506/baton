@@ -357,6 +357,17 @@ gated on sustained ≥ 0.99 agreement (`min_agreement`); below it, serving auto-
 | `mode` | `"off"` | `"off"`, `"shadow"` (measure only, never serve), or `"serve"`. |
 | `min_agreement` | `0.98` | Live-sampling floor: below it, semantic serving auto-disables. |
 
+## `[dashboard]`
+
+The web dashboard's own display preferences (issue
+[#116](https://github.com/Gane2506/baton/issues/116)). Read from the **user
+config only**: a repo's `jev.toml` cannot override the user's own display
+choice.
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `ui_style` | `"bento"` | The dashboard's UI style: one of the 16 styles in the sidebar Style picker (Bento Grid, Minimalism, Flat Design 2.0, Skeuomorphism, Neumorphism, Glassmorphism, Claymorphism, Cards-Based UI, Split-Screen Design, Brutalism, Neo-Brutalism, Bauhaus Style, Hand-Drawn, Cyberpunk, Y2K/Vaporwave, Pixel Art UI). An unknown value falls back to Bento Grid. |
+
 ## `[events]`
 
 The event-sourced execution log: every run mutation is dual-written as an append-only event
