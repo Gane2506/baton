@@ -626,6 +626,30 @@ input[type="password"]:disabled, input[type="url"]:disabled, input[type="email"]
 select:disabled, textarea:disabled {
   opacity: 0.55; cursor: not-allowed; background: var(--surface-2);
 }
+
+/* ---- native selects: custom chevron ------------------------------------------------
+   appearance:none drops the cramped native arrow (it sat against the edge with only
+   12px padding). The chevron is drawn from two gradient layers so its color stays a
+   real CSS variable — theme-aware across all 16 UI styles + dark mode. One global
+   rule: every select in the product gets it. select:disabled is listed so the
+   shorthand `background` above can't wipe the chevron layers (same specificity,
+   later in source order wins). */
+select, select:disabled {
+  --select-chevron: color-mix(in srgb, var(--fg) 55%, transparent);
+  appearance: none;
+  -webkit-appearance: none;
+  padding-right: 34px;
+  background-image:
+    linear-gradient(45deg, transparent 50%, var(--select-chevron) 50%),
+    linear-gradient(135deg, var(--select-chevron) 50%, transparent 50%);
+  background-position:
+    calc(100% - 22px) center,
+    calc(100% - 16px) center;
+  background-size: 7px 7px, 7px 7px;
+  background-repeat: no-repeat;
+}
+/* Compact sidebar picker: same chevron, tighter clearance to match its size. */
+.theme-pick select, .theme-pick select:disabled { padding-right: 30px; }
 input[type="checkbox"], input[type="radio"] {
   width: 17px; height: 17px; margin: 0; flex: none;
   accent-color: var(--accent); cursor: pointer;
