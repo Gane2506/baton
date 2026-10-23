@@ -609,7 +609,9 @@ def test_propose_skills_groups_by_tag(learning: Learning) -> None:
     tags = {p["tag"] for p in proposals}
     assert tags == {"ui", "testing"}
     for p in proposals:
-        assert len(p["lesson_ids"]) == 2
+        ids = p["lesson_ids"]
+        assert isinstance(ids, list)
+        assert len(ids) == 2
 
 
 def test_propose_skills_empty_when_no_lessons(learning: Learning) -> None:
