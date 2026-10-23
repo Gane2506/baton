@@ -1,6 +1,7 @@
 {% extends "base.html" %}
 {% from "macros.html" import badge, icon, csrf_input with context %}
 {% block title %}Learning{% endblock %}
+{% block extra_head %}<script src="/static/laya-weights.js" defer></script>{% endblock %}
 {% block content %}
 <div class="page-head">
   <div class="titles">
@@ -82,10 +83,38 @@
   {% if laya.profile %}
   <p class="small">Current weights: <span class="mono">{{ laya.source }}</span>; outcomes:
   {{ laya.passed }} passed, {{ laya.failed }} failed.</p>
+  <form method="post" action="/learning/laya/weights" id="laya-weights-form">
+    {{ csrf_input() }}
+    <input type="hidden" name="profile" value="{{ laya.profile }}">
+    <div class="weights">
+      {% for criterion in laya.criteria %}
+      <label class="check small"><span class="mono">{{ criterion }}</span>
+        <input type="number" step="0.01" min="0" max="1" name="w_{{ criterion }}"
+               value="{{ "%.2f" % laya.current[criterion] }}" data-laya-weight
+               aria-label="{{ criterion }} weight">
+      </label>
+      {% endfor %}
+    </div>
+    <p class="hint" id="laya-weights-sum" role="status">Sum: {{ "%.2f" % (laya.current.values() | sum) }}</p>
+    {% if laya.repo_pinned %}
+    <p class="flash warn small" role="note">{{ icon("i-alert", "sm") }}<span>This repo's
+    <code>jev.toml</code> pins the weights. Saving here moves them to your user config and
+    removes the repo pin, so the weights stay editable in the dashboard.</span></p>
+    {% endif %}
+    <div class="actions">
+      <button class="btn btn-primary" type="submit" id="laya-weights-save">Save weights</button>
+    </div>
+  </form>
   {% if laya.configured %}
-  <p class="flash warn small" role="note">{{ icon("i-alert", "sm") }}<span><code>jev.toml</code> sets
-  <code>[dispatcher.laya] weights</code>, which always win — tune suggestions cannot be applied
-  to this profile. Edit the weights in <code>jev.toml</code> instead.</span></p>
+  {% if laya.repo_pinned %}
+  <p class="flash warn small" role="note">{{ icon("i-alert", "sm") }}<span>Tune suggestions cannot
+  be applied while this repo's <code>jev.toml</code> pins the weights — save the weights above to
+  move them to your user config first.</span></p>
+  {% else %}
+  <p class="flash warn small" role="note">{{ icon("i-alert", "sm") }}<span>Your user config pins the
+  weights, so tune suggestions cannot be applied to this profile — edit the weights above
+  instead.</span></p>
+  {% endif %}
   {% elif laya.suggestion %}
   <form method="post" action="/learning/laya/apply">
     {{ csrf_input() }}
