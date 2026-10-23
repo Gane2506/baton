@@ -369,6 +369,8 @@ def test_queue_items_note_column_has_no_wrap_floor(client: TestClient) -> None:
 # to ship without a plan crashed with AssertionError (pipeline.request_changes'
 # `assert run.plan is not None`) — a 500 traceback page. The assert is now a
 # PipelineError, which the modify handler turns into an actionable error flash.
+# The same sweep found changes_task_card crashed with ValueError (max() on an
+# empty task list); it now numbers the new task T1 instead.
 
 
 def test_modify_run_without_plan_flashes_instead_of_500(
@@ -384,3 +386,10 @@ def test_modify_run_without_plan_flashes_instead_of_500(
     assert modified.status_code == 303  # never a 500
     page = client.get(f"/runs/{run_id}")
     assert "has no plan" in page.text  # the error is actionable in the UI
+
+
+def test_changes_task_card_with_no_cards_starts_at_t1() -> None:
+    from jev_agent.core.ship import changes_task_card
+
+    card = changes_task_card([], "  do the thing  ")
+    assert card.id == "T1" and card.depends_on == [] and "do the thing" in card.description

@@ -997,7 +997,9 @@ async def ship_and_merge(
 
 def changes_task_card(cards: list[TaskCard], notes: str) -> TaskCard:
     """A new task, after all of `cards`, carrying a person's notes from `jev ship modify`."""
-    next_no = 1 + max(int(card.id[1:]) for card in cards)
+    # `default=0`: a run whose task rows are gone still gets a T1 instead of a
+    # ValueError from max() on an empty sequence (issue #174 — never a 500).
+    next_no = 1 + max((int(card.id[1:]) for card in cards), default=0)
     rounds = sum(1 for card in cards if card.title.startswith(CHANGES_TITLE))
     return TaskCard(
         id=f"T{next_no}",
