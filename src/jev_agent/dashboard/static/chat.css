@@ -714,6 +714,245 @@
   transform: rotate(180deg);
 }
 
+/* ---- serene empty state (issue #156) ----------------------------------------------
+   New chat: a warm greeting, the composer centered in vast whitespace,
+   repo-aware starters — no forms, no errors, no clutter. The context lives in
+   a quiet strip at the bottom, visible but never demanding attention. */
+
+#chat-main[data-empty="true"] {
+  justify-content: flex-start;
+}
+
+.empty-hero {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--s4);
+  padding: var(--s5);
+  max-width: 880px;
+  width: 100%;
+  margin: 0 auto;
+  animation: hero-rise 480ms ease both;
+}
+
+@keyframes hero-rise {
+  from { opacity: 0; transform: translateY(14px); }
+  to { opacity: 1; transform: none; }
+}
+
+.empty-kicker {
+  margin: 0;
+  font-size: var(--fs-12);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  color: var(--faint);
+}
+
+.empty-title {
+  margin: 0;
+  font-size: clamp(24px, 3.4vw, 34px);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  text-align: center;
+  text-wrap: balance;
+  color: var(--fg);
+}
+
+/* The composer floats centered in the hero: wider, calmer, glowing on focus. */
+.empty-hero #chat-composer {
+  width: 100%;
+  margin: 0;
+  border-radius: 20px;
+  padding: var(--s4);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.10);
+  transition: border-color 160ms ease, box-shadow 220ms ease;
+}
+
+.empty-hero #chat-composer:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 12px 44px rgba(0, 0, 0, 0.14),
+    0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent);
+}
+
+.empty-hero #composer-text {
+  min-height: 56px;
+  font-size: var(--fs-15);
+}
+
+/* Starters: pill chips that lift on hover — the "warmer than blank" touch. */
+.empty-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s2);
+  justify-content: center;
+  max-width: 720px;
+  padding: 0;
+  margin: 0;
+}
+
+.empty-chips .chip {
+  transition: transform 140ms ease, background 140ms ease, border-color 140ms ease,
+    color 140ms ease, box-shadow 140ms ease;
+}
+
+.empty-chips .chip:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.10);
+}
+
+/* ---- persistent quiet context strip -------------------------------------------
+   Repo · branch · backend · model — always visible, never blocking input. */
+
+.context-strip {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: var(--s2);
+  padding: var(--s2) var(--s4);
+  border-top: 1px solid var(--border);
+  background: var(--surface);
+  font-size: var(--fs-12);
+  color: var(--faint);
+}
+
+.ctx-item {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 280px;
+}
+
+.ctx-repo {
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.ctx-sep {
+  color: var(--border-strong);
+}
+
+/* ---- smart rail: recency groups + status pills ---------------------------------- */
+
+.rail-heading {
+  margin: var(--s3) var(--s3) var(--s1);
+  font-size: var(--fs-11);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--faint);
+}
+
+.rail-heading:first-child {
+  margin-top: var(--s1);
+}
+
+.rail-item {
+  transition: transform 120ms ease, background 120ms ease, border-color 120ms ease;
+}
+
+.rail-item:hover {
+  transform: translateX(2px);
+}
+
+.rail-item-top {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  min-width: 0;
+}
+
+.rail-item-top .rail-item-title {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* Rich status language (issue #156): Running / Needs you / Queued / Briefed.
+   Running pulses; Needs you carries the warm attention color; the rest whisper. */
+.status-pill {
+  flex: 0 0 auto;
+  font-size: var(--fs-10);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 2px 7px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  color: var(--muted);
+  background: var(--surface-2);
+  white-space: nowrap;
+}
+
+.status-running {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+  background: var(--accent-soft);
+  animation: chat-pulse 1.6s ease-in-out infinite;
+}
+
+.status-needs-you {
+  color: var(--warn);
+  border-color: color-mix(in srgb, var(--warn) 45%, transparent);
+  background: color-mix(in srgb, var(--warn) 12%, transparent);
+}
+
+.status-queued {
+  color: var(--info, var(--accent));
+  border-color: color-mix(in srgb, var(--info, var(--accent)) 40%, transparent);
+  background: color-mix(in srgb, var(--info, var(--accent)) 10%, transparent);
+}
+
+.status-briefed {
+  color: var(--faint);
+}
+
+/* ---- micro-interactions ----------------------------------------------------------
+   Everything alive but calm: rail items glide, chips lift, the composer glows,
+   buttons answer the hover. All motion honors prefers-reduced-motion. */
+
+.rail-new {
+  transition: transform 140ms ease, box-shadow 140ms ease;
+}
+
+.rail-new:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.12);
+}
+
+#chat-composer {
+  transition: border-color 160ms ease, box-shadow 200ms ease;
+}
+
+#composer-send {
+  transition: transform 120ms ease, filter 120ms ease;
+}
+
+#composer-send:hover:not(:disabled) {
+  transform: translateY(-1px);
+  filter: brightness(1.06);
+}
+
+#action-bar .btn {
+  transition: transform 120ms ease, background 120ms ease;
+}
+
+#action-bar .btn:hover:not(:disabled) {
+  transform: translateY(-1px);
+}
+
+#chat-header .icon-btn {
+  transition: background 120ms ease, transform 120ms ease;
+}
+
+#chat-header .icon-btn:hover {
+  transform: scale(1.06);
+}
+
 /* ---- narrow screens: rail becomes an overlay drawer ---------------------------- */
 
 @media (max-width: 1080px) {
@@ -793,13 +1032,32 @@
 
 @media (prefers-reduced-motion: reduce) {
   .pulse,
-  .work-dot.on {
+  .work-dot.on,
+  .status-running {
+    animation: none;
+  }
+  .empty-hero {
     animation: none;
   }
   #chat-rail,
   #work-panel,
   #rail-toggle .icon,
-  #work-panel-toggle .icon {
+  #work-panel-toggle .icon,
+  .rail-item,
+  .rail-new,
+  .empty-chips .chip,
+  #chat-composer,
+  #composer-send,
+  #action-bar .btn,
+  #chat-header .icon-btn {
     transition: none;
+  }
+  .rail-item:hover,
+  .rail-new:hover,
+  .empty-chips .chip:hover,
+  #composer-send:hover:not(:disabled),
+  #action-bar .btn:hover:not(:disabled),
+  #chat-header .icon-btn:hover {
+    transform: none;
   }
 }

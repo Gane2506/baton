@@ -1,0 +1,26 @@
+{# Shared message composer (issue #156): rendered once per chat page — either in
+   the normal bottom-docked position or centered in the serene empty-state hero.
+   The no-JS contract holds in both spots: a real form POST to /chats/{id}/send. #}
+<form id="chat-composer" method="post" action="/chats/{{ chat_id }}/send">
+  {{ csrf_input() }}
+  <div class="composer-row">
+    {% if backends is defined and backends %}
+    <select id="composer-backend" name="worker" aria-label="Chat backend">
+      {% if backends is mapping %}
+        {% for name, pair in backends.items() %}
+      <option value="{{ name }}"{% if not pair[0] %} disabled{% endif %}{% if meta and meta.backend == name %} selected{% endif %} title="{{ pair[1] }}">{{ "OpenRouter API" if name == "api" else "Claude Code" }}</option>
+        {% endfor %}
+      {% else %}
+        {% for name, note, ok in backends %}
+      <option value="{{ name }}"{% if not ok %} disabled{% endif %}{% if meta and meta.backend == name %} selected{% endif %} title="{{ note }}">{{ "OpenRouter API" if name == "api" else "Claude Code" }}</option>
+        {% endfor %}
+      {% endif %}
+    </select>
+    {% endif %}
+    <label class="sr-only" for="composer-text">Message</label>
+    <textarea id="composer-text" name="text" rows="2" required placeholder="Message Baton…" aria-label="Message Baton"></textarea>
+    <button id="composer-stop" class="btn btn-secondary" type="button"{% if not busy %} hidden{% endif %}>{{ icon("i-stop", "sm") }}<span>Stop</span></button>
+    <button id="composer-send" class="btn btn-primary" type="submit"{% if busy %} disabled{% endif %}>{{ icon("i-up", "sm") }}<span>Send</span></button>
+  </div>
+  {% if busy %}<p class="muted small composer-status"><span class="pulse" aria-hidden="true"></span>waiting for the model…</p>{% endif %}
+</form>

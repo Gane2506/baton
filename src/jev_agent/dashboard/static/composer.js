@@ -11,7 +11,8 @@
  * - #composer-text   the textarea
  * - #composer-send   submit button; #composer-stop is hidden unless busy
  * - #chat-transcript the transcript (data-live polling, like live.js)
- * - #suggestion-chips container of <button> suggestion chips
+ * - #suggestion-chips container of <button> suggestion chips (in the normal
+ *   layout under the transcript, or centered in the empty-state hero)
  * - #rail-toggle / #chat-rail            collapsible conversation rail
  * - #sidebar-toggle                      toggles body.chat-fullscreen
  *

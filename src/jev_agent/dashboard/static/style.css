@@ -698,6 +698,110 @@ form .btn + .hint { vertical-align: middle; }
    (38px input − 17px checkbox) difference so it centers on the controls. */
 .form-grid > div:has(> label.check:only-child) { align-self: end; padding-bottom: 10px; }
 
+/* ---- minimal new-chat form (issue: simplify the 6-field form) --------------------
+   One calm row: task input + environment picker + Start. Advanced options hide
+   in a collapsed <details> with sensible defaults, so type + Enter just works. */
+
+.new-chat-form {
+  margin-top: var(--s3);
+}
+
+.new-chat-main {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+}
+
+.new-chat-main #nc-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 44px;
+  font-size: var(--fs-15);
+  border-radius: 12px;
+}
+
+.new-chat-main .env-select {
+  flex: 0 0 auto;
+  width: auto;
+  max-width: 170px;
+  height: 44px;
+  border-radius: 12px;
+  font-size: var(--fs-13);
+}
+
+.new-chat-main .env-model {
+  flex: 0 1 200px;
+  min-width: 0;
+  height: 44px;
+  border-radius: 12px;
+  font-size: var(--fs-13);
+}
+
+.new-chat-main .btn {
+  flex: 0 0 auto;
+  height: 44px;
+  border-radius: 12px;
+  padding: 0 var(--s5);
+}
+
+.advanced-details {
+  margin-top: var(--s3);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+}
+
+.advanced-details > summary {
+  cursor: pointer;
+  padding: var(--s2) var(--s4);
+  font-size: var(--fs-13);
+  font-weight: 500;
+  color: var(--muted);
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+}
+
+.advanced-details > summary::-webkit-details-marker {
+  display: none;
+}
+
+.advanced-details > summary::before {
+  content: "›";
+  display: inline-block;
+  transition: transform 140ms ease;
+  color: var(--faint);
+}
+
+.advanced-details[open] > summary::before {
+  transform: rotate(90deg);
+}
+
+.advanced-details > summary:hover {
+  color: var(--fg);
+}
+
+.advanced-details .form-grid {
+  margin: 0;
+  padding: 0 var(--s4) var(--s4);
+  border-top: 1px solid var(--border);
+  padding-top: var(--s3);
+}
+
+.new-chat-form .hint {
+  margin-top: var(--s2);
+}
+
+@media (max-width: 720px) {
+  .new-chat-main {
+    flex-wrap: wrap;
+  }
+  .new-chat-main #nc-text {
+    flex: 1 1 100%;
+  }
+}
+
 /* ---- tables -------------------------------------------------------------- */
 
 .table-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); margin-bottom: var(--s4); }
