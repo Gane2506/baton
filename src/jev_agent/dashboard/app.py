@@ -2184,7 +2184,12 @@ class Dashboard:
             RunInUseError,
             ValueError,
         ) as exc:
-            self.flash(request, "error", str(exc))
+            message = str(exc)
+            # The UI disables these buttons without a brief, but a crafted POST
+            # could still hit this — keep the message actionable, not raw.
+            if "no brief yet" in message:
+                message = "write a brief first (the Write brief button above), then plan or run."
+            self.flash(request, "error", message)
             return self.back(to)
         verb = "plan-only run" if plan_only else "run"
         self.flash(request, "ok", f"{verb} {run_id} started from the chat's brief")
@@ -2209,7 +2214,10 @@ class Dashboard:
             QueueError,
             ValueError,
         ) as exc:
-            self.flash(request, "error", str(exc))
+            message = str(exc)
+            if "no brief yet" in message:
+                message = "write a brief first (the Write brief button above), then queue it."
+            self.flash(request, "error", message)
             return self.back(to)
         self.flash(request, "ok", f"queued item {item_id} from the chat's brief")
         return self.back("/queue")

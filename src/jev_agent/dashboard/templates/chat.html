@@ -64,10 +64,14 @@
     {% endif %}
 
     <div id="action-bar" role="group" aria-label="Turn this chat into work">
-      <form class="inline" method="post" action="/chats/{{ chat_id }}/brief">{{ csrf_input() }}<button type="submit" class="btn btn-sm btn-secondary"{% if busy %} disabled{% endif %}>Write brief</button></form>
-      <form class="inline" method="post" action="/chats/{{ chat_id }}/start">{{ csrf_input() }}<input type="hidden" name="action" value="plan"><button type="submit" class="btn btn-sm btn-secondary"{% if busy %} disabled{% endif %}>{{ icon("i-log", "sm") }}Plan it</button></form>
-      <form class="inline" method="post" action="/chats/{{ chat_id }}/start">{{ csrf_input() }}<input type="hidden" name="action" value="run"><button type="submit" class="btn btn-sm btn-primary"{% if busy %} disabled{% endif %}>{{ icon("i-run", "sm") }}Run it</button></form>
-      <form class="inline" method="post" action="/chats/{{ chat_id }}/queue">{{ csrf_input() }}<button type="submit" class="btn btn-sm btn-secondary"{% if busy %} disabled{% endif %}>Queue it</button></form>
+      {# Brief-gated actions (issue: "no brief yet" confusion): Plan/Run/Queue need
+         a brief. When none exists, disable them with an explanation instead of
+         letting the click fail with a raw error. Write brief becomes primary. #}
+      {% set has_brief = meta and meta.brief %}
+      <form class="inline" method="post" action="/chats/{{ chat_id }}/brief">{{ csrf_input() }}<button type="submit" class="btn btn-sm {% if has_brief %}btn-secondary{% else %}btn-primary{% endif %}"{% if busy %} disabled{% endif %}>Write brief</button></form>
+      <form class="inline" method="post" action="/chats/{{ chat_id }}/start">{{ csrf_input() }}<input type="hidden" name="action" value="plan"><button type="submit" class="btn btn-sm btn-secondary"{% if busy or not has_brief %} disabled{% endif %}{% if not has_brief %} title="Write a brief first"{% endif %}>{{ icon("i-log", "sm") }}Plan it</button></form>
+      <form class="inline" method="post" action="/chats/{{ chat_id }}/start">{{ csrf_input() }}<input type="hidden" name="action" value="run"><button type="submit" class="btn btn-sm btn-secondary"{% if busy or not has_brief %} disabled{% endif %}{% if not has_brief %} title="Write a brief first"{% endif %}>{{ icon("i-run", "sm") }}Run it</button></form>
+      <form class="inline" method="post" action="/chats/{{ chat_id }}/queue">{{ csrf_input() }}<button type="submit" class="btn btn-sm btn-secondary"{% if busy or not has_brief %} disabled{% endif %}{% if not has_brief %} title="Write a brief first"{% endif %}>Queue it</button></form>
     </div>
 
     <form id="chat-composer" method="post" action="/chats/{{ chat_id }}/send">
