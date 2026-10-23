@@ -1343,6 +1343,49 @@ dialog.palette::backdrop { background: rgba(0, 0, 0, 0.45); }
 .radio-pill:has(input:checked) { border-color: var(--accent); background: var(--accent-soft); }
 .radio-pill input { accent-color: var(--accent); }
 
+/* Design Studio vibe picker (issue #155): selectable aesthetic cards. */
+.vibe-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: var(--s2);
+}
+.vibe-card {
+  display: grid;
+  gap: 4px;
+  padding: var(--s3);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  cursor: pointer;
+  background: var(--surface);
+  transition: border-color 120ms ease, box-shadow 120ms ease;
+}
+.vibe-card:hover { border-color: var(--text-faint); }
+.vibe-card.selected, .vibe-card:has(input:checked) {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+.vibe-card input { position: absolute; opacity: 0; pointer-events: none; }
+.vibe-card .vibe-name { font-weight: 650; font-size: var(--text-sm); }
+.vibe-card .vibe-tagline { font-size: var(--text-xs); color: var(--text-muted); line-height: 1.35; }
+
+/* Reusable-elements code page (issue #155): scrollable code blocks + copy buttons. */
+.code-panel .panel-head { display: flex; align-items: center; justify-content: space-between; gap: var(--s2); }
+.code-block {
+  max-height: 480px;
+  overflow: auto;
+  background: var(--code-bg);
+  color: var(--text);
+  border-radius: var(--r-md);
+  padding: var(--s3);
+  font-family: var(--mono);
+  font-size: 12.5px;
+  line-height: 1.6;
+  margin: var(--s2) 0 0;
+  white-space: pre;
+  tab-size: 2;
+}
+.radio-pill.checked { border-color: var(--accent); background: var(--accent-soft); }
+
 .studio-nav {
   display: flex;
   gap: var(--s3);
