@@ -292,7 +292,12 @@ class Pipeline:
         async with hold_run_lease(self.store, run_id, reason="approve"):
             self._require_state(run_id, {RunState.AWAITING_SHIP}, "modify")
             run = self.store.get_run(run_id)
-            assert run.plan is not None
+            if run.plan is None:
+                # Unreachable through the pipeline (a run only waits to ship after
+                # executing its plan), but the dashboard and `jev ship modify` take
+                # the run id from the user: fail with an actionable error, never a
+                # 500 from the assert (issue #174).
+                raise PipelineError(f"run {run_id} has no plan; it cannot be modified")
             cards = [task.card for task in self.store.list_tasks(run_id)]
             tasks = [*cards, changes_task_card(cards, notes)]
             plan = Plan(summary=run.plan.summary, tasks=tasks, risks=run.plan.risks)

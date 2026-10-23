@@ -362,3 +362,34 @@ def test_queue_items_note_column_has_no_wrap_floor(client: TestClient) -> None:
     # past its container, slicing the Remove buttons at the table's right edge.
     assert '<td class="wrap small">' not in html
     assert '<td class="small"></td>' in html  # the empty note cell still renders
+
+
+# ---- Functional sweep (issue #174) ----------------------------------------------------------
+# The dashboard HTTP sweep found that POST /runs/{run_id}/modify on a run waiting
+# to ship without a plan crashed with AssertionError (pipeline.request_changes'
+# `assert run.plan is not None`) — a 500 traceback page. The assert is now a
+# PipelineError, which the modify handler turns into an actionable error flash.
+# The same sweep found changes_task_card crashed with ValueError (max() on an
+# empty task list); it now numbers the new task T1 instead.
+
+
+def test_modify_run_without_plan_flashes_instead_of_500(
+    client: TestClient, fixture_repo: Path
+) -> None:
+    response = _post(client, "/runs/new", {"idea": "planless run", "plan_only": "on"})
+    assert response.status_code == 303
+    run_id = response.headers["location"].rsplit("/", 1)[1]
+    with _store(fixture_repo) as store:
+        store.set_run_state(run_id, RunState.AWAITING_SHIP)  # a real pipeline always plans first
+
+    modified = _post(client, f"/runs/{run_id}/modify", {"notes": "change the world"})
+    assert modified.status_code == 303  # never a 500
+    page = client.get(f"/runs/{run_id}")
+    assert "has no plan" in page.text  # the error is actionable in the UI
+
+
+def test_changes_task_card_with_no_cards_starts_at_t1() -> None:
+    from jev_agent.core.ship import changes_task_card
+
+    card = changes_task_card([], "  do the thing  ")
+    assert card.id == "T1" and card.depends_on == [] and "do the thing" in card.description
