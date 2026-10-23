@@ -30,9 +30,7 @@ from jev_agent.core.design_showcase import (
 )
 from jev_agent.core.design_showcase_html import render_showcase
 
-_TOKENS: dict[str, Any] = {
-    "design_tokens": rich_tokens(vibe_for_keywords("elegant"), "both")
-}
+_TOKENS: dict[str, Any] = {"design_tokens": rich_tokens(vibe_for_keywords("elegant"), "both")}
 
 
 def _rich() -> dict[str, Any]:
