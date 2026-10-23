@@ -362,3 +362,25 @@ def test_queue_items_note_column_has_no_wrap_floor(client: TestClient) -> None:
     # past its container, slicing the Remove buttons at the table's right edge.
     assert '<td class="wrap small">' not in html
     assert '<td class="small"></td>' in html  # the empty note cell still renders
+
+
+# ---- Functional sweep (issue #174) ----------------------------------------------------------
+# The dashboard HTTP sweep found that POST /runs/{run_id}/modify on a run waiting
+# to ship without a plan crashed with AssertionError (pipeline.request_changes'
+# `assert run.plan is not None`) — a 500 traceback page. The assert is now a
+# PipelineError, which the modify handler turns into an actionable error flash.
+
+
+def test_modify_run_without_plan_flashes_instead_of_500(
+    client: TestClient, fixture_repo: Path
+) -> None:
+    response = _post(client, "/runs/new", {"idea": "planless run", "plan_only": "on"})
+    assert response.status_code == 303
+    run_id = response.headers["location"].rsplit("/", 1)[1]
+    with _store(fixture_repo) as store:
+        store.set_run_state(run_id, RunState.AWAITING_SHIP)  # a real pipeline always plans first
+
+    modified = _post(client, f"/runs/{run_id}/modify", {"notes": "change the world"})
+    assert modified.status_code == 303  # never a 500
+    page = client.get(f"/runs/{run_id}")
+    assert "has no plan" in page.text  # the error is actionable in the UI
