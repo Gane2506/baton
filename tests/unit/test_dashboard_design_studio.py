@@ -12,8 +12,9 @@ import httpx
 import pytest
 from starlette.testclient import TestClient
 
-from jev_agent.core.design_kit import APP_TYPES
+from jev_agent.core.design_kit import APP_TYPES, STACKS
 from jev_agent.core.design_library import list_library, save_library_system
+from jev_agent.dashboard import studio_decisions
 from jev_agent.dashboard.app import NAV, create_app
 from jev_agent.dashboard.design_studio import (
     STUDIO_STEPS,
@@ -24,6 +25,8 @@ from jev_agent.dashboard.design_studio import (
     validate_step,
 )
 from jev_agent.dashboard.security import DashboardSettings
+from jev_agent.dashboard.studio_decisions import StackRecommendation
+from jev_agent.dispatch.base import Dispatcher
 
 
 @pytest.fixture
@@ -317,3 +320,94 @@ def test_generate_clears_wizard_state(client: TestClient, home: Path) -> None:
     # A new visit restarts at Purpose instead of resuming the finished wizard.
     response = client.get("/design-studio/new/stack", follow_redirects=False)
     assert response.headers["location"] == "/design-studio/new/purpose"
+
+
+# ---- DS-03: the Jev+Laya recommendation --------------------------------------------------
+
+
+def test_stack_step_shows_default_recommendation_card(client: TestClient, home: Path) -> None:
+    # No API keys in the suite (the conftest strips them), so the wizard falls back
+    # to the static default — and says so on the card.
+    _post(client, "/design-studio/new/purpose", {"product": "Acme"})
+    _post(client, "/design-studio/new/app_type", {"app_type": "dashboard"})
+    page = client.get("/design-studio/new/stack")
+    assert page.status_code == 200
+    assert 'class="studio-rec"' in page.text
+    assert "Default recommendation" in page.text
+    assert "Jev recommended" not in page.text
+    assert "Jev was unreachable" in html.unescape(page.text)
+
+
+def _fake_jev_flutter(
+    purpose: str, app_type: str, *, vibe: str = "", dispatcher: Dispatcher | None = None
+) -> StackRecommendation:
+    return StackRecommendation(
+        stack="Flutter",
+        source="jev",
+        rationale=(
+            "Jev picked Flutter (90% confidence); "
+            "Laya's decision matrix agreed with a 0.6-point lead."
+        ),
+        laya_agreed=True,
+        laya_margin=0.6,
+    )
+
+
+def test_jev_recommendation_reorders_options_and_badges(
+    client: TestClient, home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def fake(
+        purpose: str,
+        app_type: str,
+        *,
+        vibe: str = "",
+        dispatcher: Dispatcher | None = None,
+    ) -> StackRecommendation:
+        return _fake_jev_flutter(purpose, app_type, vibe=vibe, dispatcher=dispatcher)
+
+    monkeypatch.setattr(studio_decisions, "recommend_stack", fake)
+    _post(client, "/design-studio/new/purpose", {"product": "Acme"})
+    _post(client, "/design-studio/new/app_type", {"app_type": "mobile"})
+    page = client.get("/design-studio/new/stack")
+    assert page.status_code == 200
+    assert 'class="studio-rec"' in page.text
+    assert "Jev recommended" in page.text
+    assert "Laya agreed" in page.text
+    assert "+0.6" in page.text
+    assert "Jev picked Flutter" in html.unescape(page.text)
+    assert "Default recommendation" not in page.text
+    expected = ["Flutter", "React Native", "SwiftUI", "Kotlin/Jetpack Compose"]
+    positions = [page.text.index(f'name="stack" value="{option}"') for option in expected]
+    assert positions == sorted(positions), "the Jev pick renders first"
+
+
+def test_stack_decision_made_once_per_session(
+    client: TestClient, home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[tuple[str, str]] = []
+
+    async def counting(
+        purpose: str,
+        app_type: str,
+        *,
+        vibe: str = "",
+        dispatcher: Dispatcher | None = None,
+    ) -> StackRecommendation:
+        calls.append((purpose, app_type))
+        return StackRecommendation(
+            stack=STACKS[app_type][0],
+            source="default",
+            rationale="the static default",
+            laya_agreed=False,
+            laya_margin=None,
+        )
+
+    monkeypatch.setattr(studio_decisions, "recommend_stack", counting)
+    _post(client, "/design-studio/new/purpose", {"product": "Acme"})
+    _post(client, "/design-studio/new/app_type", {"app_type": "dashboard"})
+    assert calls == [("Acme", "dashboard")]
+    client.get("/design-studio/new/stack")
+    client.get("/design-studio/new/stack")
+    assert len(calls) == 1, "re-rendering the Stack step must not re-ask Jev"
+    _post(client, "/design-studio/new/app_type", {"app_type": "mobile"})
+    assert len(calls) == 2, "changing the app type re-asks exactly once"
