@@ -15,20 +15,108 @@
 <section class="panel" aria-label="Server reachability">
   <h2>Servers <span class="muted">·</span> <span id="conn-summary" data-conn="{{ agg_state }}">{{ agg_label }}</span></h2>
   {% if servers %}
-  <div class="table-wrap"><table id="conn-panel">
-    <thead><tr><th>Server</th><th>Host</th><th>Access</th><th>Status</th><th>Last check</th></tr></thead>
-    <tbody>
-    {% for s in servers %}
-      <tr data-conn-row="{{ s.name }}">
-        <td class="mono">{{ s.name }}</td>
-        <td class="mono">{{ s.user ~ "@" if s.user }}{{ s.host }}</td>
-        <td>{{ badge(s.access, "note" if s.access == "basic" else ("warn" if s.access == "medium" else "fail")) }}</td>
-        <td class="c-state">{{ badge("Reachable", "ok") if s.state == "reachable" else (badge("Unreachable", "fail") if s.state == "unreachable" else badge("Not checked yet", "note")) }}</td>
-        <td class="c-checked small">{{ s.last_check | time if s.last_check else "-" }}</td>
-      </tr>
-    {% endfor %}
-    </tbody>
-  </table></div>
+  <div class="server-cards">
+  {% for s in servers %}
+    {% set st = server_stats.get(s.name, {}) %}
+    {% set stats = st.get("stats") %}
+    {% set st_state = st.get("state", "never") %}
+    <div class="server-card" data-conn-row="{{ s.name }}">
+      <div class="server-card-head">
+        <div>
+          <strong class="mono">{{ s.name }}</strong>
+          <span class="muted small mono">{{ s.user ~ "@" if s.user }}{{ s.host }}</span>
+        </div>
+        <div class="server-card-actions">
+          <span class="c-state">{{ badge("Reachable", "ok") if s.state == "reachable" else (badge("Unreachable", "fail") if s.state == "unreachable" else badge("Not checked yet", "note")) }}</span>
+          {{ badge(s.access, "note") }}
+          <form method="post" action="/connections/servers/{{ s.name }}/stats/refresh" class="inline">
+            {{ csrf_input() }}
+            <button type="submit" class="btn btn-sm btn-secondary" title="Re-collect health stats now">Refresh stats</button>
+          </form>
+        </div>
+      </div>
+      <div class="server-statbars">
+        {% if stats and stats.ok %}
+        <div class="statbar" title="CPU: {{ stats.cpu_cores }} cores">
+          <span class="statbar-label">CPU</span>
+          <span class="statbar-track"><span class="statbar-fill" style="width: {{ stats.cpu_pct }}%"></span></span>
+          <span class="statbar-val mono">{{ "%.0f"|format(stats.cpu_pct) }}%</span>
+        </div>
+        <div class="statbar" title="RAM: {{ stats.mem_used_gb }} / {{ stats.mem_total_gb }} GiB">
+          <span class="statbar-label">RAM</span>
+          <span class="statbar-track"><span class="statbar-fill" style="width: {{ stats.mem_pct }}%"></span></span>
+          <span class="statbar-val mono">{{ "%.0f"|format(stats.mem_pct) }}%</span>
+        </div>
+        <div class="statbar" title="Disk (highest mount)">
+          <span class="statbar-label">Disk</span>
+          <span class="statbar-track"><span class="statbar-fill" style="width: {{ stats.disk_pct }}%"></span></span>
+          <span class="statbar-val mono">{{ "%.0f"|format(stats.disk_pct) }}%</span>
+        </div>
+        {% elif st_state == "collecting" %}
+        <p class="small muted">Collecting stats… reload in a moment.</p>
+        {% elif st_state == "failed" %}
+        <p class="small muted">Stats unavailable — the server did not answer. <span class="hint">Refresh to retry.</span></p>
+        {% else %}
+        <p class="small muted">No stats yet.</p>
+        {% endif %}
+      </div>
+      {% if stats and stats.ok %}
+      <details class="disclosure server-more">
+        <summary>More info</summary>
+        <div class="server-more-grid">
+          <div>
+            <h4>System</h4>
+            <dl class="kv">
+              <dt>Hostname</dt><dd class="mono">{{ stats.hostname }}</dd>
+              <dt>OS</dt><dd class="mono">{{ stats.os }}</dd>
+              <dt>Uptime</dt><dd class="small">{{ stats.uptime }}</dd>
+              <dt>Load</dt><dd class="mono">{{ "%.2f"|format(stats.load_1) }} {{ "%.2f"|format(stats.load_5) }} {{ "%.2f"|format(stats.load_15) }}</dd>
+              <dt>CPU</dt><dd>{{ stats.cpu_cores }} cores · {{ "%.1f"|format(stats.cpu_pct) }}% used</dd>
+              <dt>RAM</dt><dd>{{ stats.mem_used_gb }} / {{ stats.mem_total_gb }} GiB ({{ "%.0f"|format(stats.mem_pct) }}%)</dd>
+            </dl>
+          </div>
+          <div>
+            <h4>Storage</h4>
+            <div class="table-wrap"><table class="small">
+              <thead><tr><th>Mount</th><th>Total</th><th>Used</th><th>Avail</th><th>Use</th></tr></thead>
+              <tbody>
+              {% for m in stats.mounts %}
+                <tr><td class="mono">{{ m.mount }}</td><td class="mono">{{ m.total_gb }}G</td><td class="mono">{{ m.used_gb }}G</td><td class="mono">{{ m.avail_gb }}G</td><td>{{ badge("%.0f%%"|format(m.use_pct), "ok" if m.use_pct < 70 else ("warn" if m.use_pct < 90 else "fail")) }}</td></tr>
+              {% endfor %}
+              </tbody>
+            </table></div>
+          </div>
+        </div>
+        <div class="server-more-grid">
+          <div>
+            <h4>Top CPU</h4>
+            <div class="table-wrap"><table class="small">
+              <thead><tr><th>Process</th><th>CPU</th><th>MEM</th></tr></thead>
+              <tbody>
+              {% for p in stats.top_cpu %}
+                <tr><td class="mono">{{ p.name }}</td><td class="mono">{{ "%.1f"|format(p.cpu_pct) }}%</td><td class="mono">{{ "%.1f"|format(p.mem_pct) }}%</td></tr>
+              {% endfor %}
+              </tbody>
+            </table></div>
+          </div>
+          <div>
+            <h4>Top memory</h4>
+            <div class="table-wrap"><table class="small">
+              <thead><tr><th>Process</th><th>CPU</th><th>MEM</th></tr></thead>
+              <tbody>
+              {% for p in stats.top_mem %}
+                <tr><td class="mono">{{ p.name }}</td><td class="mono">{{ "%.1f"|format(p.cpu_pct) }}%</td><td class="mono">{{ "%.1f"|format(p.mem_pct) }}%</td></tr>
+              {% endfor %}
+              </tbody>
+            </table></div>
+          </div>
+        </div>
+        <p class="hint">Collected {{ stats.collected_at | time }} · via SSH, cached locally.</p>
+      </details>
+      {% endif %}
+    </div>
+  {% endfor %}
+  </div>
   <form method="post" action="/connections/refresh">
     {{ csrf_input() }}
     <button type="submit" class="btn btn-secondary">Check now</button>
@@ -219,6 +307,46 @@
 
 <section class="panel" aria-label="Key health">
   <h2>Keys <span class="muted">·</span> names only, never values</h2>
+  {# Prominent provider cards (issue #153): the user should see immediately where
+     to add API keys — no hunting in collapsed disclosures. Each card shows the
+     provider, its set status, and a direct inline Add when unset
+     (disappear-when-set, like the decision-route keys). #}
+  <div class="provider-cards">
+    {% set _providers = [
+      ("OpenRouter", "OPENROUTER_API_KEY", "Chat + Jev decisions via OpenRouter"),
+      ("Anthropic", "ANTHROPIC_API_KEY", "Claude Code workers fallback (billed per token)"),
+      ("OpenAI", "OPENAI_API_KEY", "Codex workers fallback (billed per token)"),
+      ("TypeSafe", "TYPESAFE_API_KEY", "Native Jev decisions"),
+    ] %}
+    {% for _title, _name, _desc in _providers %}
+    {% set _v = env_vars | selectattr("name", "equalto", _name) | first %}
+    <div class="provider-card">
+      <div class="provider-card-head">
+        <strong>{{ _title }}</strong>
+        {{ badge(_name ~ ": set", "ok") if _v and _v.is_set else badge(_name ~ ": not set", "warn") }}
+      </div>
+      <p class="small muted">{{ _desc }}</p>
+      {% if not _v or not _v.is_set %}
+      <form method="post" action="/connections/keys/add" class="field-row">
+        {{ csrf_input() }}
+        <input type="hidden" name="name" value="{{ _name }}">
+        <div class="field-control">
+          <input type="password" name="value" required autocomplete="new-password"
+                 placeholder="Paste your {{ _title }} API key" aria-label="{{ _title }} API key">
+        </div>
+        <div class="field-actions"><button type="submit" class="btn btn-primary btn-sm">Add key</button></div>
+      </form>
+      {% elif _v.from_secrets %}
+      <form method="post" action="/connections/keys/remove" class="inline">
+        {{ csrf_input() }}
+        <input type="hidden" name="name" value="{{ _name }}">
+        <button type="submit" class="btn btn-sm btn-danger">Remove</button>
+      </form>
+      {% endif %}
+    </div>
+    {% endfor %}
+  </div>
+  <h3 class="subsection">All keys</h3>
   <div class="table-wrap"><table>
     <thead><tr><th>Variable</th><th>Used for</th><th>Status</th><th><span class="sr-only">actions</span></th></tr></thead>
     <tbody>

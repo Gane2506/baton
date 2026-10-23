@@ -59,7 +59,11 @@ def dashboard(
     import uvicorn
 
     from jev_agent.dashboard.app import create_app
-    from jev_agent.dashboard.security import DashboardSettings, is_loopback
+    from jev_agent.dashboard.security import (
+        DashboardSettings,
+        is_loopback,
+        load_or_create_secret,
+    )
 
     with cli_errors():
         root = repo_root(repo)
@@ -71,7 +75,11 @@ def dashboard(
     loopback = is_loopback(host)
     if not loopback and token is None:
         token = secrets.token_urlsafe(24)
-    app = create_app(DashboardSettings(root=root, host=host, port=port, token=token))
+    app = create_app(
+        DashboardSettings(
+            root=root, host=host, port=port, token=token, secret=load_or_create_secret()
+        )
+    )
     url = dashboard_url(host, port, token)
     if not loopback:
         console.print(
