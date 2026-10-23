@@ -11,8 +11,10 @@ itself is fixed (`servers.browser.install_argv()`); no request can change it.
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
+import sys
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -26,7 +28,71 @@ __all__ = [
     "BrowserInstallError",
     "BrowserInstallRunner",
     "BrowserInstallStatus",
+    "resolve_executable",
 ]
+
+
+def _platform_search_dirs() -> list[Path]:
+    """Well-known install locations per platform, for when PATH is minimal.
+
+    The dashboard is often launched from a bare environment (no shell profile),
+    so Homebrew/nvm/Windows-npm locations that a terminal would have on PATH
+    are missing. These are checked as a fallback after `shutil.which`.
+    """
+    home = Path.home()
+    if sys.platform == "darwin":
+        return [
+            Path("/opt/homebrew/bin"),  # Apple Silicon Homebrew
+            Path("/usr/local/bin"),  # Intel Homebrew
+            home / ".nvm" / "versions" / "node",
+        ]
+    if sys.platform == "win32":
+        appdata = Path(os.environ.get("APPDATA", ""))
+        localappdata = Path(os.environ.get("LOCALAPPDATA", ""))
+        program_files = Path(os.environ.get("ProgramFiles", r"C:\Program Files"))
+        return [
+            appdata / "npm",
+            program_files / "nodejs",
+            localappdata / "nvm",
+        ]
+    # Linux and other Unix-likes
+    candidates = [
+        Path("/usr/local/bin"),
+        Path("/opt/nodejs/bin"),
+        home / ".nvm" / "versions" / "node",
+        home / ".local" / "bin",
+    ]
+    # nvm version dirs: ~/.nvm/versions/node/vXX.YY.ZZ/bin
+    nvm_root = home / ".nvm" / "versions" / "node"
+    if nvm_root.is_dir():
+        try:
+            candidates.extend(
+                sorted((nvm_root / d / "bin" for d in os.listdir(nvm_root)), reverse=True)
+            )
+        except OSError:
+            pass
+    return candidates
+
+
+def resolve_executable(name: str) -> str | None:
+    """Full path to `name`, or None when it cannot be found.
+
+    Checks PATH first via `shutil.which`, then falls back to well-known
+    per-platform install locations (Homebrew on macOS, npm/nodejs dirs on
+    Windows, /usr/local + nvm on Linux).
+    """
+    found = shutil.which(name)
+    if found:
+        return found
+    suffix = ".exe" if sys.platform == "win32" else ""
+    for directory in _platform_search_dirs():
+        candidate = directory / f"{name}{suffix}"
+        try:
+            if candidate.is_file() and os.access(candidate, os.X_OK):
+                return str(candidate)
+        except OSError:
+            continue
+    return None
 
 _LOG_FILENAME = "browser-install.log"
 _LOG_TAIL_LINES = 30
@@ -123,11 +189,13 @@ class BrowserInstallRunner:
             if self._state == "running":
                 raise BrowserInstallBusy("a browser install is already running")
             argv = install_argv()
-            if shutil.which(argv[0]) is None:
+            resolved = resolve_executable(argv[0])
+            if resolved is None:
                 raise BrowserInstallError(
-                    f"`{argv[0]}` not found on PATH; install Node.js (which provides npx) "
-                    "and restart the dashboard so it picks up the new PATH"
+                    f"`{argv[0]}` not found; install Node.js (which provides npx). "
+                    f"Searched PATH plus the usual {sys.platform} install locations."
                 )
+            argv = [resolved, *argv[1:]]
             log = self._log_path()
             log.parent.mkdir(parents=True, exist_ok=True)
             log.write_bytes(b"")  # a fresh log per install
