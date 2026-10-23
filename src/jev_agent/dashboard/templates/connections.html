@@ -120,41 +120,70 @@
     <div class="flash warn" role="note">{{ icon("i-alert", "sm") }}<span>{{ p.warning }}</span></div>
     {% endif %}
     {% if p.provider == "claude_code" %}
-      {% if p.auth == "none" %}
-      <p class="small"><strong>Connect with your Claude subscription:</strong> on a machine with
-      a browser, run <code>claude setup-token</code>, approve the sign-in, then paste the
-      <code>sk-ant-oat01-…</code> token it prints:</p>
-      <form method="post" action="/connections/providers/claude/oauth-token" class="field-row">
-        {{ csrf_input() }}
-        <div class="field-control">
-          <input type="password" name="value" required autocomplete="new-password"
-                 placeholder="sk-ant-oat01-…" aria-label="Claude subscription token"
-                 pattern="sk-ant-oat01-.*" title="The token printed by `claude setup-token`">
-        </div>
-        <div class="field-actions"><button type="submit" class="btn btn-primary btn-sm">Save token</button></div>
-      </form>
-      {% elif p.auth == "oauth_token" %}
-      <details class="disclosure">
-        <summary>Replace the saved token</summary>
-        <form method="post" action="/connections/providers/claude/oauth-token" class="field-row">
+      {% if claude_flow.state in ("starting", "waiting") %}
+      <div id="claude-flow-waiting">
+        <p>{{ badge("waiting for browser approval", "info", live=true) }}</p>
+        {% if claude_flow.url %}
+        <ol class="small">
+          <li>Open <a href="{{ claude_flow.url }}" target="_blank" rel="noopener">{{ claude_flow.url }}</a> in your browser and approve the sign-in.</li>
+          <li>Paste the code your browser shows below.</li>
+        </ol>
+        {% else %}
+        <p class="small">Starting <code>claude setup-token</code>…</p>
+        {% endif %}
+        <p class="hint">{{ claude_flow.detail }}</p>
+        <form method="post" action="/connections/providers/claude/setup-token/code" class="field-row">
           {{ csrf_input() }}
           <div class="field-control">
-            <input type="password" name="value" required autocomplete="new-password"
-                   placeholder="sk-ant-oat01-…" aria-label="Claude subscription token"
-                   pattern="sk-ant-oat01-.*" title="The token printed by `claude setup-token`">
+            <input type="text" name="code" required autocomplete="off"
+                   placeholder="Paste the browser code" aria-label="Browser authorization code">
           </div>
-          <div class="field-actions"><button type="submit" class="btn btn-primary btn-sm">Save token</button></div>
+          <div class="field-actions"><button type="submit" class="btn btn-primary btn-sm">Submit code</button></div>
         </form>
-      </details>
+        <form method="post" action="/connections/providers/claude/setup-token/cancel" class="inline">
+          {{ csrf_input() }}
+          <button type="submit" class="btn btn-sm btn-secondary">Cancel sign-in</button>
+        </form>
+      </div>
       {% else %}
-      <p class="small">The <code>claude</code> CLI is already signed in — workers reuse that login.</p>
+        {% if claude_flow.state in ("failed", "cancelled") %}
+        <div class="flash warn" role="note">{{ icon("i-alert", "sm") }}<span>Sign-in {{ claude_flow.state }}: {{ claude_flow.detail }}</span></div>
+        {% endif %}
+        {% if p.auth == "none" or claude_flow.state in ("failed", "cancelled") %}
+        {% if p.installed %}
+        <form method="post" action="/connections/providers/claude/setup-token/start">
+          {{ csrf_input() }}
+          <button type="submit" class="btn btn-primary">Sign in with Claude</button>
+          <span class="hint">1-click: runs <code>claude setup-token</code>, shows the browser link here,
+          and saves the token automatically.</span>
+        </form>
+        {% endif %}
+        <details class="disclosure">
+          <summary>Or paste a token manually</summary>
+          <p class="small">On a machine with a browser, run <code>claude setup-token</code>,
+          approve the sign-in, then paste the <code>sk-ant-oat01-…</code> token it prints:</p>
+          <form method="post" action="/connections/providers/claude/oauth-token" class="field-row">
+            {{ csrf_input() }}
+            <div class="field-control">
+              <input type="password" name="value" required autocomplete="new-password"
+                     placeholder="sk-ant-oat01-…" aria-label="Claude subscription token"
+                     pattern="sk-ant-oat01-.*" title="The token printed by `claude setup-token`">
+            </div>
+            <div class="field-actions"><button type="submit" class="btn btn-primary btn-sm">Save token</button></div>
+          </form>
+        </details>
+        {% elif p.auth == "oauth_token" %}
+        <p>{{ badge("Set", "ok") }} <span class="small">Signed in with your Claude subscription.</span></p>
+      {% else %}
+      <p>{{ badge("Set", "ok") }} <span class="small">The <code>claude</code> CLI is signed in — workers reuse that login.</span></p>
+      {% endif %}
       {% endif %}
       <p class="hint">Saved to <code>~/.jev/secrets.env</code> (mode 600) and in effect immediately.
       Fallback: add <code>ANTHROPIC_API_KEY</code> under Keys below — it outranks the
       subscription login and is billed per token.</p>
     {% else %}
       {% if p.auth == "oauth_token" %}
-      <p class="small">Workers run <code>codex</code> with your ChatGPT subscription.</p>
+      <p>{{ badge("Set", "ok") }} <span class="small">Signed in with ChatGPT.</span></p>
       {% elif codex_flow.state in ("starting", "waiting") %}
       <div id="codex-flow-waiting">
         <p>{{ badge("waiting for browser approval", "info", live=true) }}</p>

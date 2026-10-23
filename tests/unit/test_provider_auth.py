@@ -395,3 +395,229 @@ async def test_claude_worker_sees_api_key_env(
     await worker.run(_job(tmp_path, "claude-key-job"))
     assert runner.calls
     assert pa.ANTHROPIC_API_KEY_ENV in runner.calls[0].env
+
+
+# --- `claude setup-token` output parsing ---------------------------------------
+
+
+def test_parse_setup_token_output_url_and_prompt() -> None:
+    text = (
+        "To authenticate, visit:\n"
+        "https://claude.ai/oauth/authorize?code=true&client_id=abc123\n"
+        "After approval, paste the code shown:\n"
+        "> "
+    )
+    url, code_prompt = pa.parse_setup_token_output(text)
+    assert url == "https://claude.ai/oauth/authorize?code=true&client_id=abc123"
+    assert code_prompt is True
+
+
+def test_parse_setup_token_output_url_before_prompt() -> None:
+    text = "Visit https://claude.ai/oauth/authorize?code=true in your browser\n"
+    url, code_prompt = pa.parse_setup_token_output(text)
+    assert url is not None and "claude.ai/oauth/authorize" in url
+    assert code_prompt is False
+
+
+def test_parse_setup_token_output_empty() -> None:
+    assert pa.parse_setup_token_output("") == (None, False)
+    assert pa.parse_setup_token_output("some unrelated output\n") == (None, False)
+
+
+def test_parse_setup_token_output_strips_ansi() -> None:
+    text = "\x1b[1mhttps://claude.ai/oauth/authorize?code=true\x1b[0m\npaste the code:\n"
+    url, code_prompt = pa.parse_setup_token_output(text)
+    assert url == "https://claude.ai/oauth/authorize?code=true"
+    assert code_prompt is True
+
+
+def test_extract_setup_token() -> None:
+    text = "Token issued (valid 1 year):\nsk-ant-oat01-abcDEF123-_xyz\n"
+    assert pa.extract_setup_token(text) == "sk-ant-oat01-abcDEF123-_xyz"
+
+
+def test_extract_setup_token_none() -> None:
+    assert pa.extract_setup_token("no token here\n") is None
+    assert pa.extract_setup_token("") is None
+
+
+def test_extract_setup_token_ignores_api_keys() -> None:
+    # An Anthropic API key must not match the setup-token pattern.
+    assert pa.extract_setup_token("sk-ant-api03-abc123\n") is None
+
+
+# --- the setup-token flow runner -----------------------------------------------
+
+
+class FakeSetupTokenProcess:
+    """A stand-in for the `claude setup-token` child.
+
+    Yields the initial lines (URL + prompt), then blocks like the real CLI
+    waiting for the browser code on stdin. When the test's `stdin` receives a
+    code, the generator yields the token lines and ends; `wait()` blocks until
+    `release` is set, like the process exiting. `simulate_exit()` ends the
+    generator without a token, like the CLI dying before completion.
+    """
+
+    def __init__(self, lines: list[str]) -> None:
+        self._lines = lines
+        self._code_received = threading.Event()
+        self._stop = threading.Event()
+        self._token: str | None = None
+        self.stdout = self._generate()
+        self.stdin_writes: list[str] = []
+        self.stdin = self._FakeStdin(self)
+        self.terminated = False
+        self.release = threading.Event()
+
+    class _FakeStdin:
+        def __init__(self, proc: FakeSetupTokenProcess) -> None:
+            self._proc = proc
+
+        def write(self, data: str) -> int:
+            self._proc.stdin_writes.append(data)
+            # Like the real CLI: a code on stdin unblocks it to print the token.
+            self._proc._token = "sk-ant-oat01-faketoken123"
+            self._proc._code_received.set()
+            return len(data)
+
+        def flush(self) -> None:
+            pass
+
+    def _generate(self):  # type: ignore[no-untyped-def]
+        yield from self._lines
+        while not self._stop.is_set():
+            if self._code_received.wait(timeout=0.05):
+                break
+        if self._token and not self._stop.is_set():
+            yield "Token issued (valid 1 year):\n"
+            yield f"{self._token}\n"
+
+    def wait(self) -> int:
+        self.release.wait(timeout=30)
+        return 0
+
+    def terminate(self) -> None:
+        self.terminated = True
+        self._stop.set()
+        self._code_received.set()
+        self.release.set()
+
+    def simulate_exit(self) -> None:
+        """The CLI exits on its own without printing a token."""
+        self._stop.set()
+        self._code_received.set()
+        self.release.set()
+
+
+def _wait_for_claude(flow: pa.ClaudeSetupTokenFlow, state: str, timeout_s: float = 10.0) -> None:
+    deadline = time.monotonic() + timeout_s
+    while flow.status().state != state:
+        assert time.monotonic() < deadline, f"never reached {state}"
+        time.sleep(0.02)
+
+
+def _setup_token_lines() -> list[str]:
+    return [
+        "To authenticate, visit:\n",
+        "https://claude.ai/oauth/authorize?code=true&client_id=abc123\n",
+        "After approval, paste the code shown:\n",
+        "> ",
+    ]
+
+
+def _popen_setup_token_fake(
+    procs: list[FakeSetupTokenProcess],
+) -> Callable[..., FakeSetupTokenProcess]:
+    def _popen(*args: Any, **kwargs: Any) -> FakeSetupTokenProcess:
+        proc = FakeSetupTokenProcess(_setup_token_lines())
+        procs.append(proc)
+        return proc
+
+    return _popen
+
+
+def test_setup_token_flow_waiting_then_done(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(shutil, "which", lambda cmd: "/fake/bin/claude")
+    procs: list[FakeSetupTokenProcess] = []
+    saved: dict[str, str] = {}
+    flow = pa.ClaudeSetupTokenFlow(
+        popen=_popen_setup_token_fake(procs),
+        write_secret=lambda name, value: saved.update({name: value}),
+    )
+    try:
+        flow.start(command="claude", timeout_s=30.0)
+        _wait_for_claude(flow, "waiting")
+        status = flow.status()
+        assert status.url is not None and "claude.ai/oauth/authorize" in status.url
+        assert status.code_prompt is True
+        # The user approves in the browser and pastes the browser code.
+        assert flow.submit_code("browser-code-123") is True
+        assert procs[0].stdin_writes == ["browser-code-123\n"]
+        # The CLI prints the token; the flow saves it and reports done.
+        procs[0].release.set()  # let wait() return after the token lines
+        _wait_for_claude(flow, "done")
+        assert saved == {pa.CLAUDE_OAUTH_TOKEN_ENV: "sk-ant-oat01-faketoken123"}
+        assert "token" not in flow.status().detail.lower()  # names only
+    finally:
+        procs[0].release.set() if procs else None
+        flow.shutdown()
+
+
+def test_setup_token_flow_fails_without_token(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(shutil, "which", lambda cmd: "/fake/bin/claude")
+    procs: list[FakeSetupTokenProcess] = []
+    flow = pa.ClaudeSetupTokenFlow(popen=_popen_setup_token_fake(procs))
+    try:
+        flow.start(command="claude", timeout_s=30.0)
+        _wait_for_claude(flow, "waiting")
+        procs[0].simulate_exit()  # process exits, no token printed
+        _wait_for_claude(flow, "failed")
+        assert "did not complete" in flow.status().detail
+    finally:
+        procs[0].release.set() if procs else None
+        flow.shutdown()
+
+
+def test_setup_token_flow_busy_and_cancel(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(shutil, "which", lambda cmd: "/fake/bin/claude")
+    procs: list[FakeSetupTokenProcess] = []
+    flow = pa.ClaudeSetupTokenFlow(popen=_popen_setup_token_fake(procs))
+    try:
+        flow.start(command="claude", timeout_s=30.0)
+        _wait_for_claude(flow, "waiting")
+        with pytest.raises(pa.DeviceFlowBusy):
+            flow.start(command="claude")
+        assert flow.cancel() is True
+        assert flow.status().state == "cancelled"
+        assert procs[0].terminated
+        assert flow.cancel() is False  # nothing left to cancel
+        assert flow.submit_code("late-code") is False
+    finally:
+        procs[0].release.set() if procs else None
+        flow.shutdown()
+
+
+def test_setup_token_flow_needs_the_cli(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(shutil, "which", lambda cmd: None)
+    flow = pa.ClaudeSetupTokenFlow(popen=lambda *a, **k: FakeSetupTokenProcess([]))
+    with pytest.raises(pa.DeviceFlowError, match="not on PATH"):
+        flow.start(command="claude")
+    assert flow.status().state == "idle"
+
+
+def test_setup_token_flow_rejects_empty_code(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(shutil, "which", lambda cmd: "/fake/bin/claude")
+    procs: list[FakeSetupTokenProcess] = []
+    flow = pa.ClaudeSetupTokenFlow(popen=_popen_setup_token_fake(procs))
+    try:
+        flow.start(command="claude", timeout_s=30.0)
+        _wait_for_claude(flow, "waiting")
+        assert flow.submit_code("") is False
+        assert flow.submit_code("   ") is False
+        assert procs[0].stdin_writes == []
+    finally:
+        procs[0].release.set() if procs else None
+        flow.shutdown()

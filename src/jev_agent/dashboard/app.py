@@ -114,6 +114,7 @@ from jev_agent.core.models import RunState, TaskState
 from jev_agent.core.pipeline import STOPPED, PipelineError, cancel_run
 from jev_agent.core.provider_auth import (
     CLAUDE_OAUTH_TOKEN_ENV,
+    ClaudeSetupTokenFlow,
     CodexDeviceFlow,
     check_claude_oauth_token,
 )
@@ -624,6 +625,7 @@ class Dashboard:
             else ReverseRunner(settings.root)
         )
         self.codex_flow = CodexDeviceFlow()
+        self.claude_flow = ClaudeSetupTokenFlow()
         self.started_at = datetime.now(UTC)  # the About panel's uptime
         self.env = _environment()
         self._flash_lock = threading.Lock()
@@ -665,6 +667,7 @@ class Dashboard:
         self.browser_installer.shutdown()
         self.reverse_runner.shutdown()
         self.codex_flow.shutdown()
+        self.claude_flow.shutdown()
         return [
             *self.launcher.shutdown(timeout),
             *self.chat_runner.shutdown(timeout),
@@ -1411,6 +1414,7 @@ class Dashboard:
                 "route": _dispatcher_route(repo.config),
                 "providers": views.cli_providers(repo.config),
                 "codex_flow": self.codex_flow.status(),
+                "claude_flow": self.claude_flow.status(),
                 "env_vars": views.env_vars(repo.config),
                 "key_names": views.env_var_names(repo.config),
                 "browser_check": views.browser_check(repo),
@@ -1526,6 +1530,45 @@ class Dashboard:
             return "Claude subscription token saved to the secrets file; it is in effect now."
 
         return await self.act(request, "/connections", save)
+
+    async def claude_setup_token_start(self, request: Request) -> Response:
+        """Start the 1-click Claude subscription sign-in (POST): spawns
+        `claude setup-token` in the background. The card shows the authorize
+        URL the CLI prints; the user approves in their browser, pastes the
+        browser code into the card, and the captured token is saved to the
+        secrets file automatically."""
+
+        def start(repo: views.Repo, form: FormData) -> str:
+            self.claude_flow.start(command=repo.config.workers.claude_code.command)
+            return (
+                "Claude sign-in started — open the link on the Claude card, "
+                "approve in your browser, then paste the browser code."
+            )
+
+        return await self.act(request, "/connections", start)
+
+    async def claude_setup_token_cancel(self, request: Request) -> Response:
+        """Cancel a pending Claude setup-token sign-in (POST)."""
+
+        def cancel(repo: views.Repo, form: FormData) -> str:
+            if self.claude_flow.cancel():
+                return "Claude sign-in cancelled; no credentials were stored."
+            return "No Claude sign-in was in progress."
+
+        return await self.act(request, "/connections", cancel)
+
+    async def claude_setup_token_code(self, request: Request) -> Response:
+        """Forward the browser code to the pending `claude setup-token` (POST)."""
+
+        def submit(repo: views.Repo, form: FormData) -> str:
+            code = str(form.get("code", "")).strip()
+            if not code:
+                raise ValueError("paste the code your browser showed")
+            if self.claude_flow.submit_code(code):
+                return "Code sent — the sign-in will complete automatically."
+            raise ValueError("no Claude sign-in is waiting for a code right now")
+
+        return await self.act(request, "/connections", submit)
 
     async def codex_device_start(self, request: Request) -> Response:
         """Start the ChatGPT device sign-in (POST): spawns `codex login
@@ -3256,6 +3299,21 @@ def create_app(
         Route(
             "/connections/providers/claude/oauth-token",
             dash.claude_oauth_token_save,
+            methods=["POST"],
+        ),
+        Route(
+            "/connections/providers/claude/setup-token/start",
+            dash.claude_setup_token_start,
+            methods=["POST"],
+        ),
+        Route(
+            "/connections/providers/claude/setup-token/cancel",
+            dash.claude_setup_token_cancel,
+            methods=["POST"],
+        ),
+        Route(
+            "/connections/providers/claude/setup-token/code",
+            dash.claude_setup_token_code,
             methods=["POST"],
         ),
         Route(

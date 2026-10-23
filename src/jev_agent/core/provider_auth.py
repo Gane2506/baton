@@ -24,8 +24,8 @@ Codex precedence:
 Workers run the CLIs with the full process environment (`os.environ`), and the
 dashboard/CLI inject `~/.jev/secrets.env` into it at startup, so anything saved
 through the Connections page is visible to the next worker run with no extra
-wiring. The integration point this module provides is detection + the device
-flow runner the dashboard drives.
+wiring. The integration point this module provides is detection + the sign-in
+flow runners the dashboard drives.
 """
 
 from __future__ import annotations
@@ -50,6 +50,7 @@ __all__ = [
     "CLAUDE_SETUP_TOKEN_PREFIX",
     "CODEX_DEVICE_URL",
     "OPENAI_API_KEY_ENV",
+    "ClaudeSetupTokenFlow",
     "CodexDeviceFlow",
     "DeviceFlowBusy",
     "DeviceFlowError",
@@ -58,7 +59,9 @@ __all__ = [
     "check_claude_oauth_token",
     "claude_code_auth",
     "codex_auth",
+    "extract_setup_token",
     "parse_device_output",
+    "parse_setup_token_output",
 ]
 
 CLAUDE_OAUTH_TOKEN_ENV = "CLAUDE_CODE_OAUTH_TOKEN"
@@ -238,6 +241,43 @@ def parse_device_output(text: str) -> tuple[str | None, str | None]:
     )
 
 
+# `claude setup-token` prints an authorize URL, then — after the browser
+# approval — prompts for the code the browser shows. ANSI escapes are stripped
+# before matching, like the device output above.
+_CLAUDE_AUTHORIZE_URL = re.compile(r"https://claude\.ai/oauth/authorize\?[^\s\"']+")
+_CODE_PROMPT = re.compile(r"paste.{0,40}code", re.IGNORECASE)
+_SETUP_TOKEN = re.compile(r"sk-ant-oat01-[A-Za-z0-9\-_]+")
+
+
+def parse_setup_token_output(text: str) -> tuple[str | None, bool]:
+    """Pull the (authorize URL, code-prompt-seen) out of `claude setup-token`
+    output.
+
+    Returns the URL once printed and whether the CLI is prompting for the
+    browser code yet. The token itself is extracted separately on completion
+    so its value never lingers in parsed state.
+    """
+    clean = _strip_ansi(text)
+    url_match = _CLAUDE_AUTHORIZE_URL.search(clean)
+    if url_match:
+        return url_match.group(0), bool(_CODE_PROMPT.search(clean))
+    # Fall back to any URL: older/newer CLI wordings still print exactly one.
+    generic = _URL.search(clean)
+    return (
+        (generic.group(0), bool(_CODE_PROMPT.search(clean))) if generic else (None, False)
+    )
+
+
+def extract_setup_token(text: str) -> str | None:
+    """Pull the `sk-ant-oat01-…` token out of `claude setup-token` output.
+
+    Returns the token value — callers must treat it as a secret (save it via
+    `write_secret`, never log or render it).
+    """
+    match = _SETUP_TOKEN.search(_strip_ansi(text))
+    return match.group(0) if match else None
+
+
 class DeviceFlowError(JevError):
     """A Codex device sign-in could not be started or tracked."""
 
@@ -385,3 +425,215 @@ class CodexDeviceFlow:
                 )
             self._process = None
             self._thread = None
+
+
+@dataclass
+class ClaudeSetupTokenStatus:
+    """The dashboard renders this; the token value is never stored here."""
+
+    state: str = "idle"  # idle|starting|waiting|done|failed|cancelled
+    url: str | None = None
+    code_prompt: bool = False  # the CLI is asking for the browser code
+    detail: str = ""
+
+
+class ClaudeSetupTokenFlow:
+    """Runs `claude setup-token` in the background for the dashboard.
+
+    The CLI prints an authorize URL; the user approves in their browser and
+    the browser shows a code which the dashboard forwards to the CLI's stdin
+    via `submit_code()`. The CLI then prints the `sk-ant-oat01-…` token,
+    which this flow saves to `~/.jev/secrets.env` as `CLAUDE_CODE_OAUTH_TOKEN`
+    through `write_secret` — the token value never appears in status, logs,
+    or rendered pages.
+
+    `start()` returns once the process is spawned; `status()` reports the
+    parsed URL and whether the code prompt has appeared. Only one flow runs
+    at a time; `cancel()`/`shutdown()` stop it. A `timeout_s` deadline guards
+    against a hung CLI.
+    """
+
+    def __init__(
+        self,
+        popen: Callable[..., Any] = subprocess.Popen,
+        write_secret: Callable[[str, str], None] | None = None,
+    ) -> None:
+        self._popen = popen
+        self._write_secret = write_secret
+        self._lock = threading.Lock()
+        self._status = ClaudeSetupTokenStatus()
+        self._process: Any = None
+        self._thread: threading.Thread | None = None
+        self._timer: threading.Timer | None = None
+        self._command = "claude"
+
+    # -- dashboard API ---------------------------------------------------------
+
+    def start(
+        self, command: str = "claude", timeout_s: float = 600.0
+    ) -> ClaudeSetupTokenStatus:
+        """Spawn the setup-token flow. Raises DeviceFlowBusy / DeviceFlowError."""
+        with self._lock:
+            if self._status.state in ("starting", "waiting"):
+                raise DeviceFlowBusy("a Claude sign-in is already in progress")
+            if shutil.which(command) is None:
+                raise DeviceFlowError(f"the `{command}` CLI is not on PATH; install it first")
+            self._status = ClaudeSetupTokenStatus(state="starting")
+            self._command = command
+        try:
+            process = self._popen(
+                [command, "setup-token"],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+            )
+        except OSError as exc:
+            with self._lock:
+                self._status = ClaudeSetupTokenStatus(state="failed", detail=str(exc))
+            raise DeviceFlowError(f"could not start `{command} setup-token`: {exc}") from exc
+        with self._lock:
+            self._process = process
+            thread = threading.Thread(
+                target=self._watch, name="claude-setup-token-flow", daemon=True
+            )
+            self._thread = thread
+            timer = threading.Timer(timeout_s, self._on_timeout)
+            timer.daemon = True
+            self._timer = timer
+            thread.start()
+            timer.start()
+        return self.status()
+
+    def status(self) -> ClaudeSetupTokenStatus:
+        with self._lock:
+            return ClaudeSetupTokenStatus(
+                state=self._status.state,
+                url=self._status.url,
+                code_prompt=self._status.code_prompt,
+                detail=self._status.detail,
+            )
+
+    def submit_code(self, code: str) -> bool:
+        """Forward the browser code to the CLI's stdin. False when no flow is waiting."""
+        code = (code or "").strip()
+        if not code:
+            return False
+        with self._lock:
+            process = self._process
+            waiting = self._status.state == "waiting"
+        if not waiting or process is None or process.stdin is None:
+            return False
+        try:
+            process.stdin.write(code + "\n")
+            process.stdin.flush()
+        except (OSError, ValueError):
+            return False
+        return True
+
+    def cancel(self) -> bool:
+        """Stop a pending sign-in. True when one was running."""
+        with self._lock:
+            if self._status.state not in ("starting", "waiting"):
+                return False
+            process, thread, timer = self._process, self._thread, self._timer
+            self._status.state = "cancelled"
+            self._status.detail = "cancelled; no credentials were stored"
+        if timer is not None:
+            timer.cancel()
+        if process is not None:
+            with contextlib.suppress(OSError):
+                process.terminate()
+        if thread is not None:
+            thread.join(timeout=5)
+        with self._lock:
+            self._process = None
+            self._thread = None
+            self._timer = None
+        return True
+
+    def shutdown(self) -> None:
+        """Best-effort stop for dashboard exit; never raises."""
+        with contextlib.suppress(Exception):
+            self.cancel()
+
+    # -- internals ---------------------------------------------------------------
+
+    def _on_timeout(self) -> None:
+        with self._lock:
+            if self._status.state not in ("starting", "waiting"):
+                return
+            process = self._process
+            self._status.state = "failed"
+            self._status.detail = "timed out waiting for the browser sign-in"
+        if process is not None:
+            with contextlib.suppress(OSError):
+                process.terminate()
+
+    def _watch(self) -> None:
+        """Read the CLI's output, parse the URL, then save the token on success."""
+        process = self._process
+        output: list[str] = []
+        try:
+            assert process is not None and process.stdout is not None
+            for line in process.stdout:
+                output.append(line)
+                url, code_prompt = parse_setup_token_output("".join(output))
+                with self._lock:
+                    if self._status.state == "cancelled":
+                        return
+                    if url:
+                        self._status.url = url
+                        self._status.code_prompt = code_prompt
+                        if self._status.state == "starting":
+                            self._status.state = "waiting"
+                            self._status.detail = (
+                                "open the link in your browser, approve the sign-in, "
+                                "then paste the browser code below"
+                            )
+            process.wait()
+        except Exception as exc:  # a watcher must not kill the dashboard
+            with self._lock:
+                if self._status.state != "cancelled":
+                    self._status = ClaudeSetupTokenStatus(state="failed", detail=str(exc))
+            self._stop_timer()
+            return
+        self._stop_timer()
+        with self._lock:
+            if self._status.state == "cancelled":
+                return
+            token = extract_setup_token("".join(output))
+            if token:
+                try:
+                    if self._write_secret is not None:
+                        self._write_secret(CLAUDE_OAUTH_TOKEN_ENV, token)
+                    else:
+                        from jev_agent.core.secrets import write_secret
+
+                        write_secret(CLAUDE_OAUTH_TOKEN_ENV, token)
+                except Exception as exc:
+                    self._status = ClaudeSetupTokenStatus(
+                        state="failed",
+                        detail=f"the sign-in completed but the token could not be saved: {exc}",
+                    )
+                else:
+                    self._status = ClaudeSetupTokenStatus(
+                        state="done",
+                        detail="signed in with your Claude subscription",
+                    )
+            else:
+                self._status = ClaudeSetupTokenStatus(
+                    state="failed",
+                    detail=(
+                        "the sign-in did not complete — the browser step may not "
+                        "have been finished or the code expired"
+                    ),
+                )
+            self._process = None
+            self._thread = None
+
+    def _stop_timer(self) -> None:
+        with self._lock:
+            timer, self._timer = self._timer, None
+        if timer is not None:
+            timer.cancel()
