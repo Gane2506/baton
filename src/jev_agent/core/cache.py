@@ -3,8 +3,11 @@
 Two interception points in `core/harness.py` — `Harness.decide` (phase 1) and
 `Harness.run_worker` (phase 2) — consult this cache. Keys are sha256 over canonical,
 normalized request records; volatile state (round counters, spend, timestamps) is
-stripped so `jev resume` hits, while the repo fingerprint and the config fingerprint
-make any code or settings change a different key automatically.
+stripped so `jev resume` hits. The config fingerprint is key material for every key,
+so any settings change is a different key automatically; role keys additionally
+carry the repo fingerprint, so a changed repo invalidates role outputs (decisions
+key on content, and the role chain invalidates them transitively when the repo
+moves).
 
 Safety rules (enforced in code, asserted in tests):
 - `coder` and `learner` roles are never cached (hard deny, not config).
@@ -471,6 +474,17 @@ class Cache:
         if not self.usable:
             return None
         return self.store.cache_get(key.key_hash)
+
+    def get_entry(self, key_hash: str) -> CacheEntry | None:
+        """Fetch one entry by hash, counting the hit.
+
+        The semantic serve path finds its candidate via `similar()` (a table scan,
+        no hit counting); re-fetching here makes a served semantic hit account
+        exactly like an exact hit in stats, saved dollars, and LRU order.
+        """
+        if not self.usable:
+            return None
+        return self.store.cache_get(key_hash)
 
     def put(
         self,
