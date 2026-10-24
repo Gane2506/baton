@@ -299,14 +299,10 @@ def test_log_shows_jev_confidence() -> None:
     details = {"answers": {"effort": {"choice": "high", "confidence": 0.912}}, "direct": ["w"]}
     assert format_answers({"w": "codex", "effort": "high"}, details) == "w=codex effort=high (0.91)"
     assert format_answers({"w": "codex"}, {}) == "w=codex"
-    consensus = {
-        "answers": {"w": {"confidence": 0.91}},
-        "laya": {"w": {"margin": 0.45}, "effort": {"margin": -0.1}, "bad": {"margin": True}},
-    }
-    answers = {"w": "codex", "effort": "high", "bad": "x"}
-    assert format_answers(answers, consensus) == (
-        "w=codex (0.91, second vote +0.45) effort=high (second vote -0.10) bad=x"
-    )
+    # A stale "laya" second-vote key in old stored decisions is ignored now (the
+    # consensus dispatcher is gone, issue #193): only Jev's confidence shows.
+    stale = {"answers": {"w": {"confidence": 0.91}}, "laya": {"w": {"margin": 0.45}}}
+    assert format_answers({"w": "codex"}, stale) == "w=codex (0.91)"
 
 
 def test_pipeline_settings_from_config() -> None:
