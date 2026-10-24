@@ -128,11 +128,18 @@
 <div class="panel-head">
   <h2 class="section">Items</h2>
   <div class="actions">
+    <form class="inline" method="get" action="/queue">
+      <label class="muted" for="q">Search</label>
+      {% if show_all %}<input type="hidden" name="all" value="1">{% endif %}
+      <input type="search" id="q" name="q" value="{{ query }}" placeholder="idea text" maxlength="80">
+      <button class="btn btn-sm btn-secondary" type="submit">Search</button>
+      {% if query %}<a href="/queue{% if show_all %}?all=1{% endif %}">Clear</a>{% endif %}
+    </form>
     <form class="inline" method="post" action="/queue/clear">
       {{ csrf_input() }}<button class="btn btn-sm btn-danger" type="submit">Clear queue…</button>
     </form>
     <p class="small muted">
-    {% if show_all %}<a class="btn btn-sm btn-ghost" href="/queue">Hide finished items</a>{% else %}{% if q.hidden %}{{ q.hidden }} finished item(s) hidden; {% endif %}<a class="btn btn-sm btn-ghost" href="/queue?all=1">Show all</a>{% endif %}</p>
+    {% if show_all %}<a class="btn btn-sm btn-ghost" href="/queue{% if query %}?q={{ query | urlencode }}{% endif %}">Hide finished items</a>{% else %}{% if q.hidden %}{{ q.hidden }} finished item(s) hidden; {% endif %}<a class="btn btn-sm btn-ghost" href="/queue?all=1{% if query %}&q={{ query | urlencode }}{% endif %}">Show all</a>{% endif %}</p>
   </div>
 </div>
 {% if q.rows %}
@@ -169,6 +176,6 @@
   </tbody>
 </table></div>
 {% else %}
-<div class="empty"><div class="title">The queue is empty</div><p>Add an idea above; the scheduler takes them one at a time.</p></div>
+<div class="empty"><div class="title">{% if query %}No ideas match "{{ query }}"{% else %}The queue is empty{% endif %}</div><p>{% if query %}Try another word, or <a href="/queue">clear the search</a>.{% else %}Add an idea above; the scheduler takes them one at a time.{% endif %}</p></div>
 {% endif %}
 {% endblock %}

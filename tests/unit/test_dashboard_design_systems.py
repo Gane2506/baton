@@ -138,6 +138,22 @@ def test_list_shows_systems_with_metadata(client: TestClient, home: Path) -> Non
     assert 'href="/design-systems/acme-brand"' in page.text
 
 
+def test_list_search_filters_by_name(client: TestClient, home: Path) -> None:
+    # Cycle 3 workstream C (issue #184): the library list searches like chats
+    # do -- server-side, on the system name, case-insensitively, with a
+    # clearable no-match empty state instead of the plain "no systems" one.
+    _seed("acme-brand")
+    _seed("other-system")
+    page = client.get("/design-systems?q=ACME")
+    assert "acme-brand" in page.text
+    assert "other-system" not in page.text
+    assert 'value="ACME"' in page.text  # the query survives in the search box
+    page = client.get("/design-systems?q=zzz-no-such-system")
+    assert "other-system" not in page.text
+    assert "No design systems match" in page.text and "clear the search" in page.text
+    assert "other-system" in client.get("/design-systems").text  # unfiltered still full
+
+
 # ---- detail page -----------------------------------------------------------------------------
 
 
