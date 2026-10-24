@@ -11,6 +11,12 @@
   </div>
 </div>
 
+<form class="inline" method="get" action="/design-systems">
+  <label class="muted" for="q">Search</label>
+  <input type="search" id="q" name="q" value="{{ q }}" placeholder="system name" maxlength="80">
+  <button class="btn btn-secondary" type="submit">Search</button>
+  {% if q %}<a href="/design-systems">Clear</a>{% endif %}
+</form>
 {% if systems %}
 <div class="table-wrap"><table>
   <thead><tr><th>System</th><th>Source</th><th>App type</th><th>Stack</th><th>Version</th><th>Updated</th><th><span class="sr-only">actions</span></th></tr></thead>
@@ -41,9 +47,9 @@
 </table></div>
 {% else %}
 <div class="empty">
-  <div class="title">No design systems in the library</div>
-  <p><a href="/design-studio/reverse">Reverse-engineer one from a website or screenshots</a>, or build one with the
-  <a href="/design-studio/new">interactive wizard</a>.</p>
+  <div class="title">{% if q %}No design systems match "{{ q }}"{% else %}No design systems in the library{% endif %}</div>
+  <p>{% if q %}Try another word, or <a href="/design-systems">clear the search</a>.{% else %}<a href="/design-studio/reverse">Reverse-engineer one from a website or screenshots</a>, or build one with the
+  <a href="/design-studio/new">interactive wizard</a>.{% endif %}</p>
 </div>
 {% endif %}
 {% endblock %}

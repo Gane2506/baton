@@ -335,6 +335,22 @@ def test_queue_page_and_actions(client: TestClient, planned: tuple[Path, str]) -
         assert len(store.list_queue()) == 1
 
 
+def test_queue_search_filters_by_idea(client: TestClient) -> None:
+    # Cycle 3 workstream C (issue #184): the queue list searches like chats do --
+    # server-side, on the idea text, case-insensitively, with a clearable
+    # no-match empty state instead of the plain "queue is empty" one.
+    _post(client, "/queue/add", {"idea": "alpha dashboard widget", "priority": "normal"})
+    _post(client, "/queue/add", {"idea": "beta billing export", "priority": "normal"})
+    page = client.get("/queue?q=ALPHA")
+    assert "alpha dashboard widget" in page.text
+    assert "beta billing export" not in page.text
+    assert 'value="ALPHA"' in page.text  # the query survives in the search box
+    page = client.get("/queue?q=zzz-no-such-idea")
+    assert "beta billing export" not in page.text
+    assert "No ideas match" in page.text and "clear the search" in page.text
+    assert "alpha dashboard widget" in client.get("/queue").text  # unfiltered still full
+
+
 def test_fragment_error_keeps_flash_messages(client: TestClient) -> None:
     # A live poll that fails (rendering error.html) must not eat the session's flash
     # messages: they survive until the next successful full-page render (#52).

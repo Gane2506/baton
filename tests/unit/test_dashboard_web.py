@@ -370,6 +370,27 @@ def test_queue_items_note_column_has_no_wrap_floor(client: TestClient) -> None:
     assert '<td class="small"></td>' in html  # the empty note cell still renders
 
 
+# ---- Cycle 3: live-region loading feedback (issue #184) ----------------------------------
+# No JS test harness exists in this repo, so the live.js contract is asserted as
+# served substrings (the same pattern as the queue-polish CSS tests above):
+# the fetch sets aria-busy + data-live-loading and clears both on resolve, and
+# a region that starts empty gets a "Loading…" placeholder until the first
+# fetch replaces it. The CSS assertion pins the subtle-dim rule: opacity with a
+# transition delay, so fast auto-refreshes never visibly flicker.
+
+
+def test_live_region_loading_feedback_js_and_css(client: TestClient) -> None:
+    js = client.get("/static/live.js").text
+    assert 'el.setAttribute("aria-busy", "true")' in js
+    assert 'el.setAttribute("data-live-loading", "true")' in js
+    assert 'el.removeAttribute("aria-busy")' in js
+    assert 'el.removeAttribute("data-live-loading")' in js
+    assert "Loading…" in js
+    css = client.get("/static/style.css").text
+    assert "[data-live-loading] { opacity: 0.7; transition-delay: 200ms; }" in css
+    assert ".live-loading" in css
+
+
 # ---- Functional sweep (issue #174) ----------------------------------------------------------
 # The dashboard HTTP sweep found that POST /runs/{run_id}/modify on a run waiting
 # to ship without a plan crashed with AssertionError (pipeline.request_changes'

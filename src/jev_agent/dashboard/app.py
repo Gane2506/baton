@@ -850,11 +850,13 @@ class Dashboard:
 
     def queue_page(self, request: Request) -> Response:
         show_all = request.query_params.get("all") == "1"
+        query = request.query_params.get("q", "")
         return self.page(
             request,
             "queue.html",
             lambda repo: {
-                "q": views.queue_view(repo, show_all),
+                "q": views.queue_view(repo, show_all, query),
+                "query": query.strip(),
                 "sched": self.scheduler_runner.status(),
                 "show_all": show_all,
                 "priorities": QUEUE_PRIORITIES,
@@ -1155,7 +1157,14 @@ class Dashboard:
 
     def design_systems_page(self, request: Request) -> Response:
         """The design library: the saved systems, their sources and versions (Tier 0)."""
-        return self.page(request, "design_systems.html", _design_systems_view)
+        query = request.query_params.get("q", "")
+
+        def build(repo: views.Repo) -> dict[str, Any]:
+            view = _design_systems_view(repo, query)
+            view["q"] = query.strip()
+            return view
+
+        return self.page(request, "design_systems.html", build)
 
     def design_system_page(self, request: Request) -> Response:
         """One library system: its tokens and system markdown, read-only (Tier 0)."""
@@ -3590,11 +3599,17 @@ def _repo_design_source(root: Path) -> str | None:
     return str(source) if isinstance(source, str) else None
 
 
-def _design_systems_view(repo: views.Repo) -> dict[str, Any]:
-    """The library's systems for the list page, with the repo's active one marked."""
+def _design_systems_view(repo: views.Repo, query: str = "") -> dict[str, Any]:
+    """The library's systems for the list page, with the repo's active one marked.
+
+    `query` filters on the system name, case-insensitively (the chats list's
+    search pattern)."""
     active = _repo_design_source(repo.root)
+    needle = query.strip().lower()
     systems = []
     for name in list_library():
+        if needle and needle not in name.lower():
+            continue
         meta = _library_meta(name)
         systems.append(
             {
