@@ -28,12 +28,10 @@ from jev_agent.core.models import (
     DecisionRequest,
     Idea,
     Plan,
-    RunState,
     TaskCard,
     WorkerResult,
 )
 from jev_agent.core.store import Store
-from jev_agent.core.tuning import run_samples
 from jev_agent.dispatch.guard import GuardedDispatcher
 from jev_agent.dispatch.rules import RulesDispatcher
 from jev_agent.workers.base import WorkerOutput
@@ -694,18 +692,6 @@ def _consensus_decision(
             details=details,
         ),
     )
-
-
-def test_tune_dedupes_cached_decisions(store: Store, tmp_path: Path) -> None:
-    run_id = store.create_run(Idea(text="idea", repo_path=tmp_path)).id
-    store.set_run_state(run_id, RunState.DONE)
-    _consensus_decision(store, run_id, "D1", "plan")
-    _consensus_decision(store, run_id, "D1", "plan", cached_from=1)
-    _consensus_decision(store, run_id, "D1", "plan", cached_from=1)
-    run = store.get_run(run_id)
-    samples = run_samples(run, store.list_tasks(run_id), store.list_decisions(run_id))
-    # The original vote counts once; its two cache replays are skipped.
-    assert len(samples) == 1
 
 
 # ---- cache policy object ---------------------------------------------------------------

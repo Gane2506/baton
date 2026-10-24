@@ -1,7 +1,6 @@
 {% extends "base.html" %}
 {% from "macros.html" import badge, icon, csrf_input with context %}
 {% block title %}Learning{% endblock %}
-{% block extra_head %}<script src="/static/laya-weights.js" defer></script>{% endblock %}
 {% block content %}
 <div class="page-head">
   <div class="titles">
@@ -66,91 +65,6 @@
     <button class="btn btn-primary" type="submit">{{ icon("i-plus", "sm") }}Create</button>
   </form>
   <p class="hint">Shared profiles live in <span class="mono">{{ lv.shared_path }}</span>.</p>
-</section>
-
-<h2 class="section" id="laya">Laya tuning</h2>
-<section class="panel">
-  <p class="hint">Suggestions from <code>jev laya tune</code>: weight changes learned from how past
-  decisions turned out. Review suggestion by suggestion, then apply.</p>
-  <form method="get" action="/learning" class="actions">
-    <input type="hidden" name="profile" value="{{ lv.selected or '' }}">
-    <label for="laya-profile">Profile</label>
-    <select id="laya-profile" name="laya_profile">
-      {% for pname in laya.profiles %}<option value="{{ pname }}"{% if pname == laya.profile %} selected{% endif %}>{{ pname }}</option>{% endfor %}
-    </select>
-    <button class="btn btn-sm btn-secondary" type="submit">Show suggestions</button>
-  </form>
-  {% if laya.profile %}
-  <p class="small">Current weights: <span class="mono">{{ laya.source }}</span>; outcomes:
-  {{ laya.passed }} passed, {{ laya.failed }} failed.</p>
-  <form method="post" action="/learning/laya/weights" id="laya-weights-form">
-    {{ csrf_input() }}
-    <input type="hidden" name="profile" value="{{ laya.profile }}">
-    <div class="weights">
-      {% for criterion in laya.criteria %}
-      <label class="check small"><span class="mono">{{ criterion }}</span>
-        <input type="number" step="0.01" min="0" max="1" name="w_{{ criterion }}"
-               value="{{ "%.2f" % laya.current[criterion] }}" data-laya-weight
-               aria-label="{{ criterion }} weight">
-      </label>
-      {% endfor %}
-    </div>
-    <p class="hint" id="laya-weights-sum" role="status">Sum: {{ "%.2f" % (laya.current.values() | sum) }}</p>
-    {% if laya.repo_pinned %}
-    <p class="flash warn small" role="note">{{ icon("i-alert", "sm") }}<span>This repo's
-    <code>jev.toml</code> pins the weights. Saving here moves them to your user config and
-    removes the repo pin, so the weights stay editable in the dashboard.</span></p>
-    {% endif %}
-    <div class="actions">
-      <button class="btn btn-primary" type="submit" id="laya-weights-save">Save weights</button>
-    </div>
-  </form>
-  {% if laya.configured %}
-  {% if laya.repo_pinned %}
-  <p class="flash warn small" role="note">{{ icon("i-alert", "sm") }}<span>Tune suggestions cannot
-  be applied while this repo's <code>jev.toml</code> pins the weights — save the weights above to
-  move them to your user config first.</span></p>
-  {% else %}
-  <p class="flash warn small" role="note">{{ icon("i-alert", "sm") }}<span>Your user config pins the
-  weights, so tune suggestions cannot be applied to this profile — edit the weights above
-  instead.</span></p>
-  {% endif %}
-  {% elif laya.suggestion %}
-  <form method="post" action="/learning/laya/apply">
-    {{ csrf_input() }}
-    <input type="hidden" name="profile" value="{{ laya.profile }}">
-    <div class="table-wrap"><table>
-      <thead><tr><th>Criterion</th><th class="num">Passed avg</th><th class="num">Failed avg</th><th class="num">Current</th><th class="num">Suggested</th><th>Apply</th></tr></thead>
-      <tbody>
-      {% for e in laya.suggestion.evidence %}
-        <tr>
-          <td>{{ e.criterion }}</td>
-          <td class="num">{{ "%.2f" % e.passed_mean }}</td>
-          <td class="num">{{ "%.2f" % e.failed_mean }}</td>
-          <td class="num">{{ "%.3f" % e.current }}</td>
-          <td class="num">{{ "%.3f" % e.suggested }}</td>
-          <td><label class="check"><input type="checkbox" name="accept_{{ e.criterion }}" checked><span class="sr-only">Apply {{ e.criterion }}</span></label></td>
-        </tr>
-      {% endfor %}
-      </tbody>
-    </table></div>
-    <div class="actions">
-      <button class="btn btn-primary" type="submit">Apply selected</button>
-    </div>
-  </form>
-  {% if laya.tuned %}
-  <form method="post" action="/learning/laya/reset" data-confirm="Remove the tuned weights from {{ laya.profile }}? Its runs go back to the configured weights.">
-    {{ csrf_input() }}
-    <input type="hidden" name="profile" value="{{ laya.profile }}">
-    <button class="btn btn-secondary" type="submit">Reset tuned weights</button>
-  </form>
-  {% endif %}
-  {% else %}
-  <p class="muted">{{ laya.reason }}</p>
-  {% endif %}
-  {% else %}
-  <p class="muted">No profiles yet — turn learning on to create one.</p>
-  {% endif %}
 </section>
 
 {% if lv.selected %}

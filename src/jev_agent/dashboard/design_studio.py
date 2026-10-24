@@ -68,7 +68,7 @@ def _str(values: Mapping[str, object], key: str) -> str:
 def stack_options(app_type: str, recommendation: str | None = None) -> tuple[list[str], str]:
     """The stack choices for `app_type`: the ordered list and the recommended one.
 
-    The recommendation comes first. DS-03: the wizard passes the cached Jev+Laya
+    The recommendation comes first. DS-03: the wizard passes the cached Jev
     pick as `recommendation`; without one (or when it is not a listed stack) the
     recommendation is the design kit's static default — the first entry of
     `STACKS[app_type]`, like the CLI wizard's.
@@ -340,7 +340,7 @@ def wizard_context(
     }
     if step == "stack":
         app_type = session_state["app_type"]["app_type"]
-        # The Jev+Laya pick, decided once when the App type step was submitted and
+        # The Jev pick, decided once when the App type step was submitted and
         # cached in the wizard state; without a cache the static default applies.
         cached = StackRecommendation.from_state(session_state.get(STACK_REC_KEY))
         rec = cached or default_recommendation(app_type, "not_asked")
@@ -352,7 +352,5 @@ def wizard_context(
         context["stack_rec"] = {
             "source": rec.source,
             "rationale": rec.rationale,
-            "laya_agreed": rec.laya_agreed,
-            "laya_margin": (f"{rec.laya_margin:.1f}" if rec.laya_margin is not None else ""),
         }
     return context
