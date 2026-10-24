@@ -24,7 +24,15 @@ def describe_pr(pr: ShippedPrRecord) -> str:
 
 async def decide_ship(ctx: AppContext, choice: str, run_id: str, notes: str | None) -> RunRecord:
     """Approve (ship and merge), modify (a task with the notes, then the votes again) or
-    stop (end DONE, not shipped) a run waiting to ship. `JevError` for bad flag use."""
+    stop (end DONE, not shipped) a run waiting to ship. `JevError` for bad flag use.
+
+    An unknown choice used to fall through to `stop_ship`: a typo (or a bad
+    dashboard value) silently ended a run as not shipped instead of erroring
+    (issue #197). `CHOICES` is the contract, and it is validated here, not
+    just in the CLI wrapper, so every caller gets the error.
+    """
+    if choice not in CHOICES:
+        raise JevError(f"unknown ship choice {choice!r}; choose one of: {', '.join(CHOICES)}")
     if choice == "modify" and not (notes or "").strip():
         raise JevError('say what to change: `jev ship modify RUN_ID --notes "..."`')
     if choice != "modify" and notes is not None:

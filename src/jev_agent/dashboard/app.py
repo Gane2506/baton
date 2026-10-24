@@ -2152,10 +2152,21 @@ class Dashboard:
                     return f"{key}: {exc}"
                 if value is not settings.UNSET:
                     entry[key] = value
+
+            def add(layer: dict[str, Any]) -> None:
+                # The duplicate check lives here, not in the write closure:
+                # save() validates from `mutate` and ignores the closure, so
+                # a check there never ran and a duplicate silently overwrote
+                # the existing entry (issue #197). A ValueError from mutate
+                # becomes save()'s error string.
+                if settings.entity_exists(layer, section, name):
+                    raise ValueError(f"{section}.{name} already exists")
+                settings.set_path(layer, f"{section}.{name}", entry)
+
             return settings.save(
                 root,
                 target,
-                lambda layer: settings.set_path(layer, f"{section}.{name}", entry),
+                add,
                 lambda: settings.add_entity(file, section, name, entry),
             )
 
