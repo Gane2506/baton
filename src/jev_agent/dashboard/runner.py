@@ -22,9 +22,9 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Literal
+from typing import Generic, Literal, Protocol, TypeVar
 
-from jev_agent.app.context import NO_WORKERS_MESSAGE, open_context, open_repo
+from jev_agent.app.context import NO_WORKERS_MESSAGE, AppContext, open_context, open_repo
 from jev_agent.app.jobs import STOPPED_MESSAGE, JobCancel, JobState, bind_job, run_job_coroutine
 from jev_agent.app.runs import approve_run, create_run, resume_run
 from jev_agent.app.ship import describe_pr
@@ -32,6 +32,7 @@ from jev_agent.config.schema import ShipMode
 from jev_agent.core.pipeline import PipelineError
 from jev_agent.core.ship import Gh, prepare_ship
 from jev_agent.core.ship import execute_ship as ship_now
+from jev_agent.core.store import RunRecord
 from jev_agent.dashboard.errors import friendly_error
 
 RunAction = Literal["approve", "resume", "ship", "stop", "start"]
@@ -80,24 +81,27 @@ def request_changes(root: Path, run_id: str, notes: str) -> bool:
         return ctx.has_workers
 
 
+def _advance(ctx: AppContext, run_id: str, action: RunAction) -> RunRecord:
+    """The run's next step, run to completion. Approve and stop need no workers
+    (the gate, not a model, does the work); start and resume do."""
+    if action == "approve":
+        return run_job_coroutine(approve_run(ctx, run_id))
+    if action == "stop":
+        return run_job_coroutine(ctx.pipeline.stop_ship(run_id))
+    if not ctx.has_workers:
+        raise PipelineError(NO_WORKERS_MESSAGE)
+    if action == "start":
+        return run_job_coroutine(ctx.pipeline.advance(run_id))
+    return run_job_coroutine(resume_run(ctx, run_id))
+
+
 def execute_run(root: Path, run_id: str, action: RunAction) -> str:
     """Approve, resume, ship or stop (`jev ship stop`) `run_id` exactly as the CLI does, and
     describe the outcome."""
     if action == "ship":
         return execute_ship(root, run_id)
     with open_context(root) as ctx:
-        if action == "start":
-            if not ctx.has_workers:
-                raise PipelineError(NO_WORKERS_MESSAGE)
-            record = run_job_coroutine(ctx.pipeline.advance(run_id))
-        elif action == "approve":
-            record = run_job_coroutine(approve_run(ctx, run_id))
-        elif action == "stop":
-            record = run_job_coroutine(ctx.pipeline.stop_ship(run_id))
-        else:
-            if not ctx.has_workers:
-                raise PipelineError(NO_WORKERS_MESSAGE)
-            record = run_job_coroutine(resume_run(ctx, run_id))
+        record = _advance(ctx, run_id, action)
         warnings = ctx.warnings if ctx.has_workers else []  # as `jev approve` / `resume` show
     outcome = f"run {record.state}" + (f": {record.reason}" if record.reason else "")
     return "; ".join([outcome, *(f"warning: {w}" for w in warnings)])
@@ -133,6 +137,144 @@ def prepare_run(
     return run.id
 
 
+class _JobLike(Protocol):
+    """What the launcher tracks per job: the outcome message, the state, and when it ended."""
+
+    message: str
+    state: JobState
+    started_at: datetime
+    finished_at: datetime | None
+
+
+JobT = TypeVar("JobT", bound=_JobLike)
+
+
+class _JobRunner(Generic[JobT]):
+    """One background job per key, at most one running at a time.
+
+    `RunLauncher` and `ChatRunner` are the same machine with different jobs
+    (a run action vs a chat turn), so this class owns the shared parts: the
+    per-key locks, the job/thread/cancel registries, pruning finished jobs
+    past `_MAX_JOBS`, and shutdown. Subclasses supply the job object and the
+    zero-arg callable that produces its message.
+    """
+
+    def __init__(self) -> None:
+        self._guard = threading.Lock()
+        self._locks: dict[str, threading.Lock] = {}
+        self._jobs: dict[str, JobT] = {}
+        self._threads: dict[str, threading.Thread] = {}
+        self._cancels: dict[str, JobCancel] = {}
+
+    def _lock_for(self, key: str) -> threading.Lock:
+        with self._guard:
+            return self._locks.setdefault(key, threading.Lock())
+
+    def _prune_finished(self) -> None:
+        """Drop finished jobs past `_MAX_JOBS`, oldest first (lock held).
+
+        Only jobs whose thread has actually exited: a job between its state
+        flip and its lock release must keep its lock, or a new start for the
+        same key could run concurrently with the old thread's cleanup.
+        """
+
+        def _thread_dead(key: str) -> bool:
+            thread = self._threads.get(key)
+            return thread is None or not thread.is_alive()
+
+        finished = sorted(
+            (
+                key
+                for key, job in self._jobs.items()
+                if job.state != "running" and _thread_dead(key)
+            ),
+            key=lambda key: self._jobs[key].finished_at or self._jobs[key].started_at,
+        )
+        while len(self._jobs) > _MAX_JOBS and finished:
+            old = finished.pop(0)
+            self._jobs.pop(old, None)
+            self._threads.pop(old, None)
+            self._cancels.pop(old, None)
+            self._locks.pop(old, None)
+
+    def busy(self, key: str) -> bool:
+        return self._lock_for(key).locked()
+
+    def _launch(self, key: str, job: JobT, produce: Callable[[], str], name: str) -> bool:
+        """Run `produce` in a thread for `key`; False when a job for it is still going."""
+        lock = self._lock_for(key)
+        if not lock.acquire(blocking=False):
+            return False
+        cancel = JobCancel()
+        # Non-daemon: the lifespan shutdown joins every job thread, so a missed
+        # shutdown must not silently abandon a run or a chat turn.
+        thread = threading.Thread(
+            target=self._work,
+            args=(job, lock, cancel, produce),
+            name=name,
+        )
+        with self._guard:
+            self._jobs[key] = job
+            self._threads[key] = thread
+            self._cancels[key] = cancel
+            self._prune_finished()
+        try:
+            thread.start()
+        except BaseException:
+            # A thread that never started must not linger as a "running" job.
+            with self._guard:
+                del self._jobs[key]
+                del self._threads[key]
+                del self._cancels[key]
+            lock.release()
+            raise
+        return True
+
+    def _work(
+        self, job: JobT, lock: threading.Lock, cancel: JobCancel, produce: Callable[[], str]
+    ) -> None:
+        bind_job(cancel)
+        try:
+            job.message = produce()
+            job.state = "finished"
+        except asyncio.CancelledError:  # `shutdown` cancelled it
+            job.message = STOPPED_MESSAGE
+            job.state = "failed"
+        except Exception as exc:  # shown on the page; the run/chat keeps its saved state
+            job.message = friendly_error(exc)
+            job.state = "failed"
+        finally:
+            job.finished_at = datetime.now(UTC)
+            lock.release()
+
+    def shutdown(self, timeout: float = 30.0) -> list[str]:
+        """Cancel every running job and wait for its thread; returns the keys still going
+        after `timeout` (a blocking step that ignores cancellation, such as a git push)."""
+        with self._guard:
+            running = [
+                (key, thread, self._cancels[key])
+                for key, thread in self._threads.items()
+                if thread.is_alive()
+            ]
+        for _, _, cancel in running:
+            cancel.cancel()
+        for _, thread, _ in running:
+            thread.join(timeout)
+        return [key for key, thread, _ in running if thread.is_alive()]
+
+    def job(self, key: str) -> JobT | None:
+        with self._guard:
+            return self._jobs.get(key)
+
+    def wait(self, key: str, timeout: float = 30.0) -> JobT | None:
+        """Block until the key's current job ends (tests, shutdown)."""
+        with self._guard:
+            thread = self._threads.get(key)
+        if thread is not None:
+            thread.join(timeout)
+        return self.job(key)
+
+
 @dataclass
 class Job:
     run_id: str
@@ -143,120 +285,23 @@ class Job:
     finished_at: datetime | None = None
 
 
-class RunLauncher:
+class RunLauncher(_JobRunner[Job]):
     """Background approve/resume jobs, at most one per run id."""
 
     def __init__(self, root: Path, executor: Executor = execute_run) -> None:
+        super().__init__()
         self.root = root
         self.executor = executor
-        self._guard = threading.Lock()
-        self._locks: dict[str, threading.Lock] = {}
-        self._jobs: dict[str, Job] = {}
-        self._threads: dict[str, threading.Thread] = {}
-        self._cancels: dict[str, JobCancel] = {}
-
-    def _lock_for(self, run_id: str) -> threading.Lock:
-        with self._guard:
-            return self._locks.setdefault(run_id, threading.Lock())
-
-    def _prune_finished(self) -> None:
-        """Drop finished jobs past `_MAX_JOBS`, oldest first (lock held).
-
-        Only jobs whose thread has actually exited: a job between its state
-        flip and its lock release must keep its lock, or a new start for the
-        same run could run concurrently with the old thread's cleanup.
-        """
-
-        def _thread_dead(job: Job) -> bool:
-            thread = self._threads.get(job.run_id)
-            return thread is None or not thread.is_alive()
-
-        finished = sorted(
-            (job for job in self._jobs.values() if job.state != "running" and _thread_dead(job)),
-            key=lambda job: job.finished_at or job.started_at,
-        )
-        while len(self._jobs) > _MAX_JOBS and finished:
-            old = finished.pop(0)
-            self._jobs.pop(old.run_id, None)
-            self._threads.pop(old.run_id, None)
-            self._cancels.pop(old.run_id, None)
-            self._locks.pop(old.run_id, None)
-
-    def busy(self, run_id: str) -> bool:
-        return self._lock_for(run_id).locked()
 
     def start(self, run_id: str, action: RunAction) -> bool:
         """Start the job in a thread; False when a job for this run is still going."""
-        lock = self._lock_for(run_id)
-        if not lock.acquire(blocking=False):
-            return False
         job = Job(run_id, action, datetime.now(UTC))
-        cancel = JobCancel()
-        # Non-daemon, like ChatRunner's threads below: the lifespan shutdown joins
-        # every job thread, so a missed shutdown must not silently abandon a run.
-        thread = threading.Thread(
-            target=self._work,
-            args=(job, lock, cancel),
+        return self._launch(
+            run_id,
+            job,
+            lambda: self.executor(self.root, job.run_id, job.action),
             name=f"jev-{action}-{run_id}",
         )
-        with self._guard:
-            self._jobs[run_id] = job
-            self._threads[run_id] = thread
-            self._cancels[run_id] = cancel
-            self._prune_finished()
-        try:
-            thread.start()
-        except BaseException:
-            # A thread that never started must not linger as a "running" job.
-            with self._guard:
-                del self._jobs[run_id]
-                del self._threads[run_id]
-                del self._cancels[run_id]
-            lock.release()
-            raise
-        return True
-
-    def _work(self, job: Job, lock: threading.Lock, cancel: JobCancel) -> None:
-        bind_job(cancel)
-        try:
-            job.message = self.executor(self.root, job.run_id, job.action)
-            job.state = "finished"
-        except asyncio.CancelledError:  # `shutdown` cancelled it
-            job.message = STOPPED_MESSAGE
-            job.state = "failed"
-        except Exception as exc:  # shown on the run page; the run keeps its saved state
-            job.message = friendly_error(exc)
-            job.state = "failed"
-        finally:
-            job.finished_at = datetime.now(UTC)
-            lock.release()
-
-    def shutdown(self, timeout: float = 30.0) -> list[str]:
-        """Cancel every running job and wait for its thread; returns the run ids still going
-        after `timeout` (a blocking step that ignores cancellation, such as a git push)."""
-        with self._guard:
-            running = [
-                (run_id, thread, self._cancels[run_id])
-                for run_id, thread in self._threads.items()
-                if thread.is_alive()
-            ]
-        for _, _, cancel in running:
-            cancel.cancel()
-        for _, thread, _ in running:
-            thread.join(timeout)
-        return [run_id for run_id, thread, _ in running if thread.is_alive()]
-
-    def job(self, run_id: str) -> Job | None:
-        with self._guard:
-            return self._jobs.get(run_id)
-
-    def wait(self, run_id: str, timeout: float = 30.0) -> Job | None:
-        """Block until the run's current job ends (tests, shutdown)."""
-        with self._guard:
-            thread = self._threads.get(run_id)
-        if thread is not None:
-            thread.join(timeout)
-        return self.job(run_id)
 
 
 @dataclass
@@ -268,91 +313,17 @@ class ChatJob:
     finished_at: datetime | None = None
 
 
-class ChatRunner:
+class ChatRunner(_JobRunner[ChatJob]):
     """Background chat turns, at most one per chat id (the shape of `RunLauncher`).
 
     The work is a plain callable (an `app.chat` turn); it runs `run_job_coroutine`
     inside, so `shutdown` can cancel a model call waiting on the network.
     """
 
-    def __init__(self) -> None:
-        self._guard = threading.Lock()
-        self._locks: dict[str, threading.Lock] = {}
-        self._jobs: dict[str, ChatJob] = {}
-        self._threads: dict[str, threading.Thread] = {}
-        self._cancels: dict[str, JobCancel] = {}
-
-    def _lock_for(self, chat_id: str) -> threading.Lock:
-        with self._guard:
-            return self._locks.setdefault(chat_id, threading.Lock())
-
-    def _prune_finished(self) -> None:
-        """Drop finished turns past `_MAX_JOBS`, oldest first (lock held)."""
-
-        # Same rule as RunLauncher: only turns whose thread has exited.
-        def _thread_dead(job: ChatJob) -> bool:
-            thread = self._threads.get(job.chat_id)
-            return thread is None or not thread.is_alive()
-
-        finished = sorted(
-            (job for job in self._jobs.values() if job.state != "running" and _thread_dead(job)),
-            key=lambda job: job.finished_at or job.started_at,
-        )
-        while len(self._jobs) > _MAX_JOBS and finished:
-            old = finished.pop(0)
-            self._jobs.pop(old.chat_id, None)
-            self._threads.pop(old.chat_id, None)
-            self._cancels.pop(old.chat_id, None)
-            self._locks.pop(old.chat_id, None)
-
-    def busy(self, chat_id: str) -> bool:
-        return self._lock_for(chat_id).locked()
-
     def start(self, chat_id: str, work: Callable[[], str]) -> bool:
         """Run `work` in a thread; False when this chat already has a turn going."""
-        lock = self._lock_for(chat_id)
-        if not lock.acquire(blocking=False):
-            return False
         job = ChatJob(chat_id, datetime.now(UTC))
-        cancel = JobCancel()
-        thread = threading.Thread(
-            target=self._work,
-            args=(job, lock, cancel, work),
-            name=f"jev-chat-{chat_id}",
-        )
-        with self._guard:
-            self._jobs[chat_id] = job
-            self._threads[chat_id] = thread
-            self._cancels[chat_id] = cancel
-            self._prune_finished()
-        try:
-            thread.start()
-        except BaseException:
-            # A thread that never started must not linger as a "running" job.
-            with self._guard:
-                del self._jobs[chat_id]
-                del self._threads[chat_id]
-                del self._cancels[chat_id]
-            lock.release()
-            raise
-        return True
-
-    def _work(
-        self, job: ChatJob, lock: threading.Lock, cancel: JobCancel, work: Callable[[], str]
-    ) -> None:
-        bind_job(cancel)
-        try:
-            job.message = work()
-            job.state = "finished"
-        except asyncio.CancelledError:  # `shutdown` cancelled it
-            job.message = STOPPED_MESSAGE
-            job.state = "failed"
-        except Exception as exc:  # shown on the chat page; the transcript keeps its state
-            job.message = friendly_error(exc)
-            job.state = "failed"
-        finally:
-            job.finished_at = datetime.now(UTC)
-            lock.release()
+        return self._launch(chat_id, job, work, name=f"jev-chat-{chat_id}")
 
     def stop(self, chat_id: str) -> bool:
         """Cancel this chat's running turn (the Stop button); False when no turn is running.
@@ -368,29 +339,3 @@ class ChatRunner:
             return False
         cancel.cancel()
         return True
-
-    def shutdown(self, timeout: float = 30.0) -> list[str]:
-        """Cancel every running turn and wait for its thread (see `RunLauncher.shutdown`)."""
-        with self._guard:
-            running = [
-                (chat_id, thread, self._cancels[chat_id])
-                for chat_id, thread in self._threads.items()
-                if thread.is_alive()
-            ]
-        for _, _, cancel in running:
-            cancel.cancel()
-        for _, thread, _ in running:
-            thread.join(timeout)
-        return [chat_id for chat_id, thread, _ in running if thread.is_alive()]
-
-    def job(self, chat_id: str) -> ChatJob | None:
-        with self._guard:
-            return self._jobs.get(chat_id)
-
-    def wait(self, chat_id: str, timeout: float = 30.0) -> ChatJob | None:
-        """Block until the chat's current turn ends (tests, shutdown)."""
-        with self._guard:
-            thread = self._threads.get(chat_id)
-        if thread is not None:
-            thread.join(timeout)
-        return self.job(chat_id)
