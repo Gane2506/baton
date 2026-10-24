@@ -137,7 +137,13 @@ class TaskRunner:
             store.set_task_state(run_id, task.id, TaskState.FAILED, note=reason)
             raise Halt(RunState.FAILED, reason)
         self.h.check_budget(run_id, task.id)
-        assert task.worker is not None, "a DISPATCHED task always has an assignment"
+        if task.worker is None:
+            # A DISPATCHED task always has an assignment; a record without one is an
+            # internal inconsistency, and `_advance` catches only Halt — so this stops
+            # as FAILED, never as AssertionError (issue #201, cf. #174).
+            reason = f"task {task.id} reached DISPATCHED with no assignment"
+            store.set_task_state(run_id, task.id, TaskState.FAILED, note=reason)
+            raise Halt(RunState.FAILED, reason)
         workdir = await self._workdir(run_id, task)
         current = Assignment(task.worker, task.model, task.effort)
         # Render before the attempt is counted: a bad template stops the run without using one.
@@ -175,7 +181,8 @@ class TaskRunner:
     def _coder_prompt(self, run_id: str, task: TaskRecord, attempt: int) -> tuple[str, list[str]]:
         """The coder's prompt and the ids of the lessons in it."""
         run = self.h.store.get_run(run_id)
-        assert run.plan is not None
+        if run.plan is None:
+            raise Halt(RunState.FAILED, f"internal: run {run_id} reached coding with no plan")
         lessons = self.h.lessons_for(run_id, "coder", [task.card.description], [task.card])
         prompt = self.h.prompt(
             "coder",
