@@ -1241,7 +1241,7 @@ class TrustConfig(_Strict):
         default_factory=list,
         description=(
             'Repository paths whose jev.toml may change guarded keys; "*" trusts every '
-            'repository. Relative entries resolve against the repo being checked.'
+            "repository. Relative entries resolve against the repo being checked."
         ),
     )
 

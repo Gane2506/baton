@@ -11,6 +11,7 @@ from __future__ import annotations
 import os
 import warnings
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -57,9 +58,7 @@ def test_trusted_repo_cannot_point_prompt_file_outside(
         load_config(repo, trusted_user_cfg)
 
 
-def test_repo_prompt_file_dotdot_escape_rejected(
-    tmp_path: Path, trusted_user_cfg: Path
-) -> None:
+def test_repo_prompt_file_dotdot_escape_rejected(tmp_path: Path, trusted_user_cfg: Path) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()
     _write(repo / "jev.toml", '[roles.coder]\nprompt_file = "../outside.md"\n')
@@ -67,9 +66,7 @@ def test_repo_prompt_file_dotdot_escape_rejected(
         load_config(repo, trusted_user_cfg)
 
 
-def test_repo_prompt_file_symlink_escape_rejected(
-    tmp_path: Path, trusted_user_cfg: Path
-) -> None:
+def test_repo_prompt_file_symlink_escape_rejected(tmp_path: Path, trusted_user_cfg: Path) -> None:
     repo = tmp_path / "repo"
     (repo / "prompts").mkdir(parents=True)
     outside = tmp_path / "outside.md"
@@ -85,14 +82,10 @@ def test_repo_prompt_file_inside_allowed(tmp_path: Path, trusted_user_cfg: Path)
     (repo / "prompts").mkdir(parents=True)
     (repo / "prompts" / "coder.md").write_text("custom\n")
     _write(repo / "jev.toml", '[roles.coder]\nprompt_file = "prompts/coder.md"\n')
-    assert load_config(repo, trusted_user_cfg).roles.coder.prompt_file == Path(
-        "prompts/coder.md"
-    )
+    assert load_config(repo, trusted_user_cfg).roles.coder.prompt_file == Path("prompts/coder.md")
 
 
-def test_repo_prompt_file_absolute_inside_allowed(
-    tmp_path: Path, trusted_user_cfg: Path
-) -> None:
+def test_repo_prompt_file_absolute_inside_allowed(tmp_path: Path, trusted_user_cfg: Path) -> None:
     repo = tmp_path / "repo"
     (repo / "prompts").mkdir(parents=True)
     (repo / "prompts" / "coder.md").write_text("custom\n")
@@ -132,7 +125,7 @@ def test_dashboard_save_rejects_escaping_prompt_file(
     root.mkdir()
     (root / "jev.toml").write_text("")
 
-    def mutate(layer: dict) -> None:
+    def mutate(layer: dict[str, Any]) -> None:
         layer.setdefault("roles", {}).setdefault("coder", {})["prompt_file"] = "/etc/passwd"
 
     err = settings_save(root, "repo", mutate)

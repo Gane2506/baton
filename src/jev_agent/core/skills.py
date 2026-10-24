@@ -355,11 +355,7 @@ def _keyword_tokens(keyword: str) -> tuple[str, ...]:
 def _find_occurrences(tokens: list[str], phrase: tuple[str, ...]) -> list[int]:
     """Start indexes where `phrase` occurs as consecutive tokens."""
     width = len(phrase)
-    return [
-        i
-        for i in range(len(tokens) - width + 1)
-        if tuple(tokens[i : i + width]) == phrase
-    ]
+    return [i for i in range(len(tokens) - width + 1) if tuple(tokens[i : i + width]) == phrase]
 
 
 def _is_negated(tokens: list[str], start: int) -> bool:
@@ -395,10 +391,7 @@ def _score(skill: Skill, tokens: list[str]) -> float:
             continue
         seen.add(phrase)
         weight = _PHRASE_WEIGHT if len(phrase) > 1 else _WORD_WEIGHT
-        if any(
-            not _is_negated(tokens, start)
-            for start in _find_occurrences(tokens, phrase)
-        ):
+        if any(not _is_negated(tokens, start) for start in _find_occurrences(tokens, phrase)):
             raw += weight
     return min(1.0, raw / _FULL_SCORE_RAW)
 

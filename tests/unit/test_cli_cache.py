@@ -24,16 +24,16 @@ def test_cache_clear_bogus_type_errors_on_stderr(fixture_repo: Path) -> None:
 
 
 def test_cache_stats_and_clear(fixture_repo: Path) -> None:
-    code, out, err = _jev(fixture_repo, "cache", "stats")
+    code, out, _ = _jev(fixture_repo, "cache", "stats")
     assert code == 0, out
     assert "Decision/role cache" in out
     assert "Entries" in out
-    code, out, err = _jev(fixture_repo, "cache", "clear")
+    code, out, _ = _jev(fixture_repo, "cache", "clear")
     assert code == 0, out
     assert "Cleared 0 cache entries" in out
-    code, out, err = _jev(fixture_repo, "cache", "clear", "--type", "decisions")
+    code, out, _ = _jev(fixture_repo, "cache", "clear", "--type", "decisions")
     assert code == 0, out
     assert "Cleared 0 cache entries" in out
-    code, out, err = _jev(fixture_repo, "cache", "clear", "--type", "roles")
+    code, out, _ = _jev(fixture_repo, "cache", "clear", "--type", "roles")
     assert code == 0, out
     assert "Cleared 0 cache entries" in out

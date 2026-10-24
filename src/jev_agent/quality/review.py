@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from jev_agent.core.harness import Harness
-from jev_agent.core.models import TaskCard
+from jev_agent.core.models import Role, TaskCard
 from jev_agent.dispatch.requests import clip
 from jev_agent.quality.levels import QualityLevel, at_least
 from jev_agent.quality.models import CheckResult, ReviewStatus
@@ -26,7 +26,7 @@ DIFF_CHARS = 40_000  # diff shown to the reviewer
 # (every gate run reviews the diff, and the gate does not run at "none"). The
 # `jev quality checks` listing derives its ai-review row from these, instead of
 # the CLI hardcoding the level and role (issue #223).
-REVIEWER_ROLE = "code_reviewer"
+REVIEWER_ROLE: Role = "code_reviewer"
 REVIEW_MIN_LEVEL: QualityLevel = "basic"
 
 
