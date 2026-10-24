@@ -82,25 +82,17 @@ A repository's `jev.toml` cannot contain `[trust]`.
 | --- | --- | --- |
 | `primary` | `"consensus"` | Dispatcher asked first: `"consensus"`, `"jev"` or `"rules"`. |
 
-With `primary = "consensus"` (the default), every decision needs two votes that agree. Jev votes
-first. Laya votes second: Jev scores every allowed answer from 1 to 5 on six weighted criteria
-(see [`[dispatcher.laya]`](#dispatcherlaya)) and the highest weighted total is Laya's pick. The
-two are asked separately, and Laya does not see Jev's vote in the first round. A question is
-settled only when all three hold:
+With `primary = "consensus"` (the default), Jev — the main orchestrator — makes every
+decision. For code work, the Coding Decision Agent ([`[code_orchestrator]`](#code_orchestrator))
+grades diffs and routes coding tasks; it never merges, ships, or approves a plan on its own.
+A question Jev cannot settle confidently stops the run in `NEEDS_HUMAN` and `jev resume`
+continues it once you have looked. The consensus dispatcher never falls back to rules, so a
+missing key, a network error or an answer outside the allowed values also stops the run
+instead of being decided without Jev. The saved decision records Jev's vote and the reason
+of every unsettled round. Questions with a single allowed value are not asked.
 
-- Jev's confidence is at least `[dispatcher.jev] min_confidence`;
-- Laya ranks the same answer first;
-- Laya's lead over the runner-up is at least `min_margin` even after each score Laya was unsure
-  about (confidence below `min_confidence`) is moved one level against it.
-
-If a question is not settled, it is asked again, up to `follow_up_rounds` more times, with the
-reasons of the earlier rounds in the state. If it is still not settled, the run stops in
-`NEEDS_HUMAN` and `jev resume` continues it once you have looked. The consensus dispatcher
-never falls back to rules, so a missing key, a network error or an answer outside the allowed
-values also stops the run instead of being decided without Jev. The saved decision records
-both votes, Laya's totals and final scores, the weights used and the reason of every unsettled
-round. Questions with a single
-allowed value are not asked.
+> The former second vote is removed (issue #193): there is no `[dispatcher.laya]` table
+> any more — see [Removed: `[dispatcher.laya]`](#removed-dispatcherlaya).
 
 With `primary = "jev"`, every decision goes to Jev first. If the call fails (key unset, network
 or HTTP error, an answer outside the allowed values, low confidence, oversized state), the rules
@@ -142,55 +134,13 @@ Native TypeSafe does not report a cost, so jev estimates it from input tokens at
 confidence were either given by the rules dispatcher or had only one allowed value (Jev is not
 asked those).
 
-## `[dispatcher.laya]`
+## Removed: `[dispatcher.laya]`
 
-Laya's vote in the consensus dispatcher (`primary = "consensus"`). Laya is Jev with the Laya CDA
-decision matrix on top: it reaches Jev with the `[dispatcher.jev]` settings, so there is no
-second key or model to configure. The table is ignored with `"jev"` and `"rules"`.
-
-| Key | Default | Meaning |
-| --- | --- | --- |
-| `weights` | see below | Table of the six criteria and their weights. It must name exactly those six and add up to 1; weights may be 0 but not negative. |
-| `min_margin` | `0.2` | Between 0 and 4. The winner's weighted total (on the 1-5 scale) must lead the runner-up by at least this much, also after every low-confidence score is moved one level against it. |
-| `follow_up_rounds` | `2` | From 0 to 5. Extra rounds after a first round without agreement, before the run stops for a human. `0` stops at the first disagreement. |
-
-The default weights are the Laya CDA matrix:
-
-| Criterion | Default weight | Asks |
-| --- | --- | --- |
-| `correctness` | `0.30` | Will it solve the problem? |
-| `safety` | `0.20` | Does it avoid harmful changes? |
-| `simplicity` | `0.15` | Is it the least complex solution? |
-| `maintainability` | `0.15` | Is it readable and sound long-term? |
-| `tool_fit` | `0.10` | Does it use the available tools and budget well? |
-| `user_preference` | `0.10` | Does it align with the stated intent? |
-
-```toml
-[dispatcher.laya]
-min_margin = 0.3
-follow_up_rounds = 1
-
-[dispatcher.laya.weights]   # to change a weight, give all six
-correctness = 0.40
-safety = 0.20
-simplicity = 0.10
-maintainability = 0.10
-tool_fit = 0.10
-user_preference = 0.10
-```
-
-`jev laya tune` suggests weights from how past decisions turned out, and `--apply` saves them
-on a learning profile; weights set here win over a profile's. See
-[docs/learning.md](learning.md#laya-weights).
-
-Each round makes two Jev calls, one for the votes and one for Laya's scores (every allowed
-answer on every criterion, in one call), so a decision costs about twice as much as with
-`primary = "jev"`. Follow-up rounds ask only the questions still unsettled and re-score only
-the uncertain cells; a new score replaces the old one when it is at least as confident.
-
-> Deprecated for code work (issue #187): code grading and merge actions now belong to the
-> Coding Decision Agent (`[code_orchestrator]` below). This section still parses and still
-> drives the consensus dispatcher, so existing configs keep working unchanged.
+Removed (issue #193). The Laya second vote and `jev laya tune` are gone: delete any
+`[dispatcher.laya]` table (including `[dispatcher.laya.weights]`) from `jev.toml` and
+from your user config. Jev alone decides as main orchestrator; code grading and
+routing now belong to the Coding Decision Agent — see
+[`[code_orchestrator]`](#code_orchestrator) below.
 
 ## `[code_orchestrator]`
 
@@ -254,9 +204,8 @@ failed commit stops the run in NEEDS_HUMAN: fix the cause, then `jev resume`.
 | --- | --- | --- |
 | `require_plan_approval` | unset | Stop for human approval after the plan is validated. Unset follows the dispatcher: off with `primary = "consensus"`, on with `"jev"` and `"rules"`. `true` or `false` always wins. |
 
-Under `consensus`, Jev and Laya's agreement on the D3 verdict is the gate: a plan they both
-approve goes straight to execution, and a plan they cannot agree on stops the run in
-`NEEDS_HUMAN`. Set `require_plan_approval = true` to also stop for yourself after every
+Under `consensus`, Jev's D3 verdict is the gate: a plan Jev approves goes straight to
+execution, and a plan Jev cannot settle stops the run in `NEEDS_HUMAN`. Set `require_plan_approval = true` to also stop for yourself after every
 validated plan. `--plan-only` always stops at the plan, whatever the setting.
 
 ## `[autonomy]`
@@ -289,8 +238,8 @@ prefer_different_vendor_than = "coder"` to have D8 prefer a different vendor tha
 coder, as D2 does for the validator.
 
 Under `consensus` the review's verdict is part of the D5 state, so a task is done only when Jev
-and Laya both accept an attempt the reviewer has checked. Each review adds one decision (two
-Jev calls) and one reviewer call per attempt; set `enabled = false` to skip both.
+accepts an attempt the reviewer has checked. Each review adds one decision and one reviewer
+call per attempt; set `enabled = false` to skip both.
 
 ## `[quality]`
 
@@ -350,7 +299,7 @@ on the Spend page (`jev cache stats` for the totals).
 Hard rules, enforced in code rather than config: the **coder** and **learner** roles are
 never cached, only `success` results are stored, and rules-fallback answers are never
 stored. A repo change (HEAD, diff, untracked files) or a config change (`min_confidence`,
-Laya weights, model, prompt template, lessons) is automatically a different key, so stale
+model, prompt template, lessons) is automatically a different key, so stale
 answers can't be served after the code or settings moved. `jev cache clear` flushes
 entries (`--type decisions|roles`, `--older-than HOURS`).
 

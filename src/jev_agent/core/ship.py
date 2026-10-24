@@ -1021,7 +1021,7 @@ class ShipPreview:
     title: str
     branch: str
     diff: DiffStat | None
-    vote: DecisionRecord | None  # the latest D6 decision, with Jev's and Laya's votes
+    vote: DecisionRecord | None  # the latest D6 decision, with Jev's vote
 
 
 def ship_preview(root: Path, store: Store, run_id: str) -> ShipPreview:

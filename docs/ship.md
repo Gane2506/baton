@@ -1,8 +1,8 @@
 # Shipping PRs and tracking KPIs
 
-With shipping on, a run ships itself once both votes approve it at D6: it pushes its branch,
+With shipping on, a run ships itself once Jev approves it at D6: it pushes its branch,
 opens the PR, waits for the checks and merges it, or first waits for you to approve, modify or
-stop it ([Shipping after the votes](#shipping-after-the-votes)). `jev ship RUN` turns a finished
+stop it ([Shipping after the approval](#shipping-after-the-approval)). `jev ship RUN` turns a finished
 run into a GitHub pull request by hand. `jev ship sync` reads the PR
 back from GitHub, and `jev kpi` and the dashboard's **KPIs** page show what each shipped PR
 cost, how it went, and how that trends over time. Everything here is opt-in and runs with your
@@ -63,7 +63,7 @@ the remote's default branch (`refs/remotes/<remote>/HEAD`, else
 `gh repo view --json defaultBranchRef`), else the branch checked out in the repo. If the push
 worked but `gh pr create` failed, run `jev ship RUN` again: the push is skipped when the remote
 branch already holds the same commit. `jev ship RUN` never merges a PR; only the pipeline does,
-after the votes ([below](#shipping-after-the-votes)). jev never enables auto-merge.
+after the approval ([below](#shipping-after-the-approval)). jev never enables auto-merge.
 
 GitHub may open the PR even when `gh pr create` reports an error or times out (the answer was
 lost). So after such a failure, and before creating a PR on a branch an earlier `jev ship`
@@ -92,24 +92,24 @@ The dashboard's run page has a **Ship as PR** button for a DONE, not yet shipped
 shipping is enabled. It shows the same summary and the rendered body on a confirmation page;
 confirming runs `jev ship RUN --yes` in the background, and the run page then links the PR.
 
-## Shipping after the votes
+## Shipping after the approval
 
 With `[ship] enabled = true`, a D6 "ship" no longer ends the run at `DONE`. What happens next is
 `[ship] after_approval` ([config.md](config.md#ship)), or the run's own choice:
 
-| Setting | After both votes approve |
+| Setting | After Jev approves at D6 |
 | --- | --- |
 | `"merge"` (default under `primary = "consensus"`) | The run goes to `SHIPPING`: push, open the PR ready for review (never a draft), wait for its checks, merge it, then `DONE`. Nobody is asked. |
 | `"ask"` (default with `jev` and `rules`) | The run waits in `AWAITING_SHIP`. Nothing is pushed yet. |
 
 Per run: `jev run --auto-ship` ("merge") or `jev run --ask-before-ship` ("ask"); the same flags
-on `jev queue add`, and the "After both votes approve" choice in the dashboard's queue form.
+on `jev queue add`, and the "After Jev approves" choice in the dashboard's queue form.
 Both need shipping on. Shipping off: D6 ends the run `DONE` as before.
 
 ### Waiting for you (`AWAITING_SHIP`)
 
 `jev run`, `jev approve` and `jev status` show the PR title, the result branch, the diff summary
-and the D6 vote (Jev's confidence and Laya's margin). The dashboard's run page shows the same,
+and the D6 vote (Jev's confidence). The dashboard's run page shows the same,
 with three buttons. You choose:
 
 ```bash
@@ -142,8 +142,8 @@ commit, so a PR opened before a "modify" could only be updated by force-pushing.
    `DONE` with "merged PR #N". A PR GitHub merged although `gh` reported an error or timed out
    counts as merged.
 
-There is no second vote after the checks: the merge is pinned to the commit both votes
-approved, and the checks are a yes/no gate.
+There is no further vote after the checks: the merge is pinned to the commit Jev
+approved at D6, and the checks are a yes/no gate.
 
 ### When it stops for you
 
@@ -159,7 +159,7 @@ and a finished merge are found, not redone.
 - `gh pr merge` failed and GitHub does not report the PR merged (branch protection, required
   reviews), or a merge queue still holds it;
 - the push or `gh pr create` failed, as for `jev ship`;
-- under consensus, Jev and Laya do not agree at D6: that stops before anything ships.
+- under consensus, Jev does not approve at D6: that stops before anything ships.
 
 The shapes of `gh pr view --json` and `gh pr merge` are verified against a live repository
 ([verification.md](verification.md) section 8, 2026-10-15).

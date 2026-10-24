@@ -5,6 +5,17 @@ All notable changes to this project are documented here. The format is based on
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Design detail for every entry is in
 [docs/decisions.md](docs/decisions.md).
 
+## [Unreleased]
+
+### Removed
+
+- **Laya second vote (issue #193).** The Laya second vote, `jev laya tune` / `jev laya reset`,
+  and the `[dispatcher.laya]` config table are removed. Jev is now the sole decision-maker as
+  main orchestrator; code grading and routing belong to the Coding Decision Agent
+  (`[code_orchestrator]`, see [docs/code-orchestrator.md](docs/code-orchestrator.md)).
+  Historical entries below still mention Laya: they describe released versions, not current
+  behavior.
+
 ## [0.5.0] - 2026-10-17
 
 ### Added

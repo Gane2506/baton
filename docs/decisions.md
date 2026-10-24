@@ -2,6 +2,19 @@
 
 Deviations from [PLAN.md](../PLAN.md) and choices it left open. Newest first.
 
+## 2026-10-24: Laya second vote removed (#193, docs track)
+
+- **Jev is the main orchestrator; the Coding Decision Agent is the code orchestrator.**
+  The Laya second vote is removed: `[dispatcher.laya]` is no longer documented or
+  supported, and `jev laya tune` / `jev laya reset` documentation is removed. Docs,
+  templates, and user-facing app text on this branch describe that target state; the
+  core dispatcher, CLI, tuning, and dashboard weights-editor code are removed by the
+  other #193 tracks, which must land with (or before) this branch.
+- **Entries below are historical.** Dated entries that describe Laya's vote, its
+  weights, or `jev laya tune` describe the system as it was at that date, not current
+  behavior. The Coding Decision Agent model itself remains a Laya derivative (see the
+  #187 entry below) — that is a fact about the model's lineage, not a second vote.
+
 ## 2026-10-24: Coding Decision Agent as code orchestrator (#187)
 
 - **Jev stays the main orchestrator; the Coding Decision Agent orchestrates

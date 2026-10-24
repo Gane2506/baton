@@ -76,7 +76,7 @@ class AutonomyMode(StrEnum):
     # ship gate (AWAITING_SHIP) when `[ship] after_approval` asks for it.
     STANDARD = "standard"
     # Explicit opt-in only (`AutonomyConfig.autonomous_opt_in`): no plan-approval gate;
-    # the Jev+Laya >= 85 decision gate stays the quality backstop.
+    # the Jev decision gate stays the quality backstop.
     AUTONOMOUS = "autonomous"
     # A person approves each pipeline step: the run waits in an explicit AWAITING_* gate
     # state before PLANNING, VALIDATING, EXECUTING, INTEGRATING and SHIPPING.
