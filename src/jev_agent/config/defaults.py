@@ -30,6 +30,10 @@ DEFAULT_CONFIG_TOML = """\
 # "D4.effort" = "..."              # at one decision point
 # model = "..."                    # at every decision point
 
+# Removed (issue #193): the former [dispatcher.laya] second vote and its weights are
+# gone. Delete any [dispatcher.laya] table from existing configs; code grading and routing
+# now belong to [code_orchestrator] below, and Jev alone decides as main orchestrator.
+
 # Cost-aware Jev leg ordering and pre-run cost estimates (the model prices live here, not
 # in code: providers reprice). This changes the leg order, never the availability.
 [dispatcher.cost]

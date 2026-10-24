@@ -155,8 +155,10 @@ def test_connections_page_consensus_route(
     )
     with TestClient(app) as client:
         html = client.get("/connections").text
-    assert "Laya" in html
-    assert "No rules fallback" in html
+    # The consensus dispatcher is gone (issue #193): an old `primary = "consensus"`
+    # config migrates to jev, so the page shows the Jev route with rules fallback.
+    assert "Laya" not in html
+    assert "Rules dispatcher" in html
     assert "TYPESAFE_API_KEY: set" in html
     assert "OPENROUTER_API_KEY: not set" in html
     assert SECRET not in html

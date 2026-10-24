@@ -305,7 +305,7 @@ def test_log_shows_jev_confidence() -> None:
     }
     answers = {"w": "codex", "effort": "high", "bad": "x"}
     assert format_answers(answers, consensus) == (
-        "w=codex (0.91, Laya +0.45) effort=high (Laya -0.10) bad=x"
+        "w=codex (0.91, second vote +0.45) effort=high (second vote -0.10) bad=x"
     )
 
 
