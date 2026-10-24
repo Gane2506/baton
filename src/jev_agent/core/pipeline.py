@@ -86,7 +86,6 @@ from jev_agent.core.taskgraph import CycleError, topological_order
 from jev_agent.core.tasks import TaskRunner
 from jev_agent.core.workspace import GitWorkspace, Workspace, WorkspaceError, result_branch
 from jev_agent.dispatch.base import Dispatcher
-from jev_agent.dispatch.consensus import ConsensusDispatcher
 from jev_agent.dispatch.guard import GuardedDispatcher
 from jev_agent.dispatch.requests import d1_intake, d2_validator, d3_after_validation, d6_integration
 from jev_agent.dispatch.rules import RulesDispatcher
@@ -842,10 +841,8 @@ def _integration_stop_reason(outcome: IntegrationOutcome, rounds: int, max_round
 
 
 def guarded_dispatcher(primary: Dispatcher) -> GuardedDispatcher:
-    """`primary` behind the answer guard, with the rules dispatcher as fallback unless the
-    primary is the consensus dispatcher, which must never be overruled by rules."""
-    fallback = None if primary.name == ConsensusDispatcher.name else RulesDispatcher()
-    return GuardedDispatcher(primary, fallback)
+    """`primary` behind the answer guard, with the rules dispatcher as fallback."""
+    return GuardedDispatcher(primary, RulesDispatcher())
 
 
 def build_pipeline(
@@ -867,8 +864,7 @@ def build_pipeline(
     is the cached OpenRouter model list that free models come from (None: no free models
     except `:free` slugs listed by name).
 
-    The rules dispatcher is the fallback, except for the consensus dispatcher: a decision
-    Jev and Laya do not agree on stops the run for a human instead (issue #66).
+    The rules dispatcher is the fallback for every primary.
     """
     state_dir = state_dir or repo / STATE_DIRNAME
     harness = Harness(

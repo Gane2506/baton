@@ -40,8 +40,8 @@ profile's servers, browser, learning and quality. An item without one uses the r
 the item, the item is marked `failed` with a note instead of running with other access.
 `--quality LEVEL` sets the run's quality gate level ([quality.md](quality.md)); without it the
 run gets `[quality] level` from the config at the time it starts. `--auto-ship` and
-`--ask-before-ship` choose what the run does once both votes approve it
-([ship.md](ship.md#shipping-after-the-votes)); they need `[ship] enabled = true`.
+`--ask-before-ship` choose what the run does once Jev approves it at D6
+([ship.md](ship.md#shipping-after-the-approval)); they need `[ship] enabled = true`.
 
 **Statuses.**
 
@@ -115,13 +115,13 @@ while its run goes on (removed by hand), the scheduler notes it and carries on w
 ### Approvals and unattended runs
 
 `[approval] require_plan_approval` is unset by default, and then follows the dispatcher. With the
-default `consensus` dispatcher it is off: Jev and Laya's D3 approve vote is the gate, so a run
-whose plan they both approve goes straight to execution, and one they cannot agree on stops in
-`NEEDS_HUMAN` and leaves its item `waiting` ([config.md](config.md#dispatcherlaya)). With
+default `consensus` dispatcher it is off: Jev's D3 approve vote is the gate, so a run
+whose plan Jev approves goes straight to execution, and one Jev cannot settle stops in
+`NEEDS_HUMAN` and leaves its item `waiting` ([config.md](config.md#dispatcher)). With
 `primary = "jev"` or `"rules"` it is on, and a run stops at `AWAITING_APPROVAL` once its plan is
 validated, with nothing built until you approve it. The scheduler respects both: an unattended
 scheduler leaves every stopped idea `waiting` for you. You come back to the validated plans (or
-the questions Jev and Laya could not settle), read them with `jev status RUN`, and approve with
+the questions Jev could not settle), read them with `jev status RUN`, and approve with
 `jev approve RUN` or continue with `jev resume RUN` in your terminal.
 
 To review every plan yourself under `consensus`, set `require_plan_approval = true` in

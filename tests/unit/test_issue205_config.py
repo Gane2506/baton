@@ -17,11 +17,11 @@ from jev_agent.config.schema import (
     CostSettings,
     JevConfig,
     JevSettings,
-    LayaSettings,
     ModelsConfig,
     QualityConfig,
     find_secret_keys,
 )
+from jev_agent.core.learning import LearningError, _checked_weights
 
 NAN = float("nan")
 INF = float("inf")
@@ -43,6 +43,8 @@ def _weights(**overrides: float) -> dict[str, float]:
 
 
 # ---- 1. NaN / infinite Laya weights ----------------------------------------------------
+# LayaSettings is gone (issue #193); stored learning-profile weights are validated by
+# `_checked_weights` in core/learning.py, which keeps the same finite/sum rules.
 
 
 @pytest.mark.parametrize(
@@ -55,17 +57,17 @@ def _weights(**overrides: float) -> dict[str, float]:
     ],
 )
 def test_non_finite_weights_are_rejected(bad: dict[str, float]) -> None:
-    with pytest.raises(ValidationError, match="finite"):
-        LayaSettings(weights=bad)
+    with pytest.raises(LearningError, match="finite"):
+        _checked_weights("test", bad)
 
 
 def test_good_weights_still_pass() -> None:
-    assert LayaSettings(weights=GOOD_WEIGHTS).weights == GOOD_WEIGHTS
+    assert _checked_weights("test", GOOD_WEIGHTS) == GOOD_WEIGHTS
 
 
 def test_weights_must_still_add_up_to_one() -> None:
-    with pytest.raises(ValidationError, match="add up to 1"):
-        LayaSettings(weights=_weights(correctness=0.31))
+    with pytest.raises(LearningError, match="add up to 1"):
+        _checked_weights("test", _weights(correctness=0.31))
 
 
 # ---- systemic: every numeric gate rejects non-finite inputs ----------------------------
@@ -77,7 +79,6 @@ def test_weights_must_still_add_up_to_one() -> None:
         (JevSettings, {"timeout_s": INF}),
         (JevSettings, {"timeout_s": NAN}),
         (JevSettings, {"min_confidence": NAN}),
-        (LayaSettings, {"min_margin": INF}),
         (CostSettings, {"native_price_per_million": INF}),
         (CostSettings, {"openrouter_price_per_million": INF}),
         (CostSettings, {"worker_price_per_million": NAN}),

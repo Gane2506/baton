@@ -74,7 +74,7 @@ session, the new lessons are sent along with your next message.
 | *(plain text)* | Goes to the model. Start a line with `//` to send text that begins with `/`. |
 | `/brief` | The model writes the current idea brief (title, goal, scope, acceptance criteria, constraints, assumptions); it is shown and saved. |
 | `/plan` | Starts a plan-only run from the brief, as `jev run --plan-only` would. Prints the run id and the `jev status` hint. |
-| `/run` | Starts a full run from the brief. It stops at plan approval when `[approval] require_plan_approval` is on (the default with the `jev` and `rules` dispatchers; off under `consensus`, where Jev and Laya's agreement on the plan is the gate unless you set it to `true`). |
+| `/run` | Starts a full run from the brief. It stops at plan approval when `[approval] require_plan_approval` is on (the default with the `jev` and `rules` dispatchers; off under `consensus`, where Jev's approval of the plan is the gate unless you set it to `true`). |
 | `/queue [high\|normal\|low]` | Adds the brief to the idea queue (default `normal`) with the chat's learning choice and workspace profile, instead of running it now. `jev scheduler start` runs the queue. |
 | `/learning [on\|off\|default\|NAME]` | Show or change the learning choice. |
 | `/quality [LEVEL\|default]` | Show or change the quality gate level of runs started (or queued) from this chat; `default` uses `[quality] level` ([quality.md](quality.md)). |

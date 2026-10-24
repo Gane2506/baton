@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-import math
 import re
+import warnings
 from pathlib import Path
 from typing import Any, Literal
 
@@ -18,7 +18,7 @@ from jev_agent.config.servers_schema import (
 from jev_agent.quality.levels import QualityLevel
 from jev_agent.runlog.redact import SECRET_PATTERNS
 
-DispatcherName = Literal["consensus", "jev", "rules"]
+DispatcherName = Literal["jev", "rules"]
 Selection = Literal["dispatcher", "fixed"]
 
 # The questions asked at each decision point, in request order (dispatch/requests.py builds
@@ -191,8 +191,11 @@ class JevSettings(_Strict):
         return cls(**values)
 
 
-# The Laya CDA decision matrix (issue #66): the criteria Laya scores every allowed answer on,
-# and their default weights. `[dispatcher.laya] weights` may change the weights, not the names.
+# The Laya CDA decision matrix (issue #66): the criteria and their default weights.
+# Kept after the consensus dispatcher was removed (issue #193): the quality gate's
+# 0-100 score (`quality/scoring.py`) still scores against these six criteria, and
+# stored learning-profile weights are still validated against them. No dispatcher
+# reads them any more; `[dispatcher.laya]` is no longer a config section.
 LAYA_CRITERIA: dict[str, str] = {
     "correctness": "Correctness: will it solve the problem?",
     "safety": "Safety: does it avoid harmful changes?",
@@ -209,61 +212,6 @@ DEFAULT_LAYA_WEIGHTS: dict[str, float] = {
     "tool_fit": 0.10,
     "user_preference": 0.10,
 }
-
-
-class LayaSettings(_Strict):
-    """`[dispatcher.laya]`: Laya's vote in the consensus dispatcher (Jev scoring every allowed
-    answer on the Laya CDA matrix). Laya reaches Jev with the `[dispatcher.jev]` settings.
-
-    DEPRECATED for code work (issue #187): the Coding Decision Agent
-    (`[code_orchestrator]`, docs/code-orchestrator.md) now grades code and
-    proposes merge actions. `[dispatcher.laya]` still parses and still drives
-    the consensus dispatcher, so existing configs keep working unchanged;
-    new code-grading setups should use `[code_orchestrator]` instead, and a
-    future release will remove the consensus second-vote once the code
-    orchestrator covers the remaining decision points."""
-
-    weights: dict[str, float] = Field(
-        default_factory=lambda: dict(DEFAULT_LAYA_WEIGHTS),
-        description="How much each of the six criteria counts in Laya's vote; must add up to 1.",
-    )
-    # The winner's weighted total (1-5 scale) must lead the runner-up by this much, also after
-    # every low-confidence score is moved one level against it.
-    min_margin: float = Field(
-        default=0.2,
-        ge=0,
-        le=4,
-        description="How far ahead the winner must be for Laya to count it as agreement.",
-        allow_inf_nan=False,
-    )
-    # Extra rounds after a first round without agreement, before the run needs a human.
-    follow_up_rounds: int = Field(
-        default=2,
-        ge=0,
-        le=5,
-        description="Extra voting rounds after a disagreement before a human is asked.",
-    )
-
-    @field_validator("weights")
-    @classmethod
-    def _check_weights(cls, value: dict[str, float]) -> dict[str, float]:
-        unknown = sorted(set(value) - set(LAYA_CRITERIA))
-        missing = sorted(set(LAYA_CRITERIA) - set(value))
-        if unknown or missing:
-            raise ValueError(
-                f"weights must name exactly the criteria {', '.join(LAYA_CRITERIA)}"
-                + (f"; unknown: {', '.join(unknown)}" if unknown else "")
-                + (f"; missing: {', '.join(missing)}" if missing else "")
-            )
-        # NaN defeats the sum check below (abs(nan - 1) > 1e-6 is False), so
-        # all-NaN weights used to pass; reject non-finite weights first.
-        if any(not math.isfinite(w) for w in value.values()):
-            raise ValueError("weights must be finite numbers (NaN and infinities are not allowed)")
-        if any(w < 0 for w in value.values()):
-            raise ValueError("weights must not be negative")
-        if abs(sum(value.values()) - 1) > 1e-6:
-            raise ValueError(f"weights must add up to 1 (they add up to {sum(value.values()):g})")
-        return value
 
 
 class CodeOrchestratorSettings(_Strict):
@@ -410,16 +358,11 @@ class CostSettings(_Strict):
 
 class DispatcherConfig(_Strict):
     primary: DispatcherName = Field(
-        default="consensus",
-        description=(
-            "Who makes the decisions: Jev and Laya voting together, Jev alone, or fixed rules."
-        ),
+        default="jev",
+        description="Who makes the decisions: Jev, or fixed rules.",
     )
     jev: JevSettings = Field(
         default_factory=JevSettings, description="Connection and gating for the Jev dispatcher."
-    )
-    laya: LayaSettings = Field(
-        default_factory=LayaSettings, description="Laya's vote in the consensus dispatcher."
     )
     cost: CostSettings = Field(
         default_factory=CostSettings,
@@ -430,8 +373,38 @@ class DispatcherConfig(_Strict):
     @classmethod
     def _drop_fallback(cls, data: Any) -> Any:
         """`fallback` was removed (issue #30): the rules dispatcher always backs up Jev. Old
-        files may still say `fallback = "rules"`; any other value would be silently ignored."""
-        if not isinstance(data, dict) or "fallback" not in data:
+        files may still say `fallback = "rules"`; any other value would be silently ignored.
+
+        The consensus dispatcher and `[dispatcher.laya]` were removed (issue #193):
+        old files may still say `primary = "consensus"` or carry a `[dispatcher.laya]`
+        table. Neither hard-fails: both warn and are treated as `primary = "jev"` (the
+        rules dispatcher still backs Jev up), so existing configs keep running — but
+        the warning is the prompt to remove those keys, since they no longer do anything.
+        """
+        if not isinstance(data, dict):
+            return data
+        data = dict(data)
+        if "laya" in data:
+            warnings.warn(
+                "The consensus dispatcher was removed (issue #193): "
+                "[dispatcher.laya] is ignored and Jev decides alone (with the rules "
+                "dispatcher as fallback); remove the [dispatcher.laya] table from "
+                "your config.",
+                UserWarning,
+                stacklevel=2,
+            )
+            del data["laya"]
+        if data.get("primary") == "consensus":
+            warnings.warn(
+                "The consensus dispatcher was removed (issue #193): "
+                'primary = "consensus" is treated as primary = "jev" (Jev decides alone, '
+                "with the rules dispatcher as fallback); update your config to "
+                'primary = "jev".',
+                UserWarning,
+                stacklevel=2,
+            )
+            data["primary"] = "jev"
+        if "fallback" not in data:
             return data
         if data["fallback"] != "rules":
             raise ValueError(
@@ -514,14 +487,11 @@ class WorkspaceConfig(_Strict):
 
 
 class ApprovalConfig(_Strict):
-    # Stop for a human after the plan is validated. Unset: off under the consensus dispatcher,
-    # whose D3 approve vote (Jev and Laya agreeing) is the gate, and on otherwise (issue #66).
+    # Stop for a human after the plan is validated. Unset: on (the consensus dispatcher's
+    # D3 approve vote used to be the gate that made it off; that dispatcher is gone).
     require_plan_approval: bool | None = Field(
         default=None,
-        description=(
-            "Stop and ask a human after the plan is checked, before building. Unset: off with "
-            "consensus, on otherwise."
-        ),
+        description=("Stop and ask a human after the plan is checked, before building. Unset: on."),
     )
 
 
@@ -659,14 +629,13 @@ class ModelsConfig(_Strict):
 
 
 class ReviewConfig(_Strict):
-    # Review each task's diff after its tests pass. Unset: on under the consensus dispatcher,
-    # so a task is done only when both votes accept a reviewed attempt, and off otherwise
-    # (issue #67).
+    # Review each task's diff after its tests pass. Unset: off (it used to be on under the
+    # consensus dispatcher only, so a task was done only when both votes accepted a
+    # reviewed attempt; that dispatcher is gone, issue #193).
     enabled: bool | None = Field(
         default=None,
         description=(
-            "Have the reviewer check each finished task's diff after its tests pass. Unset: on "
-            "with consensus, off otherwise."
+            "Have the reviewer check each finished task's diff after its tests pass. Unset: off."
         ),
     )
 
@@ -800,12 +769,13 @@ class ShipConfig(_Strict):
         default=True,
         description="Refuse to ship runs whose latest quality gate blocked.",
     )
-    # After both votes approve at D6; unset: "merge" under `primary = "consensus"`, else "ask".
+    # After D6 votes ship; unset: "ask" (it used to be "merge" under the consensus
+    # dispatcher, whose two votes were the gate; that dispatcher is gone, issue #193).
     after_approval: ShipMode | None = Field(
         default=None,
         description=(
-            'What happens when both votes approve: "merge" opens the PR ready and merges after '
-            'checks, "ask" waits for you first. Unset: merge with consensus, ask otherwise.'
+            'What happens when D6 votes ship: "merge" opens the PR ready and merges after '
+            'checks, "ask" waits for you first. Unset: "ask".'
         ),
     )
     merge_method: MergeMethod = Field(
@@ -1489,13 +1459,13 @@ class JevConfig(_Strict):
     def plan_approval_required(self) -> bool:
         """Whether a validated plan waits for a human (`[approval] require_plan_approval`)."""
         required = self.approval.require_plan_approval
-        return self.dispatcher.primary != "consensus" if required is None else required
+        return True if required is None else required
 
     @property
     def review_enabled(self) -> bool:
         """Whether the reviewer checks each task's diff (`[review] enabled`)."""
         enabled = self.review.enabled
-        return self.dispatcher.primary == "consensus" if enabled is None else enabled
+        return False if enabled is None else enabled
 
     @model_validator(mode="before")
     @classmethod

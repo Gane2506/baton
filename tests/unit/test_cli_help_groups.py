@@ -57,7 +57,6 @@ EXPECTED_PANELS: dict[str, str] = {
     "design": PANEL_CONFIGURE,
     # Learn
     "learning": PANEL_LEARN,
-    "laya": PANEL_LEARN,
     "code": PANEL_LEARN,
     "chat": PANEL_LEARN,
     "models": PANEL_LEARN,

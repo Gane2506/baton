@@ -93,11 +93,9 @@ to paste. It is the fastest way to check whether a `jev` command has a dashboard
   active, lesson count) and each profile's lessons. Actions: create (repo or shared), use,
   enable / disable (the repo or one profile), forget a lesson, flush a profile (asks for
   confirmation on a separate page first), and delete a profile with all its lessons (also a
-  confirmation page). Below the profiles, **Laya tuning**: the `jev laya tune` suggestions for
-  a profile (weight, current → suggested, the passed/failed evidence), with per-suggestion
-  checkboxes and **Apply selected**, plus **Reset tuned weights** when a profile has tuned
-  weights. Applying is disabled while `jev.toml` sets `[dispatcher.laya] weights` (those
-  always win).
+  confirmation page). Below the profiles, the former Laya tuning section is removed (issue #193): there is no
+  weight-tuning UI any more. Code grading and routing now belong to the Coding Decision
+  Agent (see [code-orchestrator.md](code-orchestrator.md)).
 - **Profiles** (`/profiles`): the workspace profiles (`jev profile list` / `show` / `use`):
   servers, browser access, learning and quality per profile, which one is the repo default,
   what each role gets from the selected profile, and **Make default** / **Clear default**.
@@ -196,8 +194,8 @@ New web actions follow a tier policy, on top of the CSRF/same-origin/token rules
   quality checks, scheduler status, profiles, the sync preview. Never renders secret values
   (presence booleans only).
 - **Tier 1 — reversible or low-blast-radius.** POST + CSRF + same-origin (the `act()` path):
-  queue add/move/remove, learning create/use/enable/disable/forget, profile use, Laya apply /
-  reset, `ship sync`, scheduler stop, browser install stop.
+  queue add/move/remove, learning create/use/enable/disable/forget, profile use,
+  `ship sync`, scheduler stop, browser install stop.
 - **Tier 2 — destructive, irreversible, costly, or process-spawning.** POST + CSRF +
   **two-step confirm page**: the first POST renders a page naming exactly what will happen;
   only `confirm=yes` executes. Learning flush and delete, queue clear, run cancel and ship,

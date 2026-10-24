@@ -11,7 +11,6 @@ error, paid quota exhaustion staying terminal, and the dispatch guards.
 from __future__ import annotations
 
 import json
-import re
 import sqlite3
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
@@ -23,7 +22,7 @@ import httpx
 import pytest
 
 from jev_agent import __version__
-from jev_agent.config.schema import LAYA_CRITERIA, JevConfig
+from jev_agent.config.schema import JevConfig
 from jev_agent.core.cache import (
     Cache,
     SimHashEmbedder,
@@ -40,10 +39,8 @@ from jev_agent.core.models import DecisionRequest, Idea, RunState
 from jev_agent.core.pipeline import build_pipeline
 from jev_agent.core.queue import recover_note, status_for_run
 from jev_agent.core.store import Store, StoreError
-from jev_agent.core.tuning import _normalised
 from jev_agent.dispatch.base import DispatchError
-from jev_agent.dispatch.consensus import ConsensusDispatcher, Score, evaluate
-from jev_agent.dispatch.jev import JevDispatcher, JevSettings, check_size, retry_delay
+from jev_agent.dispatch.jev import check_size, retry_delay
 from jev_agent.roles.schemas import LearnerOutput, LessonDraft
 from jev_agent.workers.fake import FakeStep, FakeWorker
 from jev_agent.workers.registry import WorkerRegistry
@@ -386,19 +383,6 @@ async def test_paid_model_quota_exhaustion_is_terminal(fixture_repo: Path) -> No
         assert run.state is RunState.NEEDS_HUMAN
 
 
-# ---- 10. tuning._normalised guards ----------------------------------------------------
-
-
-def test_normalised_rejects_empty_weight_map() -> None:
-    with pytest.raises(ValueError, match="empty"):
-        _normalised({})
-
-
-def test_normalised_rejects_all_zero_weights() -> None:
-    with pytest.raises(ValueError, match="zero"):
-        _normalised({"a": 0.0, "b": 0.0})
-
-
 # ---- 12. chat backends never pass a "0.00" budget -------------------------------------
 
 
@@ -409,39 +393,6 @@ def test_claude_backend_never_passes_zero_budget(tmp_path: Path) -> None:
     argv = backend.build_argv(None, 2.5)
     assert argv[argv.index("--max-budget-usd") + 1] == "2.50"
     assert "--max-budget-usd" not in backend.build_argv(None, 0.0)
-
-
-# ---- 13. dispatch minors -------------------------------------------------------------
-
-
-def _weights() -> dict[str, float]:
-    return {c: 1.0 / len(LAYA_CRITERIA) for c in LAYA_CRITERIA}
-
-
-def test_evaluate_rejects_fewer_than_two_options() -> None:
-    with pytest.raises(ValueError, match="at least 2"):
-        evaluate(
-            ["only"],
-            {"choice": "only", "confidence": 0.9},
-            {},
-            _weights(),
-            min_confidence=0.5,
-            min_margin=0.1,
-        )
-
-
-def test_evaluate_reports_missing_cells() -> None:
-    first = next(iter(LAYA_CRITERIA))
-    scores = {("a", first): Score(4.0, 0.9)}
-    with pytest.raises(KeyError, match="missing"):
-        evaluate(
-            ["a", "b"],
-            {"choice": "a", "confidence": 0.9},
-            scores,
-            _weights(),
-            min_confidence=0.5,
-            min_margin=0.1,
-        )
 
 
 def test_check_size_rejects_empty_questions() -> None:
@@ -462,52 +413,3 @@ def test_retry_delay_parses_http_date() -> None:
     # Numeric headers still work.
     assert retry_delay(httpx.Response(429, headers={"retry-after": "3"})) == 3.0
     assert retry_delay(httpx.Response(429)) == 1.0  # DEFAULT_BACKOFF_S
-
-
-class _ProvenanceServer:
-    """System One fake: Jev's vote calls report one model, Laya's scoring calls another."""
-
-    def __init__(self) -> None:
-        self.vote_model = "jev-vote-model"
-        self.score_model = "laya-score-model"
-
-    def __call__(self, request: httpx.Request) -> httpx.Response:
-        payload = json.loads(request.content)
-        kinds = {q["type"] for q in payload["questions"].values()}
-        assert kinds == {"choice"} or kinds == {"score"}, kinds
-        if "choice" in kinds:
-            answers = {
-                name: {
-                    "type": "choice",
-                    "choice": "retry",
-                    "confidence": 0.99,
-                    "probabilities": {},
-                }
-                for name in payload["questions"]
-            }
-            return httpx.Response(200, json={"model": self.vote_model, "answers": answers})
-        answers = {}
-        for qid, question in payload["questions"].items():
-            match = re.search(r"Candidate answer to `(\w+)`: (\S+)", question["instructions"])
-            assert match is not None, question["instructions"]
-            answers[qid] = {
-                "type": "score",
-                "score": 4 if match.group(2) == "retry" else 0,
-                "confidence": 0.99,
-            }
-        return httpx.Response(200, json={"model": self.score_model, "answers": answers})
-
-
-async def test_consensus_decision_model_is_jevs_vote_model() -> None:
-    """`Decision.model` is the model that made the decision (Jev's vote), not the model
-    that ran Laya's scoring pass."""
-    client = httpx.AsyncClient(transport=httpx.MockTransport(_ProvenanceServer()))
-    dispatcher = ConsensusDispatcher(JevDispatcher(JevSettings(), client=client))
-    req = DecisionRequest(
-        point="D4",
-        state={"task": {"id": "T1"}},
-        questions={"action": ["retry", "escalate"]},
-    )
-    decision = await dispatcher.decide(req)
-    assert decision.answers == {"action": "retry"}
-    assert decision.model == "jev-vote-model"

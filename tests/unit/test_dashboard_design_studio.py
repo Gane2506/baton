@@ -328,7 +328,7 @@ def test_generate_clears_wizard_state(client: TestClient, home: Path) -> None:
     assert response.headers["location"] == "/design-studio/new/purpose"
 
 
-# ---- DS-03: the Jev+Laya recommendation --------------------------------------------------
+# ---- DS-03: the Jev recommendation --------------------------------------------------
 
 
 def test_stack_step_shows_default_recommendation_card(client: TestClient, home: Path) -> None:
@@ -350,12 +350,7 @@ def _fake_jev_flutter(
     return StackRecommendation(
         stack="Flutter",
         source="jev",
-        rationale=(
-            "Jev picked Flutter (90% confidence); "
-            "Laya's decision matrix agreed with a 0.6-point lead."
-        ),
-        laya_agreed=True,
-        laya_margin=0.6,
+        rationale="Jev picked Flutter (90% confidence).",
     )
 
 
@@ -378,8 +373,6 @@ def test_jev_recommendation_reorders_options_and_badges(
     assert page.status_code == 200
     assert 'class="studio-rec"' in page.text
     assert "Jev recommended" in page.text
-    assert "Laya agreed" in page.text
-    assert "+0.6" in page.text
     assert "Jev picked Flutter" in html.unescape(page.text)
     assert "Default recommendation" not in page.text
     expected = ["Flutter", "React Native", "SwiftUI", "Kotlin/Jetpack Compose"]
@@ -404,8 +397,6 @@ def test_stack_decision_made_once_per_session(
             stack=STACKS[app_type][0],
             source="default",
             rationale="the static default",
-            laya_agreed=False,
-            laya_margin=None,
         )
 
     monkeypatch.setattr(studio_decisions, "recommend_stack", counting)

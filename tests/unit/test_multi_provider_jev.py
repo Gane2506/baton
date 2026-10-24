@@ -7,9 +7,7 @@ native provider fails (unreachable, timed out, rate-limited, auth/key problems).
 """
 
 import json
-import re
 from pathlib import Path
-from typing import Any
 
 import httpx
 import pytest
@@ -17,7 +15,6 @@ import pytest
 from jev_agent.config.schema import JevSettings
 from jev_agent.core.models import DecisionRequest
 from jev_agent.dispatch.base import Dispatcher, DispatchError
-from jev_agent.dispatch.consensus import ConsensusDispatcher
 from jev_agent.dispatch.jev import (
     NATIVE_PROVIDER,
     OPENROUTER_PROVIDER,
@@ -199,104 +196,3 @@ async def test_auth_failure_fails_over() -> None:
 
     assert rec.urls() == [NATIVE_URL, OPENROUTER_URL]
     assert decision.details["provider"] == OPENROUTER_PROVIDER
-
-
-# --- through the consensus dispatcher ------------------------------------------------
-
-PICK = {"worker": "claude_code", "effort": "low"}
-
-
-def _choice_body() -> dict[str, Any]:
-    return {
-        "model": "jev-latest",
-        "answers": {
-            name: {"choice": choice, "confidence": 0.95, "probabilities": {choice: 0.95}}
-            for name, choice in PICK.items()
-        },
-        "usage": {"input_tokens": 10, "output_tokens": 5},
-    }
-
-
-def _score_body(payload: dict[str, Any]) -> dict[str, Any]:
-    """Laya ranks Jev's pick first with confident 4/5 scores, 1/5 for the rest."""
-    answers: dict[str, Any] = {}
-    for qid, question in payload["questions"].items():
-        match = re.search(r"Candidate answer to `\w+`: (\S+)", question["instructions"])
-        assert match, question["instructions"]
-        option = match[1]
-        name = next(q for q in PICK if f"`{q}`" in question["instructions"])
-        score = 3 if option == PICK[name] else 0  # level index: 4/5 vs 1/5
-        answers[qid] = {"type": "score", "score": score, "confidence": 0.9}
-    return {"model": "jev-latest", "answers": answers, "usage": {"input_tokens": 20}}
-
-
-class _Server:
-    """Plays System One; `plan` lists per-request responses or exceptions."""
-
-    def __init__(self, *plan: httpx.Response | Exception | str) -> None:
-        self.plan = list(plan)
-        self.requests: list[httpx.Request] = []
-
-    def __call__(self, request: httpx.Request) -> httpx.Response:
-        self.requests.append(request)
-        item = self.plan.pop(0)
-        if isinstance(item, Exception):
-            raise item
-        payload = json.loads(request.content)
-        kinds = {q["type"] for q in payload["questions"].values()}
-        if item == "choice":
-            assert kinds == {"choice"}, kinds
-            return httpx.Response(200, json=_choice_body())
-        assert item == "score" and kinds == {"score"}, kinds
-        return httpx.Response(200, json=_score_body(payload))
-
-
-def _consensus(server: _Server) -> ConsensusDispatcher:
-    client = httpx.AsyncClient(transport=httpx.MockTransport(server))
-    jev = MultiProviderJevDispatcher(
-        JevSettings.for_native(), JevSettings(), client=client, sleep=_no_sleep
-    )
-    return ConsensusDispatcher(jev)
-
-
-async def _no_sleep(_seconds: float) -> None:
-    return None
-
-
-def _consensus_request() -> DecisionRequest:
-    return DecisionRequest(
-        point="D4",
-        state={"task": {"id": "T1"}},
-        questions={"worker": ["claude_code", "codex"], "effort": ["low", "high"]},
-    )
-
-
-async def test_consensus_fails_over_both_votes() -> None:
-    server = _Server(
-        httpx.ConnectError("down"),
-        httpx.ConnectError("down"),
-        "choice",
-        httpx.ConnectError("down"),
-        httpx.ConnectError("down"),
-        "score",
-    )
-    decision = await _consensus(server).decide(_consensus_request())
-
-    assert [str(r.url) for r in server.requests] == [
-        NATIVE_URL,
-        NATIVE_URL,
-        OPENROUTER_URL,
-        NATIVE_URL,
-        NATIVE_URL,
-        OPENROUTER_URL,
-    ]
-    assert decision.answers == PICK
-    assert decision.details["provider"] == OPENROUTER_PROVIDER
-
-
-async def test_consensus_reports_mixed_providers() -> None:
-    server = _Server("choice", httpx.ConnectError("down"), httpx.ConnectError("down"), "score")
-    decision = await _consensus(server).decide(_consensus_request())
-
-    assert decision.answers == PICK
-    assert decision.details["provider"] == "mixed"

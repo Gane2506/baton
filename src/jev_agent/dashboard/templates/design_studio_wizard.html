@@ -79,9 +79,6 @@
     <div class="studio-rec-head">
       {% if stack_rec.source == "jev" %}
       {{ badge("Jev recommended", "ok") }}
-      {% if stack_rec.laya_agreed %}
-      <span class="studio-rec-laya">Laya agreed{% if stack_rec.laya_margin %} · +{{ stack_rec.laya_margin }}{% endif %}</span>
-      {% endif %}
       {% else %}
       {{ badge("Default recommendation", "idle") }}
       {% endif %}

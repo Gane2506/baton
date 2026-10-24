@@ -54,9 +54,9 @@ Coding agents are good at single tasks, but turning an idea into merged-quality 
 planning, checking the plan, handing out work, running tests and reviewing, by hand. Baton runs
 that pipeline on your git repository with the agents you already use (Claude Code, Codex CLI,
 OpenRouter models), while Jev, a decision model from TypeSafe, picks the agent, model and effort
-at every step. By default every decision needs two confident votes, Jev first and then Laya (Jev
-scoring the options on a weighted decision matrix); when they disagree, the run stops for you
-instead of guessing. Every task runs on its own local branch, inside budgets you set, and
+at every step. Jev, the main orchestrator, decides at every step; for code work the Coding
+Decision Agent grades diffs and routes coding tasks (see [docs/code-orchestrator.md](docs/code-orchestrator.md)).
+When a decision cannot be made confidently, the run stops for you instead of guessing. Every task runs on its own local branch, inside budgets you set, and
 nothing is pushed unless you turn shipping on.
 
 ## Features
@@ -71,7 +71,7 @@ terminal images; see [docs/dashboard.md](docs/dashboard.md#screenshots)).
     <td width="50%"><img alt="Dashboard run page: plan, tasks, decisions and attempts" src="docs/images/dashboard-run.png"></td>
     <td width="50%"><img alt="jev status RUN: plan summary, validation verdict, tasks with worker, model and spend" src="docs/images/cli-status-run.svg"></td>
   </tr>
-  <tr><td colspan="2"><b>Two votes at every decision: Jev, then Laya</b><br>Jev picks agent, model and effort at every decision point, and Laya (Jev scoring each answer on a weighted decision matrix) must agree confidently; otherwise the question is asked again and then the run stops for a human. The validator challenges every plan choice, a voted reviewer checks each task, and <code>jev laya tune</code> suggests matrix weights from past outcomes. With <code>primary = "jev"</code>, Jev answers alone with the rules dispatcher as fallback, and <code>jev log</code> says why. <a href="#how-it-works">The dispatcher</a></td></tr>
+  <tr><td colspan="2"><b>Jev decides; the Coding Decision Agent grades code</b><br>Jev picks agent, model and effort at every decision point; if a decision cannot be made confidently, the run stops for a human. The validator challenges every plan choice, a voted reviewer checks each task, and for code work the Coding Decision Agent grades diffs and routes coding tasks. With <code>primary = "jev"</code>, Jev answers alone with the rules dispatcher as fallback, and <code>jev log</code> says why. <a href="#how-it-works">The dispatcher</a></td></tr>
   <tr><td colspan="2"><img alt="jev log RUN: decision timeline with Jev confidences and one rules fallback after a timeout" src="docs/images/cli-log.svg"></td></tr>
   <tr><td colspan="2"><b>Chat before you run</b><br><code>jev chat</code> asks which lessons to use, talks the idea through, writes a brief, then plans, runs or queues it. <a href="docs/chat.md">Chat</a></td></tr>
   <tr><td colspan="2"><img alt="jev chat session: learning choice, two exchanges, /brief and /plan" src="docs/images/cli-chat.svg" width="760"></td></tr>
@@ -105,7 +105,7 @@ terminal images; see [docs/dashboard.md](docs/dashboard.md#screenshots)).
     <td><b>Isolated, local, dashboard</b><br>Each task in its own worktree and branch; nothing is pushed unless you ship a run. <code>jev dashboard</code> binds 127.0.0.1. <a href="#safety-defaults">Safety</a> · <a href="#dashboard">Dashboard</a></td>
   </tr>
   <tr><td colspan="2"><img alt="Dashboard spend page: spend per day and the costliest runs" src="docs/images/dashboard-spend.png" width="760"></td></tr>
-  <tr><td colspan="2"><b>Ship PRs and track KPIs</b><br>Opt-in <code>jev ship RUN</code> pushes a finished run's branch and opens a draft GitHub PR with your <code>gh</code> login (never force-pushes). With shipping on, a run both votes approve is merged once its checks pass, or waits for you to approve, modify or stop it. <code>jev kpi</code> and the KPIs page track cost, attempts, first-pass rate, fallbacks, time to merge and CI per PR, with trend charts and regression flags. <a href="#ship-prs-and-track-kpis">Ship and KPIs</a></td></tr>
+  <tr><td colspan="2"><b>Ship PRs and track KPIs</b><br>Opt-in <code>jev ship RUN</code> pushes a finished run's branch and opens a draft GitHub PR with your <code>gh</code> login (never force-pushes). With shipping on, a run Jev approves at D6 is merged once its checks pass, or waits for you to approve, modify or stop it. <code>jev kpi</code> and the KPIs page track cost, attempts, first-pass rate, fallbacks, time to merge and CI per PR, with trend charts and regression flags. <a href="#ship-prs-and-track-kpis">Ship and KPIs</a></td></tr>
   <tr>
     <td><img alt="Dashboard KPIs page: summary cards, regressions, shipped PRs and trend charts with rolling medians" src="docs/images/dashboard-kpis.png"></td>
     <td><img alt="jev kpi --last 10: one row per shipped PR, medians and regression flags" src="docs/images/cli-kpi.svg"></td>
@@ -169,14 +169,10 @@ card (state plus allowed answers) and acts on the answer:
 | D7 | At the end of a run, if learning is on | Learn or skip; learner worker, model, effort |
 | D8 | Before each task review | Reviewer worker, model, effort |
 
-By default every decision needs two votes: Jev first, then Laya (Jev scoring each allowed
-answer on the Laya CDA decision matrix). Both must agree confidently; otherwise the question is
-asked again, and then the run stops for a human (`jev resume` continues it). `jev laya tune`
-suggests new matrix weights from how past decisions turned out, and `--apply` saves them on a
-learning profile. For code work, the Coding Decision Agent
+Jev, the main orchestrator, makes every decision; if a question cannot be settled confidently,
+the run stops for a human (`jev resume` continues it). For code work, the Coding Decision Agent
 (`S4MPL3BI4S/Coding_Decision_Agent`, opt-in via `[code_orchestrator]`) grades diffs at the
-quality gate and routes coding tasks at D4, gated on calibrated confidence (0.7) instead of
-the Laya vote — see [docs/code-orchestrator.md](docs/code-orchestrator.md). With
+quality gate and routes coding tasks at D4, gated on calibrated confidence (0.7) — see [docs/code-orchestrator.md](docs/code-orchestrator.md). With
 `[dispatcher] primary = "jev"`, Jev answers alone and a deterministic rules dispatcher answers
 any decision Jev cannot. `jev log` shows who made each decision and why a fallback happened. The harness
 itself makes no routing choices; it only enforces hard limits (plan rounds, task attempts,
@@ -547,7 +543,7 @@ jev kpi --last 10           # per-PR KPIs, medians and regression flags (--json 
 ```
 
 Only DONE runs whose quality gate passed are shipped. jev never force-pushes and never enables
-auto-merge; branch protection still applies. With shipping on, a run both votes approve at D6
+auto-merge; branch protection still applies. With shipping on, a run Jev approves at D6
 ships by itself: it is merged once its checks pass (`[ship] after_approval = "merge"`, the
 default under consensus), or waits for `jev ship approve | modify | stop RUN` ("ask"). The dashboard run page has a
 **Ship as PR** button and the **KPIs** page charts each KPI against its rolling median.
@@ -585,7 +581,7 @@ Details, including the allow/deny tables and a VPS browser setup: [docs/servers.
 
 - Coder tasks run in separate git worktrees under `.jev/worktrees/`, never on your branch.
 - jev never runs `git push`, except to ship a run (opt-in `[ship] enabled`, never `--force`;
-  it merges only a PR both votes approved, once its checks pass).
+  it merges only a PR Jev approved at D6, once its checks pass).
 - The planner, validator and reviewer get read-only access. The `api` worker has no file
   access at all.
 - Claude Code's coder may only use read and edit tools plus `git status` and `git diff` unless

@@ -249,12 +249,13 @@ def test_doctor_points_at_dashboard_when_key_missing(
     repo.mkdir()
     subprocess.run(["git", "init", "-q", str(repo)], check=True)
     # The suite's test user config picks the rules dispatcher; opt back into
-    # consensus so the key check actually runs.
-    (repo / "jev.toml").write_text('[dispatcher]\nprimary = "consensus"\n')
+    # jev so the key check actually runs. (The consensus dispatcher is gone,
+    # issue #193: an old `primary = "consensus"` config now warns like jev.)
+    (repo / "jev.toml").write_text('[dispatcher]\nprimary = "jev"\n')
     monkeypatch.setattr(doctor_cmd, "which", lambda cmd: f"/fake/bin/{cmd}")
     monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
     check = {c.name: c for c in doctor_cmd.run_checks(repo)}["dispatcher"]
-    assert check.status == "fail"
+    assert check.status == "warn"
     assert "dashboard Connections page" in check.detail
 
     (repo / "jev.toml").write_text('[dispatcher]\nprimary = "jev"\n')

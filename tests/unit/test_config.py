@@ -38,7 +38,7 @@ def user_cfg(tmp_path: Path) -> Path:
 
 def test_empty_config_is_valid_with_plan_defaults() -> None:
     cfg = JevConfig()
-    assert cfg.dispatcher.primary == "consensus"
+    assert cfg.dispatcher.primary == "jev"
     assert cfg.budget.per_run_usd == 5.0
     assert cfg.budget.per_task_usd == 1.5
     assert cfg.approval.require_plan_approval is None
@@ -167,9 +167,7 @@ def test_prefer_different_vendor_must_name_another_role(
 
 def test_invalid_dispatcher_name(repo: Path, user_cfg: Path) -> None:
     _write(repo / "jev.toml", '[dispatcher]\nprimary = "gpt"\n')
-    with pytest.raises(
-        ConfigError, match=r"dispatcher\.primary: must be 'consensus', 'jev' or 'rules'"
-    ):
+    with pytest.raises(ConfigError, match=r"dispatcher\.primary: must be 'jev' or 'rules'"):
         load_config(repo, user_cfg)
 
 
@@ -497,12 +495,14 @@ def test_trust_error_prints_the_table_verbatim(
 
 
 def test_review_default_depends_on_the_dispatcher() -> None:
-    assert JevConfig().review_enabled is True  # consensus is the default
+    # Unset review is off now that the consensus dispatcher is gone (issue #193);
+    # an explicit setting still wins for every primary.
+    assert JevConfig().review_enabled is False
     for primary in ("jev", "rules"):
         assert (
             JevConfig.model_validate({"dispatcher": {"primary": primary}}).review_enabled is False
         )
-    for primary in ("consensus", "jev", "rules"):
+    for primary in ("jev", "rules"):
         for explicit in (True, False):
             config = JevConfig.model_validate(
                 {"dispatcher": {"primary": primary}, "review": {"enabled": explicit}}

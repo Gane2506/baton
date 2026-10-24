@@ -1,4 +1,4 @@
-"""DS-03: the studio's Jev+Laya stack recommendation (issue #124).
+"""DS-03: the studio's Jev stack recommendation (issue #124).
 
 The decision service is tested with a fake dispatcher behind the `Dispatcher`
 protocol — no network, no keys. A separate integration block in
@@ -41,11 +41,11 @@ class _FakeDispatcher:
 
 
 def _settled(choice: str) -> Decision:
-    """A consensus decision that settled on `choice` with Laya's agreement."""
+    """A Jev decision that settled on `choice`."""
     return Decision(
         point="D1",
         answers={"stack": choice},
-        dispatcher="consensus",
+        dispatcher="jev",
         model="jev-latest",
         details={
             "answers": {
@@ -53,13 +53,6 @@ def _settled(choice: str) -> Decision:
                     "choice": choice,
                     "confidence": 0.9,
                     "probabilities": {choice: 0.9},
-                }
-            },
-            "laya": {
-                "stack": {
-                    "choice": choice,
-                    "totals": {choice: 4.2},
-                    "margin": 0.6,
                 }
             },
         },
@@ -84,15 +77,13 @@ def test_build_stack_request_shape() -> None:
 # ---- the happy path ---------------------------------------------------------------------
 
 
-async def test_recommend_stack_uses_jev_and_laya() -> None:
+async def test_recommend_stack_uses_jev() -> None:
     fake = _FakeDispatcher(decision=_settled("Flutter"))
     rec = await recommend_stack("Acme Analytics", "mobile", dispatcher=fake)
     assert rec.source == "jev"
     assert rec.stack == "Flutter"
-    assert rec.laya_agreed is True
-    assert rec.laya_margin == pytest.approx(0.6)
     assert "Jev picked Flutter (90% confidence)" in rec.rationale
-    assert "Laya" in rec.rationale and "0.6-point lead" in rec.rationale
+    assert "Laya" not in rec.rationale
     # The dispatcher saw exactly one request, with the kit's stacks as the answers.
     assert len(fake.seen) == 1
     assert fake.seen[0].questions == {"stack": list(STACKS["mobile"])}
@@ -106,9 +97,7 @@ async def test_recommend_stack_falls_back_when_dispatcher_raises() -> None:
     rec = await recommend_stack("Acme Analytics", "mobile", dispatcher=fake)
     assert rec.source == "default"
     assert rec.stack == STACKS["mobile"][0]
-    assert rec.laya_agreed is False
-    assert rec.laya_margin is None
-    assert "could not agree" in rec.rationale
+    assert "could not settle" in rec.rationale
 
 
 async def test_recommend_stack_falls_back_without_api_keys(
@@ -124,7 +113,7 @@ async def test_recommend_stack_falls_back_without_api_keys(
 
 
 async def test_recommend_stack_rejects_an_out_of_range_answer() -> None:
-    decision = Decision(point="D1", answers={"stack": "COBOL"}, dispatcher="consensus", details={})
+    decision = Decision(point="D1", answers={"stack": "COBOL"}, dispatcher="jev", details={})
     rec = await recommend_stack(
         "Acme Analytics", "mobile", dispatcher=_FakeDispatcher(decision=decision)
     )
@@ -138,7 +127,7 @@ async def test_recommend_stack_unknown_app_type() -> None:
 
 
 def test_default_recommendation_reasons() -> None:
-    for reason in ("no_keys", "no_consensus", "not_asked"):
+    for reason in ("no_keys", "no_pick", "not_asked"):
         rec = default_recommendation("website", reason)
         assert rec.source == "default"
         assert rec.stack == STACKS["website"][0]
@@ -152,9 +141,7 @@ def test_recommendation_state_roundtrip() -> None:
     rec = StackRecommendation(
         stack="Flutter",
         source="jev",
-        rationale="Jev picked Flutter; Laya agreed.",
-        laya_agreed=True,
-        laya_margin=0.6,
+        rationale="Jev picked Flutter.",
     )
     back = StackRecommendation.from_state(rec.to_state())
     assert back == rec
@@ -165,12 +152,17 @@ def test_recommendation_from_state_rejects_garbage() -> None:
     assert StackRecommendation.from_state({}) is None
     assert StackRecommendation.from_state({"stack": "Flutter"}) is None
     assert StackRecommendation.from_state({"stack": "Flutter", "source": "chatgpt"}) is None
-    assert (
-        StackRecommendation.from_state(
-            {"stack": "Flutter", "source": "jev", "laya_margin": "nonsense"}
-        )
-        is None
+    # State cached before the Laya removal (extra laya_* keys) still reads back.
+    old = StackRecommendation.from_state(
+        {
+            "stack": "Flutter",
+            "source": "jev",
+            "rationale": "Jev picked Flutter.",
+            "laya_agreed": "true",
+            "laya_margin": "0.6",
+        }
     )
+    assert old is not None and old.stack == "Flutter" and old.source == "jev"
 
 
 # ---- the stack_options seam ---------------------------------------------------------------

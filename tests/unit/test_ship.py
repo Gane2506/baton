@@ -193,7 +193,7 @@ def test_ship_pushes_the_result_branch_and_opens_a_draft_pr(
     body = gh.body()
     for heading in ("## Idea", "## Plan", "## Quality", "## KPIs", "## Decisions"):
         assert heading in body
-    assert "by Jev (with Laya under consensus)" in body
+    assert "by Jev," in body
     assert "| T1 |" in body and "Opened by Baton Agent Orchestrator (`jev ship`)" in body
 
     with _store(repo) as store:
@@ -786,11 +786,13 @@ def _state(repo: Path, run_id: str) -> RunState:
 
 
 def test_after_approval_defaults_and_overrides() -> None:
-    def config(ship: dict[str, Any], primary: str = "consensus") -> JevConfig:
+    def config(ship: dict[str, Any], primary: str = "jev") -> JevConfig:
         return JevConfig.model_validate({"dispatcher": {"primary": primary}, "ship": ship})
 
     assert after_approval(config({}), "merge") is None  # shipping off: D6 ends DONE
-    assert after_approval(config({"enabled": True}), None) == "merge"
+    # Unset after_approval is "ask" now that the consensus dispatcher is gone
+    # (issue #193); its two votes used to make the unset default "merge".
+    assert after_approval(config({"enabled": True}), None) == "ask"
     assert after_approval(config({"enabled": True}, "rules"), None) == "ask"
     assert after_approval(config({"enabled": True}, "jev"), None) == "ask"
     assert after_approval(config({"enabled": True, "after_approval": "ask"}), None) == "ask"

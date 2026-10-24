@@ -25,7 +25,6 @@ from jev_agent.core.cache import (
     decision_normalized_text,
     role_cache_key,
     role_normalized_text,
-    tuned_laya_fingerprint,
 )
 from jev_agent.core.commands import CommandRunner
 from jev_agent.core.events import (
@@ -52,7 +51,6 @@ from jev_agent.core.models import (
 from jev_agent.core.store import AttemptRecord, NotFoundError, Store
 from jev_agent.core.workspace import Workspace
 from jev_agent.dispatch.base import DispatchError
-from jev_agent.dispatch.consensus import ConsensusDispatcher
 from jev_agent.dispatch.guard import GuardedDispatcher
 from jev_agent.dispatch.requests import RoleOptions, role_options
 from jev_agent.dispatch.rules import RulesDispatcher
@@ -214,27 +212,15 @@ class Harness:
     async def decide(self, run_id: str, task_id: str | None, req: DecisionRequest) -> Decision:
         """Ask the dispatcher (with fallback), persist the decision and charge its cost.
 
-        Without a fallback (the consensus dispatcher) a missing decision stops the run for a
-        human, resumably: `jev resume` asks again once the cause is fixed. With one, both
-        dispatchers failed, which only an internal error can cause, so the run fails.
+        With a fallback, both dispatchers failing only an internal error can cause, so
+        the run fails.
 
         Exact-match cache (issue #10, phase 1): a settled decision is served without
         calling the dispatcher again. Only clean primary answers are stored — never
-        rules-fallback answers, never D6 unless `[cache] d6_decisions`. The Laya
-        constraint: caching happens here, on settled decisions, never inside the
-        dispatchers, so Jev's vote and Laya's vote are always evaluated together.
+        rules-fallback answers, never D6 unless `[cache] d6_decisions`.
         """
         dispatcher = self.dispatcher
         laya_weights_fp: str | None = None
-        if isinstance(dispatcher.primary, ConsensusDispatcher):
-            weights = self.laya_weights(run_id)
-            if weights is not None:
-                dispatcher = GuardedDispatcher(
-                    dispatcher.primary.with_weights(weights), dispatcher.fallback
-                )
-                # Tuned weights change the vote without changing jev.toml: fingerprint
-                # them separately so a retuned profile is a different cache key.
-                laya_weights_fp = tuned_laya_fingerprint(weights)
         key = None
         entry = None
         if self._decisions_cached(dispatcher) and self._decision_cacheable(req):
@@ -350,25 +336,6 @@ class Harness:
         cached = Decision.model_validate_json(candidate.value_json)
         agreed = cached.answers == live.answers
         self.cache.log_shadow(candidate.key_hash, "decision", agreed, 1.0 if agreed else 0.0)
-
-    def laya_weights(self, run_id: str) -> dict[str, float] | None:
-        """Tuned Laya weights from the run's learning profile (`jev laya tune --apply`), or
-        None for the configured ones. Weights set in jev.toml always win."""
-        run = self.store.get_run(run_id)
-        if (
-            "weights" in self.config.dispatcher.laya.model_fields_set
-            or self.learning is None
-            or run.learning_profile is None
-        ):
-            return None
-        if self.learning.get(run.learning_profile) is None:  # deleted after the run started
-            return None
-        try:
-            return self.learning.laya_weights(run.learning_profile)
-        except LearningError as exc:  # stored weights that no longer validate
-            raise Halt(
-                RunState.NEEDS_HUMAN, f"{exc}; `jev laya reset` clears them", resumable=True
-            ) from exc
 
     def last_answers(self, run_id: str, point: str) -> dict[str, str]:
         for record in reversed(self.store.list_decisions(run_id)):
