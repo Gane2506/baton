@@ -799,6 +799,32 @@ def test_gate_result_helpers() -> None:
     assert integration.label == "integration-1"
 
 
+def test_finding_compact_never_exceeds_tiny_limits() -> None:
+    """`compact(limit)` with `limit < 4` clamps instead of mis-slicing (`line[:limit-3]`
+    with a negative index used to return nearly the whole line plus "...")."""
+    finding = Finding(
+        source="ruff", severity="major", category="security", title="a very long finding title"
+    )
+    assert finding.compact(limit=0) == ""
+    assert finding.compact(limit=1) == "m"
+    assert finding.compact(limit=2) == "ma"
+    assert finding.compact(limit=3) == "maj"
+    assert finding.compact(limit=4) == "m..."
+    for limit in range(0, 10):
+        assert len(finding.compact(limit=limit)) <= limit
+
+
+def test_short_never_exceeds_tiny_limits() -> None:
+    """`policy._short` shares the same clamp (its `limit` parameter accepts any value)."""
+    from jev_agent.quality.policy import _short
+
+    assert _short("a very long detail", limit=0) == ""
+    assert _short("a very long detail", limit=2) == "a "
+    assert _short("a very long detail", limit=4) == "a..."
+    for limit in range(0, 10):
+        assert len(_short("a very long detail", limit=limit)) <= limit
+
+
 def test_render_gate_sections_follow_the_level() -> None:
     text = render_gate(_gate())
     for heading in ("## Summary", "## Walkthrough", "## Findings", "### Major (1)", "## Checks"):

@@ -78,7 +78,7 @@ def diff_stat(repo: Path, base: str, head: str) -> DiffStat | None:
     """`git diff --shortstat base..head` as numbers; None when git cannot tell."""
     try:
         proc = run_git(["diff", "--shortstat", f"{base}..{head}"], repo, GIT_QUICK_TIMEOUT_S)
-    except subprocess.TimeoutExpired:
+    except (subprocess.TimeoutExpired, OSError):
         return None
     if proc.returncode != 0:
         return None

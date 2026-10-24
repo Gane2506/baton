@@ -45,4 +45,8 @@ def blocking_reasons(
 
 def _short(text: str, limit: int = 160) -> str:
     line = " ".join(text.split())
-    return line if len(line) <= limit else line[: limit - 3] + "..."
+    if len(line) <= limit:
+        return line
+    if limit < 4:  # too small for an ellipsis: clamp, never wider than `limit`
+        return line[: max(limit, 0)]
+    return line[: limit - 3] + "..."

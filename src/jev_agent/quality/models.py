@@ -48,7 +48,11 @@ class Finding(BaseModel):
         if self.suggestion:
             line += f"; fix: {self.suggestion}"
         line = " ".join(line.split())
-        return line if len(line) <= limit else line[: limit - 3] + "..."
+        if len(line) <= limit:
+            return line
+        if limit < 4:  # too small for an ellipsis: clamp, never wider than `limit`
+            return line[: max(limit, 0)]
+        return line[: limit - 3] + "..."
 
 
 class CheckResult(BaseModel):

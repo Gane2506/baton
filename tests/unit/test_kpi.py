@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import subprocess
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -22,6 +23,7 @@ from jev_agent.core.kpi import (
     RunKpis,
     ci_status,
     compute_run_kpis,
+    diff_stat,
     github_kpis,
     is_revert_of,
     load_pr_kpis,
@@ -197,6 +199,26 @@ def test_parse_shortstat() -> None:
     )
     assert parse_shortstat(" 1 file changed, 1 insertion(+)") == DiffStat(files=1, additions=1)
     assert parse_shortstat("") == DiffStat()
+
+
+def test_diff_stat_returns_none_when_git_cannot_tell(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A missing git (OSError) is "git cannot tell", like a timeout — not a crash
+    (the docstring promises None; `ship/prepare.py` and `ship/preview.py` call
+    `diff_stat` with no guard of their own)."""
+
+    def _missing_git(*args: object, **kwargs: object) -> None:
+        raise OSError("git not found")
+
+    monkeypatch.setattr("jev_agent.core.kpi.run_git", _missing_git)
+    assert diff_stat(tmp_path, "base", "head") is None
+
+    def _timed_out(*args: object, **kwargs: object) -> None:
+        raise subprocess.TimeoutExpired("git", 1)
+
+    monkeypatch.setattr("jev_agent.core.kpi.run_git", _timed_out)
+    assert diff_stat(tmp_path, "base", "head") is None
 
 
 def test_ci_status() -> None:

@@ -9,10 +9,11 @@ Single-writer invariant: the run lease guarantees at most one driver per run,
 and `Store._emit` runs inside the same `_tx()` block as the state write, with
 `run_seq = MAX(run_seq)+1` computed in that transaction. No new locking.
 
-Payloads reference, never duplicate, the snapshot tables — and never carry
-free-text prompts or transcripts (those stay in `.jev/runs/<id>/` log files,
-already redacted by `runlog/redact.py`). `test_event_payloads_carry_no_secrets`
-asserts this.
+Payloads carry what replay needs and nothing more: the run's own idea text and
+human notes, and the full plan/design JSON (small, and central to replay). They
+never carry worker prompts or transcripts (those stay in `.jev/runs/<id>/` log
+files, already redacted by `runlog/redact.py`), and never carry secrets —
+`test_event_payloads_carry_no_secrets` asserts this.
 """
 
 from __future__ import annotations
