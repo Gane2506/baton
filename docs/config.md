@@ -188,6 +188,31 @@ answer on every criterion, in one call), so a decision costs about twice as much
 `primary = "jev"`. Follow-up rounds ask only the questions still unsettled and re-score only
 the uncertain cells; a new score replaces the old one when it is at least as confident.
 
+> Deprecated for code work (issue #187): code grading and merge actions now belong to the
+> Coding Decision Agent (`[code_orchestrator]` below). This section still parses and still
+> drives the consensus dispatcher, so existing configs keep working unchanged.
+
+## `[code_orchestrator]`
+
+The Coding Decision Agent as orchestrator for code work (issue #187, see
+[docs/code-orchestrator.md](code-orchestrator.md)). Jev stays the main orchestrator; this
+section only covers how code is graded and routed. Off by default: enabling it without the
+model installed grades nothing (the quality gate records the grade as unavailable, it does
+not block), and `jev code status` says exactly what is missing.
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `enabled` | `false` | Grade task diffs at the quality gate and add the routing hint to D4 requests. |
+| `model_id` | `"S4MPL3BI4S/Coding_Decision_Agent"` | Hugging Face id of the Coding Decision Agent checkpoint. |
+| `confidence_threshold` | `0.7` | Calibrated `answer_confidence` a merge action needs to be trusted; below it the gate asks a human instead of merging or rejecting. |
+| `max_diff_chars` | `7000` | Characters of a diff kept before grading (the model sees 2048 tokens; longer diffs are compacted around the changed lines). |
+
+```toml
+[code_orchestrator]
+enabled = true
+confidence_threshold = 0.7
+```
+
 ## `[budget]`
 
 All values must be greater than 0, and `per_task_usd` must not exceed `per_run_usd`.

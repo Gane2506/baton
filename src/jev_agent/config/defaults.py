@@ -32,6 +32,7 @@ DEFAULT_CONFIG_TOML = """\
 
 # Laya's vote under primary = "consensus": Jev scores every allowed answer 1-5 on six weighted
 # criteria. Both must agree confidently; otherwise the run stops for a human.
+# Deprecated for code work (issue #187): see [code_orchestrator] below.
 [dispatcher.laya]
 # min_margin = 0.2                 # Laya's lead over the runner-up, on the 1-5 weighted scale
 # follow_up_rounds = 2             # extra rounds before the run stops for a human
@@ -56,6 +57,16 @@ DEFAULT_CONFIG_TOML = """\
 # worker_price_per_million = 3.0   # USD per 1M input tokens of worker calls (a guess)
 # warn_fraction = 0.8              # the estimate warns at this fraction of per_run_usd
 # refuse_fraction = 1.0            # the estimate refuses approval at this fraction
+
+# The Coding Decision Agent as orchestrator for code work (issue #187):
+# it grades task diffs at the quality gate and routes coding tasks at D4.
+# Jev stays the main orchestrator. Off by default; enabling it without the
+# model installed grades nothing (the gate records "unavailable").
+[code_orchestrator]
+# enabled = false                  # grade diffs and route coding tasks
+# model_id = "S4MPL3BI4S/Coding_Decision_Agent"
+# confidence_threshold = 0.7       # calibrated answer_confidence a merge action needs
+# max_diff_chars = 7000            # diff characters kept before grading (2048-token model)
 
 [budget]
 # per_run_usd = 5.00               # hard cap for one run

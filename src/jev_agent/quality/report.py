@@ -10,6 +10,7 @@ Both are pure functions of stored `GateResult`s, so they are easy to test and to
 from __future__ import annotations
 
 from collections.abc import Sequence
+from typing import Any, cast
 
 from jev_agent.config.schema import LAYA_CRITERIA
 from jev_agent.quality.levels import QualityLevel, at_least
@@ -71,6 +72,33 @@ def _score(result: GateResult) -> list[str]:
     lines += [f"- {cell(name)}: {cell(score.details.get(name, ''))}" for name in LAYA_CRITERIA]
     lines.append("")
     return lines
+
+
+def _code_grade(result: GateResult) -> list[str]:
+    """The Coding Decision Agent's grade section (issue #187), if one ran."""
+    grade = cast(dict[str, Any], result.code_grade)
+    if grade is None:
+        return []
+    if grade.get("status") != "graded":
+        return [
+            "## Code orchestrator",
+            "",
+            f"Not graded ({grade.get('status', 'unknown')}: {grade.get('detail', '')}).",
+            "",
+        ]
+    raw_gate = grade.get("gate")
+    gate: dict[str, Any] = raw_gate if isinstance(raw_gate, dict) else {}
+    return [
+        "## Code orchestrator",
+        "",
+        f"Coding Decision Agent ({grade.get('model', '')}): "
+        f"code_quality {grade.get('code_quality')}/4, "
+        f"instruction_followed={'yes' if grade.get('instruction_followed') else 'no'}, "
+        f"likely_correct={'yes' if grade.get('likely_correct') else 'no'}, "
+        f"merge_action `{grade.get('merge_action')}` -> "
+        f"gate {gate.get('decision', '')} ({gate.get('reason', '')}).",
+        "",
+    ]
 
 
 def _ship_score_summary(gates: Sequence[GateResult]) -> list[str]:
@@ -177,6 +205,7 @@ def render_gate(result: GateResult) -> str:
         " ".join(summary.split()),
         "",
         *_score(result),
+        *_code_grade(result),
         "## Walkthrough",
         "",
         *_walkthrough(notes, with_gate=False),

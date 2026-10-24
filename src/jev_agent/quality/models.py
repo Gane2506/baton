@@ -6,7 +6,7 @@ Everything here is a pydantic model so a gate's result can be stored as JSON in
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -107,6 +107,10 @@ class GateResult(BaseModel):
     blocked: bool = False
     reasons: list[str] = Field(default_factory=list)  # why it blocked
     score: ScoreBreakdown | None = None  # the 0-100 ship score; None before scoring existed
+    # The Coding Decision Agent's grade for this gate (issue #187), or None when
+    # the code orchestrator is disabled. `status` is "graded" or "unavailable":
+    # a missing model never blocks the gate, it only records that no grade ran.
+    code_grade: dict[str, Any] | None = None
 
     @property
     def label(self) -> str:

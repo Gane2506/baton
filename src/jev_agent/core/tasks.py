@@ -19,6 +19,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TypeVar
 
+from jev_agent.code_orchestrator import (
+    CodeOrchestrator,
+    CodeOrchestratorUnavailable,
+    routing_hint,
+)
 from jev_agent.core.assign import Assignment, can_reassign, escalate, quota_fallback, reassign
 from jev_agent.core.commands import CommandResult
 from jev_agent.core.design_system import design_context_for_coder
@@ -106,6 +111,19 @@ class TaskRunner:
         options = self.h.require_options("coder")
         run = self.h.store.get_run(run_id)
         req = d4_task(task.card, options, run.spend_usd, self.h.budget.per_run_usd)
+        if self.h.config.code_orchestrator.enabled:
+            # The code orchestrator routes the coding task; Jev still decides
+            # at D4, but with this hint in the request state instead of
+            # deciding blind. A missing model is not fatal: D4 proceeds
+            # without the hint, exactly as it did before this feature.
+            try:
+                orchestrator = CodeOrchestrator(model_id=self.h.config.code_orchestrator.model_id)
+                if orchestrator.available:
+                    req.state["code_routing"] = routing_hint(
+                        orchestrator.route(f"{task.card.title}: {task.card.description}")
+                    )
+            except CodeOrchestratorUnavailable:
+                pass
         decision = await self.h.decide(run_id, task.id, req)
         a = self.h.assignment("coder", decision.answers)
         self.h.store.set_task_assignment(

@@ -198,7 +198,15 @@ DEFAULT_LAYA_WEIGHTS: dict[str, float] = {
 
 class LayaSettings(_Strict):
     """`[dispatcher.laya]`: Laya's vote in the consensus dispatcher (Jev scoring every allowed
-    answer on the Laya CDA matrix). Laya reaches Jev with the `[dispatcher.jev]` settings."""
+    answer on the Laya CDA matrix). Laya reaches Jev with the `[dispatcher.jev]` settings.
+
+    DEPRECATED for code work (issue #187): the Coding Decision Agent
+    (`[code_orchestrator]`, docs/code-orchestrator.md) now grades code and
+    proposes merge actions. `[dispatcher.laya]` still parses and still drives
+    the consensus dispatcher, so existing configs keep working unchanged;
+    new code-grading setups should use `[code_orchestrator]` instead, and a
+    future release will remove the consensus second-vote once the code
+    orchestrator covers the remaining decision points."""
 
     weights: dict[str, float] = Field(
         default_factory=lambda: dict(DEFAULT_LAYA_WEIGHTS),
@@ -236,6 +244,47 @@ class LayaSettings(_Strict):
         if abs(sum(value.values()) - 1) > 1e-6:
             raise ValueError(f"weights must add up to 1 (they add up to {sum(value.values()):g})")
         return value
+
+
+class CodeOrchestratorSettings(_Strict):
+    """`[code_orchestrator]`: the Coding Decision Agent as orchestrator for code work
+    (issue #187, docs/code-orchestrator.md). Jev stays the main orchestrator;
+    this section only covers how code is graded and routed.
+
+    Off by default, so existing runs are unchanged: enabling it without the
+    model installed grades nothing (the quality gate records "not graded",
+    it does not block), and `jev code status` says exactly what is missing.
+    """
+
+    enabled: bool = Field(
+        default=False,
+        description=(
+            "Grade task diffs with the Coding Decision Agent at the quality gate, "
+            "and add its routing hint to D4 requests. Off: no model is loaded."
+        ),
+    )
+    model_id: str = Field(
+        default="S4MPL3BI4S/Coding_Decision_Agent",
+        min_length=1,
+        description="Hugging Face id of the Coding Decision Agent checkpoint.",
+    )
+    confidence_threshold: float = Field(
+        default=0.7,
+        ge=0,
+        le=1,
+        description=(
+            "Calibrated `answer_confidence` a merge action needs to be trusted; "
+            "below it the gate asks a human instead of merging or rejecting."
+        ),
+    )
+    max_diff_chars: int = Field(
+        default=7000,
+        gt=0,
+        description=(
+            "Characters of a diff kept before grading (the model sees 2048 "
+            "tokens; longer diffs are compacted around the changed lines)."
+        ),
+    )
 
 
 class CostSettings(_Strict):
@@ -1370,6 +1419,10 @@ class JevConfig(_Strict):
     dashboard: DashboardConfig = Field(
         default_factory=DashboardConfig,
         description="The web dashboard's own display preferences (issue #116).",
+    )
+    code_orchestrator: CodeOrchestratorSettings = Field(
+        default_factory=CodeOrchestratorSettings,
+        description="The Coding Decision Agent as orchestrator for code work.",
     )
 
     @property

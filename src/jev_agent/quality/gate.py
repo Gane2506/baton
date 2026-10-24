@@ -13,7 +13,13 @@ import asyncio
 from collections.abc import Collection, Iterable
 from pathlib import Path
 
-from jev_agent.config.schema import JevConfig
+from jev_agent.code_orchestrator import (
+    CodeOrchestrator,
+    CodeOrchestratorUnavailable,
+    compact_diff,
+    gate_code_review,
+)
+from jev_agent.config.schema import CodeOrchestratorSettings, JevConfig
 from jev_agent.core.harness import Halt, Harness
 from jev_agent.core.models import TaskCard
 from jev_agent.quality import tools
@@ -33,6 +39,76 @@ RUN_REVIEW_FILENAME = "review.md"
 
 def quality_dir(state_dir: Path, run_id: str) -> Path:
     return state_dir / "runs" / run_id / QUALITY_DIRNAME
+
+
+def apply_code_grade(
+    result: GateResult,
+    *,
+    settings: CodeOrchestratorSettings,
+    task_title: str,
+    diff: str,
+    orchestrator: CodeOrchestrator | None = None,
+) -> GateResult:
+    """Grade one gate's diff with the Coding Decision Agent (issue #187).
+
+    This is the merge-decision wiring: Jev still runs the pipeline and the
+    gate's checks still run; the code orchestrator only adds its own gate on
+    top. A confident `reject` blocks, `request_changes`/`needs_tests` sends
+    the work back for rework (the gate blocks, so D5/D6 see it as failed),
+    and anything below the confidence threshold asks a human -- it never
+    silently passes or silently rejects. A missing model is recorded, not
+    fatal: grading is opt-in (`enabled`), and a user who enabled it without
+    installing the model gets "unavailable" in the report, not a broken run.
+    A mis-shaped verdict, by contrast, blocks fail-closed: a grade that
+    cannot be trusted must not let code through.
+    """
+    orch = orchestrator or CodeOrchestrator(model_id=settings.model_id)
+    try:
+        grade = orch.grade_code(
+            task=task_title,
+            diff=compact_diff(diff, max_chars=settings.max_diff_chars),
+            tests="",
+        )
+    except CodeOrchestratorUnavailable as exc:
+        return result.model_copy(
+            update={"code_grade": {"status": "unavailable", "detail": str(exc)}}
+        )
+    except Halt:
+        raise
+    except Exception as exc:  # a verdict that cannot be normalised must not pass code
+        return result.model_copy(
+            update={
+                "blocked": True,
+                "reasons": [
+                    *result.reasons,
+                    f"code orchestrator error: {type(exc).__name__}: {exc}",
+                ],
+                "code_grade": {"status": "error", "detail": f"{type(exc).__name__}: {exc}"},
+            }
+        )
+    outcome = gate_code_review(grade, threshold=settings.confidence_threshold)
+    graded = result.model_copy(
+        update={
+            "code_grade": {
+                "status": "graded",
+                "model": settings.model_id,
+                "code_quality": grade.code_quality,
+                "instruction_followed": grade.instruction_followed,
+                "likely_correct": grade.likely_correct,
+                "merge_action": grade.merge_action,
+                "answer_confidence": grade.answer_confidence,
+                "gate": outcome.as_dict(),
+            }
+        }
+    )
+    if outcome.decision == "accept":
+        return graded
+    return graded.model_copy(
+        update={
+            "blocked": True,
+            "reasons": [*result.reasons, f"code orchestrator: {outcome.reason}"],
+        }
+    )
 
 
 def settings_for(config: JevConfig, level: QualityLevel) -> QualitySettings:
@@ -58,6 +134,7 @@ async def run_gate(
     diff: str,
     passed_commands: Collection[str] = (),
     checks: Iterable[QualityCheck] | None = None,
+    code_orchestrator: CodeOrchestrator | None = None,
 ) -> GateResult:
     """Run the gate and persist it. `number` is the task attempt or the integration round;
     `passed_commands` are test commands that already passed in this step (not run again)."""
@@ -106,6 +183,17 @@ async def run_gate(
     )
     reasons = blocking_reasons(level, results, result.findings())
     result = result.model_copy(update={"blocked": bool(reasons), "reasons": reasons})
+    if h.config.code_orchestrator.enabled and diff.strip():
+        # The code orchestrator grades the same diff the gate just checked.
+        # It never replaces the checks or the AI review above; it adds the
+        # calibrated-confidence merge gate on top of them.
+        result = apply_code_grade(
+            result,
+            settings=h.config.code_orchestrator,
+            task_title=task.title if task is not None else "integration",
+            diff=diff,
+            orchestrator=code_orchestrator,
+        )
     # The 0-100 ship score (quality/scoring.py): deterministic, from this gate's
     # checks, findings and diff. Stored on the result, so the score and its
     # breakdown are audit-logged with the gate decision. Scoring or persisting must
