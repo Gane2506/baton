@@ -40,7 +40,6 @@ from jev_agent.core.models import DecisionRequest, Idea, RunState
 from jev_agent.core.pipeline import build_pipeline
 from jev_agent.core.queue import recover_note, status_for_run
 from jev_agent.core.store import Store, StoreError
-from jev_agent.core.tuning import _normalised
 from jev_agent.dispatch.base import DispatchError
 from jev_agent.dispatch.consensus import ConsensusDispatcher, Score, evaluate
 from jev_agent.dispatch.jev import JevDispatcher, JevSettings, check_size, retry_delay
@@ -384,19 +383,6 @@ async def test_paid_model_quota_exhaustion_is_terminal(fixture_repo: Path) -> No
         planner = [a for a in store.list_attempts(run.id) if a.role == "planner"]
         assert len(planner) == 1  # no fallback attempt was made
         assert run.state is RunState.NEEDS_HUMAN
-
-
-# ---- 10. tuning._normalised guards ----------------------------------------------------
-
-
-def test_normalised_rejects_empty_weight_map() -> None:
-    with pytest.raises(ValueError, match="empty"):
-        _normalised({})
-
-
-def test_normalised_rejects_all_zero_weights() -> None:
-    with pytest.raises(ValueError, match="zero"):
-        _normalised({"a": 0.0, "b": 0.0})
 
 
 # ---- 12. chat backends never pass a "0.00" budget -------------------------------------

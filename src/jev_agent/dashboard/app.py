@@ -76,7 +76,7 @@ from jev_agent.app.queue import QueueOptions
 from jev_agent.app.runs import RunOptions, require_ship_enabled
 from jev_agent.config import STATE_DIRNAME, ConfigError
 from jev_agent.config.loader import default_user_config_path, trusts
-from jev_agent.config.schema import BEGINNER_FIELDS, LAYA_CRITERIA, JevConfig, JevSettings, ShipMode
+from jev_agent.config.schema import BEGINNER_FIELDS, JevConfig, JevSettings, ShipMode
 from jev_agent.config.servers_schema import ServerConfig
 from jev_agent.core.benchmarks import DEFAULT_LAST, format_value
 from jev_agent.core.budget import approval_budget_block
@@ -889,9 +889,6 @@ class Dashboard:
                 "tab": tab if tab == "graph" and graph is not None else "list",
                 "graph": graph,
                 "relation_facets": views.RELATION_FACETS,
-                "laya": views.laya_view(
-                    repo, request.query_params.get("laya_profile") or lv.selected
-                ),
             }
 
         return self.page(request, "learning.html", build)
@@ -1328,7 +1325,7 @@ class Dashboard:
     async def _refresh_stack_recommendation(
         self, session: str, state: dict[str, dict[str, str]], answers: dict[str, str]
     ) -> None:
-        """Ask Jev+Laya for this session's stack pick, once, and cache it.
+        """Ask Jev for this session's stack pick, once, and cache it.
 
         The Stack step only reads the cache, so re-rendering the page never re-asks.
         The decision service falls back to the static default on any AI failure, so
@@ -2972,144 +2969,10 @@ class Dashboard:
             self.flash(request, "ok", f"deleted profile {name}")
         return self.back("/learning")
 
-    async def laya_apply(self, request: Request) -> Response:
-        """Apply the selected `laya tune` suggestions to a profile (Tier 1: re-running
-        the tune or `laya reset` undoes it). Refuses when jev.toml pins the weights."""
-        form = await checked_form(request)
-        name = _text(form, "profile") or ""
-        accepted = [key for key in form if key.startswith("accept_")]
-
-        def apply() -> str:
-            with views.open_repo(self.settings.root) as repo:
-                view = views.laya_view(repo, name)
-                if view.profile is None:
-                    raise LearningError(f"unknown profile {name}")
-                if view.configured:
-                    if view.repo_pinned:
-                        raise LearningError(
-                            "this repo's jev.toml sets [dispatcher.laya] weights, which "
-                            "win over a profile's; move them to your user config with "
-                            "the weights editor below instead"
-                        )
-                    raise LearningError(
-                        "your user config sets [dispatcher.laya] weights, which win "
-                        "over a profile's; edit them in the weights editor below instead"
-                    )
-                suggestion = view.suggestion
-                if suggestion is None or suggestion.weights is None:
-                    raise LearningError(f"nothing to apply: {view.reason}")
-                criteria = [key[7:] for key in accepted if key[7:] in suggestion.weights]
-                if not criteria:
-                    raise LearningError("select at least one suggestion")
-                merged = views.apply_laya_selection(
-                    suggestion.current, suggestion.weights, criteria
-                )
-                repo.learning.set_laya_weights(view.profile, merged)
-                return f"applied {len(criteria)} weight(s) on profile {view.profile}"
-
-        try:
-            message = await run_in_threadpool(apply)
-        except (JevError, LearningError, ConfigError) as exc:
-            self.flash(request, "error", _friendly_error(exc))
-        else:
-            self.flash(request, "ok", message)
-        return self.back(f"/learning?profile={name}")
-
-    async def laya_reset(self, request: Request) -> Response:
-        """Remove a profile's tuned weights (Tier 1; the button confirms first)."""
-        form = await checked_form(request)
-        name = _text(form, "profile") or ""
-
-        def reset() -> str:
-            with views.open_repo(self.settings.root) as repo:
-                repo.learning.db_for(name)  # unknown profile: error first
-                repo.learning.set_laya_weights(name, None)
-                return f"profile {name} uses the configured weights again"
-
-        try:
-            message = await run_in_threadpool(reset)
-        except (JevError, LearningError, ConfigError) as exc:
-            self.flash(request, "error", _friendly_error(exc))
-        else:
-            self.flash(request, "ok", message)
-        return self.back(f"/learning?profile={name}")
-
-    async def laya_weights_save(self, request: Request) -> Response:
-        """Save the Laya decision weights from the Learning page to the user config.
-
-        Tier 1: saving again undoes it. The weights live in the user config
-        (`$XDG_CONFIG_HOME/jev/config.toml`), never in the repo. When the repo's
-        jev.toml pins the weights, the pin is removed as part of the save: the
-        layering is defaults < user config < repo jev.toml, so a user-config save
-        alone would silently lose to the repo pin and the save would do nothing.
-        """
-        form = await checked_form(request)
-        name = _text(form, "profile") or ""
-        values = {key: value for key, value in form.items() if isinstance(value, str)}
-        back = f"/learning?profile={name}#laya" if name else "/learning#laya"
-
-        def job() -> bool:
-            """Save; returns whether a repo pin was moved aside. Raises on error."""
-            weights = _parse_laya_weights(values)  # ValueError: user-facing
-            root = self.settings.root
-            try:
-                repo_raw, _user_raw, _user_path = settings.read_layers(root)
-            except ConfigError as exc:
-                raise LearningError(str(exc)) from exc
-            pinned = settings.layer_sets_laya_weights(repo_raw)
-            err = settings.save(
-                root,
-                "user",
-                lambda layer: settings.set_path(layer, "dispatcher.laya.weights", weights),
-            )
-            if err is not None:
-                raise LearningError(err)
-            if pinned:
-                err = settings.save(
-                    root,
-                    "repo",
-                    lambda layer: settings.remove_path(layer, "dispatcher.laya.weights"),
-                )
-                if err is not None:
-                    raise LearningError(err)
-            return pinned
-
-        try:
-            moved_pin = await run_in_threadpool(job)
-        except (ValueError, JevError, LearningError, ConfigError) as exc:
-            self.flash(request, "error", str(exc))
-        else:
-            message = "saved the Laya weights to your user config"
-            if moved_pin:
-                message += (
-                    " and removed the [dispatcher.laya] weights pin from this repo's "
-                    "jev.toml so they take effect"
-                )
-            self.flash(request, "ok", message)
-        return self.back(back)
-
 
 def _text(form: FormData, name: str) -> str | None:
     value = form.get(name)
     return value.strip() if isinstance(value, str) else None
-
-
-def _parse_laya_weights(form: dict[str, str]) -> dict[str, float]:
-    """The six posted `w_<criterion>` fields as floats, in canonical order.
-
-    Only parsing happens here; the config validator (via `settings.save`) checks
-    the names, the signs and the sum. `ValueError` messages are user-facing.
-    """
-    weights: dict[str, float] = {}
-    for criterion in LAYA_CRITERIA:
-        raw = form.get(f"w_{criterion}", "").strip()
-        if not raw:
-            raise ValueError(f"missing a weight for {criterion}")
-        try:
-            weights[criterion] = float(raw)
-        except ValueError:
-            raise ValueError(f"{criterion}: {raw!r} is not a number") from None
-    return weights
 
 
 def _back_target(request: Request) -> str:
@@ -3802,7 +3665,7 @@ def palette_registry(csrf_token: str) -> dict[str, Any]:
         ("Agents: roles, workers and models", "/agents"),
         ("Fleet: the agent roster", "/fleet"),
         ("Chats", "/chats"),
-        ("Learning: profiles, lessons, Laya tuning", "/learning#laya"),
+        ("Learning: profiles, lessons", "/learning"),
         ("Profiles: workspace profiles", "/profiles"),
         ("Design systems: the design library", "/design-systems"),
         ("Tools: MCP, skills and plugins", "/tools"),
@@ -3885,9 +3748,6 @@ def create_app(
         Route("/queue/clear", dash.queue_clear, methods=["POST"]),
         Route("/artifacts", dash.artifacts_page),
         Route("/learning", dash.learning_page),
-        Route("/learning/laya/apply", dash.laya_apply, methods=["POST"]),
-        Route("/learning/laya/reset", dash.laya_reset, methods=["POST"]),
-        Route("/learning/laya/weights", dash.laya_weights_save, methods=["POST"]),
         Route("/learning/{action}", dash.learning_action, methods=["POST"]),
         Route("/chats", dash.chats_page),
         Route("/chats/new", dash.chats_new, methods=["POST"]),

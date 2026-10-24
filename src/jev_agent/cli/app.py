@@ -15,7 +15,6 @@ from jev_agent.cli.design_cmds import design_app
 from jev_agent.cli.doctor_cmd import doctor
 from jev_agent.cli.events_cmds import events_app
 from jev_agent.cli.init_cmd import init
-from jev_agent.cli.laya_cmds import laya_app
 from jev_agent.cli.learning_cmds import learning_app
 from jev_agent.cli.models_cmds import models_app
 from jev_agent.cli.quality_cmds import quality_app
@@ -97,7 +96,6 @@ app.add_typer(design_app, name="design", rich_help_panel=PANEL_CONFIGURE)
 
 # --- Learn: lessons, the decision model, and the models themselves ---
 app.add_typer(learning_app, name="learning", rich_help_panel=PANEL_LEARN)
-app.add_typer(laya_app, name="laya", rich_help_panel=PANEL_LEARN)
 app.add_typer(code_app, name="code", rich_help_panel=PANEL_LEARN)
 app.add_typer(models_app, name="models", rich_help_panel=PANEL_LEARN)
 app.command("chat", rich_help_panel=PANEL_LEARN)(chat)
