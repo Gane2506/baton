@@ -12,6 +12,12 @@
  * - Submitting a form disables its submit button until the page navigates (no double POST).
  * - Live polls never overlap (a tick is skipped while a fetch is pending) and back off
  *   exponentially while the server keeps failing, so dead servers are not hammered.
+ * - While a fetch is in flight the region carries aria-busy and data-live-loading
+ *   (cleared on resolve, success or failure); the stylesheet dims it slightly, with
+ *   a transition delay so a fast auto-refresh never visibly flickers and no
+ *   spinner flashes every few seconds. A region that starts empty shows a
+ *   "Loading…" placeholder until the first fetch resolves; that is the loading
+ *   state, distinct from a server-rendered empty state (e.g. "No live preview").
  */
 (function () {
   "use strict";
@@ -34,6 +40,14 @@
       return Math.min(base * Math.pow(2, Math.min(failures, 5)), BACKOFF_MAX_MS);
     }
 
+    // A region that starts empty has no server-rendered content yet: show a
+    // loading placeholder until the first fetch resolves (and replaces it).
+    // Regions with server content are untouched, so their empty states --
+    // rendered by the server, e.g. "No live preview" -- are never overwritten.
+    if (el.textContent.trim() === "") {
+      el.innerHTML = '<p class="live-loading" role="status">Loading…</p>';
+    }
+
     function tick() {
       if (!el.isConnected) {
         return;
@@ -43,6 +57,8 @@
         return;
       }
       pending = true;
+      el.setAttribute("aria-busy", "true");
+      el.setAttribute("data-live-loading", "true");
       fetch(el.getAttribute("data-live"), {
         credentials: "same-origin",
         headers: { "X-Requested-With": "fetch" },
@@ -66,6 +82,8 @@
         })
         .then(function () {
           pending = false;
+          el.removeAttribute("aria-busy");
+          el.removeAttribute("data-live-loading");
           window.setTimeout(tick, wait());
         });
     }

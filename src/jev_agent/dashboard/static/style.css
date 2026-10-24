@@ -1025,6 +1025,11 @@ button.copied { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 50%
 
 [data-live] { transition: opacity 200ms ease; position: relative; }
 [data-stale="true"] { opacity: 0.55; }
+/* A fetch in flight dims the region slightly -- but only on slow fetches: the
+   transition delay means a fast auto-refresh (tens of ms) resolves before the
+   dim starts, so no spinner or flash fires every few seconds. */
+[data-live-loading] { opacity: 0.7; transition-delay: 200ms; }
+.live-loading { color: var(--muted); }
 [data-stale="true"]::after {
   content: "reconnecting…";
   position: absolute;

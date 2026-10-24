@@ -514,8 +514,11 @@ def recurring_rows(repo: Repo) -> list[RecurringRow]:
     ]
 
 
-def queue_view(repo: Repo, show_all: bool = False) -> QueueView:
-    """`jev queue list` (with effective statuses) plus `jev scheduler status`."""
+def queue_view(repo: Repo, show_all: bool = False, query: str = "") -> QueueView:
+    """`jev queue list` (with effective statuses) plus `jev scheduler status`.
+
+    `query` filters on the idea text, case-insensitively (the chats list's
+    search pattern); the counts and spent-today totals stay unfiltered."""
     items = repo.store.list_queue()
     states = run_states(repo.store, items)
     rows = [
@@ -527,6 +530,9 @@ def queue_view(repo: Repo, show_all: bool = False) -> QueueView:
         )
         for item in items
     ]
+    needle = query.strip().lower()
+    if needle:
+        rows = [r for r in rows if needle in r.item.idea.lower()]
     shown = rows if show_all else [r for r in rows if r.status in ("queued", "running", "waiting")]
     return QueueView(
         rows=shown,
