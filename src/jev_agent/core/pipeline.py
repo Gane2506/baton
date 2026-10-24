@@ -33,7 +33,7 @@ standard flow (enforcing the folder boundary is workstream C2's job).
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -61,6 +61,7 @@ from jev_agent.core.integration import (
 )
 from jev_agent.core.learner import LEARN_STATES, learn
 from jev_agent.core.learning import Learning
+from jev_agent.core.learning.models import Lesson
 from jev_agent.core.lease import hold_run_lease
 from jev_agent.core.models import (
     AutonomyConfig,
@@ -297,15 +298,11 @@ class Pipeline:
                 # the run id from the user: fail with an actionable error, never a
                 # 500 from the assert (issue #174).
                 raise PipelineError(f"run {run_id} has no plan; it cannot be modified")
-            cards = [task.card for task in self.store.list_tasks(run_id)]
-            tasks = [*cards, changes_task_card(cards, notes)]
-            plan = Plan(summary=run.plan.summary, tasks=tasks, risks=run.plan.risks)
-            self.store.set_run_plan(run_id, plan, run.plan_round)
-            self.store.upsert_tasks(run_id, plan)
+            task = self._apply_changes_task(run, run.plan, notes)
             self.store.emit(
                 run_id,
                 EventType.HUMAN_NOTE,
-                HumanNotePayload(notes=notes, task_id=tasks[-1].id),
+                HumanNotePayload(notes=notes, task_id=task.id),
                 actor=ACTOR_HUMAN,
             )
             if not self.store.set_run_state(run_id, RunState.EXECUTING, unless=STOPPED):
@@ -335,19 +332,8 @@ class Pipeline:
     async def _resume(self, run_id: str, *, via: str = "resume command") -> RunRecord:
         run = self.store.get_run(run_id)
         from_state = str(run.state)
-        if run.state in APPROVAL_GATES:
-            raise PipelineError(f"run {run_id} is awaiting approval; use `jev approve {run_id}`")
-        if run.state is RunState.AWAITING_SHIP:
-            raise PipelineError(
-                f"run {run_id} waits for a person before it ships; use `jev ship approve`, "
-                f"`jev ship modify` or `jev ship stop` with {run_id}"
-            )
-        if run.state is RunState.NEEDS_HUMAN and run.resume_state is not None:
-            if not self.store.set_run_state(run_id, run.resume_state, unless=KEEP_CANCELLED):
-                raise PipelineError(f"run {run_id} was cancelled; it cannot be resumed")
-            self.store.set_run_learning_outcome(run_id, None)  # learn again when it ends
-        elif run.state in STOPPED:
-            raise PipelineError(f"run {run_id} is {run.state}; it cannot be resumed")
+        _check_resumable(run)
+        self._restore_resume_state(run)
         self.store.emit(
             run_id,
             EventType.RUN_RESUMED,
@@ -355,6 +341,14 @@ class Pipeline:
         )
         self._close_interrupted_attempts(run_id)
         return await self._advance(run_id)
+
+    def _restore_resume_state(self, run: RunRecord) -> None:
+        """Move a NEEDS_HUMAN run back to the state it stopped from, so it learns
+        again when it ends."""
+        if run.state is RunState.NEEDS_HUMAN and run.resume_state is not None:
+            if not self.store.set_run_state(run.id, run.resume_state, unless=KEEP_CANCELLED):
+                raise PipelineError(f"run {run.id} was cancelled; it cannot be resumed")
+            self.store.set_run_learning_outcome(run.id, None)  # learn again when it ends
 
     def cancel(self, run_id: str) -> RunRecord:
         return cancel_run(self.store, run_id)
@@ -414,7 +408,7 @@ class Pipeline:
         decision = await self.h.decide(run.id, None, d1_intake(run.idea, options))
         if decision.answers["clear"] == "ask_human":
             raise Halt(RunState.NEEDS_HUMAN, "D1: the idea is not clear enough to plan")
-        self._move(run.id, step_gate_target(run_autonomy_mode(run), RunState.PLANNING))
+        self._move_to_step(run, RunState.PLANNING)
 
     async def _plan(self, run: RunRecord) -> None:
         h, max_rounds = self.h, self.h.config.budget.max_plan_rounds
@@ -423,7 +417,26 @@ class Pipeline:
         h.check_budget(run.id)
         revising = run.plan is not None and run.validation is not None
         lessons = h.lessons_for(run.id, "planner")
-        prompt = h.prompt(
+        output = await self._run_level_worker(
+            run,
+            "planner",
+            h.assignment("planner", h.last_answers(run.id, "D1")),
+            self._planner_prompt(run, revising, lessons),
+            [lesson.id for lesson in lessons],
+        )
+        parsed = output.parsed
+        if not isinstance(parsed, Plan):
+            raise Halt(RunState.NEEDS_HUMAN, f"planner gave no plan: {_describe(output.result)}")
+        plan = _finalize_plan(parsed)
+        self.store.set_run_plan(run.id, plan, run.plan_round + 1)
+        self.store.set_run_validation(run.id, None)
+        self._move_to_step(run, RunState.VALIDATING)
+
+    def _planner_prompt(self, run: RunRecord, revising: bool, lessons: Sequence[Lesson]) -> str:
+        """The planner prompt: the idea, the repo context, and — when revising — the
+        previous plan and the validator's issues."""
+        h = self.h
+        return h.prompt(
             "planner",
             lessons,
             idea=run.idea.text,
@@ -434,51 +447,23 @@ class Pipeline:
             previous_plan=run.plan.model_dump_json(indent=2) if revising and run.plan else None,
             validation_issues=run.validation.issues if revising and run.validation else [],
         )
-        output = await self._run_level_worker(
-            run,
-            "planner",
-            h.assignment("planner", h.last_answers(run.id, "D1")),
-            prompt,
-            [lesson.id for lesson in lessons],
-        )
-        plan = output.parsed
-        if not isinstance(plan, Plan):
-            raise Halt(RunState.NEEDS_HUMAN, f"planner gave no plan: {_describe(output.result)}")
-        # Every card the planner produces is a plan task: mark them explicitly so fix rounds
-        # are counted by kind, not by title prefix (#58). Cards from runs written before
-        # kinds existed keep `kind=None` and fall back to the title check.
-        plan = Plan(
-            summary=plan.summary,
-            risks=plan.risks,
-            tasks=[card.model_copy(update={"kind": "plan"}) for card in plan.tasks],
-        )
-        try:
-            topological_order(plan.tasks)
-        except CycleError as exc:
-            raise Halt(RunState.FAILED, f"plan rejected: {exc}") from exc
-        self.store.set_run_plan(run.id, plan, run.plan_round + 1)
-        self.store.set_run_validation(run.id, None)
-        self._move(run.id, step_gate_target(run_autonomy_mode(run), RunState.VALIDATING))
 
     async def _validate(self, run: RunRecord) -> None:
-        h, plan = self.h, run.plan
+        plan = run.plan
         if plan is None:
             # Unreachable through the pipeline (a plan is set before VALIDATING),
             # but `_advance` catches only Halt: an invariant failure must stop the
             # run as FAILED, never escape as AssertionError/500 (issue #201, cf. #174).
             raise Halt(RunState.FAILED, f"internal: run {run.id} reached validation with no plan")
-        options = h.require_options("validator")
-        avoid_role = h.config.roles.validator.prefer_different_vendor_than
-        avoid = None if avoid_role is None else h.last_attempt(run.id, avoid_role)
-        req = d2_validator(
-            plan,
-            run.plan_round,
-            options,
-            avoid_role,
-            None if avoid is None else avoid.worker,
-            None if avoid is None else avoid.model,
-        )
-        assignment = h.assignment("validator", (await h.decide(run.id, None, req)).answers)
+        validation = await self._run_validator(run, plan)
+        self.store.set_run_validation(run.id, validation)
+        self._apply_d3_verdict(run, plan, await self._d3_verdict(run, validation))
+
+    async def _run_validator(self, run: RunRecord, plan: Plan) -> ValidationResult:
+        """D2: pick the validator (a different vendor than the planner when configured)
+        and have it review the plan."""
+        h = self.h
+        assignment = await self._validator_assignment(run, plan)
         h.check_budget(run.id)
         lessons = h.lessons_for(run.id, "validator", [plan.summary], plan.tasks)
         prompt = h.prompt(
@@ -496,26 +481,50 @@ class Pipeline:
             raise Halt(
                 RunState.NEEDS_HUMAN, f"validator gave no verdict: {_describe(output.result)}"
             )
-        self.store.set_run_validation(run.id, validation)
+        return validation
 
-        max_rounds = h.config.budget.max_plan_rounds
+    async def _validator_assignment(self, run: RunRecord, plan: Plan) -> Assignment:
+        """D2: pick the validator's worker/model — a different vendor than the
+        planner when configured — via the D2 decision."""
+        h = self.h
+        options = h.require_options("validator")
+        avoid_role = h.config.roles.validator.prefer_different_vendor_than
+        avoid = None if avoid_role is None else h.last_attempt(run.id, avoid_role)
+        req = d2_validator(
+            plan,
+            run.plan_round,
+            options,
+            avoid_role,
+            None if avoid is None else avoid.worker,
+            None if avoid is None else avoid.model,
+        )
+        return h.assignment("validator", (await h.decide(run.id, None, req)).answers)
+
+    async def _d3_verdict(self, run: RunRecord, validation: ValidationResult) -> str:
+        """D3: approve the validated plan, send it back for revision, or escalate."""
+        max_rounds = self.h.config.budget.max_plan_rounds
         req = d3_after_validation(validation, run.plan_round, max_rounds)
-        verdict = (await h.decide(run.id, None, req)).answers["verdict"]
+        return (await self.h.decide(run.id, None, req)).answers["verdict"]
+
+    def _apply_d3_verdict(self, run: RunRecord, plan: Plan, verdict: str) -> None:
+        """Route after D3: escalate (Halt), revise (back to planning), or approve
+        (upsert the tasks, then DESIGNING when the plan needs one, else the
+        execution gate)."""
         if verdict == "escalate_human":
             raise Halt(RunState.NEEDS_HUMAN, "D3: plan escalated to a human")
         if verdict == "revise":
+            max_rounds = self.h.config.budget.max_plan_rounds
             if run.plan_round >= max_rounds:
                 raise Halt(RunState.NEEDS_HUMAN, f"plan not approved after {max_rounds} rounds")
-            self._move(run.id, step_gate_target(run_autonomy_mode(run), RunState.PLANNING))
+            self._move_to_step(run, RunState.PLANNING)
             return
         self.store.upsert_tasks(run.id, plan)
-        gate = run.plan_only or h.config.plan_approval_required
         if plan.needs_design:
             # The design is approved together with the plan at the approval gate below,
             # so the run first passes through DESIGNING (or its ASK_EVERY_STEP gate).
-            self._move(run.id, step_gate_target(run_autonomy_mode(run), RunState.DESIGNING))
+            self._move_to_step(run, RunState.DESIGNING)
         else:
-            self._move(run.id, execution_gate_target(run_autonomy_mode(run), gate))
+            self._move_to_execution(run)
 
     async def _design(self, run: RunRecord) -> None:
         """Turn the approved plan's UI work into a design doc, for the coders to follow.
@@ -532,30 +541,34 @@ class Pipeline:
         h.require_options("designer")
         h.check_budget(run.id)
         lessons = h.lessons_for(run.id, "designer")
-        # A chat-launched run prefers the chat's design-system choice ("library:<name>");
-        # "repo" and None resolve to the repo's own system, as before, while "none"
-        # means no design system at all (the designer prompt gets no design context).
-        design_system = render_for_prompt(resolve_design_system(h.repo, run.design_system))
-        prompt = h.prompt(
-            "designer",
-            lessons,
-            idea=run.idea.text,
-            plan_json=plan.model_dump_json(indent=2),
-            design_system=design_system,
-        )
         output = await self._run_level_worker(
             run,
             "designer",
             h.assignment("designer", h.last_answers(run.id, "D1")),
-            prompt,
+            self._designer_prompt(run, plan, lessons),
             [lesson.id for lesson in lessons],
         )
         design = output.parsed
         if not isinstance(design, DesignDoc):
             raise Halt(RunState.NEEDS_HUMAN, f"designer gave no design: {_describe(output.result)}")
         self.store.set_run_design(run.id, design)
-        gate = run.plan_only or h.config.plan_approval_required
-        self._move(run.id, execution_gate_target(run_autonomy_mode(run), gate))
+        self._move_to_execution(run)
+
+    def _designer_prompt(self, run: RunRecord, plan: Plan, lessons: Sequence[Lesson]) -> str:
+        """The designer prompt: the idea and the plan, plus the design system to
+        follow. A chat-launched run prefers the chat's design-system choice
+        ("library:<name>"); "repo" and None resolve to the repo's own system, as
+        before, while "none" means no design system at all (the designer prompt
+        gets no design context)."""
+        h = self.h
+        design_system = render_for_prompt(resolve_design_system(h.repo, run.design_system))
+        return h.prompt(
+            "designer",
+            lessons,
+            idea=run.idea.text,
+            plan_json=plan.model_dump_json(indent=2),
+            design_system=design_system,
+        )
 
     async def _execute(self, run: RunRecord) -> None:
         try:
@@ -566,14 +579,14 @@ class Pipeline:
         runner = TaskRunner(self.h, self.settings.test_timeout_s)
         for card in self._task_order(run.id):
             await runner.run(run.id, card.id)
-        self._move(run.id, step_gate_target(run_autonomy_mode(run), RunState.INTEGRATING))
+        self._move_to_step(run, RunState.INTEGRATING)
 
     async def _integrate(self, run: RunRecord) -> None:
         """Merge task branches into `jev/<run_id>/result`, run the tests there, then D6."""
         h, order = self.h, self._task_order(run.id)
         if any(t.state is not TaskState.DONE for t in self.store.list_tasks(run.id)):
             # A fix task was added just before a crash.
-            self._move(run.id, step_gate_target(run_autonomy_mode(run), RunState.EXECUTING))
+            self._move_to_step(run, RunState.EXECUTING)
             return
         rounds, max_rounds = fix_rounds(order), self.settings.max_fix_rounds
         try:
@@ -587,6 +600,28 @@ class Pipeline:
             )
         except WorkspaceError as exc:
             raise Halt(RunState.FAILED, f"integration failed: {exc}") from exc
+        action = await self._d6_action(run, outcome, order, rounds, max_rounds)
+        if action == "ship":
+            await self._ship_after_score_gate(run, outcome, order)
+        elif action == "fix_task" and outcome.fixable and rounds < max_rounds:
+            self._add_fix_task(run, outcome)
+            self._move_to_step(run, RunState.EXECUTING)
+        else:
+            raise Halt(RunState.NEEDS_HUMAN, _integration_stop_reason(outcome, rounds, max_rounds))
+
+    async def _d6_action(
+        self,
+        run: RunRecord,
+        outcome: IntegrationOutcome,
+        order: list[TaskCard],
+        rounds: int,
+        max_rounds: int,
+    ) -> str:
+        """D6: ship, add a fix task, or ask a human — with the hard limits applied
+        (issue #201): a ship vote never ships while the quality gate blocks, and
+        never ships a result with merge conflicts or failed integration tests.
+        Conflicts are not fixable, so they end as a fix_task vote that the caller
+        turns into a human stop; failed tests get a fix task while rounds remain."""
         result = outcome.result
         req = d6_integration(
             len(order),
@@ -598,22 +633,12 @@ class Pipeline:
             quality=outcome.quality_state,
             quality_findings=[] if outcome.quality is None else outcome.quality.top_findings(),
         )
-        action = (await h.decide(run.id, None, req)).answers["action"]
+        action = (await self.h.decide(run.id, None, req)).answers["action"]
         if action == "ship" and outcome.quality_state == "failed":
             action = "fix_task"  # the gate is a hard limit: never ship while it blocks
         if action == "ship" and (not result.clean or outcome.tests == "failed"):
-            # Hard limits, like the gate (issue #201): a D6 ship vote never ships a
-            # result with merge conflicts or failed integration tests. Conflicts are
-            # not fixable, so the run below stops for a human; failed tests get a fix
-            # task while rounds remain, exactly as a fix_task vote would.
             action = "fix_task"
-        if action == "ship":
-            await self._ship_after_score_gate(run, outcome, order)
-        elif action == "fix_task" and outcome.fixable and rounds < max_rounds:
-            self._add_fix_task(run, outcome)
-            self._move(run.id, step_gate_target(run_autonomy_mode(run), RunState.EXECUTING))
-        else:
-            raise Halt(RunState.NEEDS_HUMAN, _integration_stop_reason(outcome, rounds, max_rounds))
+        return action
 
     async def _ship_after_score_gate(
         self, run: RunRecord, outcome: IntegrationOutcome, order: list[TaskCard]
@@ -631,14 +656,7 @@ class Pipeline:
         if decision == "ship":
             await self._after_ship_vote(run, outcome.result.branch)
             return
-        if score is None or outcome.quality is None:
-            # `ship_gate_outcome` only returns rework/stop for a real below-threshold
-            # score, so this is unreachable — but it must still fail as FAILED, never
-            # as AssertionError, if the gate ever disagrees (issue #201).
-            raise Halt(
-                RunState.FAILED,
-                f"internal: ship score gate decided {decision} with no score for run {run.id}",
-            )
+        score = _score_for_rework(run.id, outcome, score, decision)
         if decision == "stop":
             raise Halt(
                 RunState.NEEDS_HUMAN,
@@ -648,17 +666,13 @@ class Pipeline:
                 f"{outcome.result.branch}",
             )
         self._add_score_fix_task(run, outcome, score)
-        self._move(run.id, step_gate_target(run_autonomy_mode(run), RunState.EXECUTING))
+        self._move_to_step(run, RunState.EXECUTING)
 
     async def _after_ship_vote(self, run: RunRecord, branch: str) -> None:
         """D6 voted "ship": ship and merge, wait for a person, or (shipping off) end DONE."""
         mode = after_approval(self.h.config, run.ship_mode)
         if mode == "merge":
-            self._move(
-                run.id,
-                step_gate_target(run_autonomy_mode(run), RunState.SHIPPING),
-                f"result on branch {branch}",
-            )
+            self._move_to_step(run, RunState.SHIPPING, f"result on branch {branch}")
         elif mode == "ask":
             reason = (
                 f"result on branch {branch}; ship it with `jev ship approve {run.id}`, ask for "
@@ -706,6 +720,16 @@ class Pipeline:
             lesson_ids=lesson_ids,
         )
 
+    def _apply_changes_task(self, run: RunRecord, plan: Plan, notes: str) -> TaskCard:
+        """Append the person's change notes as a task, after every other task, to
+        the run's plan and task list. Returns the new task card."""
+        cards = [task.card for task in self.store.list_tasks(run.id)]
+        tasks = [*cards, changes_task_card(cards, notes)]
+        new_plan = Plan(summary=plan.summary, tasks=tasks, risks=plan.risks)
+        self.store.set_run_plan(run.id, new_plan, run.plan_round)
+        self.store.upsert_tasks(run.id, new_plan)
+        return tasks[-1]
+
     def _add_fix_task(self, run: RunRecord, outcome: IntegrationOutcome) -> None:
         """Append a fix task, after every other task, to the run's plan and task list."""
         if run.plan is None or not outcome.fixable:
@@ -716,13 +740,13 @@ class Pipeline:
         cards = [task.card for task in self.store.list_tasks(run.id)]
         if outcome.failure is not None:
             fix = fix_task_card(cards, outcome.failure)
-        else:
-            if outcome.quality is None:
-                raise Halt(
-                    RunState.FAILED,
-                    f"internal: fix task for run {run.id} has no failing test and no gate",
-                )
+        elif outcome.quality is not None:
             fix = quality_fix_task_card(cards, outcome.quality)
+        else:
+            raise Halt(
+                RunState.FAILED,
+                f"internal: fix task for run {run.id} has no failing test and no gate",
+            )
         self._append_task(run, fix)
 
     def _add_score_fix_task(
@@ -737,19 +761,7 @@ class Pipeline:
             )
         cards = [task.card for task in self.store.list_tasks(run.id)]
         rounds = score_fix_rounds(card.title for card in cards)
-        weak = [
-            f"{name} ({value}/5): {score.details[name]}"
-            for name, value in sorted(score.criteria.items(), key=lambda item: item[1])
-            if value < 5
-        ]
-        lines = "\n".join(f"- {line}" for line in weak) or "- (no weak criterion recorded)"
-        description = (
-            f"After merging all tasks, the ship score gate rates the result "
-            f"{score.total}/100, below the threshold {score.threshold}. Improve the code "
-            f"so it scores at least {score.threshold}/100, keeping what the other tasks "
-            f"built:\n\n{lines}\n\nThe full report is "
-            f"`.jev/runs/<run_id>/quality/{outcome.quality.label}.md`."
-        )
+        description = _score_fix_description(score, outcome.quality.label)
         self._append_task(
             run,
             TaskCard(
@@ -787,6 +799,17 @@ class Pipeline:
         except CycleError as exc:
             raise Halt(RunState.FAILED, f"plan rejected: {exc}") from exc
 
+    def _move_to_step(self, run: RunRecord, step: RunState, reason: str | None = None) -> None:
+        """Move the run to `step`, or its ASK_EVERY_STEP approval gate."""
+        self._move(run.id, step_gate_target(run_autonomy_mode(run), step), reason)
+
+    def _move_to_execution(self, run: RunRecord) -> None:
+        """Move the run to the execution gate: the approval gate when the plan
+        needs one (`plan_only` or `[approval] require_plan_approval`), straight to
+        EXECUTING when AUTONOMOUS skips it."""
+        gate = run.plan_only or self.h.config.plan_approval_required
+        self._move(run.id, execution_gate_target(run_autonomy_mode(run), gate))
+
     def _move(self, run_id: str, state: RunState, reason: str | None = None) -> None:
         if not self.store.set_run_state(run_id, state, reason, unless=KEEP_CANCELLED):
             self.h.check_running(run_id)  # cancelled meanwhile: stop the run here (Halt)
@@ -811,25 +834,102 @@ def _describe(result: WorkerResult) -> str:
     return f"{result.status}: {result.summary}"
 
 
+def _check_resumable(run: RunRecord) -> None:
+    """Raise unless the run can be resumed: not waiting at an approval or ship gate,
+    and not stopped (a NEEDS_HUMAN run with a `resume_state` is resumable)."""
+    if run.state in APPROVAL_GATES:
+        raise PipelineError(f"run {run.id} is awaiting approval; use `jev approve {run.id}`")
+    if run.state is RunState.AWAITING_SHIP:
+        raise PipelineError(
+            f"run {run.id} waits for a person before it ships; use `jev ship approve`, "
+            f"`jev ship modify` or `jev ship stop` with {run.id}"
+        )
+    if run.state in STOPPED and not (
+        run.state is RunState.NEEDS_HUMAN and run.resume_state is not None
+    ):
+        raise PipelineError(f"run {run.id} is {run.state}; it cannot be resumed")
+
+
+def _score_fix_description(score: ScoreBreakdown, quality_label: str) -> str:
+    """The fix task's description: the gate score, the weak criteria, and where
+    the full report lives."""
+    weak = _weak_criteria_lines(score)
+    lines = "\n".join(f"- {line}" for line in weak) or "- (no weak criterion recorded)"
+    return (
+        f"After merging all tasks, the ship score gate rates the result "
+        f"{score.total}/100, below the threshold {score.threshold}. Improve the code "
+        f"so it scores at least {score.threshold}/100, keeping what the other tasks "
+        f"built:\n\n{lines}\n\nThe full report is "
+        f"`.jev/runs/<run_id>/quality/{quality_label}.md`."
+    )
+
+
+def _weak_criteria_lines(score: ScoreBreakdown) -> list[str]:
+    """The score criteria below a perfect 5, weakest first, as report lines."""
+    return [
+        f"{name} ({value}/5): {score.details[name]}"
+        for name, value in sorted(score.criteria.items(), key=lambda item: item[1])
+        if value < 5
+    ]
+
+
+def _score_for_rework(
+    run_id: str, outcome: IntegrationOutcome, score: ScoreBreakdown | None, decision: str
+) -> ScoreBreakdown:
+    """The gate score behind a rework/stop decision. `ship_gate_outcome` only returns
+    those for a real below-threshold score, so a missing one is unreachable — but it
+    must still fail as FAILED, never as AssertionError, if the gate ever disagrees
+    (issue #201)."""
+    if score is None or outcome.quality is None:
+        raise Halt(
+            RunState.FAILED,
+            f"internal: ship score gate decided {decision} with no score for run {run_id}",
+        )
+    return score
+
+
+def _finalize_plan(plan: Plan) -> Plan:
+    """Mark every card the planner produced as a plan task and reject a plan whose
+    tasks form a cycle. Marking explicitly means fix rounds are counted by kind,
+    not by title prefix (#58)."""
+    marked = Plan(
+        summary=plan.summary,
+        risks=plan.risks,
+        tasks=[card.model_copy(update={"kind": "plan"}) for card in plan.tasks],
+    )
+    try:
+        topological_order(marked.tasks)
+    except CycleError as exc:
+        raise Halt(RunState.FAILED, f"plan rejected: {exc}") from exc
+    return marked
+
+
+def _quality_block_reason(outcome: IntegrationOutcome, rounds: int, max_rounds: int) -> str:
+    """Why the run stops when the quality gate blocks: the gate's reasons, and
+    whether fix rounds remain. `quality_state == "failed"` already implies a gate
+    result, so the missing-quality branch is unreachable — but the reason must
+    never come from an assert."""
+    branch = outcome.result.branch
+    reasons = (
+        "; ".join(outcome.quality.reasons)
+        if outcome.quality is not None
+        else "the quality gate blocked"
+    )
+    if rounds >= max_rounds:
+        return (
+            f"the quality gate still blocks after {rounds} fix round(s) ({reasons}); "
+            f"see `jev quality show` and branch {branch}"
+        )
+    return f"D6: the quality gate blocks ({reasons}); a human should review {branch}"
+
+
 def _integration_stop_reason(outcome: IntegrationOutcome, rounds: int, max_rounds: int) -> str:
     branch, failure = outcome.result.branch, outcome.failure
     if outcome.result.conflicts:
         ids = ", ".join(outcome.result.conflicts)
         return f"integration: task(s) {ids} do not merge cleanly; resolve them by hand ({branch})"
     if failure is None and outcome.quality_state == "failed":
-        # `quality_state == "failed"` already implies a gate result, so the None
-        # branch is unreachable — but the reason must never come from an assert.
-        reasons = (
-            "; ".join(outcome.quality.reasons)
-            if outcome.quality is not None
-            else "the quality gate blocked"
-        )
-        if rounds >= max_rounds:
-            return (
-                f"the quality gate still blocks after {rounds} fix round(s) ({reasons}); "
-                f"see `jev quality show` and branch {branch}"
-            )
-        return f"D6: the quality gate blocks ({reasons}); a human should review {branch}"
+        return _quality_block_reason(outcome, rounds, max_rounds)
     if failure is None:
         return f"D6: a human should review branch {branch}"
     if rounds >= max_rounds:

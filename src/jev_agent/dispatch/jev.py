@@ -328,6 +328,76 @@ POINT_OPTION_DESCRIPTIONS: dict[tuple[DecisionPoint, str], dict[str, str]] = {
 }
 
 
+def _option_description(
+    point: DecisionPoint, name: str, option: str, free: set[str], unknown: set[str]
+) -> str | None:
+    """The description for one allowed answer, if known."""
+    if name == "model" and option in free:
+        return FREE_UNKNOWN_OPTION if option in unknown else FREE_OPTION
+    descriptions = POINT_OPTION_DESCRIPTIONS.get(
+        (point, name), COMMON_OPTION_DESCRIPTIONS.get(name, {})
+    )
+    return descriptions.get(option)
+
+
+def _question_instruction(
+    base: str,
+    point: DecisionPoint,
+    name: str,
+    state: dict[str, Any],
+    *,
+    prefer: bool,
+    free: set[str],
+    mismatch: bool,
+) -> str:
+    """The prompt instructions for one decision question: the base instruction plus
+    the applicable hints (free-model preference, worker/model pairing, D4 routing).
+    Each hint is independent — the first two are name-disjoint, so no `elif` — and
+    they append in a fixed order."""
+    hints: list[str] = []
+    if prefer and name == "model":
+        hints.append(PREFER_FREE_INSTRUCTION)
+    if free and name == "worker":
+        hints.append(FREE_WORKER_INSTRUCTION)
+    if mismatch and name in ("worker", "model"):
+        hints.append(PAIRING_INSTRUCTION)
+    if point == "D4" and "code_routing" in state and name in ("worker", "model", "effort"):
+        hints.append(CODE_ROUTING_INSTRUCTION)
+    return " ".join([base, *hints])
+
+
+def _check_confidence(details: dict[str, dict[str, Any]], min_confidence: float) -> None:
+    """Raise unless every answer meets the confidence bar."""
+    low = [
+        f"{q} ({d['confidence']:.2f})"
+        for q, d in details.items()
+        if d["confidence"] < min_confidence
+    ]
+    if low:
+        raise DispatchError(f"jev: low confidence on {', '.join(low)}")
+
+
+def _decision_details(
+    direct: dict[str, str],
+    details: dict[str, dict[str, Any]],
+    usage: dict[str, Any] | None,
+    provider: Any,
+    routing_reason: Any,
+) -> dict[str, Any]:
+    """`Decision.details`: direct answers, per-question details and usage, plus the
+    provider and routing reason when `MultiProviderJevDispatcher.post` set them."""
+    decision_details: dict[str, Any] = {
+        "direct": sorted(direct),
+        "answers": details,
+        "usage": usage,
+    }
+    if isinstance(provider, str):
+        decision_details["provider"] = provider
+    if isinstance(routing_reason, str):
+        decision_details["routing_reason"] = routing_reason
+    return decision_details
+
+
 class JevDispatcher:
     """`Dispatcher` backed by Jev. Each `Decision.details` holds the questions answered locally
     (`direct`), per-question choice, confidence and probabilities (`answers`) and `usage`.
@@ -382,27 +452,9 @@ class JevDispatcher:
         answers, details = parse_answers(body, asked)
         usage = body.get("usage") if isinstance(body.get("usage"), dict) else None
 
-        low = [
-            f"{q} ({d['confidence']:.2f})"
-            for q, d in details.items()
-            if d["confidence"] < self.settings.min_confidence
-        ]
-        if low:
-            raise DispatchError(f"jev: low confidence on {', '.join(low)}")
+        _check_confidence(details, self.settings.min_confidence)
 
         model = body.get("model")
-        decision_details: dict[str, Any] = {
-            "direct": sorted(direct),
-            "answers": details,
-            "usage": usage,
-        }
-        if isinstance(provider, str):
-            # Set by MultiProviderJevDispatcher.post: which provider answered.
-            decision_details["provider"] = provider
-        routing_reason = body.get(ROUTING_REASON_KEY)
-        if isinstance(routing_reason, str):
-            # Set by MultiProviderJevDispatcher.post: why the legs ran in this order.
-            decision_details["routing_reason"] = routing_reason
         return Decision(
             point=req.point,
             answers={**direct, **answers},
@@ -410,7 +462,9 @@ class JevDispatcher:
             model=model if isinstance(model, str) else self.settings.model,
             cost_usd=cost_from_usage(usage, self._input_price(provider)),
             latency_ms=int((time.monotonic() - started) * 1000),
-            details=decision_details,
+            details=_decision_details(
+                direct, details, usage, provider, body.get(ROUTING_REASON_KEY)
+            ),
         )
 
     def build_payload(
@@ -420,8 +474,8 @@ class JevDispatcher:
         context = {"id": point, "description": POINT_DESCRIPTIONS[point]}
         full_state = {"decision_point": context}
         full_state.update({k: v for k, v in state.items() if k != "decision_point"})
-        free_info = state.get("models") if isinstance(state.get("models"), dict) else {}
-        assert isinstance(free_info, dict)
+        models = state.get("models")
+        free_info = models if isinstance(models, dict) else {}
         free, unknown = (
             set(free_info.get("free", [])),
             set(free_info.get("structured_output_unknown", [])),
@@ -433,45 +487,25 @@ class JevDispatcher:
             for model in questions.get("model", [])
         )
 
-        def describe(name: str, option: str) -> str | None:
-            """Return the description for one allowed answer, if known."""
-            if name == "model" and option in free:
-                return FREE_UNKNOWN_OPTION if option in unknown else FREE_OPTION
-            descriptions = POINT_OPTION_DESCRIPTIONS.get(
-                (point, name), COMMON_OPTION_DESCRIPTIONS.get(name, {})
-            )
-            return descriptions.get(option)
-
-        def instruction(name: str) -> str:
-            """Build the prompt instructions for one decision question."""
-            text = self.instruction_for(point, name)
-            if prefer and name == "model":
-                text = f"{text} {PREFER_FREE_INSTRUCTION}"
-            elif free and name == "worker":
-                text = f"{text} {FREE_WORKER_INSTRUCTION}"
-            if mismatch and name in ("worker", "model"):
-                text = f"{text} {PAIRING_INSTRUCTION}"
-            if (
-                point == "D4"
-                and "code_routing" in state
-                and name
-                in (
-                    "worker",
-                    "model",
-                    "effort",
-                )
-            ):
-                text = f"{text} {CODE_ROUTING_INSTRUCTION}"
-            return text
-
         return {
             "state": full_state,
             "model": self.settings.model,
             "questions": {
                 name: {
                     "type": "choice",
-                    "instructions": instruction(name),
-                    "criteria": {option: describe(name, option) for option in allowed},
+                    "instructions": _question_instruction(
+                        self.instruction_for(point, name),
+                        point,
+                        name,
+                        state,
+                        prefer=prefer,
+                        free=free,
+                        mismatch=mismatch,
+                    ),
+                    "criteria": {
+                        option: _option_description(point, name, option, free, unknown)
+                        for option in allowed
+                    },
                 }
                 for name, allowed in questions.items()
             },
@@ -529,45 +563,72 @@ class JevDispatcher:
         """One retry in all: on 429/5xx (after `Retry-After`), or on a connect error (the
         request was never sent; after `DEFAULT_BACKOFF_S`)."""
         for attempt in (1, 2):
-            try:
-                resp = await client.post(
-                    url, json=payload, headers=headers, timeout=self.settings.timeout_s
-                )
-            except httpx.TimeoutException as exc:
-                raise DispatchError(
-                    f"jev: request timed out after {self.settings.timeout_s:g}s",
-                    provider_failure=True,
-                ) from exc
-            except httpx.ConnectError as exc:
+            resp = await _send_once(client, url, payload, headers, self.settings.timeout_s)
+            if isinstance(resp, httpx.ConnectError):
                 if attempt == 1:
                     await self._sleep(DEFAULT_BACKOFF_S)
                     continue
                 raise DispatchError(
-                    f"jev: network error ({type(exc).__name__})", provider_failure=True
-                ) from exc
-            except httpx.HTTPError as exc:
-                raise DispatchError(
-                    f"jev: network error ({type(exc).__name__})", provider_failure=True
-                ) from exc
-
-            status = resp.status_code
-            if status == 200:
-                try:
-                    body = resp.json()
-                except ValueError as exc:
-                    raise DispatchError("jev: response is not JSON", provider_failure=True) from exc
-                if not isinstance(body, dict):
-                    raise DispatchError("jev: response is not a JSON object", provider_failure=True)
-                return body
-            retryable = status in RETRY_STATUSES or status >= 500
-            if retryable and attempt == 1:
+                    f"jev: network error ({type(resp).__name__})", provider_failure=True
+                ) from resp
+            body = _response_body(resp, attempt, self.settings.api_key_env, key)
+            if body is None:
                 await self._sleep(retry_delay(resp))
                 continue
-            raise DispatchError(
-                http_error_message(resp, self.settings.api_key_env, key),
-                provider_failure=status in (401, 403) or retryable,
-            )
+            return body
         raise AssertionError("unreachable")  # pragma: no cover
+
+
+async def _send_once(
+    client: httpx.AsyncClient,
+    url: str,
+    payload: dict[str, Any],
+    headers: dict[str, str],
+    timeout_s: float,
+) -> httpx.Response | httpx.ConnectError:
+    """One POST: the response, or the connect error (the request was never sent, so
+    the caller may retry). Timeouts and other transport errors raise at once."""
+    try:
+        return await client.post(url, json=payload, headers=headers, timeout=timeout_s)
+    except httpx.TimeoutException as exc:
+        raise DispatchError(
+            f"jev: request timed out after {timeout_s:g}s",
+            provider_failure=True,
+        ) from exc
+    except httpx.ConnectError as exc:
+        return exc
+    except httpx.HTTPError as exc:
+        raise DispatchError(
+            f"jev: network error ({type(exc).__name__})", provider_failure=True
+        ) from exc
+
+
+def _response_body(
+    resp: httpx.Response, attempt: int, key_env: str, key: str
+) -> dict[str, Any] | None:
+    """The parsed body for a 200, None when the caller should retry, or raise for a
+    final failure (non-JSON, non-object, or a non-retryable / second-attempt status)."""
+    status = resp.status_code
+    if status == 200:
+        return _parse_body(resp)
+    retryable = status in RETRY_STATUSES or status >= 500
+    if retryable and attempt == 1:
+        return None
+    raise DispatchError(
+        http_error_message(resp, key_env, key),
+        provider_failure=status in (401, 403) or retryable,
+    )
+
+
+def _parse_body(resp: httpx.Response) -> dict[str, Any]:
+    """A 200 response's body as a JSON object, or raise when it is not one."""
+    try:
+        body = resp.json()
+    except ValueError as exc:
+        raise DispatchError("jev: response is not JSON", provider_failure=True) from exc
+    if not isinstance(body, dict):
+        raise DispatchError("jev: response is not a JSON object", provider_failure=True)
+    return body
 
 
 class MultiProviderJevDispatcher(JevDispatcher):
@@ -735,6 +796,13 @@ def check_size(payload: dict[str, Any]) -> None:
         )
 
 
+def _json_number(value: Any) -> float | None:
+    """A JSON number as a float, or None for bools and non-numbers."""
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        return None
+    return float(value)
+
+
 def parse_answers(
     body: dict[str, Any], questions: dict[str, list[str]]
 ) -> tuple[dict[str, str], dict[str, dict[str, Any]]]:
@@ -745,29 +813,39 @@ def parse_answers(
     answers: dict[str, str] = {}
     details: dict[str, dict[str, Any]] = {}
     for name, allowed in questions.items():
-        answer = raw.get(name)
-        if not isinstance(answer, dict) or "choice" not in answer:
-            raise DispatchError(f"jev: no answer for {name}")
-        choice = answer["choice"]
-        if not isinstance(choice, str) or choice not in allowed:
-            raise DispatchError(f"jev: answer for {name} ({str(choice)[:50]!r}) is not allowed")
-        confidence = answer.get("confidence")
-        if not isinstance(confidence, int | float) or isinstance(confidence, bool):
-            raise DispatchError(f"jev: answer for {name} has no confidence")
-        try:
-            confidence_value = float(confidence)
-        except OverflowError:
-            raise DispatchError(f"jev: answer for {name} has invalid confidence") from None
-        if not math.isfinite(confidence_value) or not 0.0 <= confidence_value <= 1.0:
-            raise DispatchError(f"jev: answer for {name} has invalid confidence")
-        probabilities = answer.get("probabilities")
-        answers[name] = choice
-        details[name] = {
-            "choice": choice,
-            "confidence": confidence_value,
-            "probabilities": probabilities if isinstance(probabilities, dict) else {},
-        }
+        answers[name], details[name] = _parse_answer(name, allowed, raw)
     return answers, details
+
+
+def _parse_answer(name: str, allowed: list[str], raw: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+    """One answer's choice and detail, or raise when it is missing or not allowed."""
+    answer = raw.get(name)
+    if not isinstance(answer, dict) or "choice" not in answer:
+        raise DispatchError(f"jev: no answer for {name}")
+    choice = answer["choice"]
+    if not isinstance(choice, str) or choice not in allowed:
+        raise DispatchError(f"jev: answer for {name} ({str(choice)[:50]!r}) is not allowed")
+    confidence = _answer_confidence(name, answer)
+    probabilities = answer.get("probabilities")
+    return choice, {
+        "choice": choice,
+        "confidence": confidence,
+        "probabilities": probabilities if isinstance(probabilities, dict) else {},
+    }
+
+
+def _answer_confidence(name: str, answer: dict[str, Any]) -> float:
+    """A 0-1 confidence for one answer, or raise when it is missing or invalid."""
+    confidence = answer.get("confidence")
+    if not isinstance(confidence, int | float) or isinstance(confidence, bool):
+        raise DispatchError(f"jev: answer for {name} has no confidence")
+    try:
+        value = float(confidence)
+    except OverflowError:
+        raise DispatchError(f"jev: answer for {name} has invalid confidence") from None
+    if not math.isfinite(value) or not 0.0 <= value <= 1.0:
+        raise DispatchError(f"jev: answer for {name} has invalid confidence")
+    return value
 
 
 def cost_from_usage(
@@ -777,9 +855,9 @@ def cost_from_usage(
     """`usage.cost` when present (OpenRouter), else input tokens times the given price."""
     if not usage:
         return None
-    cost = usage.get("cost")
-    if isinstance(cost, int | float) and not isinstance(cost, bool):
-        return float(cost)
+    cost = _json_number(usage.get("cost"))
+    if cost is not None:
+        return cost
     tokens = usage.get("input_tokens")
     if isinstance(tokens, int) and not isinstance(tokens, bool):
         return tokens * price_per_input_token_usd
@@ -836,13 +914,19 @@ def _error_detail(resp: httpx.Response) -> str:
         body: Any = resp.json()
     except ValueError:
         body = resp.text
+    text = _error_text(body)
+    if len(text) > _MAX_ERROR_CHARS:
+        text = text[:_MAX_ERROR_CHARS] + "..."
+    return text or "(empty body)"
+
+
+def _error_text(body: Any) -> str:
+    """One line of error text from a parsed error body: the `error`/`detail` message
+    when present, else the body itself, whitespace-collapsed."""
     if isinstance(body, dict):
         error = body.get("error", body.get("detail", body))
         if isinstance(error, dict) and "message" in error:
             error = error["message"]
         body = error
     text = body if isinstance(body, str) else json.dumps(body, ensure_ascii=False)
-    text = " ".join(text.split())
-    if len(text) > _MAX_ERROR_CHARS:
-        text = text[:_MAX_ERROR_CHARS] + "..."
-    return text or "(empty body)"
+    return " ".join(text.split())
