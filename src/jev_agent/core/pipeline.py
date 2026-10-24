@@ -462,7 +462,11 @@ class Pipeline:
 
     async def _validate(self, run: RunRecord) -> None:
         h, plan = self.h, run.plan
-        assert plan is not None
+        if plan is None:
+            # Unreachable through the pipeline (a plan is set before VALIDATING),
+            # but `_advance` catches only Halt: an invariant failure must stop the
+            # run as FAILED, never escape as AssertionError/500 (issue #201, cf. #174).
+            raise Halt(RunState.FAILED, f"internal: run {run.id} reached validation with no plan")
         options = h.require_options("validator")
         avoid_role = h.config.roles.validator.prefer_different_vendor_than
         avoid = None if avoid_role is None else h.last_attempt(run.id, avoid_role)
@@ -523,7 +527,8 @@ class Pipeline:
         moved to, so this step ends at the same target `_validate` would have used.
         """
         h, plan = self.h, run.plan
-        assert plan is not None
+        if plan is None:
+            raise Halt(RunState.FAILED, f"internal: run {run.id} reached designing with no plan")
         h.require_options("designer")
         h.check_budget(run.id)
         lessons = h.lessons_for(run.id, "designer")
@@ -596,6 +601,12 @@ class Pipeline:
         action = (await h.decide(run.id, None, req)).answers["action"]
         if action == "ship" and outcome.quality_state == "failed":
             action = "fix_task"  # the gate is a hard limit: never ship while it blocks
+        if action == "ship" and (not result.clean or outcome.tests == "failed"):
+            # Hard limits, like the gate (issue #201): a D6 ship vote never ships a
+            # result with merge conflicts or failed integration tests. Conflicts are
+            # not fixable, so the run below stops for a human; failed tests get a fix
+            # task while rounds remain, exactly as a fix_task vote would.
+            action = "fix_task"
         if action == "ship":
             await self._ship_after_score_gate(run, outcome, order)
         elif action == "fix_task" and outcome.fixable and rounds < max_rounds:
@@ -620,7 +631,14 @@ class Pipeline:
         if decision == "ship":
             await self._after_ship_vote(run, outcome.result.branch)
             return
-        assert score is not None and outcome.quality is not None
+        if score is None or outcome.quality is None:
+            # `ship_gate_outcome` only returns rework/stop for a real below-threshold
+            # score, so this is unreachable — but it must still fail as FAILED, never
+            # as AssertionError, if the gate ever disagrees (issue #201).
+            raise Halt(
+                RunState.FAILED,
+                f"internal: ship score gate decided {decision} with no score for run {run.id}",
+            )
         if decision == "stop":
             raise Halt(
                 RunState.NEEDS_HUMAN,
@@ -690,12 +708,20 @@ class Pipeline:
 
     def _add_fix_task(self, run: RunRecord, outcome: IntegrationOutcome) -> None:
         """Append a fix task, after every other task, to the run's plan and task list."""
-        assert run.plan is not None and outcome.fixable
+        if run.plan is None or not outcome.fixable:
+            raise Halt(
+                RunState.FAILED,
+                f"internal: cannot build a fix task for run {run.id} (no plan, or nothing fixable)",
+            )
         cards = [task.card for task in self.store.list_tasks(run.id)]
         if outcome.failure is not None:
             fix = fix_task_card(cards, outcome.failure)
         else:
-            assert outcome.quality is not None
+            if outcome.quality is None:
+                raise Halt(
+                    RunState.FAILED,
+                    f"internal: fix task for run {run.id} has no failing test and no gate",
+                )
             fix = quality_fix_task_card(cards, outcome.quality)
         self._append_task(run, fix)
 
@@ -704,7 +730,11 @@ class Pipeline:
     ) -> None:
         """Append a task asking to raise the ship score to the threshold, keeping
         what the other tasks built."""
-        assert run.plan is not None and outcome.quality is not None
+        if run.plan is None or outcome.quality is None:
+            raise Halt(
+                RunState.FAILED,
+                f"internal: cannot build a score fix task for run {run.id} (no plan or no gate)",
+            )
         cards = [task.card for task in self.store.list_tasks(run.id)]
         rounds = score_fix_rounds(card.title for card in cards)
         weak = [
@@ -734,7 +764,8 @@ class Pipeline:
 
     def _append_task(self, run: RunRecord, card: TaskCard) -> None:
         """Append `card`, after every other task, to the run's plan and task list."""
-        assert run.plan is not None
+        if run.plan is None:
+            raise Halt(RunState.FAILED, f"internal: cannot append a task to run {run.id}: no plan")
         cards = [task.card for task in self.store.list_tasks(run.id)]
         plan = Plan(summary=run.plan.summary, tasks=[*cards, card], risks=run.plan.risks)
         self.store.set_run_plan(run.id, plan, run.plan_round)
@@ -786,8 +817,13 @@ def _integration_stop_reason(outcome: IntegrationOutcome, rounds: int, max_round
         ids = ", ".join(outcome.result.conflicts)
         return f"integration: task(s) {ids} do not merge cleanly; resolve them by hand ({branch})"
     if failure is None and outcome.quality_state == "failed":
-        assert outcome.quality is not None
-        reasons = "; ".join(outcome.quality.reasons)
+        # `quality_state == "failed"` already implies a gate result, so the None
+        # branch is unreachable — but the reason must never come from an assert.
+        reasons = (
+            "; ".join(outcome.quality.reasons)
+            if outcome.quality is not None
+            else "the quality gate blocked"
+        )
         if rounds >= max_rounds:
             return (
                 f"the quality gate still blocks after {rounds} fix round(s) ({reasons}); "
