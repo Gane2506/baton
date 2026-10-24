@@ -121,6 +121,52 @@ def test_quality_checks_lists_checks_and_tools(repo: Path) -> None:
         assert name in out
     assert "no (built-in scan)" in out and "scalable:" in out
     assert "[quality] required_tools" in out  # not eaten as Rich markup
+    # Issue #223: the ai-review row is derived, not hardcoded — its "from level"
+    # is the real first level ("basic"), never the old "basic+" type lie.
+    assert "basic+" not in out
+    assert "code_reviewer role" in out
+
+
+def test_ai_review_row_derives_from_review_constants(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from jev_agent.app.quality import ai_review_row
+    from jev_agent.config.schema import JevConfig
+    from jev_agent.quality.models import AI_REVIEW
+    from jev_agent.quality.review import REVIEW_MIN_LEVEL, REVIEWER_ROLE
+
+    monkeypatch.setattr(tools, "which", lambda tool: None)
+    row = ai_review_row(JevConfig())
+    assert row.name == AI_REVIEW
+    assert row.level == REVIEW_MIN_LEVEL == "basic"
+    assert row.tool == f"{REVIEWER_ROLE} role"
+    assert row.applies is True
+    assert row.blocks_from == REVIEW_MIN_LEVEL
+    # No CLI worker on PATH and no API key: nothing could run the reviewer.
+    assert row.installed == "no"
+
+
+def test_ai_review_row_installed_with_api_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from jev_agent.app.quality import ai_review_row
+    from jev_agent.config.schema import JevConfig
+
+    monkeypatch.setattr(tools, "which", lambda tool: None)
+    config = JevConfig()
+    monkeypatch.setenv(config.workers.api.api_key_env, "test-key")
+    assert ai_review_row(config).installed == "yes"
+
+
+def test_ai_review_row_uninstalled_without_workers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from jev_agent.app.quality import ai_review_row
+    from jev_agent.config.schema import JevConfig
+
+    monkeypatch.setattr(tools, "which", lambda tool: "/usr/bin/claude")
+    config = JevConfig.model_validate({"roles": {"code_reviewer": {"workers": []}}})
+    assert ai_review_row(config).installed == "no"
 
 
 def test_doctor_quality_row(repo: Path, monkeypatch: pytest.MonkeyPatch) -> None:

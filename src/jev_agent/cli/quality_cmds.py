@@ -10,6 +10,7 @@ from rich.table import Table
 
 from jev_agent.app.quality import (
     CheckRow,
+    ai_review_row,
     check_rows,
     missing_tools,
     review_path,
@@ -22,7 +23,7 @@ from jev_agent.config import ConfigError, load_config
 from jev_agent.core.store import NotFoundError
 from jev_agent.quality.levels import LEVEL_SUMMARY, LEVELS
 
-__all__ = ["CheckRow", "check_rows", "missing_tools", "review_path", "review_text"]
+__all__ = ["CheckRow", "ai_review_row", "check_rows", "missing_tools", "review_path", "review_text"]
 
 console = Console()
 
@@ -67,7 +68,9 @@ def checks(repo: RepoOption = Path(".")) -> None:
     table = Table(title=f"quality checks (this repo: level {config.quality.level})")
     for column in ("from level", "check", "tool", "installed", "applies here", "blocks from"):
         table.add_column(column, overflow="fold")
-    for row in check_rows(root, config):
+    # The AI review is not a registered check, so it is not in `check_rows` —
+    # but its row is derived in `app.quality`, not hardcoded here (issue #223).
+    for row in [*check_rows(root, config), ai_review_row(config)]:
         style = (
             "green" if row.installed.startswith(("yes", "built", "varies", "project")) else "yellow"
         )
@@ -79,7 +82,6 @@ def checks(repo: RepoOption = Path(".")) -> None:
             "yes" if row.applies else "no",
             row.blocks_from,
         )
-    table.add_row("basic+", "ai-review", "code_reviewer role", "-", "yes", "findings")
     console.print(table)
     for level in LEVELS:
         console.print(f"  {level}: {LEVEL_SUMMARY[level]}", highlight=False)

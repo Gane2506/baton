@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from jev_agent.core.harness import Harness
-from jev_agent.core.models import TaskCard
+from jev_agent.core.models import Role, TaskCard
 from jev_agent.dispatch.requests import clip
 from jev_agent.quality.levels import QualityLevel, at_least
 from jev_agent.quality.models import CheckResult, ReviewStatus
@@ -21,6 +21,13 @@ from jev_agent.roles.schemas import QualityReview
 from jev_agent.runlog.redact import redact
 
 DIFF_CHARS = 40_000  # diff shown to the reviewer
+
+# The role that performs the AI review, and the first level the gate runs it at
+# (every gate run reviews the diff, and the gate does not run at "none"). The
+# `jev quality checks` listing derives its ai-review row from these, instead of
+# the CLI hardcoding the level and role (issue #223).
+REVIEWER_ROLE: Role = "code_reviewer"
+REVIEW_MIN_LEVEL: QualityLevel = "basic"
 
 
 @dataclass(frozen=True)
@@ -51,11 +58,11 @@ async def ai_review(
     """
     if not diff.strip():
         return ReviewOutcome("skipped", "empty diff")
-    options = h.options("code_reviewer")
+    options = h.options(REVIEWER_ROLE)
     if not options.workers:
         return ReviewOutcome("skipped", "no usable worker for role code_reviewer")
     assignment = h.assignment(
-        "code_reviewer",
+        REVIEWER_ROLE,
         {
             "worker": options.workers[0],
             "model": options.models[0],
@@ -66,7 +73,7 @@ async def ai_review(
     h.check_budget(run_id, task_id)
     run = h.store.get_run(run_id)
     prompt = h.prompt(
-        "code_reviewer",
+        REVIEWER_ROLE,
         [],
         level=level,
         task=task,
@@ -82,7 +89,7 @@ async def ai_review(
     output = await h.run_worker_with_fallback(
         run_id=run_id,
         task_id=task_id,
-        role="code_reviewer",
+        role=REVIEWER_ROLE,
         assignment=assignment,
         prompt=prompt,
         workdir=workdir,
