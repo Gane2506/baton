@@ -1210,6 +1210,13 @@ details.panel[open] > summary { margin-bottom: var(--s3); }
 .weights { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: var(--s2); }
 .weights .check { flex-direction: row-reverse; justify-content: flex-end; }
 .weights input { width: 84px; }
+/* Learning page: the Laya weights editor's live sum. The invalid state is a class
+   (not an inline style) because the dashboard CSP forbids inline styles. */
+#laya-weights-sum.bad { color: var(--bad); }
+/* The Learning panel is narrower than the settings editor, so the six
+   label+input pairs need roomier grid cells than the shared `.weights`
+   default, or the criterion names clip. */
+#laya-weights-form .weights { grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); }
 
 details.entity { border-bottom: 1px solid var(--border); padding: var(--s2) 0; }
 /* ---- settings editor: mode picker + tier warning --------------------------------
