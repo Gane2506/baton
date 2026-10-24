@@ -10,11 +10,13 @@ timeout, redirect limit, size cap and a guard refusing non-public hosts.
 from __future__ import annotations
 
 import html as _html
+import http.client
 import ipaddress
 import json
 import math
 import re
 import socket
+import ssl
 import struct
 import zlib
 from collections import Counter
@@ -23,7 +25,7 @@ from http.client import HTTPMessage, HTTPResponse
 from pathlib import Path
 from typing import IO, cast
 from urllib.parse import urlsplit
-from urllib.request import HTTPRedirectHandler, Request, build_opener
+from urllib.request import HTTPHandler, HTTPRedirectHandler, HTTPSHandler, Request, build_opener
 
 _USER_AGENT = "jev-design-reverse/1.0"
 _MAX_HTML_BYTES = 2_000_000
@@ -59,8 +61,10 @@ def suggest_library_name(targets: list[str]) -> str:
 
     Lowercased, runs of non-alphanumerics become `-`, capped at 64 chars — the
     result always passes `validate_library_name` (falls back to "reversed" when
-    nothing usable remains).
+    nothing usable remains, including an empty target list).
     """
+    if not targets:
+        return "reversed"
     if len(targets) == 1 and is_url_target(targets[0]):
         host = urlsplit(targets[0]).hostname or ""
         if host.startswith("www."):
@@ -89,6 +93,9 @@ def _validate_fetch_url(url: str) -> str:
     localhost, LAN hosts, link-local (incl. cloud metadata endpoints) and other
     special ranges are refused, since the fetch runs with the user's network
     identity. Returns the URL unchanged; raises ValueError with the reason.
+    This is the early check only: the actual connection re-validates and
+    pins its own resolution (`_validated_socket`), so a DNS rebinding
+    between this check and the fetch cannot steer the socket.
     """
     parts = urlsplit(url)
     if parts.scheme not in ("http", "https"):
@@ -112,6 +119,66 @@ def _validate_fetch_url(url: str) -> str:
     return url
 
 
+def _validated_socket(host: str, port: int, timeout: float | None) -> socket.socket:
+    """Resolve `host` and connect to one of its globally routable addresses.
+
+    Resolution and connection happen in this one step, and the socket is
+    opened to the resolved IP literal — not the hostname. That closes the
+    TOCTOU in the old flow, where `_validate_fetch_url` resolved the host
+    and the fetch then resolved it again: a rebinding DNS answer between
+    the two could steer the fetch at a private address. A host whose
+    resolution yields no public address is refused here, even if the
+    pre-check passed on a stale answer.
+    """
+    try:
+        infos = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+    except OSError as exc:
+        raise ValueError(f"cannot resolve {host}: {exc}") from exc
+    public = sorted({str(info[4][0]) for info in infos if _is_global_ip(str(info[4][0]))})
+    if not public:
+        raise ValueError(f"refusing to connect to {host}: no globally routable address")
+    return socket.create_connection((public[0], port), timeout)
+
+
+class _PinnedHTTPConnection(http.client.HTTPConnection):
+    """An HTTP connection that connects to the validated IP, not the hostname."""
+
+    def connect(self) -> None:
+        self.sock = _validated_socket(self.host, self.port, self.timeout)
+
+
+class _PinnedHTTPSConnection(http.client.HTTPSConnection):
+    """An HTTPS connection to the validated IP, with SNI/Host kept as the
+    original hostname (the certificate must still match the hostname)."""
+
+    def connect(self) -> None:
+        if getattr(self, "_tunnel_host", None):
+            super().connect()
+            return
+        sock = _validated_socket(self.host, self.port, self.timeout)
+        context = getattr(self, "_context", None) or ssl.create_default_context()
+        self.sock = context.wrap_socket(sock, server_hostname=self.host)
+
+
+class _SafeHTTPHandler(HTTPHandler):
+    """HTTP via the pinned connection (see `_validated_socket`)."""
+
+    def http_open(self, req: Request) -> HTTPResponse:
+        return self.do_open(_PinnedHTTPConnection, req)
+
+
+class _SafeHTTPSHandler(HTTPSHandler):
+    """HTTPS via the pinned connection (see `_validated_socket`)."""
+
+    def https_open(self, req: Request) -> HTTPResponse:
+        return self.do_open(
+            _PinnedHTTPSConnection,
+            req,
+            context=getattr(self, "_context", None),
+            check_hostname=getattr(self, "_check_hostname", True),
+        )
+
+
 class _SafeRedirectHandler(HTTPRedirectHandler):
     """Follow redirects (max 10, like the default handler) but refuse any hop
     whose URL fails the fetch guard — a redirect to an internal address is
@@ -133,12 +200,19 @@ class _SafeRedirectHandler(HTTPRedirectHandler):
 
 
 def urlopen(request: Request, timeout: float | None = None) -> HTTPResponse:
-    """Open `request` through the SSRF-safe redirect handler.
+    """Open `request` through the SSRF-safe redirect handler and the pinned
+    connections (`_validated_socket`): the socket connects to a validated
+    public IP, never to a re-resolved hostname.
 
     A module-level function (rather than `urllib.request.urlopen` directly) so
     tests can stub the network without touching the redirect policy.
     """
-    return cast(HTTPResponse, build_opener(_SafeRedirectHandler()).open(request, timeout=timeout))
+    return cast(
+        HTTPResponse,
+        build_opener(_SafeRedirectHandler(), _SafeHTTPHandler(), _SafeHTTPSHandler()).open(
+            request, timeout=timeout
+        ),
+    )
 
 
 def fetch_url_evidence(url: str, timeout_s: int = 15) -> dict[str, object]:
