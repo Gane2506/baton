@@ -36,6 +36,7 @@ from jev_agent.config.defaults import CONFIG_FILENAME
 from jev_agent.config.loader import (
     ConfigError,
     changed_guarded_keys,
+    check_repo_prompt_files,
     deep_merge,
     default_user_config_path,
     trusts,
@@ -595,6 +596,13 @@ def save(
             except ValidationError as exc:
                 return _error_line(exc)
             if target == "repo":
+                # A repo save must not smuggle a prompt_file outside the repo past
+                # the loader: the written jev.toml would fail its next load
+                # (issue #194).
+                try:
+                    check_repo_prompt_files(repo_new, root)
+                except ConfigError as exc:
+                    return str(exc)
                 if before is None:
                     if not _repo_trusted(user_new, root):
                         return (

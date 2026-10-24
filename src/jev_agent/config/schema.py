@@ -1233,12 +1233,15 @@ def role_can_use_free(config: JevConfig, role: str) -> bool:
 
 class TrustConfig(_Strict):
     """`[trust]` (user config only): repositories whose jev.toml may change the guarded keys
-    (`config.loader.GUARDED_KEYS`): absolute paths, or `"*"` for every repository."""
+    (`config.loader.GUARDED_KEYS`): absolute paths, or `"*"` for every repository.
+    Relative entries resolve against the repo being checked, not the working
+    directory, so `"."` trusts the repo itself wherever jev runs from."""
 
     repos: list[str] = Field(
         default_factory=list,
         description=(
-            'Repository paths whose jev.toml may change guarded keys; "*" trusts every repository.'
+            'Repository paths whose jev.toml may change guarded keys; "*" trusts every '
+            'repository. Relative entries resolve against the repo being checked.'
         ),
     )
 

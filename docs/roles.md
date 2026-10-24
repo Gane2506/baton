@@ -287,8 +287,13 @@ Point `prompt_file` at your own template:
 
 ```toml
 [roles.planner]
-prompt_file = "prompts/planner.md"   # relative to the repo root; absolute paths work too
+prompt_file = "prompts/planner.md"   # relative to the repo root; absolute paths inside the repo work too
 ```
+
+A repo's `jev.toml` cannot point a prompt at a file outside the repo (even a
+trusted repo): prompt files are part of the repo, and their contents are
+rendered into worker-model prompts. Your own user config may still use an
+absolute path elsewhere — that is your explicit choice.
 
 Only the prompt changes; the role's workers, models and output schema stay the same.
 

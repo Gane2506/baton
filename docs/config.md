@@ -66,7 +66,7 @@ Otherwise loading fails with an error that names each key and the `[trust]` line
 
 | Key | Default | Meaning |
 |---|---|---|
-| `repos` | `[]` | Repositories whose `jev.toml` may change guarded keys: absolute paths (`~` allowed), or `"*"` for every repository. |
+| `repos` | `[]` | Repositories whose `jev.toml` may change guarded keys: absolute paths (`~` allowed), or `"*"` for every repository. Relative entries resolve against the repo being checked, so `"."` trusts the repo itself wherever you run from. |
 
 ```toml
 # ~/.config/jev/config.toml
@@ -503,7 +503,7 @@ lessons at the end of a run when learning is on ([learning.md](learning.md)), an
 | `plugins` | `[]` | Claude Code plugins this role's agent gets, by name from `[tools.plugins]`. |
 | `servers` | `[]` | Servers this role's agent may reach through jev's server tools, by name from `[servers.<name>]` ([servers.md](servers.md)). Every role except `coder` is capped at `basic` access. |
 | `browser` | `false` | Give this role the virtual browser (Playwright MCP server); needs `[browser] enabled = true`. |
-| `prompt_file` | unset | Your own Jinja2 prompt template for this role, replacing the built-in one in `src/jev_agent/roles/<role>/prompt.md`. Relative paths are resolved against the repo root. `jev doctor` fails if the file is missing or not valid Jinja2. A bad template, or a variable it uses that jev does not provide, stops the run in `NEEDS_HUMAN`; fix it and `jev resume` (see [roles.md](roles.md#overriding-a-prompt)). |
+| `prompt_file` | unset | Your own Jinja2 prompt template for this role, replacing the built-in one in `src/jev_agent/roles/<role>/prompt.md`. Relative paths are resolved against the repo root. A repo's `jev.toml` cannot point it outside the repo (absolute, `..`-escaping, or symlinked paths are rejected at load); your user config may still use an absolute path elsewhere. `jev doctor` fails if the file is missing or not valid Jinja2. A bad template, or a variable it uses that jev does not provide, stops the run in `NEEDS_HUMAN`; fix it and `jev resume` (see [roles.md](roles.md#overriding-a-prompt)). |
 | `prompt_addendum` | `""` | Extra instructions appended to the role's prompt after the template is rendered, so they apply on top of the built-in template and any `prompt_file`. Up to 4000 characters, no control characters. Blank means none. Editable per role on the dashboard's Fleet page ("Additional prompt"). |
 
 A `[roles.<role>]` table is layered on top of that role's defaults, so a table that sets only

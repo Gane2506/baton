@@ -94,6 +94,7 @@ def config_from_layers(
     if repo is None:
         return config
     _check_secrets(repo_file, repo)
+    check_repo_prompt_files(repo, repo_path)
     if "trust" in repo:
         raise ConfigError(
             f"{repo_file}: [trust] belongs in your user config ({user_path}); a repository "
@@ -108,12 +109,57 @@ def config_from_layers(
     return final
 
 
-def trusts(config: JevConfig, repo_path: Path) -> bool:
-    """Whether the user config's `[trust] repos` lists `repo_path` (or is `["*"]`)."""
+def check_repo_prompt_files(repo: dict[str, Any] | None, repo_path: Path) -> None:
+    """Reject a repo layer's `roles.*.prompt_file` values that resolve outside the repo.
+
+    `roles.*.prompt_file` is a guarded key, so an untrusted repo cannot change it at
+    all — but a *trusted* repo could still point a prompt at a file elsewhere on
+    disk, and its contents are rendered into a worker-model prompt. A prompt file
+    is part of the repo: relative paths resolve against the repo root, and absolute
+    (or `..`-escaping, or symlinked) paths must stay inside it (issue #194). The
+    user's own config is not checked here — an absolute path there is the user's
+    explicit choice, and the dashboard's `save()` calls this for repo saves only.
+    """
+    if not repo:
+        return
+    roles = repo.get("roles")
+    if not isinstance(roles, dict):
+        return
     root = repo_path.resolve()
-    return any(
-        entry == "*" or Path(entry).expanduser().resolve() == root for entry in config.trust.repos
-    )
+    for role, settings in roles.items():
+        if not isinstance(settings, dict):
+            continue
+        value = settings.get("prompt_file")
+        if value is None:
+            continue
+        path = Path(str(value)).expanduser()
+        resolved = (path if path.is_absolute() else root / path).resolve()
+        if not resolved.is_relative_to(root):
+            raise ConfigError(
+                f"{repo_path / CONFIG_FILENAME}: roles.{role}.prompt_file {value!r} "
+                f"resolves outside the repository ({resolved}); prompt files must live "
+                "inside the repo"
+            )
+
+
+def trusts(config: JevConfig, repo_path: Path) -> bool:
+    """Whether the user config's `[trust] repos` lists `repo_path` (or is `["*"]`).
+
+    Relative entries resolve against the repo being checked — not the working
+    directory, which depends on where jev was invoked (issue #194): `"."` trusts
+    the repo itself wherever you run from, and a relative entry means the same
+    repo regardless of the caller's cwd.
+    """
+    root = repo_path.resolve()
+    for entry in config.trust.repos:
+        if entry == "*":
+            return True
+        path = Path(entry).expanduser()
+        if not path.is_absolute():
+            path = root / path
+        if path.resolve() == root:
+            return True
+    return False
 
 
 def changed_guarded_keys(before: JevConfig, after: JevConfig) -> list[str]:

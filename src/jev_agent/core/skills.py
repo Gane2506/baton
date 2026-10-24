@@ -10,6 +10,7 @@ Pure functions, stdlib-only: no model calls, no I/O.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 
 
@@ -293,39 +294,129 @@ SKILLS: tuple[Skill, ...] = (
 )
 
 # Minimum score for a skill to be reported; tuned so generic chatter ("hello",
-# "thanks") matches nothing while real intents match.
+# "thanks") matches nothing while real intents match. One single-word hit scores
+# 1/3 (see _score), so the bar sits below that; a lone common word is the weakest
+# real signal this pass reports.
 _MIN_SCORE = 0.25
 # Cap on reported matches: the UI shows a short list, not a dump.
 _MAX_MATCHES = 3
+# Evidence weights: a multi-word phrase is a strong intent signal, a single word
+# a weak one. Scores are absolute (evidence in the message), not divided by how
+# many keywords a skill lists — the old sqrt(len(keywords)) divisor made a single
+# word hit score at most 0.6/sqrt(6) ≈ 0.24, below the bar, so single-keyword
+# discovery could never match at all (issue #223).
+_PHRASE_WEIGHT = 2.0
+_WORD_WEIGHT = 1.0
+# Raw evidence that saturates the score at 1.0: one phrase + one word, or three
+# single words, is a certain match.
+_FULL_SCORE_RAW = 3.0
+
+# Tokens that negate a keyword occurrence ("I don't want a design system" must
+# not match design-new). Checked in the tokens just before the occurrence; the
+# "why not" and "not only" idioms are suggestions, not negations.
+_NEGATORS = frozenset(
+    {
+        "no",
+        "not",
+        "never",
+        "without",
+        "don't",
+        "doesn't",
+        "didn't",
+        "can't",
+        "won't",
+        "isn't",
+        "aren't",
+        "dont",
+        "doesnt",
+        "didnt",
+        "cant",
+        "wont",
+    }
+)
+# How far back from a keyword occurrence a negator may sit and still negate it:
+# "don't want a design system" (3 back) yes, "not sure how to design" (4 back) no.
+_NEGATION_WINDOW = 3
 
 
-def _tokenize(text: str) -> set[str]:
-    """Lowercase word tokens; keeps it simple and stdlib-only."""
-    import re
+def _tokens(text: str) -> list[str]:
+    """Lowercase word tokens, in order. Apostrophes stay attached ("don't" is one
+    token, so the negation pass sees it); hyphens split ("design-system" reads as
+    the phrase "design system")."""
+    return re.findall(r"[a-z0-9]+(?:'[a-z]+)?", text.lower())
 
-    return set(re.findall(r"[a-z0-9]+(?:-[a-z0-9]+)?", text.lower()))
+
+def _keyword_tokens(keyword: str) -> tuple[str, ...]:
+    """A keyword as a token tuple, so "design system" and "design-system" are the
+    same trigger and count once."""
+    return tuple(_tokens(keyword))
+
+
+def _find_occurrences(tokens: list[str], phrase: tuple[str, ...]) -> list[int]:
+    """Start indexes where `phrase` occurs as consecutive tokens."""
+    width = len(phrase)
+    return [
+        i
+        for i in range(len(tokens) - width + 1)
+        if tuple(tokens[i : i + width]) == phrase
+    ]
+
+
+def _is_negated(tokens: list[str], start: int) -> bool:
+    """Whether a negator sits in the window just before `start`.
+
+    "why not" ("why not design a theme?") and "not only" are suggestions, not
+    negations, so a negator preceded by "why" or followed by "only" does not count.
+    """
+    for j in range(max(0, start - _NEGATION_WINDOW), start):
+        if tokens[j] not in _NEGATORS:
+            continue
+        if j > 0 and tokens[j - 1] == "why":
+            continue
+        if j + 1 < len(tokens) and tokens[j + 1] == "only":
+            continue
+        return True
+    return False
+
+
+def _score(skill: Skill, tokens: list[str]) -> float:
+    """0..1 match strength for `skill` against the message tokens.
+
+    Each distinct keyword trigger counts once (so "design system" + "design-system"
+    do not double-count the same occurrence, and a repeated word does not inflate
+    the score); phrases count double, single words single; negated occurrences do
+    not count. A single word hit scores 1/3, a single phrase 2/3.
+    """
+    raw = 0.0
+    seen: set[tuple[str, ...]] = set()
+    for keyword in skill.keywords:
+        phrase = _keyword_tokens(keyword)
+        if not phrase or phrase in seen:
+            continue
+        seen.add(phrase)
+        weight = _PHRASE_WEIGHT if len(phrase) > 1 else _WORD_WEIGHT
+        if any(
+            not _is_negated(tokens, start)
+            for start in _find_occurrences(tokens, phrase)
+        ):
+            raw += weight
+    return min(1.0, raw / _FULL_SCORE_RAW)
 
 
 def find_skills(message: str, *, limit: int = _MAX_MATCHES) -> list[SkillMatch]:
     """Best-matching skills for `message`, strongest first.
 
-    Scores each skill by keyword overlap: multi-word phrases count more than
-    single words, and an exact phrase hit outranks scattered words. Returns at
-    most `limit` matches above `_MIN_SCORE`; generic messages return [].
+    Scores each skill by keyword evidence: multi-word phrases count more than
+    single words, a lone keyword is enough to match, and a negated keyword
+    ("don't want a design system") does not count. Returns at most `limit`
+    matches above `_MIN_SCORE`; generic messages return [].
     """
-    tokens = _tokenize(message)
-    lowered = message.lower()
-    scored: list[SkillMatch] = []
-    for skill in SKILLS:
-        phrase_hits = sum(1 for kw in skill.keywords if " " in kw and kw in lowered)
-        word_hits = sum(1 for kw in skill.keywords if " " not in kw and kw in tokens)
-        # Phrases are strong intent signals; single common words are weak.
-        raw = phrase_hits * 2.0 + word_hits * 0.6
-        # Normalize by keyword count so skills with many keywords don't dominate.
-        norm = raw / max(1, len(skill.keywords) ** 0.5)
-        score = min(1.0, norm)
-        if score >= _MIN_SCORE:
-            scored.append(SkillMatch(skill=skill, score=round(score, 2)))
+    tokens = _tokens(message)
+    scored = [
+        SkillMatch(skill=skill, score=round(score, 2))
+        for skill in SKILLS
+        if (score := _score(skill, tokens)) >= _MIN_SCORE
+    ]
     scored.sort(key=lambda m: m.score, reverse=True)
     return scored[:limit]
 

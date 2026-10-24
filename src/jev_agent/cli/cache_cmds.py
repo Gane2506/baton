@@ -16,7 +16,7 @@ from rich.console import Console
 from rich.table import Table
 
 from jev_agent.cli.repo import RepoOption
-from jev_agent.cli.wiring import cli_context
+from jev_agent.cli.wiring import cli_context, fail
 from jev_agent.core.cache import Cache, SimHashEmbedder, decision_normalized_text
 from jev_agent.core.store import DecisionRecord
 
@@ -81,8 +81,9 @@ def cache_clear(
 ) -> None:
     """Flush cache entries (all, or filtered by --type / --older-than)."""
     if kind is not None and kind not in ("decisions", "roles"):
-        console.print('[red]error: --type must be "decisions" or "roles"[/red]')
-        raise typer.Exit(1)
+        # The CLI error contract (wiring.py): `error:` on stderr, exit 1 — a
+        # plain console.print here used to send it to stdout (issue #223).
+        raise fail('--type must be "decisions" or "roles"')
     store_kind = {"decisions": "decision", "roles": "role"}.get(kind) if kind else None
     with cli_context(repo) as ctx:
         cache = Cache(ctx.store, ctx.config.cache, ctx.root)
