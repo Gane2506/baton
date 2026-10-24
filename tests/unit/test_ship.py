@@ -493,9 +493,8 @@ def test_failed_rev_list_fails_the_ship_loudly(done_run: tuple[Path, str]) -> No
     repo, run_id = done_run
     _git(repo, "update-ref", "-d", f"refs/jev/{run_id}/start")
     assert start_ref(run_id) == f"refs/jev/{run_id}/start"
-    with _store(repo) as store:
-        with pytest.raises(ShipError, match="cannot count the commits"):
-            prepare_ship(repo, load_config(repo), store, run_id, gh=Gh(repo), dry_run=True)
+    with _store(repo) as store, pytest.raises(ShipError, match="cannot count the commits"):
+        prepare_ship(repo, load_config(repo), store, run_id, gh=Gh(repo), dry_run=True)
 
 
 def test_default_base_ignores_a_malformed_default_branch_ref(
