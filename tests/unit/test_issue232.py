@@ -20,6 +20,7 @@ from __future__ import annotations
 import ast
 import inspect
 from pathlib import Path
+from types import ModuleType
 
 import pytest
 
@@ -30,7 +31,7 @@ from jev_agent.core.store import Store
 from jev_agent.core.store.base import StoreBase
 
 
-def _assert_nodes(module: object) -> list[ast.Assert]:
+def _assert_nodes(module: ModuleType) -> list[ast.Assert]:
     return [n for n in ast.walk(ast.parse(inspect.getsource(module))) if isinstance(n, ast.Assert)]
 
 
@@ -43,7 +44,7 @@ def test_laya_weights_fingerprint_plumbing_is_gone() -> None:
     assert not hasattr(cache_module, "tuned_laya_fingerprint")
     assert "laya_weights_fp" not in inspect.signature(decision_cache_key).parameters
     req = DecisionRequest(
-        point="D1",  # type: ignore[arg-type]
+        point="D1",
         state={"idea": "add search", "round": 1},
         questions={"action": ["plan", "ask"]},
     )
@@ -94,7 +95,7 @@ def test_no_production_asserts_in_residual_modules(module_name: str) -> None:
 def test_store_base_declares_update_queue_item() -> None:
     assert "_update_queue_item" in StoreBase.__abstractmethods__
     # The concrete implementation lives on the queue mixin, not the base.
-    assert Store._update_queue_item is not StoreBase._update_queue_item  # type: ignore[attr-defined]
+    assert Store._update_queue_item is not StoreBase._update_queue_item
 
 
 def test_queue_update_uses_the_allowlisted_columns(tmp_path: Path) -> None:
