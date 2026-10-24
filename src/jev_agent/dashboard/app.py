@@ -227,7 +227,10 @@ def create_app(
     ]
 
     async def http_error(request: Request, exc: Exception) -> Response:
-        assert isinstance(exc, HTTPException)
+        if not isinstance(exc, HTTPException):
+            # The handler is registered for HTTPException only, so this is
+            # defensive — but a non-HTTP error must be a 500, not a crash.
+            return PlainTextResponse("internal server error", status_code=500)
         if not hasattr(request.state, "csrf"):  # rejected before the session was set up
             return PlainTextResponse(exc.detail, status_code=exc.status_code)
         return dash.render(

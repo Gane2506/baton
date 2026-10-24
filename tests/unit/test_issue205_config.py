@@ -43,8 +43,9 @@ def _weights(**overrides: float) -> dict[str, float]:
 
 
 # ---- 1. NaN / infinite Laya weights ----------------------------------------------------
-# LayaSettings is gone (issue #193); stored learning-profile weights are validated by
-# `_checked_weights` in core/learning.py, which keeps the same finite/sum rules.
+# LayaSettings is gone (issue #193) and profile-stored weights with it (issue #232);
+# the six-criterion weights are validated by `_checked_weights` in
+# core/learning/weights.py, which keeps the same finite/sum rules.
 
 
 @pytest.mark.parametrize(

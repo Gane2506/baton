@@ -46,12 +46,13 @@ def _is_runs_id_collision(exc: sqlite3.IntegrityError) -> bool:
     return "UNIQUE constraint failed: runs.id" in str(exc)
 
 
-# Columns `_update_run` / `_update_task` may assign (issue #224). The helpers take a
-# raw SQL fragment, so without this allowlist any future caller could smuggle an
-# arbitrary assignment (or a second statement's worth of SQL) past review — the
-# values stay bound parameters, but the column list is the injection surface.
-# Keep these in sync with the callers; a column added here needs a caller that
-# sets it, and a caller that sets a new column needs an entry here.
+# Columns `_update_run` / `_update_task` / `_update_queue_item` may assign (issue #224,
+# extended to queue items in #232). The helpers take a raw SQL fragment, so without
+# this allowlist any future caller could smuggle an arbitrary assignment (or a second
+# statement's worth of SQL) past review — the values stay bound parameters, but the
+# column list is the injection surface. Keep these in sync with the callers; a column
+# added here needs a caller that sets it, and a caller that sets a new column needs
+# an entry here.
 _RUN_UPDATE_COLUMNS = frozenset(
     {"learning_profile", "learning_outcome", "quality_level", "spend_usd"}
 )
@@ -220,6 +221,13 @@ class StoreBase(ABC):
         self, run_id: str, task_id: str, assignments: str, params: tuple[object, ...]
     ) -> None:
         """Update task columns (see `tasks.py`)."""
+        ...
+
+    @abstractmethod
+    def _update_queue_item(
+        self, item_id: int, assignments: str, params: tuple[object, ...]
+    ) -> None:
+        """Update queue columns (see `queue.py`)."""
         ...
 
     def get_setting(self, key: str) -> str | None:

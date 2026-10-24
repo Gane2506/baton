@@ -745,7 +745,11 @@ class MultiProviderJevDispatcher(JevDispatcher):
                 last_error = exc
         # Both legs failed with provider errors: the last one carries the meaning, and
         # the harness guard turns it into the rules fallback (or a human stop).
-        assert last_error is not None  # a leg always either answers or raises
+        if last_error is None:
+            # Unreachable: `_ordered_legs` always returns both legs, and each leg
+            # either answers or raises. A plain error (not `assert`) so a `-O`
+            # run fails the same way instead of raising `None`.
+            raise DispatchError("jev: no dispatcher leg produced an answer")
         raise last_error
 
 
