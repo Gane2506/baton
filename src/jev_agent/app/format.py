@@ -81,7 +81,8 @@ def _number(value: Any) -> float | None:
 
 
 def format_answers(answers: dict[str, str], details: dict[str, Any]) -> str:
-    """`worker=codex (0.91, second vote +0.45)`: each answer, with Jev's confidence and the second vote's margin."""
+    """`worker=codex (0.91, second vote +0.45)`: each answer, with Jev's
+    confidence and the second vote's margin."""
     jev_votes = details.get("answers")
     laya_votes = details.get("laya")
     if not isinstance(jev_votes, dict):
