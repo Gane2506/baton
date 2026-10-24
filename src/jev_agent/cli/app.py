@@ -8,6 +8,7 @@ from jev_agent.capbench.cli import capbench_app
 from jev_agent.cli.board_cmds import board
 from jev_agent.cli.cache_cmds import cache_app
 from jev_agent.cli.chat_cmds import chat
+from jev_agent.cli.code_cmds import code_app
 from jev_agent.cli.dashboard_cmd import dashboard
 from jev_agent.cli.demo_cmds import demo_app
 from jev_agent.cli.design_cmds import design_app
@@ -97,6 +98,7 @@ app.add_typer(design_app, name="design", rich_help_panel=PANEL_CONFIGURE)
 # --- Learn: lessons, the decision model, and the models themselves ---
 app.add_typer(learning_app, name="learning", rich_help_panel=PANEL_LEARN)
 app.add_typer(laya_app, name="laya", rich_help_panel=PANEL_LEARN)
+app.add_typer(code_app, name="code", rich_help_panel=PANEL_LEARN)
 app.add_typer(models_app, name="models", rich_help_panel=PANEL_LEARN)
 app.command("chat", rich_help_panel=PANEL_LEARN)(chat)
 

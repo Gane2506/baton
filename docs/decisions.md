@@ -2,6 +2,34 @@
 
 Deviations from [PLAN.md](../PLAN.md) and choices it left open. Newest first.
 
+## 2026-10-24: Coding Decision Agent as code orchestrator (#187)
+
+- **Jev stays the main orchestrator; the Coding Decision Agent orchestrates
+  code work only.** Jev owns the pipeline and D1–D8. The Coding Decision
+  Agent (`S4MPL3BI4S/Coding_Decision_Agent`, a Laya derivative) grades
+  diffs, routes coding tasks to a model tier/skill, and proposes merge
+  actions — it never merges, ships, or approves on its own.
+- **Calibrated confidence replaces the old ≥85-style vote for code.**
+  Merge actions are trusted only when `answer_confidence[merge_action]`
+  reaches 0.7; below it the gate asks a human, whatever the label says.
+  The gate lives in the quality gate (`apply_code_grade`) and as a routing
+  hint in D4 state (`code_routing`); Jev still makes the D4 decision.
+- **Backward compatibility by default-off, not by migration.** The feature
+  is off unless `[code_orchestrator] enabled = true`, and a missing model
+  records "unavailable" instead of blocking. `[dispatcher.laya]` still
+  parses and still drives consensus, so existing configs work unchanged;
+  Laya's second-vote is deprecated *for code work* only, and its removal
+  is a separate future change (it touches every D-point, tuning, and the
+  dashboard weights editor, and cannot be validated without the model).
+- **No guessed model API.** `coding_decision_agent` is not on PyPI and
+  the card shows a public call shape only for `grade_code`/`route_model`,
+  so the backend supports exactly those two and refuses to invent question
+  wording through a raw `laya` call. `tool_call`/`agent_trace` grading is
+  typed and pure-gated but not wired, for the same reason.
+- **No hard model dependency.** The 421M checkpoint is loaded lazily,
+  never in CI, and never at `jev` startup; all gates are unit-tested
+  against fake backends.
+
 ## 2026-10-15: Decision/role cache (#10)
 
 - Exact-match first, semantic second. Phase 1 caches settled dispatcher decisions in

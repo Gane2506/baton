@@ -173,7 +173,10 @@ By default every decision needs two votes: Jev first, then Laya (Jev scoring eac
 answer on the Laya CDA decision matrix). Both must agree confidently; otherwise the question is
 asked again, and then the run stops for a human (`jev resume` continues it). `jev laya tune`
 suggests new matrix weights from how past decisions turned out, and `--apply` saves them on a
-learning profile. With
+learning profile. For code work, the Coding Decision Agent
+(`S4MPL3BI4S/Coding_Decision_Agent`, opt-in via `[code_orchestrator]`) grades diffs at the
+quality gate and routes coding tasks at D4, gated on calibrated confidence (0.7) instead of
+the Laya vote — see [docs/code-orchestrator.md](docs/code-orchestrator.md). With
 `[dispatcher] primary = "jev"`, Jev answers alone and a deterministic rules dispatcher answers
 any decision Jev cannot. `jev log` shows who made each decision and why a fallback happened. The harness
 itself makes no routing choices; it only enforces hard limits (plan rounds, task attempts,
