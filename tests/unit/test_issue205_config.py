@@ -6,7 +6,7 @@ from __future__ import annotations
 import math
 
 import pytest
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 
 from jev_agent.config.schema import (
     AutonomyConfig,
@@ -95,7 +95,7 @@ def test_weights_must_still_add_up_to_one() -> None:
         (CacheTtlOverrides, {"chat": INF}),
     ],
 )
-def test_non_finite_numbers_are_rejected(model: type, kwargs: dict) -> None:
+def test_non_finite_numbers_are_rejected(model: type[BaseModel], kwargs: dict[str, object]) -> None:
     with pytest.raises(ValidationError):
         model.model_validate(kwargs)
 

@@ -4,6 +4,7 @@ relative imports, grade timeout, and keep_sandbox cleanup."""
 from __future__ import annotations
 
 import contextlib
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -203,8 +204,8 @@ def _stub_run_task(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, keep_sandbox
         return sandbox, "base-sha"
 
     @contextlib.contextmanager
-    def fake_context(path: Path):
-        yield object()
+    def fake_context(path: Path) -> Iterator[None]:
+        yield
 
     async def fake_start(*args: object, **kwargs: object) -> object:
         raise RuntimeError("boom")
