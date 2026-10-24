@@ -450,9 +450,15 @@ class OpenRouterEmbedder:
 
         digest = hashlib.sha256(text.encode()).hexdigest()
         if digest not in self._vectors:
+            # No key, no `Authorization` header (issue #224): sending
+            # `Bearer ` with an empty key is a malformed credential that some
+            # gateways log or reject oddly — and it advertises an auth attempt
+            # that cannot succeed. Without a key the request fails at
+            # OpenRouter's 401, which is the honest error.
+            headers = {"Authorization": f"Bearer {self.api_key}"} if self.api_key else {}
             response = httpx.post(
                 "https://openrouter.ai/api/v1/embeddings",
-                headers={"Authorization": f"Bearer {self.api_key}"},
+                headers=headers,
                 json={"model": self.model, "input": text},
                 timeout=60,
             )

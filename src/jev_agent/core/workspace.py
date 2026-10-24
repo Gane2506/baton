@@ -40,7 +40,12 @@ log = logging.getLogger(__name__)
 # ignore them. Matches are left in the worktree (unstaged for new files, modified
 # but uncommitted for tracked ones) so nothing is lost, and the skip is logged.
 # Deliberately name-based, not content-based: a content scan would false-positive
-# on docs and fixtures, while these names are where real secrets live.
+# on docs and fixtures, while these names are where real secrets live. The match
+# is on the file's stem (`credentials`, `secret`, `secrets`) as well as its full
+# name, so a credential file with an unexpected extension (`credentials.txt`,
+# `secrets.env` — issue #224) is covered too. A stem that merely *contains*
+# the word (`my-credentials.txt`) is not matched: the file must be the secret,
+# not a doc about one.
 _SECRET_SUFFIXES = (".pem", ".key", ".p12", ".pfx")
 _SECRET_BASENAMES = frozenset(
     {
@@ -55,12 +60,19 @@ _SECRET_BASENAMES = frozenset(
         ".netrc",
     }
 )
+_SECRET_STEMS = frozenset({"credentials", "secret", "secrets"})
 
 
 def _is_secret_path(path: str) -> bool:
     """Whether a staged path looks like a secret file (see `_SECRET_BASENAMES`)."""
     name = path.rsplit("/", 1)[-1]
-    return name in _SECRET_BASENAMES or name.startswith(".env.") or name.endswith(_SECRET_SUFFIXES)
+    stem = name.split(".", 1)[0] or name  # "credentials.txt" -> "credentials"; ".env" -> ".env"
+    return (
+        name in _SECRET_BASENAMES
+        or stem in _SECRET_STEMS
+        or name.startswith(".env.")
+        or name.endswith(_SECRET_SUFFIXES)
+    )
 
 
 # Commits made by jev use a fixed identity and never sign, so they work on any machine.
