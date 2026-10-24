@@ -15,6 +15,8 @@ from typing import Any
 
 import pytest
 
+pytest.importorskip("tomlkit", reason="dashboard extra not installed")
+
 from jev_agent.app.settings import save as settings_save
 from jev_agent.config import JevConfig
 from jev_agent.config.loader import (

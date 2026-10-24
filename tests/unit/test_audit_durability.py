@@ -16,6 +16,9 @@ import tomllib
 from pathlib import Path
 
 import pytest
+
+pytest.importorskip("tomlkit", reason="dashboard extra not installed")
+
 from tomlkit.exceptions import ParseError as TomlkitParseError
 
 from jev_agent.app import settings

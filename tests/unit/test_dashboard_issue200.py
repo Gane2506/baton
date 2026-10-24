@@ -20,6 +20,9 @@ from typing import Any
 
 import httpx
 import pytest
+
+pytest.importorskip("starlette", reason="dashboard extra not installed")
+
 from starlette.testclient import TestClient
 
 import jev_agent.dashboard.runner as runner_mod

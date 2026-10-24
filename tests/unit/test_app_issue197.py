@@ -18,6 +18,9 @@ from typing import Any, cast
 
 import httpx
 import pytest
+
+pytest.importorskip("starlette", reason="dashboard extra not installed")
+
 from starlette.testclient import TestClient
 
 from jev_agent.app import chat as app_chat

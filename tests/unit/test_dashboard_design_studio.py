@@ -10,6 +10,9 @@ from pathlib import Path
 
 import httpx
 import pytest
+
+pytest.importorskip("starlette", reason="dashboard extra not installed")
+
 from starlette.testclient import TestClient
 
 from jev_agent.core.design_kit import APP_TYPES, STACKS
