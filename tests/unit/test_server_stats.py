@@ -227,6 +227,33 @@ def test_cache_failed_keeps_old_stats(tmp_path: Path) -> None:
     assert stats is not None and stats.ok
 
 
+class _RaisingRunner:
+    """A runner that raises instead of returning: the cache thread must survive it."""
+
+    def __call__(self, argv: Sequence[str], *, stdin: bytes | None, timeout_s: float) -> SshResult:
+        raise RuntimeError("ssh transport exploded")
+
+
+def test_cache_raising_runner_does_not_stick_at_collecting(tmp_path: Path) -> None:
+    # Issue #195: a raising runner used to kill the cache thread with the entry
+    # stuck at "collecting", so stats never refreshed for the process lifetime.
+    cache = ServerStatsCache()
+    assert cache.refresh("web", _server_config(), tmp_path, _RaisingRunner())
+    deadline = time.time() + 5
+    while cache.get(tmp_path, "web")[1] not in ("ready", "failed") and time.time() < deadline:
+        time.sleep(0.05)
+    _, state = cache.get(tmp_path, "web")
+    assert state == "failed"
+    # A failed collection does not block the next attempt: stats can refresh.
+    assert cache.refresh("web", _server_config(), tmp_path, _FakeRunner(LINUX_OUTPUT.encode()))
+    deadline = time.time() + 5
+    while cache.get(tmp_path, "web")[1] not in ("ready", "failed") and time.time() < deadline:
+        time.sleep(0.05)
+    stats, state = cache.get(tmp_path, "web")
+    assert state == "ready"
+    assert stats is not None and stats.ok
+
+
 def test_cache_json_roundtrip() -> None:
     stats = parse_stats(LINUX_OUTPUT, collected_at=999.0)
     assert stats.disk_pct == 50.0

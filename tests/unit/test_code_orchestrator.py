@@ -89,6 +89,29 @@ def test_missing_confidence_is_never_trusted() -> None:
     assert outcome.confidence == 0.0
 
 
+def test_nonfinite_confidence_never_passes_the_gate() -> None:
+    # Issue #192: NaN < 0.7 is False, so a NaN-confidence "accept" used to
+    # pass the gate fail-open. NaN, +inf and -inf are distrusted as 0.0.
+    for bad in (float("nan"), float("inf"), float("-inf")):
+        outcome = gate_code_review(_grade(answer_confidence={"merge_action": bad}))
+        assert outcome.decision == "human_review", bad
+        assert outcome.confidence == 0.0, bad
+
+
+def test_nonfinite_trace_confidence_is_not_trusted_to_continue() -> None:
+    grade = AgentTraceGrade(
+        action="continue",
+        needs_review=False,
+        outcome="success",
+        risk=0,
+        urgency=0,
+        answer_confidence={"action": float("nan")},
+    )
+    outcome = gate_trace(grade)
+    assert outcome.decision == "human_review"
+    assert outcome.confidence == 0.0
+
+
 def test_request_changes_and_needs_tests_are_rework() -> None:
     for action in ("request_changes", "needs_tests"):
         assert gate_code_review(_grade(merge_action=action)).decision == "rework"

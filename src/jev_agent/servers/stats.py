@@ -355,7 +355,15 @@ class ServerStatsCache:
             entry.state = "collecting"
 
         def _work() -> None:
-            stats = collect_stats(server, runner=runner, state_dir=state_dir)
+            # A raising runner must not kill this thread with the entry stuck
+            # at "collecting": stats would then never refresh for the process
+            # lifetime, and `refresh()` would keep refusing (issue #195). A
+            # failed collection records "failed" (keeping the last good stats),
+            # so the next `refresh()` can start a new attempt.
+            try:
+                stats = collect_stats(server, runner=runner, state_dir=state_dir)
+            except Exception:
+                stats = ServerStats(ok=False, error="collection failed")
             if stats.ok:
                 path = self._cache_path(state_dir, name)
                 try:

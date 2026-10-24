@@ -27,6 +27,7 @@ it, the outcome is `human_review` whatever the label says: an unconfident
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from typing import Literal
 
@@ -75,6 +76,20 @@ TraceAction = Literal["continue", "observe", "human_review", "stop"]
 GateDecision = Literal["accept", "rework", "human_review", "block"]
 
 
+def _finite_confidence(value: object) -> float:
+    """A confidence value safe to gate on.
+
+    Non-finite floats are a fail-open hole: `float("nan") < 0.7` is False, so
+    a NaN-confidence "accept" would pass the gate. NaN, +inf and -inf (and
+    non-numbers, including bools) are therefore distrusted as 0.0, never
+    passed through (issue #192).
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return 0.0
+    number = float(value)
+    return number if math.isfinite(number) else 0.0
+
+
 @dataclass(frozen=True)
 class CodeReviewGrade:
     """One `code_review` grading: labels plus their calibrated probabilities."""
@@ -88,8 +103,7 @@ class CodeReviewGrade:
     answer_confidence: dict[str, float] = field(default_factory=dict)
 
     def confidence_for(self, question: str) -> float:
-        value = self.answer_confidence.get(question, 0.0)
-        return value if isinstance(value, (int, float)) else 0.0
+        return _finite_confidence(self.answer_confidence.get(question, 0.0))
 
 
 @dataclass(frozen=True)
@@ -102,8 +116,7 @@ class RoutingGrade:
     answer_confidence: dict[str, float] = field(default_factory=dict)
 
     def confidence_for(self, question: str) -> float:
-        value = self.answer_confidence.get(question, 0.0)
-        return value if isinstance(value, (int, float)) else 0.0
+        return _finite_confidence(self.answer_confidence.get(question, 0.0))
 
 
 @dataclass(frozen=True)
@@ -127,8 +140,7 @@ class AgentTraceGrade:
     answer_confidence: dict[str, float] = field(default_factory=dict)
 
     def confidence_for(self, question: str) -> float:
-        value = self.answer_confidence.get(question, 0.0)
-        return value if isinstance(value, (int, float)) else 0.0
+        return _finite_confidence(self.answer_confidence.get(question, 0.0))
 
 
 @dataclass(frozen=True)
