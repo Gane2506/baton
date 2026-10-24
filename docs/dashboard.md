@@ -226,7 +226,7 @@ New web actions follow a tier policy, on top of the CSRF/same-origin/token rules
 
 Every new CLI flag or subcommand needs a dashboard decision: either a dashboard home (page,
 section, or palette entry) or a CLI-only justification added to the list above. The palette
-registry (`palette_registry()` in `dashboard/app.py`) is the checklist — if the verb is not
+registry (`palette_registry()` in `dashboard/helpers.py`) is the checklist — if the verb is not
 in it, the PR is not done.
 
 ## Security
