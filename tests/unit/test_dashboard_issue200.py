@@ -57,11 +57,13 @@ def _csrf(client: TestClient) -> str:
 
 
 def _post(client: TestClient, url: str, data: dict[str, str] | None = None) -> httpx.Response:
-    return client.post(
+    response: httpx.Response = client.post(
         url,
         data={"csrf_token": _csrf(client), **(data or {})},
         follow_redirects=False,
     )
+    assert isinstance(response, httpx.Response)
+    return response
 
 
 # ---- 1. wizard 500 on skipped step -------------------------------------------------------
@@ -147,12 +149,13 @@ def test_preview_prune_returns_count() -> None:
 def test_page_catch_all_renders_error_page(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    import jev_agent.dashboard.app as app_mod
+    import jev_agent.dashboard.views as views_mod
 
     def _boom(*args: Any, **kwargs: Any) -> Any:
         raise RuntimeError("the board build exploded")
 
-    monkeypatch.setattr(app_mod.views, "board", _boom)
+    # Same module object app.py renders through, so this replaces its board.
+    monkeypatch.setattr(views_mod, "board", _boom)
     response = client.get("/")
     assert response.status_code == 500
     assert "text/html" in response.headers["content-type"]
