@@ -115,4 +115,5 @@ def test_path_helpers_live_in_submodules() -> None:
     assert scope_violation("/etc/x", MEDIUM, strictly=False) is not None
     assert command_scope_paths("cp -r /srv/app/a /srv/app/b", MEDIUM)[0].strictly is True
     assert isinstance(Decision.deny("no"), Decision)
-    assert PolicyContext(access="medium", project_boundary="/srv/app/").project_boundary == "/srv/app"
+    bounded = PolicyContext(access="medium", project_boundary="/srv/app/")
+    assert bounded.project_boundary == "/srv/app"
