@@ -8,6 +8,7 @@ from jev_agent.core.events import EventType, GateCheckedPayload
 from jev_agent.quality.models import GateResult
 
 from .base import StoreBase
+from .errors import StoreError
 from .records import QualityReportRecord
 from .rows import _quality_record
 
@@ -36,7 +37,8 @@ class QualityMixin(StoreBase):
                     self._clock(),
                 ),
             )
-            assert cur.lastrowid is not None
+            if cur.lastrowid is None:
+                raise StoreError("quality report insert did not return an id")
             self._emit(
                 db,
                 run_id,

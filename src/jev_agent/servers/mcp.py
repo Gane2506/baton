@@ -24,7 +24,7 @@ import logging
 import math
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import IO, Any
+from typing import IO, Any, cast
 
 from jev_agent.servers.service import ServerService, ToolResult
 
@@ -114,8 +114,8 @@ class McpServer:
         meta = params.get("_meta")
         modern = isinstance(meta, dict) and VERSION_META in meta
         if modern:
-            assert isinstance(meta, dict)
-            requested = meta[VERSION_META]
+            # Narrowed by the `modern` check above (no assert needed).
+            requested = cast(dict[str, Any], meta)[VERSION_META]
             if requested not in SUPPORTED_VERSIONS:
                 raise _RpcError(
                     UNSUPPORTED_VERSION,

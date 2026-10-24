@@ -100,7 +100,8 @@ class Applied:
 async def learn(h: Harness, run: RunRecord) -> str:
     """Score, decide (D7) and distill for a run that ended. Returns the outcome line."""
     profile = run.learning_profile
-    assert profile is not None
+    if profile is None:
+        raise LearningError(f"run {run.id} has no learning profile; it cannot be learned into")
     if h.learning is None:
         return "skipped: learning is not available"
     try:
@@ -187,7 +188,8 @@ def score_lessons(store: Store, run: RunRecord, db: LessonDB) -> None:
     once per task, plus once run-level only when no task credited it.
     """
     profile = run.learning_profile
-    assert profile is not None
+    if profile is None:
+        raise LearningError(f"run {run.id} has no learning profile; its lessons cannot be scored")
     attempts = store.list_attempts(run.id)
     scored_task_ids: set[str] = set()
     for task in store.list_tasks(run.id):

@@ -6,6 +6,7 @@ from jev_agent.core.events import DecisionRecordedPayload, EventType
 from jev_agent.core.models import Decision, DecisionRequest
 
 from .base import StoreBase
+from .errors import StoreError
 from .records import DecisionRecord
 from .rows import _decision_record
 
@@ -50,7 +51,8 @@ class DecisionsMixin(StoreBase):
                     self._clock(),
                 ),
             )
-            assert cur.lastrowid is not None
+            if cur.lastrowid is None:
+                raise StoreError("decision insert did not return an id")
             self._emit(
                 db,
                 run_id,

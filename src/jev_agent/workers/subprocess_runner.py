@@ -113,7 +113,10 @@ async def _run(
         start_new_session=True,  # own process group, so a timeout kills grandchildren too
     )
     out, err = _CappedOutput(), _CappedOutput()
-    assert proc.stdout is not None and proc.stderr is not None
+    if proc.stdout is None or proc.stderr is None:
+        raise RuntimeError(
+            f"subprocess pipes were not created for {argv[0]!r}; cannot collect its output"
+        )
     readers = [
         asyncio.create_task(_drain(proc.stdout, out)),
         asyncio.create_task(_drain(proc.stderr, err)),
@@ -184,7 +187,8 @@ async def _drain(stream: asyncio.StreamReader, sink: _CappedOutput) -> None:
 
 
 async def _feed(proc: asyncio.subprocess.Process, text: str) -> None:
-    assert proc.stdin is not None
+    if proc.stdin is None:
+        raise RuntimeError("subprocess stdin was not created; cannot feed it input")
     with contextlib.suppress(BrokenPipeError, ConnectionResetError):
         proc.stdin.write(text.encode("utf-8"))
         await proc.stdin.drain()

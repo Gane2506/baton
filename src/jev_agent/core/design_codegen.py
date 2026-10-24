@@ -91,9 +91,7 @@ def _str_dict(value: object) -> dict[str, str]:
 
 def _section(tokens: dict[str, object], key: str) -> dict[str, object]:
     rich = tokens.get("design_tokens")
-    if isinstance(rich, dict) and isinstance(rich.get(key), dict):
-        section = rich[key]
-        assert isinstance(section, dict)
+    if isinstance(rich, dict) and isinstance(section := rich.get(key), dict):
         return dict(section)
     value = tokens.get(key)
     return dict(value) if isinstance(value, dict) else {}

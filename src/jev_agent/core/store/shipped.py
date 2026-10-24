@@ -8,7 +8,7 @@ from datetime import datetime
 from jev_agent.core.events import EventType, ShipRecordedPayload
 
 from .base import StoreBase
-from .errors import NotFoundError
+from .errors import NotFoundError, StoreError
 from .records import PrState, ShippedPrRecord
 from .rows import _iso, _shipped_pr
 
@@ -58,7 +58,8 @@ class ShippedMixin(StoreBase):
                     state,
                 ),
             )
-            assert cur.lastrowid is not None
+            if cur.lastrowid is None:
+                raise StoreError("shipped PR insert did not return an id")
             pr_id = cur.lastrowid
             self._emit(
                 db,
@@ -132,7 +133,8 @@ class ShippedMixin(StoreBase):
             row = db.execute(
                 "SELECT run_id, number FROM shipped_prs WHERE id = ?", (pr_id,)
             ).fetchone()
-            assert row is not None
+            if row is None:
+                raise NotFoundError(f"shipped PR {pr_id} not found")
             self._emit(
                 db,
                 str(row["run_id"]),

@@ -148,7 +148,8 @@ def _score_line(run: RunRecord, reports: list[QualityReportRecord]) -> str:
     ]
     if scored:
         score = scored[-1].score
-        assert score is not None
+        if score is None:
+            raise ValueError("latest integration gate has no ship score")
         state = (
             "skipped"
             if score.skipped

@@ -30,6 +30,7 @@ from jev_agent.cli.wiring import (
     FAKE_WORKERS_ENV,
     NO_WORKERS_MESSAGE,
     CliContext,
+    JevError,
     cli_context,
     fail,
     repo_context,
@@ -168,7 +169,8 @@ def make_backend(ctx: CliContext, backend: BackendName, model: str | None) -> Ch
 
 
 def _learning(ctx: CliContext) -> Learning:
-    assert ctx.learning is not None
+    if ctx.learning is None:
+        raise JevError("learning is not available: no learning registry was loaded for this repo")
     return ctx.learning
 
 

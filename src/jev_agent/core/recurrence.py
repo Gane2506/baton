@@ -137,7 +137,11 @@ def next_due(schedule: Schedule, after: datetime, tz: ZoneInfo) -> datetime:
     the user scheduled it in (handles DST on the `tz` side, via croniter).
     """
     due = croniter(schedule.cron, after.astimezone(tz)).get_next(datetime)
-    assert due.tzinfo is not None  # a tz-aware start yields a tz-aware result
+    if due.tzinfo is None:
+        raise ScheduleError(
+            f"croniter returned a naive datetime for schedule {schedule.cron!r}; "
+            "a tz-aware start should yield a tz-aware result"
+        )
     return due
 
 

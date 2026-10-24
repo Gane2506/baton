@@ -16,7 +16,7 @@ from jev_agent.core.events import (
 from jev_agent.core.models import Role, WorkerResult
 
 from .base import StoreBase
-from .errors import NotFoundError
+from .errors import NotFoundError, StoreError
 from .records import AttemptRecord
 from .rows import _attempt_record
 
@@ -60,7 +60,8 @@ class AttemptsMixin(StoreBase):
                     json.dumps(list(lesson_ids)) if lesson_ids else None,
                 ),
             )
-            assert cur.lastrowid is not None
+            if cur.lastrowid is None:
+                raise StoreError("attempt insert did not return an id")
             self._emit(
                 db,
                 run_id,
