@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "macros.html" import icon with context %}
+{% from "macros.html" import csrf_input, icon with context %}
 {% block title %}Design Studio{% endblock %}
 {% block content %}
 <div class="page-head">
@@ -15,14 +15,19 @@
 </div>
 
 <div class="studio-cards">
-  <a class="studio-card" href="/design-studio/new">
-    <div class="studio-card-icon">{{ icon("i-plus") }}</div>
-    <h2>New design system</h2>
-    <p>Answer five guided questions — purpose, app type, stack, brand, generate —
-    and the studio builds a complete kit: design tokens, system markdown, logo
-    mark and favicons, saved to your library.</p>
-    <span class="studio-card-cta"><span class="btn btn-primary">Start the wizard</span></span>
-  </a>
+  {# Issue #200: starting the wizard clears its session state, so it is a
+     POST form (CSRF-checked), not a link — a GET must never change state. #}
+  <form method="post" action="/design-studio/new" class="studio-card-form">
+    {{ csrf_input() }}
+    <button class="studio-card" type="submit">
+      <span class="studio-card-icon">{{ icon("i-plus") }}</span>
+      <span class="studio-card-title">New design system</span>
+      <span class="studio-card-desc">Answer five guided questions — purpose, app type, stack, brand, generate —
+      and the studio builds a complete kit: design tokens, system markdown, logo
+      mark and favicons, saved to your library.</span>
+      <span class="studio-card-cta"><span class="btn btn-primary">Start the wizard</span></span>
+    </button>
+  </form>
   <a class="studio-card" href="/design-studio/reverse">
     <div class="studio-card-icon">{{ icon("i-search") }}</div>
     <h2>Reverse from URL or screenshots</h2>

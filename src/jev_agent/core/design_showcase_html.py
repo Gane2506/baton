@@ -9,7 +9,33 @@ the system works.
 
 from __future__ import annotations
 
+import html
+import re
+
 from jev_agent.core.design_showcase import VibeProfile, _relative_luminance
+
+
+def _css_value(value: object) -> str:
+    """A token value safe inside a CSS declaration: control characters and
+    `;`/`{`/`}` terminators stripped so a value cannot inject extra rules."""
+    return re.sub(r"[\x00-\x1f\x7f;{}]", "", str(value)).strip()
+
+
+def _px_value(value: object) -> str | None:
+    """A token length as `Npx`, or None when the value is not a number
+    (bools excluded) — non-numeric lengths are skipped, never interpolated
+    raw into a `width:{v}px` style."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return f"{value}px"
+    if isinstance(value, str):
+        try:
+            float(value)
+        except ValueError:
+            return None
+        return f"{value}px"
+    return None
 
 
 def _dict_section(t: dict[str, object], key: str) -> dict[str, str]:
@@ -28,24 +54,27 @@ def _css_vars(colors: dict[str, str], t: dict[str, object], vibe: VibeProfile) -
     """CSS custom properties from the token set (light theme defaults)."""
     lines = [":root {"]
     for key, value in colors.items():
-        lines.append(f"  --c-{key.replace('_', '-')}: {value};")
+        lines.append(f"  --c-{key.replace('_', '-')}: {_css_value(value)};")
     typo = _dict_section(t, "typography")
-    lines.append(f"  --font-display: {_str_value(typo, 'font_display')};")
-    lines.append(f"  --font-body: {_str_value(typo, 'font_body')};")
-    lines.append(f"  --font-mono: {_str_value(typo, 'font_mono')};")
+    lines.append(f"  --font-display: {_css_value(_str_value(typo, 'font_display'))};")
+    lines.append(f"  --font-body: {_css_value(_str_value(typo, 'font_body'))};")
+    lines.append(f"  --font-mono: {_css_value(_str_value(typo, 'font_mono'))};")
     spacing = _dict_section(t, "spacing")
     for key, value in spacing.items():
-        lines.append(f"  --sp-{key}: {value}px;")
+        px = _px_value(value)
+        if px is not None:
+            lines.append(f"  --sp-{key}: {px};")
     radii = _dict_section(t, "radii")
     for key, value in radii.items():
-        px = "9999px" if value == "9999" else f"{value}px"
-        lines.append(f"  --r-{key}: {px};")
+        px = "9999px" if value == "9999" else _px_value(value)
+        if px is not None:
+            lines.append(f"  --r-{key}: {px};")
     shadows = _dict_section(t, "shadows")
     for key, value in shadows.items():
-        lines.append(f"  --sh-{key}: {value};")
+        lines.append(f"  --sh-{key}: {_css_value(value)};")
     motion = _dict_section(t, "motion")
     for key, value in motion.items():
-        lines.append(f"  --mo-{key.replace('_', '-')}: {value};")
+        lines.append(f"  --mo-{key.replace('_', '-')}: {_css_value(value)};")
     lines.append("}")
     return "\n".join(lines)
 
@@ -53,7 +82,7 @@ def _css_vars(colors: dict[str, str], t: dict[str, object], vibe: VibeProfile) -
 def _dark_overrides(dark: dict[str, str]) -> str:
     lines = ['[data-theme="dark"] {']
     for key, value in dark.items():
-        lines.append(f"  --c-{key.replace('_', '-')}: {value};")
+        lines.append(f"  --c-{key.replace('_', '-')}: {_css_value(value)};")
     # Dark shadow tuning: shadows need more presence on dark surfaces.
     lines.append("  --sh-md: 0 4px 16px rgba(0,0,0,0.35);")
     lines.append("  --sh-lg: 0 12px 32px rgba(0,0,0,0.40);")
@@ -62,13 +91,20 @@ def _dark_overrides(dark: dict[str, str]) -> str:
 
 
 def _hero(vibe: VibeProfile, name: str, colors: dict[str, str]) -> str:
-    """The hero section, treated per the vibe's hero_style."""
+    """The hero section, treated per the vibe's hero_style.
+
+    `name` and vibe copy are HTML-escaped here (the page is served as
+    text/html). The split hero never indexes colors directly: flat/legacy
+    token sets lack the accent/neutral ramps, so each swatch falls back
+    through related roles to a constant, instead of raising KeyError.
+    """
     style = vibe.hero_style
+    display_name = html.escape(name)
     inner = f"""
       <p class="hero-overline">Design system</p>
-      <h1 class="hero-title">{name}</h1>
-      <p class="hero-tagline">{vibe.tagline}</p>
-      <p class="hero-desc">{vibe.description}</p>
+      <h1 class="hero-title">{display_name}</h1>
+      <p class="hero-tagline">{html.escape(vibe.tagline)}</p>
+      <p class="hero-desc">{html.escape(vibe.description)}</p>
       <div class="hero-actions">
         <a class="btn btn-primary" href="#components">Explore components</a>
         <a class="btn btn-secondary" href="#palette">View palette</a>
@@ -83,12 +119,27 @@ def _hero(vibe: VibeProfile, name: str, colors: dict[str, str]) -> str:
       <div class="hero-dots" aria-hidden="true">{dots}</div>
     </header>"""
     if style == "split":
+        primary = (
+            colors.get("primary")
+            or colors.get("accent_500")
+            or colors.get("accent_300")
+            or "#2563EB"
+        )
+        accent = colors.get("accent_300") or colors.get("accent_500") or primary
+        neutral = (
+            colors.get("neutral_200")
+            or colors.get("neutral_100")
+            or colors.get("neutral_300")
+            or colors.get("surface")
+            or colors.get("background")
+            or "#E2E8F0"
+        )
         return f"""<header class="hero hero-split">
       <div class="hero-split-text">{inner}</div>
       <div class="hero-split-card" aria-hidden="true">
-        <div class="split-swatch" style="background:{colors["primary"]}"></div>
-        <div class="split-swatch" style="background:{colors["accent_300"]}"></div>
-        <div class="split-swatch" style="background:{colors["neutral_200"]}"></div>
+        <div class="split-swatch" style="background:{_css_value(primary)}"></div>
+        <div class="split-swatch" style="background:{_css_value(accent)}"></div>
+        <div class="split-swatch" style="background:{_css_value(neutral)}"></div>
       </div>
     </header>"""
     if style == "dark":
@@ -104,12 +155,17 @@ def _palette_section(colors: dict[str, str]) -> str:
     """Swatch grids: neutrals ramp, accent ramp, semantic roles."""
 
     def swatch(name: str, value: str) -> str:
-        text = "#FFFFFF" if _is_dark(value) else "#101418"
+        try:
+            text = "#FFFFFF" if _is_dark(value) else "#101418"
+        except (ValueError, TypeError):
+            text = "#101418"
+        safe_value = _css_value(value)
+        hex_attr = html.escape(safe_value, quote=True)
         return (
-            f'<button class="swatch" data-hex="{value}" title="Click to copy">'
-            f'<span class="swatch-color" style="background:{value};color:{text}">'
-            f"{value}</span>"
-            f'<span class="swatch-name">{name}</span></button>'
+            f'<button class="swatch" data-hex="{hex_attr}" title="Click to copy">'
+            f'<span class="swatch-color" style="background:{safe_value};color:{text}">'
+            f"{html.escape(safe_value)}</span>"
+            f'<span class="swatch-name">{html.escape(name)}</span></button>'
         )
 
     neutrals = "".join(
@@ -195,7 +251,7 @@ def _type_section(typo: dict[str, object]) -> str:
         sample = samples[key]
 
         def _spec(field: str, _d: dict[str, object] = spec_dict) -> str:
-            return str(_d.get(field, ""))
+            return html.escape(str(_d.get(field, "")))
 
         rows.append(f"""
       <div class="type-row">
@@ -330,22 +386,26 @@ def _foundations_section(t: dict[str, object]) -> str:
     radii = _dict_section(t, "radii")
     shadows = _dict_section(t, "shadows")
     sp = "".join(
-        f'<div class="space-demo"><span class="space-box" style="width:{v}px;height:{v}px"></span>'
-        f'<span class="space-name">{k} · {v}px</span></div>'
+        f'<div class="space-demo"><span class="space-box" style="width:{px};height:{px}"></span>'
+        f'<span class="space-name">{html.escape(k)} · {px}</span></div>'
         for k, v in spacing.items()
+        if (px := _px_value(v)) is not None
     )
     ra_items = []
     for k, v in radii.items():
-        radius_css = "9999px" if v == "9999" else f"{v}px"
+        radius_css = "9999px" if v == "9999" else _px_value(v)
+        if radius_css is None:
+            continue
         ra_items.append(
             f'<div class="radius-demo"><span class="radius-box"'
             f' style="border-radius:{radius_css}"></span>'
-            f'<span class="space-name">{k}</span></div>'
+            f'<span class="space-name">{html.escape(k)}</span></div>'
         )
     ra = "".join(ra_items)
     sh = "".join(
-        f'<div class="shadow-demo"><span class="shadow-box" style="box-shadow:{v}"></span>'
-        f'<span class="space-name">{k}</span></div>'
+        f'<div class="shadow-demo"><span class="shadow-box"'
+        f' style="box-shadow:{_css_value(v)}"></span>'
+        f'<span class="space-name">{html.escape(k)}</span></div>'
         for k, v in shadows.items()
     )
     return f"""
@@ -731,10 +791,15 @@ def render_showcase(
 ) -> str:
     """A complete, self-contained HTML gallery for one design system.
 
-    `tokens` comes from `rich_tokens()`; `theme` selects which palette is the
-    default ("light", "dark", or "both" — both enables the toggle, defaulting
-    to light).
+    `tokens` comes from `rich_tokens()` but flat/legacy token sets are
+    accepted too (missing ramps degrade to fallbacks, never KeyError).
+    `theme` selects which palette is the default ("light", "dark", or "both"
+    — both enables the toggle, defaulting to light); an unrecognized theme
+    falls back to "light" so the toggle and the dark overrides can never
+    disagree. `name` is HTML-escaped: the page is served as text/html.
     """
+    if theme not in ("light", "dark", "both"):
+        theme = "light"
     colors_obj = tokens.get("colors")
     light: dict[str, str] = {}
     dark: dict[str, str] = {}
@@ -763,13 +828,16 @@ def render_showcase(
         if theme == "both"
         else ""
     )
+    safe_name = html.escape(name)
+    vibe_name = html.escape(vibe.name)
+    vibe_tagline = html.escape(vibe.tagline)
 
     return f"""<!DOCTYPE html>
 <html lang="en" data-theme="{default_theme}">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{name} — Design System Showcase</title>
+<title>{safe_name} — Design System Showcase</title>
 <style>
 {css_vars}
 {dark_css}
@@ -779,7 +847,7 @@ def render_showcase(
 </head>
 <body>
 <div class="topbar"><div class="topbar-inner">
-  <span class="topbar-brand">{name}</span>
+  <span class="topbar-brand">{safe_name}</span>
   <nav><a href="#palette">Palette</a><a href="#typography">Type</a><a
     href="#components">Components</a><a href="#foundations">Foundations</a></nav>
   {toggle}
@@ -792,7 +860,7 @@ def render_showcase(
 {_foundations_section(tokens)}
 </main>
 <footer class="footer wrap">
-  <span>{name} — generated by Baton Design Studio · {vibe.name} · {vibe.tagline}</span>
+  <span>{safe_name} — generated by Baton Design Studio · {vibe_name} · {vibe_tagline}</span>
   <span>Click any swatch to copy its hex.</span>
 </footer>
 <div class="copied" id="copied">Copied</div>

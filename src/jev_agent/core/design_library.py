@@ -35,6 +35,7 @@ from jev_agent.core.design_system import (
     DesignSystem,
     _stage_temp,
     _warn,
+    snapshot_corrupt_files,
 )
 
 LIBRARY_DIRNAME = "design-systems"
@@ -94,8 +95,11 @@ def load_library_system(name: str) -> DesignSystem | None:
         meta = json.loads((d / META_JSON).read_text(encoding="utf-8"))
         markdown = (d / SYSTEM_MD).read_text(encoding="utf-8")
         tokens = json.loads((d / TOKENS_JSON).read_text(encoding="utf-8"))
+        version = meta["version"]
+        if isinstance(version, bool) or not isinstance(version, int):
+            raise ValueError(f"meta.json version must be an integer, got {version!r}")
         return DesignSystem(
-            version=int(meta["version"]),
+            version=version,
             updated_at=str(meta["updated_at"]),
             markdown=markdown,
             tokens=tokens,
@@ -126,6 +130,18 @@ def save_library_system(
     os.chmod(d, _PERMS)
     current = load_library_system(name)
     version = (current.version + 1) if current is not None else 1
+    if current is None and any(
+        (d / filename).exists() for filename in (META_JSON, SYSTEM_MD, TOKENS_JSON)
+    ):
+        # Same rule as core/design_system: an unreadable system is preserved
+        # before it is overwritten, never silently restarted at version 1.
+        snapshots = snapshot_corrupt_files(d)
+        if snapshots:
+            _warn(
+                f"existing library design system {name!r} is unreadable; preserved as "
+                + ", ".join(snapshots)
+                + " before overwriting"
+            )
     if current is not None:
         for filename, snapshot in (
             (SYSTEM_MD, f"design-system.v{current.version}.md"),
@@ -193,6 +209,38 @@ def _section(tokens: dict[str, object], key: str) -> dict[str, object]:
     return {str(k): v for k, v in section.items()} if isinstance(section, dict) else {}
 
 
+def _flat_colors(tokens: dict[str, object]) -> tuple[dict[str, object], dict[str, object] | None]:
+    """(light, dark-or-None) color palettes from a token set.
+
+    Theme-"both" systems nest colors as `{"light": {...}, "dark": {...}}`;
+    flat systems keep colors as a plain role -> value map. Returning the
+    unwrapped palettes (instead of the raw nested dict) is what keeps the
+    exporters from stringifying dicts into CSS/JS output.
+    """
+    colors = _section(tokens, "colors")
+    light_raw = colors.get("light")
+    dark_raw = colors.get("dark")
+    if isinstance(light_raw, dict) or isinstance(dark_raw, dict):
+        light = {str(k): v for k, v in light_raw.items()} if isinstance(light_raw, dict) else {}
+        dark = {str(k): v for k, v in dark_raw.items()} if isinstance(dark_raw, dict) else None
+        return light, dark
+    return colors, None
+
+
+def _css_key(key: str) -> str:
+    """A token key made safe for a CSS custom-property name: kebab-case, and
+    anything outside `[a-z0-9-]` collapsed to `-` (a key carrying whitespace,
+    newlines or `;`/`}` can no longer break out of its declaration)."""
+    return re.sub(r"[^a-z0-9-]+", "-", _kebab(key)).strip("-")
+
+
+def _css_value(value: object) -> str:
+    """A token value made safe for a CSS declaration: control characters and
+    `;`/`{`/`}` (declaration/ block terminators) are stripped so a hostile or
+    malformed token value cannot inject extra declarations."""
+    return re.sub(r"[\x00-\x1f\x7f;{}]", "", _px(value)).strip()
+
+
 def _px(value: object) -> str:
     """A length for the text formats: numbers keep their exact value with a `px`
     suffix (15 -> "15px"); everything else is stringified unchanged."""
@@ -211,10 +259,16 @@ def export_tokens_w3c(tokens: dict[str, object]) -> dict[str, object]:
     """W3C Design Tokens-ish JSON: `{group: {key: {"$value": v, "$type": t}}}`.
 
     `$value` keeps the token value verbatim (colors as strings, sizes as numbers),
-    so the export round-trips the tokens exactly.
+    so the export round-trips the tokens exactly. A theme-"both" system exports
+    its light palette as `color` and its dark palette as `colorDark`, rather
+    than nesting a dict inside a `$value`.
     """
     out: dict[str, object] = {}
-    for source_key, group, value_type in _TOKEN_SECTIONS:
+    light, dark = _flat_colors(tokens)
+    out["color"] = {key: {"$value": value, "$type": "color"} for key, value in light.items()}
+    if dark is not None:
+        out["colorDark"] = {key: {"$value": value, "$type": "color"} for key, value in dark.items()}
+    for source_key, group, value_type in _TOKEN_SECTIONS[1:]:
         out[group] = {
             key: {"$value": value, "$type": value_type}
             for key, value in _section(tokens, source_key).items()
@@ -224,9 +278,15 @@ def export_tokens_w3c(tokens: dict[str, object]) -> dict[str, object]:
 
 def export_tokens_tailwind(tokens: dict[str, object]) -> str:
     """A Tailwind config extending the theme with the tokens (colors verbatim,
-    sizes as `px` strings)."""
+    sizes as `px` strings).
+
+    For a theme-"both" system the light palette is the Tailwind `colors`
+    value: a nested `{light, dark}` object is not a usable color value, so
+    the dark palette is not emitted here (use the CSS export for dark mode).
+    """
+    light, _dark = _flat_colors(tokens)
     theme = {
-        "colors": _section(tokens, "colors"),
+        "colors": light,
         "fontSize": {k: _px(v) for k, v in _section(tokens, "type_scale").items()},
         "spacing": {k: _px(v) for k, v in _section(tokens, "spacing").items()},
         "borderRadius": {k: _px(v) for k, v in _section(tokens, "radii").items()},
@@ -255,10 +315,31 @@ _CSS_PREFIXES: tuple[tuple[str, str], ...] = (
 
 
 def export_tokens_css(tokens: dict[str, object]) -> str:
-    """CSS custom properties under `:root` (kebab-case, `px` units for sizes)."""
+    """CSS custom properties under `:root` (kebab-case, `px` units for sizes).
+
+    A theme-"both" system emits its light palette under `:root` and its dark
+    palette under `[data-theme="dark"]`; token keys are sanitized and values
+    stripped of declaration terminators, so the output is always a parseable
+    stylesheet.
+    """
     lines = [":root {"]
-    for source_key, prefix in _CSS_PREFIXES:
+    light, dark = _flat_colors(tokens)
+    for key, value in light.items():
+        css_key = _css_key(key)
+        if css_key:
+            lines.append(f"  --color-{css_key}: {_css_value(value)};")
+    for source_key, prefix in _CSS_PREFIXES[1:]:
         for key, value in _section(tokens, source_key).items():
-            lines.append(f"  --{prefix}-{_kebab(key)}: {_px(value)};")
+            css_key = _css_key(key)
+            if css_key:
+                lines.append(f"  --{prefix}-{css_key}: {_css_value(value)};")
     lines.append("}")
+    if dark is not None and dark != light:
+        lines.append("")
+        lines.append('[data-theme="dark"] {')
+        for key, value in dark.items():
+            css_key = _css_key(key)
+            if css_key:
+                lines.append(f"  --color-{css_key}: {_css_value(value)};")
+        lines.append("}")
     return "\n".join(lines) + "\n"

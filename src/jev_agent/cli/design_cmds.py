@@ -220,7 +220,14 @@ def generate(
             output_schema=ROLE_SCHEMAS["designer"],
             attempt=1,
         )
-        output = asyncio.run(worker.run(job))
+        try:
+            output = asyncio.run(worker.run(job))
+        except Exception as exc:  # CLI boundary: report the failure, don't traceback
+            # Workers map agent failures to a result status, but a transport
+            # failure (subprocess/CLI/API error mid-call, after the user
+            # waited on a model call) would otherwise traceback (issue #198).
+            # `FakeWorkerCrash` is a BaseException by design and is not caught.
+            raise fail(f"the designer worker failed: {exc}") from exc
         doc = output.parsed
         if output.result.status != "success" or not isinstance(doc, DesignDoc):
             raise fail(

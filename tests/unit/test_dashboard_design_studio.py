@@ -75,7 +75,7 @@ def _wizard(client: TestClient, **overrides: str) -> None:
         "theme": "both",
     }
     defaults.update(overrides)
-    client.get("/design-studio/new")  # starts the wizard at Purpose
+    _post(client, "/design-studio/new")  # starts the wizard at Purpose (POST: it clears state)
     response = _post(client, "/design-studio/new/purpose", {"product": defaults["product"]})
     assert response.request.url.path == "/design-studio/new/app_type"
     response = _post(client, "/design-studio/new/app_type", {"app_type": defaults["app_type"]})
@@ -178,9 +178,15 @@ def test_studio_landing_has_two_entry_cards(client: TestClient, home: Path) -> N
 
 
 def test_start_redirects_to_purpose(client: TestClient, home: Path) -> None:
+    # Issue #200: only the POST clears wizard state (CSRF-checked); a GET is
+    # a pure redirect to Purpose, so it can never wipe an in-progress wizard.
     response = client.get("/design-studio/new", follow_redirects=False)
     assert response.status_code in (302, 303)
     assert response.headers["location"] == "/design-studio/new/purpose"
+    response = _post(client, "/design-studio/new", {})
+    assert response.request.url.path == "/design-studio/new/purpose"
+    response = client.post("/design-studio/new", data={}, follow_redirects=False)  # no CSRF token
+    assert response.status_code == 403
 
 
 def test_unknown_step_404s(client: TestClient, home: Path) -> None:

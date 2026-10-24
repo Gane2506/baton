@@ -55,8 +55,12 @@ GUARDED_KEYS: tuple[str, ...] = (
     "roles.*.mcp",
     "roles.*.skills",
     "roles.*.plugins",
+    "roles.*.prompt_file",
+    "roles.*.prompt_addendum",
+    "roles.*.browser",
     "autonomy.mode",
     "autonomy.access_tier",
+    "autonomy.project_folder",
     "autonomy.unrestricted_acknowledged",
     "ship",
 )

@@ -141,9 +141,12 @@ the compose file says, and an agent can write files that the server's own servic
 jev's medium rules limit mistakes; they do not contain a hostile agent. Give medium access only
 to servers, and with a server account, where that is acceptable.
 
-Known limits: `mkdir`/`cp`/`mv`/`rm` commands are checked on the paths as written (the file
-tools also resolve symlinks on the server); a recursive `cp` from inside `allowed_paths` can
-still copy a credential file that lives there.
+Known limits: commands are checked on the paths as written, except their scope-sensitive
+operands — a `docker compose -f` file, a recursive `cp` source, a `pip -r`/`-e` file — which
+are also resolved on the server before they run, so a symlink out of the scope is refused
+(issue #204). Other command operands (a `cp` destination, `mv`/`mkdir`/`rm` targets) are
+still lexical only, like the file tools' pre-resolution check; a recursive `cp` from inside
+`allowed_paths` can still copy a credential file that lives there.
 
 ## Audit log
 

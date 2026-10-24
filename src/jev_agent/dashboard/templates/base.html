@@ -19,6 +19,7 @@
 <script src="/static/app.js" defer></script>
 <script src="/static/conn.js" defer></script>
 <script src="/static/preview.js" defer></script>
+<script src="/static/data-attrs.js" defer></script>
 {% block extra_head %}{% endblock %}
 </head>
 {# Two-level nav: `submenu-open` collapses the sidebar to icon-only whenever a
@@ -189,7 +190,7 @@
         <svg class="icon" aria-hidden="true"><use href="#{{ 'i-alert' if kind == 'error' else 'i-ok' }}"></use></svg>
         <span>{{ text }}</span>
         {% if kind == "trust" %}
-        <form method="post" action="/connections/trust?next={{ path }}" class="inline" style="margin-left: 12px;">
+        <form method="post" action="/connections/trust?next={{ path }}" class="inline ml-12">
           {{ csrf_input() }}
           <button type="submit" class="btn btn-primary btn-sm">Trust this repo</button>
         </form>

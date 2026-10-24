@@ -1,6 +1,7 @@
 {% extends "base.html" %}
 {% from "macros.html" import badge with context %}
 {% block title %}{{ name }} — reusable elements{% endblock %}
+{% block extra_head %}<script src="/static/copy.js" defer></script>{% endblock %}
 {% block content %}
 <div class="page-head">
   <div class="titles">
@@ -19,14 +20,13 @@
   <div class="panel-head"><h2>Target</h2></div>
   <div class="radio-inline" role="radiogroup" aria-label="Code target">
     {% for t in targets %}
-    <a class="radio-pill{% if t.key == target %} checked{% endif %}"
-       href="/design-systems/{{ name }}/code?target={{ t.key }}"
-       style="text-decoration:none">
+    <a class="radio-pill no-underline{% if t.key == target %} checked{% endif %}"
+       href="/design-systems/{{ name }}/code?target={{ t.key }}">
       <span>{{ t.label }}</span>
     </a>
     {% endfor %}
   </div>
-  <p class="small muted" style="margin-top:var(--s2)">
+  <p class="small muted mt-s2">
     {% for t in targets %}{% if t.key == target %}{{ t.description }}{% endif %}{% endfor %}
     {% if stack %} Suggested from your stack: <span class="mono">{{ stack }}</span>.{% endif %}
   </p>
@@ -43,24 +43,6 @@
   <pre class="code-block" id="code-{{ loop.index }}"><code>{{ entry.code }}</code></pre>
 </section>
 {% endfor %}
-<script>
-document.querySelectorAll('.copy-btn').forEach(function (btn) {
-  btn.addEventListener('click', function () {
-    var target = document.getElementById(btn.dataset.copyTarget);
-    var text = target ? target.innerText : '';
-    function done(ok) {
-      btn.textContent = ok ? 'Copied ✓' : 'Copy failed';
-      setTimeout(function () { btn.textContent = 'Copy'; }, 1600);
-    }
-    if (navigator.clipboard && navigator.clipboard.writeText) {
-      navigator.clipboard.writeText(text).then(function () { done(true); }, function () { done(false); });
-    } else {
-      var ta = document.createElement('textarea');
-      ta.value = text; document.body.appendChild(ta); ta.select();
-      try { done(document.execCommand('copy')); } catch (e) { done(false); }
-      document.body.removeChild(ta);
-    }
-  });
-});
-</script>
+{# Copy wiring lives in static/copy.js: an inline <script> here was blocked by
+   the dashboard CSP (issue #200), so the buttons silently did nothing. #}
 {% endblock %}

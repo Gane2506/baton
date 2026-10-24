@@ -19,7 +19,9 @@ a "download all" zip built by ``bundle_zip()``.
 
 from __future__ import annotations
 
+import html
 import io
+import re
 import zipfile
 
 CODEGEN_TARGETS: dict[str, dict[str, str]] = {
@@ -98,15 +100,146 @@ def _section(tokens: dict[str, object], key: str) -> dict[str, object]:
 
 
 def _kebab(name: str) -> str:
-    return name.replace("_", "-")
+    return re.sub(r"[^a-z0-9-]+", "-", name.replace("_", "-").lower()).strip("-")
+
+
+def _css_value(value: object) -> str:
+    """A token value safe inside a CSS declaration (terminators stripped)."""
+    return re.sub(r"[\x00-\x1f\x7f;{}]", "", str(value)).strip()
+
+
+def _html_name(name: str) -> str:
+    """A system name safe inside generated HTML text/attributes."""
+    return html.escape(str(name), quote=True)
+
+
+def _comment_name(name: str) -> str:
+    """A system name safe inside a `/* */` or `//` comment: newlines and
+    comment terminators neutralized so the name cannot break out of it."""
+    return re.sub(r"\s+", " ", str(name)).replace("*/", "* /").replace("/*", "/ *").strip()
+
+
+def _text_name(name: str) -> str:
+    """A system name safe on one Markdown line (newlines collapsed)."""
+    return re.sub(r"\s+", " ", str(name)).strip()
+
+
+def _zip_safe_name(name: str) -> str:
+    """A system name safe as a zip path prefix: one segment, no `..`, no
+    separators — a traversal-style name becomes a flat, harmless prefix."""
+    safe = re.sub(r"[^A-Za-z0-9._-]+", "-", str(name)).strip(".-") or "design-system"
+    return safe
+
+
+def _hex_rgb(value: str) -> tuple[int, int, int] | None:
+    text = value.strip().lstrip("#")
+    if len(text) != 6:
+        return None
+    try:
+        return int(text[0:2], 16), int(text[2:4], 16), int(text[4:6], 16)
+    except ValueError:
+        return None
+
+
+def _mix(first: str, second: str, first_weight: float) -> str:
+    """Blend two `#rrggbb` colors; falls back to `first` when either is not hex."""
+    a = _hex_rgb(first)
+    b = _hex_rgb(second)
+    if a is None or b is None:
+        return first
+    mixed = tuple(
+        round(x * first_weight + y * (1.0 - first_weight)) for x, y in zip(a, b, strict=True)
+    )
+    return f"#{mixed[0]:02X}{mixed[1]:02X}{mixed[2]:02X}"
+
+
+def _on_color(bg: str) -> str:
+    """White or near-black, whichever reads better on `bg` (WCAG luminance)."""
+    rgb = _hex_rgb(bg)
+    if rgb is None:
+        return "#FFFFFF"
+
+    def lin(c: int) -> float:
+        v = c / 255.0
+        return v / 12.92 if v <= 0.03928 else ((v + 0.055) / 1.055) ** 2.4
+
+    luminance = 0.2126 * lin(rgb[0]) + 0.7152 * lin(rgb[1]) + 0.0722 * lin(rgb[2])
+    return "#FFFFFF" if (1.05 / (luminance + 0.05)) >= ((luminance + 0.05) / 0.05) else "#101418"
+
+
+def _derived_colors(light: dict[str, str]) -> dict[str, str]:
+    """Fill every color role the component templates reference.
+
+    Rich tokens already carry these; legacy/flat sets (e.g. STARTER_TOKENS)
+    do not, which used to leave badges/alerts on transparent backgrounds.
+    Derivations mix from the palette that *is* present (a subtle is the
+    semantic color mixed 12% into the background), so a legacy system keeps
+    its own hues instead of silently swapping to another palette. Constants
+    cover roles with no derivable source (`info` when absent).
+    """
+    out = dict(light)
+    bg = out.get("background") or "#FFFFFF"
+    surface = out.get("surface") or bg
+    text = out.get("text") or "#0F172A"
+    primary = out.get("primary") or "#2563EB"
+    border = out.get("border") or "#E2E8F0"
+    out.setdefault("background", bg)
+    out.setdefault("surface", surface)
+    out.setdefault("text", text)
+    out.setdefault("primary", primary)
+    out.setdefault("primary_hover", _mix(primary, "#000000", 0.88))
+    out.setdefault("primary_text", _on_color(primary))
+    out.setdefault("primary_subtle", _mix(primary, bg, 0.12))
+    out.setdefault("surface_raised", _mix(surface, text, 0.94))
+    out.setdefault("text_muted", _mix(text, bg, 0.55))
+    out.setdefault("text_faint", _mix(text, bg, 0.35))
+    out.setdefault("border", border)
+    out.setdefault("border_strong", _mix(border, text, 0.70))
+    for role, default in (
+        ("success", "#16A34A"),
+        ("warning", "#D97706"),
+        ("danger", "#DC2626"),
+        ("info", "#0284C7"),
+    ):
+        out.setdefault(role, default)
+        out.setdefault(f"{role}_subtle", _mix(out[role], bg, 0.12))
+    return out
+
+
+_DEFAULT_FONTS: dict[str, str] = {
+    "font_display": 'system-ui, -apple-system, "Segoe UI", sans-serif',
+    "font_body": 'system-ui, -apple-system, "Segoe UI", sans-serif',
+    "font_mono": 'ui-monospace, "SF Mono", Menlo, monospace',
+}
+
+_DEFAULT_RADII: dict[str, object] = {"sm": 6, "md": 10, "lg": 14, "xl": 20, "full": 9999}
+
+_DEFAULT_SHADOWS: dict[str, str] = {
+    "sm": "0 1px 2px rgba(0, 0, 0, 0.05)",
+    "md": "0 4px 6px -1px rgba(0, 0, 0, 0.1)",
+    "lg": "0 10px 15px -3px rgba(0, 0, 0, 0.1)",
+    "xl": "0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 8px 10px -6px rgba(0, 0, 0, 0.1)",
+}
+
+_DEFAULT_MOTION: dict[str, str] = {
+    "duration_fast": "160ms",
+    "duration_normal": "250ms",
+    "ease_standard": "cubic-bezier(0.4, 0, 0.2, 1)",
+}
 
 
 def css_variables(tokens: dict[str, object]) -> str:
     """``:root`` custom properties for the light palette plus a
     ``[data-theme="dark"]`` override block. Spacing/radii/shadows/motion and
     font stacks are included so components never hard-code values.
+
+    Roles the component templates reference but the token set lacks are
+    derived (see `_derived_colors` and the `_DEFAULT_*` tables), so the
+    emitted file defines every variable the components use — including for
+    legacy flat token sets.
     """
     light, dark = _palettes(tokens)
+    light = _derived_colors(light)
     typo = _section(tokens, "typography")
     spacing = _section(tokens, "spacing")
     radii = _section(tokens, "radii")
@@ -114,28 +247,42 @@ def css_variables(tokens: dict[str, object]) -> str:
     motion = _section(tokens, "motion")
 
     def px(value: object) -> str:
-        return f"{value}px" if isinstance(value, (int, float)) else str(value)
+        if isinstance(value, bool):
+            return str(value)
+        return f"{value}px" if isinstance(value, (int, float)) else _css_value(value)
 
     lines = [":root {"]
     for key in sorted(light):
-        lines.append(f"  --color-{_kebab(key)}: {light[key]};")
+        css_key = _kebab(key)
+        if css_key:
+            lines.append(f"  --color-{css_key}: {_css_value(light[key])};")
     for key in ("font_display", "font_body", "font_mono"):
-        if typo.get(key):
-            lines.append(f"  --font-{key[5:]}: {typo[key]};")
+        value = typo.get(key) or _DEFAULT_FONTS[key]
+        lines.append(f"  --font-{key[5:]}: {_css_value(value)};")
     for key, value in spacing.items():
-        lines.append(f"  --space-{_kebab(key)}: {px(value)};")
-    for key, value in radii.items():
-        lines.append(f"  --radius-{_kebab(key)}: {px(value)};")
-    for key, value in shadows.items():
-        lines.append(f"  --shadow-{_kebab(key)}: {value};")
-    for key, value in motion.items():
-        lines.append(f"  --motion-{_kebab(key)}: {value};")
+        css_key = _kebab(key)
+        if css_key:
+            lines.append(f"  --space-{css_key}: {px(value)};")
+    for key, value in {**_DEFAULT_RADII, **radii}.items():
+        css_key = _kebab(key)
+        if css_key:
+            lines.append(f"  --radius-{css_key}: {px(value)};")
+    for key, value in {**_DEFAULT_SHADOWS, **shadows}.items():
+        css_key = _kebab(key)
+        if css_key:
+            lines.append(f"  --shadow-{css_key}: {_css_value(value)};")
+    for key, value in {**_DEFAULT_MOTION, **motion}.items():
+        css_key = _kebab(key)
+        if css_key:
+            lines.append(f"  --motion-{css_key}: {_css_value(value)};")
     lines.append("}")
     if dark and dark != light:
         lines.append("")
         lines.append('[data-theme="dark"] {')
         for key in sorted(dark):
-            lines.append(f"  --color-{_kebab(key)}: {dark[key]};")
+            css_key = _kebab(key)
+            if css_key:
+                lines.append(f"  --color-{css_key}: {_css_value(dark[key])};")
         lines.append("}")
     return "\n".join(lines) + "\n"
 
@@ -254,7 +401,7 @@ _COMPONENTS_CSS_TEMPLATE = """\
 }
 .badge-info { background: var(--color-info-subtle); color: var(--color-info); }
 .badge-muted {
-  background: var(--color-surface-raised, var(--color-neutral-100));
+  background: var(--color-surface-raised);
   color: var(--color-text-muted);
 }
 
@@ -385,11 +532,11 @@ _COMPONENTS_CSS_TEMPLATE = """\
 }
 .navbar a:hover {
   color: var(--color-text);
-  background: var(--color-surface-raised, var(--color-neutral-100));
+  background: var(--color-surface-raised);
 }
 .navbar a.active {
   color: var(--color-text);
-  background: var(--color-surface-raised, var(--color-neutral-100));
+  background: var(--color-surface-raised);
   font-weight: 600;
 }
 .navbar .spacer { margin-left: auto; }
@@ -415,7 +562,7 @@ table.data th {
   color: var(--color-text-muted);
   font-weight: 600;
   border-bottom: 1px solid var(--color-border);
-  background: var(--color-surface-raised, var(--color-neutral-100));
+  background: var(--color-surface-raised);
 }
 table.data td {
   padding: 14px 18px;
@@ -423,7 +570,7 @@ table.data td {
 }
 table.data tr:last-child td { border-bottom: 0; }
 table.data tbody tr:hover td {
-  background: var(--color-surface-raised, var(--color-neutral-100));
+  background: var(--color-surface-raised);
 }
 table.data td.num,
 table.data th.num {
@@ -435,7 +582,7 @@ table.data th.num {
 .progress {
   height: 8px;
   border-radius: 99px;
-  background: var(--color-surface-raised, var(--color-neutral-100));
+  background: var(--color-surface-raised);
   overflow: hidden;
 }
 .progress > span {
@@ -485,13 +632,13 @@ table.data th.num {
 def _html_css_files(name: str, tokens: dict[str, object]) -> dict[str, str]:
     files: dict[str, str] = {}
     files["tokens.css"] = (
-        f"/* Design tokens for {name} — generated by Baton Design Studio.\n"
+        f"/* Design tokens for {_comment_name(name)} — generated by Baton Design Studio.\n"
         '   Override with [data-theme="dark"] on <html> for dark mode. */\n' + css_variables(tokens)
     )
-    files["components.css"] = _COMPONENTS_CSS_TEMPLATE.replace("__NAME__", name)
+    files["components.css"] = _COMPONENTS_CSS_TEMPLATE.replace("__NAME__", _comment_name(name))
     files["index.html"] = _html_demo_page(name)
     files["README.md"] = (
-        f"# {name} — reusable elements (HTML + CSS)\n\n"
+        f"# {_text_name(name)} — reusable elements (HTML + CSS)\n\n"
         "1. Copy `tokens.css` and `components.css` into your project.\n"
         "2. Link both stylesheets (tokens first).\n"
         "3. Use the classes documented in `index.html`.\n\n"
@@ -501,12 +648,13 @@ def _html_css_files(name: str, tokens: dict[str, object]) -> dict[str, str]:
 
 
 def _html_demo_page(name: str) -> str:
+    safe = _html_name(name)
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{name} — components demo</title>
+<title>{safe} — components demo</title>
 <link rel="stylesheet" href="tokens.css">
 <link rel="stylesheet" href="components.css">
 <style>
@@ -533,7 +681,7 @@ def _html_demo_page(name: str) -> str:
 </head>
 <body>
 <main class="demo">
-  <h1 style="font-family: var(--font-display)">{name} components</h1>
+  <h1 style="font-family: var(--font-display)">{safe} components</h1>
 
   <section><h2>Buttons</h2><div class="row">
     <button class="btn btn-primary">Primary</button>
@@ -577,7 +725,7 @@ def _html_demo_page(name: str) -> str:
 
   <section><h2>Navbar</h2>
     <nav class="navbar">
-      <span class="navbar-brand">{name}</span>
+      <span class="navbar-brand">{safe}</span>
       <a href="#" class="active">Overview</a>
       <a href="#">Projects</a>
       <a href="#">Settings</a>
@@ -636,12 +784,17 @@ def generate_files(target: str, name: str, tokens: dict[str, object]) -> dict[st
 
 
 def bundle_zip(target: str, name: str, tokens: dict[str, object]) -> bytes:
-    """A zip of every generated file, for the "download all" button."""
+    """A zip of every generated file, for the "download all" button.
+
+    The zip prefix is sanitized (`_zip_safe_name`): a traversal-style name
+    can never produce `../` entries on extraction.
+    """
     files = generate_files(target, name, tokens)
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
         for filename, content in files.items():
-            archive.writestr(f"{name}-{validate_target(target)}/{filename}", content)
+            prefix = _zip_safe_name(name)
+            archive.writestr(f"{prefix}-{validate_target(target)}/{filename}", content)
     return buffer.getvalue()
 
 
@@ -709,10 +862,15 @@ def component_catalog(target: str) -> list[dict[str, str]]:
 
 
 def codegen_summary(tokens: dict[str, object]) -> dict[str, int]:
-    """Counts for the code page header: variables, components, files."""
-    light, _dark = _palettes(tokens)
+    """Counts for the code page header: variables, components, files.
+
+    `variables` counts the distinct custom properties actually emitted by
+    `css_variables` (light + dark blocks), not just the light palette size —
+    the old count ignored spacing/radii/shadows/motion/typography vars.
+    """
+    emitted = set(re.findall(r"--([a-z0-9-]+)\s*:", css_variables(tokens)))
     return {
-        "variables": len(light),
+        "variables": len(emitted),
         "components": 11,
         "files": 4,
     }
