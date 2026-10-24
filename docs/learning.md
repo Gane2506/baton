@@ -165,53 +165,15 @@ Problems in this step (no worker, budget spent, an invalid reply, an error) neve
 run's state; they are recorded as `skipped: ...` in the learning outcome. If a NEEDS_HUMAN run
 is resumed, it learns again when it ends.
 
-## Laya weights
+## Removed: Laya weights
 
-Under the consensus dispatcher, Laya scores every allowed answer 1-5 on six weighted criteria
-([`[dispatcher.laya]`](config.md#dispatcherlaya)). The framework ends with a feedback loop, and
-`jev laya tune` closes it: it looks at how the work chosen by past consensus decisions turned
-out and suggests new weights. It never changes them on its own.
+Removed (issue #193). The Laya second vote, `jev laya tune`, and `jev laya reset` are gone, along with the `[dispatcher.laya]` table they tuned; learning profiles no longer
+carry tuned decision weights. Code grading and routing now belong to the Coding Decision
+Agent — see [config.md](config.md#code_orchestrator) (`[code_orchestrator]`) and
+[code-orchestrator.md](code-orchestrator.md).
 
-| Command | Does |
-| --- | --- |
-| `jev laya tune [--profile NAME] [--min-outcomes N]` | Show the suggestion: per criterion, the chosen answers' average score in passed and in failed work, the current weight and the suggested one. |
-| `jev laya tune --apply` | Save the suggestion on the profile (default: the active one). |
-| `jev laya reset [--profile NAME]` | Remove the profile's tuned weights. |
-
-**Outcomes** come from what `.jev/state.db` already holds; nothing extra is recorded during a
-run. Each consensus decision stores Laya's final scores (`laya.<question>.scores` in the
-decision, see `jev log`), and its outcome is:
-
-- D4 (the coder's assignment): passed when the task's next D5 answer is `done`, failed when it
-  is anything else. Known as soon as that D5 is made.
-- Every other decision: known once the run ends in `DONE`, `FAILED` or `BUDGET_EXCEEDED`. A
-  task's decision passed when the task is `DONE`; a run-level one when the run is `DONE`.
-- D7 (whether to learn) comes after the outcome, so it is never counted. Cancelled runs, runs
-  waiting for a person and runs still going are left out, and so are decisions made by `jev`
-  or `rules` and decisions from before this feature (they have no stored scores).
-
-Every question Laya scored is one sample: the chosen answer's six scores and whether its work
-passed.
-
-**The suggestion.** Per criterion, the gap is the average score of the chosen answers in passed
-work minus the average in failed work. A criterion whose high scores went with passing work
-gains weight: the weight is multiplied by e^(0.25 x gap) (one level of gap is about +28%),
-kept within half of itself up or down per tune, and all six are rescaled to add up to 1 and
-rounded to 3 decimals. A weight of 0 stays 0. With fewer than 5 passed or 5 failed samples
-(`--min-outcomes`), there is no suggestion. Samples come from every run in this repo, whatever
-profile they used.
-
-**Which weights a run uses**, highest first:
-
-1. `[dispatcher.laya] weights` in `jev.toml` or your user config. While they are set,
-   `--apply` refuses, so a saved suggestion is never silently ignored.
-2. The tuned weights on the run's learning profile. A run without a learning profile
-   (`--no-learning`, or learning off) does not use them.
-3. The defaults (the Laya CDA matrix).
-
-Each decision records the weights it was made with (`weights` in the decision). Weights saved
-on a profile that no longer validate (for example after a criterion is renamed) stop the run
-for a person; `jev laya reset` clears them.
+Historical note: run records and schema notes elsewhere in this file that mention tuned
+Laya weights describe data written by earlier versions, not current behavior.
 
 ## What is stored, and privacy
 

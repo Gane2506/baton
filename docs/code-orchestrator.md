@@ -127,24 +127,19 @@ naming how many lines were dropped, so a grader never silently scores a
 partial diff as if it were whole. The character budget is an approximation
 (≈4 characters per token), not a token count — no tokenizer is a dependency.
 
-## What changed about Laya, and what did not
+## Laya removal (issue #193)
 
-- `[dispatcher.laya]` still parses, still drives the consensus dispatcher
-  (`primary = "consensus"`), and `jev laya tune` still works. Existing
-  configs keep working unchanged — this release migrates nothing by force
-  and breaks nothing.
-- For **code work**, Laya's second-vote is deprecated: code grading and
-  merge actions now belong to the Coding Decision Agent above, gated on
-  calibrated confidence instead of the old ≥85-style weighted vote. The
-  consensus dispatcher is retained for the non-code decision points (plan,
-  ship, and the other D-points are not code grades), and a future release
-  will remove the Laya second-vote once the code orchestrator covers the
-  remaining points. That removal is intentionally not in this release: it
-  would touch every D-point, the tuning loop, and the dashboard weights
-  editor, and it cannot be validated without the model installed.
-- The deterministic 0–100 ship score in `quality/scoring.py` still uses
-  the six Laya criteria and `[dispatcher.laya] weights`. It is a static
-  score from check results, not a model vote, so it is untouched.
+- The Laya second vote is removed. `[dispatcher.laya]` is no longer documented or
+  supported, and `jev laya tune` / `jev laya reset` are removed. Delete any
+  `[dispatcher.laya]` table (including `[dispatcher.laya.weights]`) from `jev.toml`
+  and your user config. Jev alone decides as main orchestrator; code grading and
+  routing belong to the Coding Decision Agent above, gated on calibrated confidence.
+- What remains of "Laya" is lineage, not a vote: the Coding Decision Agent model is a
+  Laya derivative (see The model above), and `laya` is still the PyPI package name
+  for that model's runtime (see Install above). Neither is a Baton second vote.
+- The deterministic 0–100 ship score in `quality/scoring.py` is a static score from
+  check results, not a model vote; its weights source is owned by the core/quality
+  track of this removal.
 
 ## Not yet wired (honest gaps)
 

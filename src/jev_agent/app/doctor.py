@@ -430,7 +430,7 @@ def _dispatcher_check(config: JevConfig) -> Check:
     if primary == "rules":
         return Check("dispatcher", "ok", "rules")
     jev = config.dispatcher.jev
-    who = "consensus: Jev, then Laya" if primary == "consensus" else "jev"
+    who = "consensus: Jev (main orchestrator)" if primary == "consensus" else "jev"
     where = f"{who} ({jev.model} at {jev.base_url})"
     native_env = JevSettings.for_native().api_key_env  # "TYPESAFE_API_KEY"
     openrouter_env = jev.api_key_env

@@ -311,8 +311,7 @@ def render_pr_body(store: Store, run_id: str, kpis: RunKpis) -> str:
         "",
         "## Decisions",
         "",
-        f"{kpis.decisions_total} decisions: {kpis.jev_decisions} by Jev "
-        "(with Laya under consensus), "
+        f"{kpis.decisions_total} decisions: {kpis.jev_decisions} by Jev, "
         f"{kpis.rules_fallbacks} rules fallbacks ({_pct(kpis.fallback_rate)} of those asked of "
         f"Jev), {rules_only} by the rules dispatcher directly. Mean Jev confidence: "
         f"{confidence}.",
@@ -1022,7 +1021,7 @@ class ShipPreview:
     title: str
     branch: str
     diff: DiffStat | None
-    vote: DecisionRecord | None  # the latest D6 decision, with Jev's and Laya's votes
+    vote: DecisionRecord | None  # the latest D6 decision, with Jev's vote
 
 
 def ship_preview(root: Path, store: Store, run_id: str) -> ShipPreview:

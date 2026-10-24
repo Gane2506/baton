@@ -4,7 +4,7 @@ The front ends (`cli/` and `dashboard/`) call in here; nothing in this module pr
 or exits, and problems are `JevError` with user-facing messages (issue #92).
 
 - Dispatcher: `[dispatcher] primary = "consensus"` (the default) gives a `ConsensusDispatcher`
-  (Jev, then Laya); the pipeline gives it no fallback, so a decision without agreement stops
+  (Jev as main orchestrator; the Coding Decision Agent grades and routes code work); the pipeline gives it no fallback, so a decision without agreement stops
   the run for a human. `"jev"` gives a `JevDispatcher`, wrapped with the rules dispatcher as
   fallback. `"rules"` uses rules only.
 - Workers: Claude Code, Codex and the API worker, each when enabled in `[workers.*]` and ready

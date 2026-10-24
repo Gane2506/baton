@@ -220,9 +220,9 @@ class Harness:
 
         Exact-match cache (issue #10, phase 1): a settled decision is served without
         calling the dispatcher again. Only clean primary answers are stored — never
-        rules-fallback answers, never D6 unless `[cache] d6_decisions`. The Laya
+        rules-fallback answers, never D6 unless `[cache] d6_decisions`. The
         constraint: caching happens here, on settled decisions, never inside the
-        dispatchers, so Jev's vote and Laya's vote are always evaluated together.
+        dispatchers, so a decision is only ever served once settled.
         """
         dispatcher = self.dispatcher
         laya_weights_fp: str | None = None

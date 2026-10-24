@@ -44,7 +44,6 @@ TRUST_GATE_MARKER = "TRUST_GATE:"
 TOP_SECTIONS: tuple[tuple[str, str], ...] = (
     ("dispatcher", "Dispatcher"),
     ("dispatcher.jev", "Dispatcher: Jev"),
-    ("dispatcher.laya", "Dispatcher: Laya (the decision matrix)"),
     ("code_orchestrator", "Code orchestrator (Coding Decision Agent)"),
     ("budget", "Budget and limits"),
     ("workers.claude_code", "Worker: Claude Code"),

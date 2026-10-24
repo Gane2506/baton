@@ -92,12 +92,12 @@ relaxes the "never push" default as an explicit action per run:
   `<branch_prefix><run>` on `[ship] remote`. Your checkout and other branches are untouched.
 - **Never force.** The push has no `--force`; a branch of that name with other commits on the
   remote is never overwritten (`--force-new` picks a new name instead).
-- **Merges only what the votes approved.** `jev ship RUN` runs `gh pr create` (a draft by
+- **Merges only what Jev approved.** `jev ship RUN` runs `gh pr create` (a draft by
   default) and later only reads the PR (`gh pr view`, `gh pr list`). With shipping on, a run
-  both votes approve at D6 is merged by the pipeline (`[ship] after_approval = "merge"`, the
+  Jev approves at D6 is merged by the pipeline (`[ship] after_approval = "merge"`, the
   default under consensus) or after you approve it (`"ask"`): only once its checks pass, and
-  pinned with `gh pr merge --match-head-commit` to the commit the votes saw. It never approves
-  a PR, never uses `--admin` and never enables auto-merge ([ship.md](ship.md#shipping-after-the-votes)).
+  pinned with `gh pr merge --match-head-commit` to the commit Jev approved. It never approves
+  a PR, never uses `--admin` and never enables auto-merge ([ship.md](ship.md#shipping-after-the-approval)).
 - **Your credentials.** git pushes with your git credentials and `gh` acts with your own `gh`
   login; jev never reads, stores or passes a token. What your account may do, jev may do
   through it, so the remote's branch protection, required reviews and checks still apply.
