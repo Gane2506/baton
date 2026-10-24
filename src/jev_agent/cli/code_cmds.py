@@ -53,6 +53,19 @@ def _orchestrator(ctx_config: object) -> CodeOrchestrator:
     return CodeOrchestrator(model_id=settings.model_id)
 
 
+def _read_input_file(path: Path, kind: str) -> str:
+    """Read a `--diff-file`/`--tests-file` input, or fail with an `error:` line.
+
+    These reads sit outside `repo_context`, so an `OSError` (missing,
+    unreadable, a directory) or a `UnicodeDecodeError` (non-UTF-8 bytes)
+    would otherwise surface as a traceback (issue #198).
+    """
+    try:
+        return path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
+        raise fail(f"could not read {kind} file {path}: {exc}") from exc
+
+
 @code_app.command("status")
 def status(repo: RepoOption = Path(".")) -> None:
     """Show whether code grading is enabled and whether the model loads."""
@@ -89,8 +102,8 @@ def grade(
     """Grade a diff with the Coding Decision Agent and show its merge gate."""
     if diff_file is None:
         raise fail("grade needs --diff-file (a file holding the unified diff)")
-    diff = diff_file.read_text(encoding="utf-8")
-    tests = tests_file.read_text(encoding="utf-8") if tests_file is not None else ""
+    diff = _read_input_file(diff_file, "diff")
+    tests = _read_input_file(tests_file, "tests") if tests_file is not None else ""
     with repo_context(repo, create=False) as ctx:
         settings = ctx.config.code_orchestrator
         orch = _orchestrator(ctx.config)
@@ -102,6 +115,10 @@ def grade(
             )
         except CodeOrchestratorUnavailable as exc:
             raise fail(str(exc)) from exc
+        except ValueError as exc:
+            # A mis-shaped verdict (unknown label, out-of-range score) is a
+            # backend problem, not a traceback for the user.
+            raise fail(f"the Coding Decision Agent returned an unusable grade: {exc}") from exc
         outcome = gate_code_review(result, threshold=settings.confidence_threshold)
         table = Table(title="Code grade")
         table.add_column("Field")
@@ -129,6 +146,8 @@ def route(
             result = orch.route(request)
         except CodeOrchestratorUnavailable as exc:
             raise fail(str(exc)) from exc
+        except ValueError as exc:
+            raise fail(f"the Coding Decision Agent returned an unusable route: {exc}") from exc
         table = Table(title="Coding route")
         table.add_column("Field")
         table.add_column("Value")
