@@ -108,7 +108,11 @@ def merge_check(view: object, head_oid: str, waited_s: float, settings: ShipConf
 def merge_command(pr: ShippedPrRecord, method: MergeMethod) -> list[str]:
     """`gh pr merge`, pinned to the commit that was pushed: GitHub refuses the merge if the
     PR's head is anything else. Never `--admin` and never `--auto`."""
-    assert pr.number is not None and pr.head_oid is not None
+    if pr.number is None or pr.head_oid is None:
+        raise ShipError(
+            f"the PR on branch {pr.branch} has no number or head commit recorded; "
+            "check it on GitHub"
+        )
     return [
         "gh",
         "pr",
@@ -149,7 +153,8 @@ def _open_for_merge(
 
 
 def _view_for_merge(gh: Gh, pr: ShippedPrRecord) -> Any:
-    assert pr.number is not None
+    if pr.number is None:
+        raise ShipError(f"the PR on branch {pr.branch} has no number recorded; check it on GitHub")
     return gh.json(
         "pr", "view", str(pr.number), "--repo", pr.repo, "--json", ",".join(MERGE_VIEW_FIELDS)
     )

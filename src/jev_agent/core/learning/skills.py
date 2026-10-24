@@ -7,10 +7,21 @@ from __future__ import annotations
 import json
 import sqlite3
 from collections.abc import Sequence
+from dataclasses import dataclass
 from datetime import datetime
 
 from jev_agent.core.learning.base import LessonDBBase
 from jev_agent.core.learning.models import LearningError, Lesson, Skill
+
+
+@dataclass(frozen=True)
+class SkillProposal:
+    """One skill the dashboard shows for approval: the lessons it distills from."""
+
+    name: str
+    description: str
+    lesson_ids: list[str]
+    tag: str
 
 
 class LessonSkillsMixin(LessonDBBase):
@@ -66,11 +77,13 @@ class LessonSkillsMixin(LessonDBBase):
                 raise LearningError(
                     f"skill {name!r} already exists in profile {profile!r}"
                 ) from None
-            assert cur.lastrowid is not None
+            if cur.lastrowid is None:
+                raise LearningError("skill insert did not return an id")
             row = db.execute(
                 "SELECT * FROM learned_skills WHERE id = ?", (cur.lastrowid,)
             ).fetchone()
-        assert row is not None
+        if row is None:
+            raise LearningError(f"skill {name!r} was not stored in profile {profile!r}")
         return self._skill(row)
 
     def list_skills(self, profile: str) -> list[Skill]:
@@ -92,11 +105,10 @@ class LessonSkillsMixin(LessonDBBase):
             if cur.rowcount == 0:
                 raise LearningError(f"no skill {skill_id} in profile {profile!r}")
 
-    def propose_skills(self, profile: str) -> list[dict[str, object]]:
+    def propose_skills(self, profile: str) -> list[SkillProposal]:
         """Analyze lessons and propose skills (issue #161).
 
-        Groups lessons by shared tags into candidate skills. Returns a list of
-        dicts with 'name', 'description', and 'lesson_ids'. The caller (dashboard)
+        Groups lessons by shared tags into candidate skills. The caller (dashboard)
         shows these for user approval before calling `add_skill`.
         """
         lessons = self.list_lessons(profile)
@@ -107,7 +119,7 @@ class LessonSkillsMixin(LessonDBBase):
         for lesson in lessons:
             for tag in lesson.tags:
                 by_tag.setdefault(tag, []).append(lesson)
-        proposals: list[dict[str, object]] = []
+        proposals: list[SkillProposal] = []
         seen: set[frozenset[str]] = set()
         for tag, group in sorted(by_tag.items(), key=lambda kv: (-len(kv[1]), kv[0])):
             if len(group) < 2:
@@ -124,14 +136,14 @@ class LessonSkillsMixin(LessonDBBase):
             if len(group) > 3:
                 description += f"; and {len(group) - 3} more"
             proposals.append(
-                {
-                    "name": name,
-                    "description": description,
-                    "lesson_ids": [lesson.id for lesson in group],
-                    "tag": tag,
-                }
+                SkillProposal(
+                    name=name,
+                    description=description,
+                    lesson_ids=[lesson.id for lesson in group],
+                    tag=tag,
+                )
             )
         return proposals
 
 
-__all__ = ["LessonSkillsMixin"]
+__all__ = ["LessonSkillsMixin", "SkillProposal"]

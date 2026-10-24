@@ -36,8 +36,20 @@ from .records import (
 )
 
 
+def _aware_time(value: str) -> datetime:
+    """ISO-8601 to a tz-aware datetime; a naive stored value is treated as UTC.
+
+    The one time converter for stored timestamps: every stored value is aware UTC,
+    and a naive one (an old row, a hand-edited database) reads as UTC rather than
+    failing later comparisons against aware datetimes.
+    """
+    parsed = datetime.fromisoformat(value)
+    return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=UTC)
+
+
 def _time(value: str | None) -> datetime | None:
-    return None if value is None else datetime.fromisoformat(value)
+    """`_aware_time` for a nullable column."""
+    return None if value is None else _aware_time(value)
 
 
 def _iso(value: datetime | None) -> str | None:
@@ -46,12 +58,6 @@ def _iso(value: datetime | None) -> str | None:
     if value.tzinfo is None:
         value = value.replace(tzinfo=UTC)
     return value.astimezone(UTC).isoformat(timespec="microseconds")
-
-
-def _aware_time(value: str) -> datetime:
-    """ISO-8601 to a tz-aware datetime; a naive stored value is treated as UTC."""
-    parsed = datetime.fromisoformat(value)
-    return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=UTC)
 
 
 def _cache_entry(
@@ -86,7 +92,7 @@ def _shipped_pr(row: sqlite3.Row) -> ShippedPrRecord:
         draft=bool(row["draft"]),
         head_oid=row["head_oid"],
         pushed_commits=row["pushed_commits"],
-        created_at=datetime.fromisoformat(row["created_at"]),
+        created_at=_aware_time(row["created_at"]),
         state=row["state"],
         merged_at=_time(row["merged_at"]),
         closed_at=_time(row["closed_at"]),
@@ -109,8 +115,8 @@ def _run_lease(row: sqlite3.Row) -> RunLease:
         token=row["token"],
         pid=int(row["pid"]),
         host=row["host"],
-        acquired_at=datetime.fromisoformat(row["acquired_at"]),
-        heartbeat_at=datetime.fromisoformat(row["heartbeat_at"]),
+        acquired_at=_aware_time(row["acquired_at"]),
+        heartbeat_at=_aware_time(row["heartbeat_at"]),
     )
 
 
@@ -132,8 +138,8 @@ def _run_record(row: sqlite3.Row) -> RunRecord:
         plan=None if plan_json is None else Plan.model_validate_json(plan_json),
         plan_round=row["plan_round"],
         spend_usd=row["spend_usd"],
-        created_at=datetime.fromisoformat(row["created_at"]),
-        updated_at=datetime.fromisoformat(row["updated_at"]),
+        created_at=_aware_time(row["created_at"]),
+        updated_at=_aware_time(row["updated_at"]),
         reason=row["reason"],
         validation=None
         if validation_json is None
@@ -182,7 +188,7 @@ def _attempt_record(row: sqlite3.Row) -> AttemptRecord:
         model=row["model"],
         effort=row["effort"],
         log_path=None if log_path is None else Path(log_path),
-        started_at=datetime.fromisoformat(row["started_at"]),
+        started_at=_aware_time(row["started_at"]),
         finished_at=_time(row["finished_at"]),
         result=None if result_json is None else WorkerResult.model_validate_json(result_json),
         lesson_ids=tuple(json.loads(row["lesson_ids"])) if row["lesson_ids"] else (),
@@ -197,7 +203,7 @@ def _decision_record(row: sqlite3.Row) -> DecisionRecord:
         request=DecisionRequest.model_validate_json(row["request_json"]),
         decision=Decision.model_validate_json(row["decision_json"]),
         fallback_reason=row["fallback_reason"],
-        created_at=datetime.fromisoformat(row["created_at"]),
+        created_at=_aware_time(row["created_at"]),
     )
 
 
@@ -208,7 +214,7 @@ def _quality_record(row: sqlite3.Row) -> QualityReportRecord:
         task_id=row["task_id"],
         result=GateResult.model_validate_json(row["result_json"]),
         report_path=None if row["report_path"] is None else Path(row["report_path"]),
-        created_at=datetime.fromisoformat(row["created_at"]),
+        created_at=_aware_time(row["created_at"]),
     )
 
 
@@ -227,8 +233,8 @@ def _queue_item(row: sqlite3.Row) -> QueueItem:
         note=row["note"],
         quality=row["quality"],
         ship_mode=row["ship_mode"],
-        created_at=datetime.fromisoformat(row["created_at"]),
-        updated_at=datetime.fromisoformat(row["updated_at"]),
+        created_at=_aware_time(row["created_at"]),
+        updated_at=_aware_time(row["updated_at"]),
     )
 
 

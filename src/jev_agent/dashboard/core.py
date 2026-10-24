@@ -154,7 +154,11 @@ class DashboardCore:
                 if "submenu_chats" not in context:
                     context["submenu_chats"] = views.chats(repo, "")[:12]
         except ConfigError as exc:
-            return self.render(request, "error.html", 500, title="Config error", message=str(exc))
+            # A broken config is the user's to fix, not a server failure: its own page
+            # (400, with where to look) instead of the generic 500 error page.
+            return self.render(
+                request, "config_error.html", 400, title="Config error", message=str(exc)
+            )
         except JevError as exc:
             return self.render(request, "error.html", 500, title="State error", message=str(exc))
         except (NotFoundError, ChatError) as exc:

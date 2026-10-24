@@ -35,7 +35,8 @@ def _slim(view: dict[str, Any]) -> dict[str, Any]:
 
 def find_revert(gh: Gh, pr: ShippedPrRecord) -> bool:
     """Whether a merged PR reverts `pr` (`is_revert_of`), searching for its reference."""
-    assert pr.number is not None
+    if pr.number is None:
+        raise ShipError(f"the PR on branch {pr.branch} has no number recorded; cannot sync it")
     found = gh.json(
         "pr",
         "list",

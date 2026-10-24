@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% from "macros.html" import icon with context %}
+{% block title %}{{ title }}{% endblock %}
+{% block content %}
+<div class="focus-page error-page">
+  <section class="panel">
+    {{ icon("i-alert", "lg") }}
+    <h1>{{ title }}</h1>
+    <p class="muted">{{ message }}</p>
+    <p class="muted">This page needs a readable configuration to load. Check the repo's
+    <code>jev.toml</code> (and the user config, if one is in play) for the problem above,
+    fix it, and reload — no restart needed. The diagnostics page lists the same checks
+    <code>jev doctor</code> runs.</p>
+    <div class="actions">
+      <a class="btn btn-secondary" href="/diagnostics">{{ icon("i-diagnostics", "sm") }}Diagnostics</a>
+      <a class="btn btn-secondary" href="/settings">{{ icon("i-settings", "sm") }}Settings</a>
+      <a class="btn btn-secondary" href="/">{{ icon("i-board", "sm") }}Back to the board</a>
+    </div>
+  </section>
+</div>
+{% endblock %}

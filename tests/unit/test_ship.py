@@ -426,10 +426,10 @@ def test_ship_git_hang_times_out(
 ) -> None:
     import time
 
-    import jev_agent.core.ship as ship
+    import jev_agent.core.workspace as workspace
 
     repo, run_id = done_run
-    monkeypatch.setattr(ship, "GIT_QUICK_TIMEOUT_S", 0.5)
+    monkeypatch.setattr(workspace, "GIT_QUICK_TIMEOUT_S", 0.5)
     _git_wrapper(tmp_path, monkeypatch, hang_on="ls-remote")
     started = time.monotonic()
     code, output = _jev(repo, "ship", run_id, "--yes")

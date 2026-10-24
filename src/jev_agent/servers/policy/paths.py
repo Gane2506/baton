@@ -18,6 +18,14 @@ _SECRET_FILES = frozenset(
 )
 
 
+# A file whose stem is one of these is a credential file whatever its extension
+# (`credentials.txt`, `secrets.env`, `secret.yaml` — issue #224 fixed the same
+# class in `core/workspace.py`; the policy denylist had the gap). A stem that
+# merely *contains* the word (`my-credentials.txt`) is not matched: the file
+# must be the secret.
+_SECRET_STEMS = frozenset({"credentials", "secret", "secrets"})
+
+
 _SECRET_DIRS = frozenset({".ssh", ".gnupg", ".aws", ".kube", ".docker", "sudoers.d"})
 
 
@@ -89,6 +97,9 @@ def sensitive(value: str) -> str | None:
     if "sudoers" in value or value.startswith("/etc/shadow") or value.startswith("/etc/gshadow"):
         return f"{value}: system credential files are off limits"
     if _KEY_NAMES.search(name) or name in _SECRET_FILES or name.startswith(".env."):
+        return f"{value}: files that usually hold keys or passwords are off limits"
+    stem = name.split(".", 1)[0]
+    if stem in _SECRET_STEMS:
         return f"{value}: files that usually hold keys or passwords are off limits"
     if name == "config" and _in_git_dir(value):
         # `.git/config` routinely holds credentials (`https://user:TOKEN@host`,

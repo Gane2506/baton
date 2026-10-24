@@ -13,27 +13,19 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
+from jev_agent.core import workspace
 from jev_agent.core.ship.errors import GhTimeoutError, ShipError
-from jev_agent.core.workspace import (
-    GIT_QUICK_TIMEOUT_S,
-    GIT_SLOW_TIMEOUT_S,
-    run_git,
-    timeout_message,
-)
+from jev_agent.core.workspace import run_git, timeout_message
 from jev_agent.runlog.redact import redact
 
 __all__ = ["Gh", "GhTimeoutError", "ShipError", "_git"]
 
 
 def _timeout_s(slow: bool) -> float:
-    """The git timeout, read off the `jev_agent.core.ship` package namespace so the
-    timeout tests can monkeypatch `ship.GIT_QUICK_TIMEOUT_S` exactly as before the
-    split (tests/unit/test_ship.py::test_ship_git_hang_times_out)."""
-    from jev_agent.core import ship as _pkg
-
-    quick = getattr(_pkg, "GIT_QUICK_TIMEOUT_S", GIT_QUICK_TIMEOUT_S)
-    slow_s = getattr(_pkg, "GIT_SLOW_TIMEOUT_S", GIT_SLOW_TIMEOUT_S)
-    return slow_s if slow else quick
+    """The git timeout, read off the workspace module at call time so the hang test can
+    shorten it by patching `jev_agent.core.workspace.GIT_QUICK_TIMEOUT_S`
+    (tests/unit/test_ship.py::test_ship_git_hang_times_out)."""
+    return workspace.GIT_SLOW_TIMEOUT_S if slow else workspace.GIT_QUICK_TIMEOUT_S
 
 
 def _git(root: Path, *args: str, slow: bool = False) -> subprocess.CompletedProcess[str]:

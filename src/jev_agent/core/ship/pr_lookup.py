@@ -20,7 +20,9 @@ class ExistingPr:
 def parse_pr_list(text: str, branch: str) -> ExistingPr | None:
     """The newest PR in `gh pr list --json number,url,state,headRefName` output whose head is
     `branch`, or None. gh's output shape is not verified live (docs/verification.md section 8):
-    anything unexpected (no JSON, no list, no integer number) reads as "none found"."""
+    anything unexpected (no JSON, no list, no integer number) reads as "none found". A missing
+    or non-string `headRefName` is no match: an item that does not say which branch it is
+    for cannot be the PR for `branch`."""
     try:
         data = json.loads(text) if text.strip() else []
     except json.JSONDecodeError:
@@ -34,7 +36,7 @@ def parse_pr_list(text: str, branch: str) -> ExistingPr | None:
         head = item.get("headRefName")
         if not isinstance(number, int) or isinstance(number, bool):
             continue
-        if isinstance(head, str) and head != branch:
+        if not isinstance(head, str) or head != branch:
             continue
         url = item.get("url")
         return ExistingPr(
