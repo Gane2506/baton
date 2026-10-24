@@ -581,10 +581,15 @@ class Harness:
         """`run_worker`, and when a free model runs out of quota: the next free model, then the
         first paid model, then one other worker (docs/config.md "Free models").
 
-        A paid model's `quota_exhausted` is terminal: the quota ladder exists only for
-        free models (rate limits are usually per-key, so reassigning the worker would
-        just burn another paid call). The exhausted output is returned as-is and the
-        run sees the real failure instead of a silent fallback.
+        The ladder exists only for runs that *started* on a free model: a run whose
+        original assignment is already paid returns its `quota_exhausted` at once
+        (rate limits are usually per-key, so reassigning the worker would just burn
+        another paid call). Once the ladder is entered it is bounded — the paid step
+        is followed by exactly one other-worker try, and a quota after that returns
+        the exhausted output as-is, so the run sees the real failure instead of a
+        silent fallback. (Issue #201 proposed testing the current model here, which
+        would have cut the documented other-worker step; the original-assignment
+        check is what keeps the ladder entered only for free starts.)
 
         Each try is its own attempt. Without `attempt_no` every try takes the next run-level
         attempt number (planner, validator, learner); with it (the reviewer) tries share the
@@ -610,6 +615,15 @@ class Harness:
                 lesson_ids=lesson_ids,
             )
             tried.append(current)
+            # The free check is deliberately on the ORIGINAL assignment, not the
+            # current model (issue #201 raised this, but the documented ladder in
+            # docs/config.md "Free models" is: next free model, then the first
+            # paid model, then one other worker — and test_free_models pins that
+            # sequence). The check gates *entry* to the ladder: a run that started
+            # on a paid model returns its quota_exhausted at once, while a run
+            # that started free walks the ladder. The ladder itself is bounded:
+            # `quota_fallback(current)` moves along it and `reassigned` allows
+            # exactly one other-worker try, so a quota after the reassign returns.
             if output.result.status != "quota_exhausted" or not options.is_free(assignment.model):
                 return output
             nxt = quota_fallback(current, options)

@@ -21,6 +21,7 @@ reach the network get `GIT_SLOW_TIMEOUT_S`; the rest get `GIT_QUICK_TIMEOUT_S`.
 from __future__ import annotations
 
 import contextlib
+import logging
 import os
 import re
 import shutil
@@ -30,6 +31,37 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol
+
+log = logging.getLogger(__name__)
+
+# Files `commit_task` never commits (issue #201): a worker's stray `.env` or private
+# key must never land on a branch that can be merged and shipped. `git add -A`
+# already respects `.gitignore`, so this is the backstop for repos that do not
+# ignore them. Matches are left in the worktree (unstaged for new files, modified
+# but uncommitted for tracked ones) so nothing is lost, and the skip is logged.
+# Deliberately name-based, not content-based: a content scan would false-positive
+# on docs and fixtures, while these names are where real secrets live.
+_SECRET_SUFFIXES = (".pem", ".key", ".p12", ".pfx")
+_SECRET_BASENAMES = frozenset(
+    {
+        ".env",
+        "id_rsa",
+        "id_ed25519",
+        "id_ecdsa",
+        "id_dsa",
+        "credentials.json",
+        "credentials.yaml",
+        "credentials.yml",
+        ".netrc",
+    }
+)
+
+
+def _is_secret_path(path: str) -> bool:
+    """Whether a staged path looks like a secret file (see `_SECRET_BASENAMES`)."""
+    name = path.rsplit("/", 1)[-1]
+    return name in _SECRET_BASENAMES or name.startswith(".env.") or name.endswith(_SECRET_SUFFIXES)
+
 
 # Commits made by jev use a fixed identity and never sign, so they work on any machine.
 _GIT_IDENTITY = [
@@ -131,8 +163,11 @@ class Workspace(Protocol):
         ...
 
     def commit_task(self, workdir: Path, message: str) -> bool:
-        """Commit all changes in `workdir`; return False if there was nothing to commit."""
-        ...
+        """Commit all changes in `workdir`; return False if there was nothing to commit.
+
+        Secret-looking staged files are never committed (issue #201): see
+        `_is_secret_path`. They are unstaged and left in the worktree.
+        """
 
     def task_diff(self, run_id: str, task_id: str) -> str:
         """The task branch's own changes, relative to the base it forked from."""
@@ -214,6 +249,21 @@ class GitWorkspace:
 
     def commit_task(self, workdir: Path, message: str) -> bool:
         self._git("add", "-A", cwd=workdir, slow=True)
+        staged = [
+            path
+            for path in self._git("diff", "--cached", "--name-only", "-z", cwd=workdir).split("\0")
+            if path
+        ]
+        blocked = [path for path in staged if _is_secret_path(path)]
+        if blocked:
+            # Unstage only: new files stay untracked, tracked files keep their
+            # modification in the worktree — nothing is deleted, nothing ships.
+            self._git("reset", "-q", "--", *blocked, cwd=workdir)
+            log.warning(
+                "commit_task: not committing secret-looking file(s) in %s: %s",
+                workdir,
+                ", ".join(blocked),
+            )
         if self._run(["diff", "--cached", "--quiet"], workdir, slow=False).returncode == 0:
             return False
         self._git(

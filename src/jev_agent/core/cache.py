@@ -11,6 +11,12 @@ moves).
 
 Safety rules (enforced in code, asserted in tests):
 - `coder` and `learner` roles are never cached (hard deny, not config).
+- A role entry is never served or stored when its repo fingerprint is
+  `"unknown"` (issue #201): without repo invalidation, caching would serve stale
+  role outputs after the repo moves. `repo_fingerprint` still returns
+  `"unknown"` (fail-soft, logged) — the refusal lives in `Cache.get`/`put`, so
+  the exact-match paths are covered, including entries written before this fix
+  (role semantic serving stays off, so no other path can serve a role entry).
 - Only `status == "success"` role results are stored; failures are never replayed.
 - Decisions are stored only from clean primary answers (no rules-fallback, no D6
   unless `[cache] d6_decisions = true`).
@@ -62,6 +68,10 @@ __all__ = [
 
 #: Appended to a worker summary when the output was served from the cache.
 CACHE_MARKER = "[served from cache]"
+
+#: The repo fingerprint when git could not produce one. `Cache` refuses to serve
+#: or store role keys carrying it (see `Cache.get`/`Cache.put`).
+UNKNOWN_REPO_FINGERPRINT = "unknown"
 
 log = logging.getLogger(__name__)
 
@@ -230,7 +240,9 @@ def repo_fingerprint(repo: Path) -> str:
 
     A changed repo is a different key — this is the primary defense against serving a
     stale review or plan after the code moved. Fail-soft: when git is unavailable the
-    fingerprint is `"unknown"` and caching still works (without repo invalidation).
+    fingerprint is `UNKNOWN_REPO_FINGERPRINT`, and `Cache` then refuses to serve or
+    store role keys carrying it (issue #201) — caching without repo invalidation
+    would serve stale outputs after the repo moves.
     """
     try:
         head = _git(repo, "rev-parse", "HEAD").strip()
@@ -254,11 +266,16 @@ def repo_fingerprint(repo: Path) -> str:
                 continue
         return digest.hexdigest()
     except Exception as exc:
-        # Fail-soft: without a fingerprint the cache still works (no repo
-        # invalidation). Record the failure's type + message so a broken git
-        # setup stays visible instead of silently degrading.
-        log.debug("repo fingerprint failed, caching without it: %s: %s", type(exc).__name__, exc)
-        return "unknown"
+        # Fail-soft here, hard refusal in `Cache.get`/`Cache.put`: without a
+        # fingerprint the call still runs, it just never touches the cache.
+        # Record the failure's type + message so a broken git setup stays
+        # visible instead of silently degrading.
+        log.debug(
+            "repo fingerprint failed, caching disabled for this call: %s: %s",
+            type(exc).__name__,
+            exc,
+        )
+        return UNKNOWN_REPO_FINGERPRINT
 
 
 def _git(repo: Path, *args: str) -> str:
@@ -284,6 +301,20 @@ def _template_fingerprint(template: Path | None) -> str:
         return f"{digest}:{stat.st_mtime_ns}"
     except OSError:
         return "missing"
+
+
+def _key_repo_fingerprint(key: CacheKey) -> str | None:
+    """The `repo_fp` recorded in a built key's JSON, or None when it has none.
+
+    Unparseable key JSON (a corrupt or hand-built key) reads as None, which is
+    not the unknown fingerprint — the refusal above only triggers on an
+    explicit `"unknown"`, so a malformed key can neither bypass nor trip it.
+    """
+    try:
+        value = json.loads(key.key_json).get("repo_fp")
+    except (ValueError, AttributeError):
+        return None
+    return value if isinstance(value, str) else None
 
 
 def role_cache_key(
@@ -470,8 +501,16 @@ class Cache:
     # -- exact match --
 
     def get(self, key: CacheKey) -> CacheEntry | None:
-        """Return the entry and count the hit, or None on miss/expiry/disabled."""
+        """Return the entry and count the hit, or None on miss/expiry/disabled.
+
+        A role key whose repo fingerprint is unknown is always a miss (issue
+        #201): the check runs before the lookup, so a refused key never counts
+        as a hit and can never serve a stale output, including one stored
+        before this refusal existed.
+        """
         if not self.usable:
+            return None
+        if key.kind == "role" and _key_repo_fingerprint(key) == UNKNOWN_REPO_FINGERPRINT:
             return None
         return self.store.cache_get(key.key_hash)
 
@@ -495,8 +534,13 @@ class Cache:
         run_id: str,
         decision_id: int | None = None,
     ) -> None:
-        """Store a fresh answer. Callers must have enforced the cacheability rules."""
+        """Store a fresh answer. Callers must have enforced the cacheability rules.
+
+        A role key whose repo fingerprint is unknown is never stored (issue #201).
+        """
         if not self.usable:
+            return
+        if key.kind == "role" and _key_repo_fingerprint(key) == UNKNOWN_REPO_FINGERPRINT:
             return
         key_json = json.loads(key.key_json)
         key_json["decision_id"] = decision_id
