@@ -351,17 +351,19 @@ def _question_instruction(
     mismatch: bool,
 ) -> str:
     """The prompt instructions for one decision question: the base instruction plus
-    the applicable hints (free-model preference, worker/model pairing, D4 routing)."""
-    text = base
+    the applicable hints (free-model preference, worker/model pairing, D4 routing).
+    Each hint is independent — the first two are name-disjoint, so no `elif` — and
+    they append in a fixed order."""
+    hints: list[str] = []
     if prefer and name == "model":
-        text = f"{text} {PREFER_FREE_INSTRUCTION}"
-    elif free and name == "worker":
-        text = f"{text} {FREE_WORKER_INSTRUCTION}"
+        hints.append(PREFER_FREE_INSTRUCTION)
+    if free and name == "worker":
+        hints.append(FREE_WORKER_INSTRUCTION)
     if mismatch and name in ("worker", "model"):
-        text = f"{text} {PAIRING_INSTRUCTION}"
+        hints.append(PAIRING_INSTRUCTION)
     if point == "D4" and "code_routing" in state and name in ("worker", "model", "effort"):
-        text = f"{text} {CODE_ROUTING_INSTRUCTION}"
-    return text
+        hints.append(CODE_ROUTING_INSTRUCTION)
+    return " ".join([base, *hints])
 
 
 def _check_confidence(details: dict[str, dict[str, Any]], min_confidence: float) -> None:
