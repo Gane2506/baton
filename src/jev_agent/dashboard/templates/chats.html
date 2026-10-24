@@ -131,7 +131,7 @@
       <td class="num">{{ meta.spent_usd | usd }}<div class="muted small">of {{ meta.budget_usd | usd }}</div></td>
       <td>
         <a class="btn btn-sm btn-secondary" href="/chats/{{ meta.chat_id }}">Continue</a>
-        <form class="inline" method="post" action="/chats/{{ meta.chat_id }}/delete" data-confirm="Delete chat {{ meta.chat_id }}? Its transcript and brief go away; runs it started are kept.">
+        <form class="inline" method="post" action="/chats/{{ meta.chat_id }}/delete">
           {{ csrf_input() }}<button class="btn btn-sm btn-danger" type="submit">Delete</button>
         </form>
       </td>

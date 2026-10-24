@@ -137,7 +137,7 @@
               </a>
               <span class="submenu-chat-actions">
                 <a href="/chats/{{ meta.chat_id }}" class="submenu-chat-btn" title="Continue">Continue</a>
-                <form class="inline" method="post" action="/chats/{{ meta.chat_id }}/delete" data-confirm="Delete chat {{ meta.chat_id }}?">
+                <form class="inline" method="post" action="/chats/{{ meta.chat_id }}/delete">
                   {{ csrf_input() }}<button class="submenu-chat-btn danger" type="submit" title="Delete">Delete</button>
                 </form>
               </span>

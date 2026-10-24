@@ -268,6 +268,88 @@ def test_learning_delete_unknown_profile_errors(client: TestClient) -> None:
     assert "nope" in _follow(client, response).text  # the flash names the problem
 
 
+# ---- cycle 3: confirm before removing API keys and deleting chats (issue #185) ----
+
+
+def _isolated_secrets(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
+    """Point the secrets file at a throwaway path (issue #185 tests only)."""
+    from jev_agent.core import secrets
+
+    file = tmp_path / ".jev" / "secrets.env"
+    monkeypatch.setenv(secrets.FILE_ENV, str(file))
+    secrets._loaded.clear()
+    return file
+
+
+def _new_chat(client: TestClient) -> str:
+    response = _post(client, "/chats/new", {"worker": "api", "learning": "", "budget_usd": "1.00"})
+    assert response.status_code == 303
+    return response.headers["location"].rsplit("/", 1)[1]
+
+
+def test_key_remove_is_two_step(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    import os
+
+    from jev_agent.core import secrets
+
+    file = _isolated_secrets(monkeypatch, tmp_path)
+    try:
+        response = _post(
+            client, "/connections/keys/add", {"name": "CYCLE3_TEST_KEY", "value": "fake-key"}
+        )
+        assert response.status_code == 303
+        assert "CYCLE3_TEST_KEY" in file.read_text()
+        response = _post(client, "/connections/keys/remove", {"name": "CYCLE3_TEST_KEY"})
+        assert response.status_code == 200
+        assert "Remove API key CYCLE3_TEST_KEY?" in response.text
+        assert "will break until a new key is added" in response.text
+        # Not confirmed: the key is still there.
+        assert "CYCLE3_TEST_KEY" in file.read_text()
+        response = _post(
+            client,
+            "/connections/keys/remove",
+            {"name": "CYCLE3_TEST_KEY", "confirm": "yes"},
+        )
+        assert response.status_code == 303
+        assert "removed from the secrets file" in _follow(client, response).text
+        assert "CYCLE3_TEST_KEY" not in file.read_text()
+    finally:
+        secrets._loaded.discard("CYCLE3_TEST_KEY")
+        os.environ.pop("CYCLE3_TEST_KEY", None)
+
+
+def test_key_remove_unknown_key_errors(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _isolated_secrets(monkeypatch, tmp_path)
+    response = _post(client, "/connections/keys/remove", {"name": "CYCLE3_NOPE_KEY"})
+    assert response.status_code == 303
+    assert "CYCLE3_NOPE_KEY" in _follow(client, response).text
+
+
+def test_chat_delete_is_two_step(client: TestClient) -> None:
+    chat_id = _new_chat(client)
+    assert chat_id in client.get("/chats").text
+    response = _post(client, f"/chats/{chat_id}/delete")
+    assert response.status_code == 200
+    assert f"Delete chat {chat_id}?" in response.text
+    assert "Runs it started are kept" in response.text
+    # Not confirmed: the chat is still there.
+    assert chat_id in client.get("/chats").text
+    response = _post(client, f"/chats/{chat_id}/delete", {"confirm": "yes"})
+    assert response.status_code == 303
+    assert f"deleted chat {chat_id}" in _follow(client, response).text
+    assert chat_id not in client.get("/chats").text
+
+
+def test_chat_delete_unknown_chat_errors(client: TestClient) -> None:
+    response = _post(client, "/chats/no-such-chat/delete")
+    assert response.status_code == 303
+    assert "no-such-chat" in _follow(client, response).text
+
+
 def test_scheduler_routes_need_csrf(client: TestClient) -> None:
     for url in ("/queue/scheduler/start", "/queue/scheduler/stop", "/queue/clear"):
         response = client.post(url, data={"confirm": "yes"}, follow_redirects=False)
