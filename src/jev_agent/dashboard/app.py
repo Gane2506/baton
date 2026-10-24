@@ -1311,12 +1311,16 @@ class Dashboard:
     async def design_studio_start(self, request: Request) -> Response:
         """Begin (or restart) the new-system wizard at its first step.
 
-        Issue #200: this clears the session's wizard state, so it is a POST
-        with a CSRF check — a GET here was a state-changing GET (a stray
-        prefetch or a link could silently wipe an in-progress wizard).
+        Issue #200: clearing the session's wizard state is a state change, so
+        only the POST clears (CSRF-checked, from the landing card's form).
+        A GET is a pure redirect to Purpose: it must never wipe an
+        in-progress wizard, so a stray prefetch, bookmark or automation
+        hitting this URL is harmless — and the screenshot walk, which opens
+        this URL directly, keeps working.
         """
-        await checked_form(request)
-        self.studio_wizard.clear(request.state.session)
+        if request.method == "POST":
+            await checked_form(request)
+            self.studio_wizard.clear(request.state.session)
         return self.back("/design-studio/new/purpose")
 
     def design_studio_step_page(self, request: Request) -> Response:
@@ -3946,7 +3950,7 @@ def create_app(
         Route("/design-systems/{name}/code/download", dash.design_code_download),
         Route("/design-systems/{action}", dash.design_systems_action, methods=["POST"]),
         Route("/design-studio", dash.design_studio_page),
-        Route("/design-studio/new", dash.design_studio_start, methods=["POST"]),
+        Route("/design-studio/new", dash.design_studio_start, methods=["GET", "POST"]),
         Route("/design-studio/new/{step}", dash.design_studio_step_page),
         # The generate POST is registered before the generic step POST so it wins.
         Route("/design-studio/new/generate", dash.design_studio_generate, methods=["POST"]),

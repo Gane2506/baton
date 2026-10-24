@@ -83,8 +83,13 @@ def test_post_stack_without_app_type_is_friendly_error_not_500(client: TestClien
     assert "Traceback" not in response.text
 
 
-def test_wizard_start_is_post_only(client: TestClient) -> None:
-    assert client.get("/design-studio/new", follow_redirects=False).status_code == 405
+def test_wizard_start_get_does_not_clear_post_does(client: TestClient) -> None:
+    # Issue #200, as fixed after the screenshots job caught it: a GET must
+    # not change state (it only redirects), while the POST clears (CSRF).
+    # The GET redirect is also what examples/demo/screenshots.py walks.
+    response = client.get("/design-studio/new", follow_redirects=False)
+    assert response.status_code == 303
+    assert response.headers["location"] == "/design-studio/new/purpose"
     response = _post(client, "/design-studio/new")
     assert response.status_code == 303
     assert response.headers["location"] == "/design-studio/new/purpose"
