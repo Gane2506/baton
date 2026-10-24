@@ -12,8 +12,6 @@ from __future__ import annotations
 import json
 import math
 import shutil
-import threading
-import time
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
@@ -29,10 +27,8 @@ from starlette.middleware import Middleware
 from starlette.requests import Request
 from starlette.responses import (
     FileResponse,
-    HTMLResponse,
     JSONResponse,
     PlainTextResponse,
-    RedirectResponse,
     Response,
 )
 from starlette.routing import Mount, Route
@@ -89,8 +85,6 @@ from jev_agent.core.models import RunState
 from jev_agent.core.pipeline import STOPPED, PipelineError, cancel_run
 from jev_agent.core.provider_auth import (
     CLAUDE_OAUTH_TOKEN_ENV,
-    ClaudeSetupTokenFlow,
-    CodexDeviceFlow,
     check_claude_oauth_token,
 )
 from jev_agent.core.queue import Move, QueueError, add_idea, move_item, queue_counts, remove_item
@@ -112,7 +106,6 @@ from jev_agent.dashboard import studio_decisions, ui_styles, views
 from jev_agent.dashboard.browser_install import (
     BrowserInstallBusy,
     BrowserInstallError,
-    BrowserInstallRunner,
 )
 from jev_agent.dashboard.chat_helpers import (
     _CHAT_SUGGESTIONS,
@@ -133,6 +126,7 @@ from jev_agent.dashboard.connection_status import (
     _refresh_servers,
     ssh_runner,
 )
+from jev_agent.dashboard.core import DashboardCore
 from jev_agent.dashboard.design_helpers import (
     _design_system_clone,
     _design_system_code_view,
@@ -147,13 +141,11 @@ from jev_agent.dashboard.design_helpers import (
 from jev_agent.dashboard.design_reverse import (
     ReverseBusy,
     ReverseExecutor,
-    ReverseRunner,
     ReverseUploadError,
     save_png_uploads,
 )
 from jev_agent.dashboard.design_studio import (
     STUDIO_STEPS,
-    StudioWizard,
     WizardError,
     first_incomplete_step,
     generate_from_state,
@@ -171,7 +163,6 @@ from jev_agent.dashboard.helpers import (
     _run_diff,
     _tail_lines,
     _text,
-    palette_registry,
 )
 from jev_agent.dashboard.learning_helpers import (
     _learning_approve_skill,
@@ -184,7 +175,7 @@ from jev_agent.dashboard.learning_helpers import (
     _learning_forget,
     _learning_use,
 )
-from jev_agent.dashboard.nav import NAV, NavChild, NavItem, _age, _environment, _time
+from jev_agent.dashboard.nav import NAV, NavChild, NavItem, _age, _time
 from jev_agent.dashboard.preview import (
     PreviewBridge,
     PreviewError,
@@ -196,7 +187,6 @@ from jev_agent.dashboard.render import (
     render_markdown,
 )
 from jev_agent.dashboard.runner import (
-    ChatRunner,
     Executor,
     RunAction,
     RunLauncher,
@@ -204,7 +194,6 @@ from jev_agent.dashboard.runner import (
     prepare_run,
     request_changes,
 )
-from jev_agent.dashboard.scheduler_runner import SchedulerRunner
 from jev_agent.dashboard.security import (
     SHOWCASE_CONTENT_SECURITY_POLICY,
     DashboardSettings,
@@ -212,11 +201,9 @@ from jev_agent.dashboard.security import (
     checked_form,
     same_origin,
 )
-from jev_agent.demo import is_demo_repo
 from jev_agent.quality.levels import LEVEL_SUMMARY, LEVELS
 from jev_agent.servers.audit import AuditEntry, AuditLog, audit_path
 from jev_agent.servers.profiles import ProfileError
-from jev_agent.servers.stats import ServerStatsCache
 
 # Names other modules and tests import from this module: the nav items and the
 # `ssh_runner` seam live in their own modules now but stay importable here.
@@ -225,179 +212,8 @@ __all__ = ["NAV", "Dashboard", "NavChild", "NavItem", "create_app", "ssh_runner"
 STATIC_DIR = Path(__file__).parent / "static"
 
 
-class Dashboard:
-    """The app's state: settings, templates, background runs and one-time messages."""
-
-    # Flash store bounds: entries per session, and how long a session that never
-    # renders again may keep its entries (its cookie is attacker-influenceable).
-    _MAX_FLASHES_PER_SESSION = 30
-    _FLASH_SESSION_TTL_S = 6 * 3600
-
-    def __init__(
-        self,
-        settings: DashboardSettings,
-        launcher: RunLauncher,
-        reverse_executor: ReverseExecutor | None = None,
-    ) -> None:
-        self.settings = settings
-        self.launcher = launcher
-        self.chat_runner = ChatRunner()
-        self.scheduler_runner = SchedulerRunner(settings.root, launcher)
-        self.browser_installer = BrowserInstallRunner(settings.root)
-        self.reverse_runner = (
-            ReverseRunner(settings.root, executor=reverse_executor)
-            if reverse_executor is not None
-            else ReverseRunner(settings.root)
-        )
-        self.codex_flow = CodexDeviceFlow()
-        self.claude_flow = ClaudeSetupTokenFlow()
-        self.server_stats = ServerStatsCache()
-        self.started_at = datetime.now(UTC)  # the About panel's uptime
-        self.env = _environment()
-        self._flash_lock = threading.Lock()
-        self._flashes: dict[str, list[tuple[str, str]]] = {}
-        self._flash_seen: dict[str, float] = {}  # session -> last flash (monotonic)
-        self.studio_wizard = StudioWizard()  # the Design Studio's wizard answers
-
-    # ---- helpers ---------------------------------------------------------------------------
-
-    def flash(self, request: Request, kind: str, text: str) -> None:
-        with self._flash_lock:
-            self._prune_flashes()
-            session = request.state.session
-            flashes = self._flashes.setdefault(session, [])
-            flashes.append((kind, text))
-            # A session that POSTs forever but never renders again must not grow the
-            # store without bound: keep the newest entries.
-            del flashes[: -self._MAX_FLASHES_PER_SESSION]
-            self._flash_seen[session] = time.monotonic()
-
-    def take_flashes(self, request: Request) -> list[tuple[str, str]]:
-        with self._flash_lock:
-            self._flash_seen.pop(request.state.session, None)
-            return self._flashes.pop(request.state.session, [])
-
-    def _prune_flashes(self) -> None:
-        """Drop sessions older than the TTL (called with the flash lock held)."""
-        cutoff = time.monotonic() - self._FLASH_SESSION_TTL_S
-        for session in [s for s, seen in self._flash_seen.items() if seen < cutoff]:
-            del self._flash_seen[session]
-            self._flashes.pop(session, None)
-
-    def shutdown_jobs(self, timeout: float) -> list[str]:
-        """Cancel and join every background job (runs, chat turns and the dashboard's
-        scheduler), for the lifespan."""
-        # Stop the scheduler first so it starts no new items; the launcher then cancels
-        # the in-flight item's run, which lets the scheduler thread exit promptly.
-        self.scheduler_runner.stop()
-        self.browser_installer.shutdown()
-        self.reverse_runner.shutdown()
-        self.codex_flow.shutdown()
-        self.claude_flow.shutdown()
-        return [
-            *self.launcher.shutdown(timeout),
-            *self.chat_runner.shutdown(timeout),
-            *self.scheduler_runner.shutdown(timeout),
-        ]
-
-    def render(
-        self, request: Request, template: str, status_code: int = 200, **context: Any
-    ) -> HTMLResponse:
-        # Flashes are shown once, on the next successful full-page render. A failed
-        # request (e.g. a live poll hitting error.html) must not eat them (#52).
-        show_flashes = 200 <= status_code < 300 and not template.startswith("_")
-        page = self.env.get_template(template).render(
-            request=request,
-            path=request.url.path,
-            csrf=request.state.csrf,
-            # The UI style (workstream UI-02): every page shares base.html, so one
-            # server-rendered `data-ui-style` attribute plus ui-styles.css covers
-            # the whole dashboard. read_ui_style() never raises (falls back to
-            # the default), so a broken preference cannot break page rendering.
-            ui_style=ui_styles.read_ui_style(),
-            ui_style_options=ui_styles.UI_STYLES,
-            # Two-level nav: when a submenu is open for the current path, the
-            # sidebar renders icon-collapsed server-side (base.html body class).
-            nav_collapsed=any(item.submenu_open(request.url.path) for item in NAV),
-            palette_registry=palette_registry(request.state.csrf),
-            refresh_ms=int(self.settings.refresh_s * 1000),
-            root=self.settings.root,
-            demo=is_demo_repo(self.settings.root),
-            flashes=self.take_flashes(request) if show_flashes else [],
-            **context,
-        )
-        return HTMLResponse(page, status_code=status_code)
-
-    def page(
-        self, request: Request, template: str, build: Callable[[views.Repo], dict[str, Any]]
-    ) -> HTMLResponse:
-        """Render `template` with what `build` reads from the repo (sync; runs in a thread)."""
-        try:
-            with views.open_repo(self.settings.root) as repo:
-                context = build(repo)
-                # Chats submenu (issue #149): the nav panel lists recent chats, so
-                # every page carries them. Capped for the narrow submenu width.
-                if "submenu_chats" not in context:
-                    context["submenu_chats"] = views.chats(repo, "")[:12]
-        except ConfigError as exc:
-            return self.render(request, "error.html", 500, title="Config error", message=str(exc))
-        except JevError as exc:
-            return self.render(request, "error.html", 500, title="State error", message=str(exc))
-        except (NotFoundError, ChatError) as exc:
-            return self.render(request, "error.html", 404, title="Not found", message=str(exc))
-        except Exception as exc:  # issue #200: anything else used to escape to
-            # Starlette's plain-text 500. Render the friendly error page instead;
-            # the message is the friendly rewrite, never a traceback.
-            return self.render(
-                request,
-                "error.html",
-                500,
-                title="Something went wrong",
-                message=_friendly_error(exc),
-            )
-        return self.render(request, template, **context)
-
-    def back(self, to: str) -> RedirectResponse:
-        return RedirectResponse(to, status_code=303)
-
-    async def act(
-        self,
-        request: Request,
-        to: str,
-        action: Callable[[views.Repo, FormData], str],
-    ) -> Response:
-        """Check the form (CSRF), run `action` against the repo in a thread, flash its message
-        (or the error), and redirect to `to`."""
-        form = await checked_form(request)
-
-        def work() -> str:
-            with views.open_repo(self.settings.root) as repo:
-                return action(repo, form)
-
-        try:
-            message = await run_in_threadpool(work)
-        except (
-            JevError,
-            ConfigError,
-            NotFoundError,
-            PipelineError,
-            QueueError,
-            LearningError,
-            ShipError,
-            ValueError,
-        ) as exc:
-            self.flash(request, "error", _friendly_error(exc))
-        except Exception as exc:  # issue #200: an unexpected failure used to
-            # escape to Starlette's plain-text 500; flash it and redirect instead.
-            self.flash(request, "error", _friendly_error(exc))
-        else:
-            # Trust gate blocked the save: offer one-click trust (issue #158).
-            if settings.TRUST_GATE_MARKER in message:
-                clean = message.replace(settings.TRUST_GATE_MARKER, "").strip()
-                self.flash(request, "trust", clean)
-            else:
-                self.flash(request, "ok", message)
-        return self.back(to)
+class Dashboard(DashboardCore):
+    """The dashboard app: route handlers grouped by area (routes_*.py mixins)."""
 
     # ---- pages -----------------------------------------------------------------------------
 
