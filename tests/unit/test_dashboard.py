@@ -190,6 +190,24 @@ def test_board_shows_runs_and_queue_escaped(client: TestClient, planned: tuple[P
     assert "<html" not in fragment.text
 
 
+def test_board_empty_columns_describe_columns(empty_client: TestClient) -> None:
+    page = empty_client.get("/")
+    assert page.status_code == 200
+    text = page.text
+    # Cycle 3 (issue #186): non-Backlog columns describe what lands there
+    # instead of a bare "Empty"; Backlog keeps its "Queue an idea" link.
+    assert "Queue an idea" in text
+    for label in (
+        "Runs appear here once planning starts.",
+        "Runs waiting for your approval appear here.",
+        "Runs appear here while they execute.",
+        "Finished runs appear here.",
+        "Runs needing attention appear here.",
+    ):
+        assert label in text
+    assert 'class="empty-inline">Empty</div>' not in text
+
+
 def test_security_headers_and_static(client: TestClient) -> None:
     response = client.get("/")
     csp = response.headers["content-security-policy"]

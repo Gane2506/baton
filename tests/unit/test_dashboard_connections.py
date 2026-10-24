@@ -170,6 +170,9 @@ def test_connections_page_no_servers(fixture_repo: Path) -> None:
         html = client.get("/connections").text
         body = client.get("/connections/live").json()
     assert "No servers configured" in html
+    # Cycle 3 (issue #186): the empty state is a CTA to the Configuration
+    # section on this page, where the "Add to Servers" form lives.
+    assert "Add a server in Configuration" in html and "#s-servers" in html
     assert body["total"] == 0
     assert body["state"] == "ok"
     assert body["label"] == "Live"

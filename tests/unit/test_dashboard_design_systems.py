@@ -115,6 +115,9 @@ def test_empty_state_points_at_studio(client: TestClient, home: Path) -> None:
     # Browser-first (issue #171): the empty state points at the Design studio page,
     # never at CLI commands.
     assert 'href="/design-studio"' in page.text
+    # Cycle 3 (issue #186): the two actions link straight to their routes.
+    assert 'href="/design-studio/reverse"' in page.text
+    assert 'href="/design-studio/new"' in page.text
     assert "jev design reverse" not in page.text
     assert "jev design new" not in page.text
 
