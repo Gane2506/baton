@@ -481,6 +481,50 @@ def test_base_branch_comes_from_the_remote_head(done_run: tuple[Path, str], gh: 
     assert _default_base(repo, configured, None, None) == "release"
 
 
+def test_failed_rev_list_fails_the_ship_loudly(done_run: tuple[Path, str]) -> None:
+    """R4-C (issue #244): a failed `git rev-list --count` used to silently yield
+    `pushed_commits=None`; the ship now fails loudly instead."""
+    from jev_agent.config import load_config
+    from jev_agent.core.ship import Gh
+    from jev_agent.core.ship.errors import ShipError
+    from jev_agent.core.ship.prepare import prepare_ship
+    from jev_agent.core.workspace import start_ref
+
+    repo, run_id = done_run
+    _git(repo, "update-ref", "-d", f"refs/jev/{run_id}/start")
+    assert start_ref(run_id) == f"refs/jev/{run_id}/start"
+    with _store(repo) as store:
+        with pytest.raises(ShipError, match="cannot count the commits"):
+            prepare_ship(repo, load_config(repo), store, run_id, gh=Gh(repo), dry_run=True)
+
+
+def test_default_base_ignores_a_malformed_default_branch_ref(
+    done_run: tuple[Path, str], gh: FakeGh
+) -> None:
+    """R4-C (issue #244): `_default_base` falls through to the checked-out branch when
+    `gh repo view` answers a `defaultBranchRef` that is not a dict with a string `name`."""
+    from jev_agent.config import JevConfig
+    from jev_agent.core.ship import Gh, _default_base
+
+    repo, _ = done_run
+    config = JevConfig.model_validate({"ship": {"enabled": True}})
+    gh.answer(
+        "repo view acme/widgets --json defaultBranchRef",
+        json.dumps({"defaultBranchRef": {"name": 123}}),
+    )
+    assert _default_base(repo, config, Gh(repo), "acme/widgets") == "main"
+    gh.answer(
+        "repo view acme/widgets --json defaultBranchRef",
+        json.dumps({"defaultBranchRef": "main"}),
+    )
+    assert _default_base(repo, config, Gh(repo), "acme/widgets") == "main"
+    gh.answer(
+        "repo view acme/widgets --json defaultBranchRef",
+        json.dumps([{"name": "main"}]),
+    )
+    assert _default_base(repo, config, Gh(repo), "acme/widgets") == "main"
+
+
 def test_push_command_never_forces() -> None:
     from jev_agent.core.kpi import RunKpis
     from jev_agent.core.ship import ShipPlan

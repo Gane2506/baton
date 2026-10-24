@@ -121,11 +121,16 @@ def _default_base(root: Path, config: JevConfig, gh: Gh | None, repo: str | None
             data = gh.json("repo", "view", repo, "--json", "defaultBranchRef")
         except ShipError:
             data = None
-        name = (data or {}).get("defaultBranchRef", {}) if isinstance(data, dict) else {}
-        if isinstance(name, dict) and isinstance(name.get("name"), str) and name["name"]:
-            return str(name["name"])
+        if isinstance(data, dict):
+            ref = data.get("defaultBranchRef")
+            if isinstance(ref, dict):
+                name = ref.get("name")
+                if isinstance(name, str) and name:
+                    return name
     proc = _git(root, "symbolic-ref", "--quiet", "--short", "HEAD")
-    return proc.stdout.strip() or None if proc.returncode == 0 else None
+    if proc.returncode != 0:
+        return None
+    return proc.stdout.strip() or None
 
 
 def check_gh(gh: Gh) -> str | None:
@@ -274,7 +279,15 @@ def prepare_ship(
             warnings.append(f"cannot tell whether a PR is already open for {branch}")
 
     count = _git(root, "rev-list", "--count", f"{start_ref(run_id)}..{head_oid}")
-    pushed = int(count.stdout.strip()) if count.returncode == 0 else None
+    if count.returncode != 0:
+        # The count is recorded on the shipped PR and feeds the KPIs; an unknown count
+        # must fail the ship loudly, not silently become `pushed_commits=None`.
+        detail = redact(count.stderr.strip()) or "git rev-list failed"
+        raise ShipError(
+            f"cannot count the commits run {run_id} pushes "
+            f"({start_ref(run_id)}..{head_oid}): {detail}"
+        )
+    pushed = int(count.stdout.strip())
     kpis = compute_run_kpis(store, run_id, diff_stat(root, start_ref(run_id), head_oid))
     return ShipPlan(
         run_id=run_id,

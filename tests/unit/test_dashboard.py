@@ -1588,3 +1588,47 @@ def test_chats_api_model_picker_shows_when_no_default_model(
     assert "Pick your API model" in page.text
     assert 'action="/chats/api-model"' in page.text
     assert "no model for the api backend" not in page.text
+
+
+def test_no_handler_is_defined_in_two_route_mixins() -> None:
+    """R4-C (issue #244): the 9-mixin diamond in `dashboard/app.py` — a handler defined
+    in two mixins would silently shadow (MRO picks the first). This fails loudly
+    instead, so a future duplicate is caught here rather than as a wrong page at
+    runtime. `DashboardCore` is included: it owns the shared helpers the mixins
+    stand on, so a mixin redefining one of those is the same silent shadow."""
+    from jev_agent.dashboard.app import Dashboard
+    from jev_agent.dashboard.core import DashboardCore
+    from jev_agent.dashboard.routes_board import BoardRoutes
+    from jev_agent.dashboard.routes_chat import ChatRoutes
+    from jev_agent.dashboard.routes_connections import ConnectionsRoutes
+    from jev_agent.dashboard.routes_design import DesignRoutes
+    from jev_agent.dashboard.routes_learning import LearningRoutes
+    from jev_agent.dashboard.routes_preview import PreviewRoutes
+    from jev_agent.dashboard.routes_queue import QueueRoutes
+    from jev_agent.dashboard.routes_settings import SettingsRoutes
+    from jev_agent.dashboard.routes_studio import StudioRoutes
+
+    mixins = [
+        BoardRoutes,
+        QueueRoutes,
+        ChatRoutes,
+        LearningRoutes,
+        DesignRoutes,
+        StudioRoutes,
+        ConnectionsRoutes,
+        SettingsRoutes,
+        PreviewRoutes,
+    ]
+    assert list(Dashboard.__mro__[1:]) == [
+        *mixins,
+        DashboardCore,
+        object,
+    ], "the guard below must cover every mixin Dashboard inherits"
+    defined: dict[str, list[str]] = {}
+    for cls in [DashboardCore, *mixins]:
+        for name in vars(cls):
+            if name.startswith("__") and name.endswith("__"):
+                continue
+            defined.setdefault(name, []).append(cls.__name__)
+    shadowed = {name: owners for name, owners in defined.items() if len(owners) > 1}
+    assert not shadowed, f"handler defined in more than one mixin: {shadowed}"
