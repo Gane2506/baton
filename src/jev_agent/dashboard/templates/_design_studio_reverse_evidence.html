@@ -27,7 +27,7 @@
     <thead><tr><th>Color</th><th>Coverage</th></tr></thead>
     <tbody>
     {% for hex, pct in shot.palette %}
-      <tr><td class="mono"><span class="swatch" style="background: {{ hex }}"></span>{{ hex }}</td><td class="mono">{{ pct }}</td></tr>
+      <tr><td class="mono"><span class="swatch" data-swatch-color="{{ hex }}"></span>{{ hex }}</td><td class="mono">{{ pct }}</td></tr>
     {% endfor %}
     </tbody>
   </table></div>

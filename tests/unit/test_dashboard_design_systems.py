@@ -117,7 +117,9 @@ def test_empty_state_points_at_studio(client: TestClient, home: Path) -> None:
     assert 'href="/design-studio"' in page.text
     # Cycle 3 (issue #186): the two actions link straight to their routes.
     assert 'href="/design-studio/reverse"' in page.text
-    assert 'href="/design-studio/new"' in page.text
+    # Issue #200: the wizard start is a POST, so the empty state links at the
+    # studio landing instead of GETting the state-changing start route.
+    assert 'href="/design-studio/new"' not in page.text
     assert "jev design reverse" not in page.text
     assert "jev design new" not in page.text
 
