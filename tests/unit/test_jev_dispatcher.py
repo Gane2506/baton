@@ -432,6 +432,36 @@ async def test_network_error_raises() -> None:
     assert sleeps == [1.0]
 
 
+async def test_post_with_retry_retries_once_then_succeeds() -> None:
+    # The retry loop itself (issue #242): a retryable response, then a 200, returns the body.
+    rec = Recorder(
+        httpx.Response(429, json=_fixture("error_429.json"), headers={"retry-after": "2"}),
+        _ok("d4_openrouter_success.json"),
+    )
+    jev, sleeps = _dispatcher(rec)
+    client = httpx.AsyncClient(transport=httpx.MockTransport(rec))
+    body = await jev._post_with_retry(client, "https://example.invalid/systemone", {}, {}, KEY)
+    assert body == _fixture("d4_openrouter_success.json")
+    assert len(rec.requests) == 2
+    assert sleeps == [2.0]
+
+
+async def test_retry_loop_fallthrough_raises_dispatch_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # If the retry loop ever exhausts without a body or a raise (issue #242), the
+    # fall-through must be a structured DispatchError, never an AssertionError.
+    monkeypatch.setattr("jev_agent.dispatch.jev._response_body", lambda *_: None)
+    rec = Recorder(_ok("d4_openrouter_success.json"), _ok("d4_openrouter_success.json"))
+    jev, sleeps = _dispatcher(rec)
+    client = httpx.AsyncClient(transport=httpx.MockTransport(rec))
+    with pytest.raises(DispatchError, match="failed after retries") as info:
+        await jev._post_with_retry(client, "https://example.invalid/systemone", {}, {}, KEY)
+    assert info.value.provider_failure is True
+    assert len(rec.requests) == 2
+    assert sleeps == [1.0, 1.0]
+
+
 async def test_non_json_response_raises() -> None:
     jev, _ = _dispatcher(Recorder(httpx.Response(200, text="<html>")))
     with pytest.raises(DispatchError, match="not JSON"):
