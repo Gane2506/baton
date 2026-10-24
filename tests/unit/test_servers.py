@@ -39,7 +39,13 @@ from jev_agent.servers.access import (
 from jev_agent.servers.audit import AuditLog, audit_path
 from jev_agent.servers.browser import BROWSER_MCP_NAME, PLAYWRIGHT_MCP_VERSION, install_argv
 from jev_agent.servers.mcp import MODERN_VERSION, UNSUPPORTED_VERSION, servers_mcp
-from jev_agent.servers.policy import PolicyContext, check_command, check_read_path, check_write_path
+from jev_agent.servers.policy import (
+    PolicyContext,
+    check_command,
+    check_read_path,
+    check_write_path,
+    command_scope_paths,
+)
 from jev_agent.servers.profiles import (
     RunProfile,
     choose_interactively,
@@ -436,6 +442,8 @@ def test_medium_marks_writes_and_runs_sudo_non_interactively() -> None:
         ("npm install https://x/y.tgz", "not a package name"),
         ("sudo systemctl stop ssh", "never restarted or stopped"),
         ("systemctl restart sshd.service", "never restarted"),
+        ("systemctl restart sshd.socket", "never restarted"),
+        ("systemctl stop ssh.socket", "never restarted"),
         ("systemctl enable nginx", "read-only verbs"),
         ("docker compose up", "add -d"),
         ("docker compose down -v", "removing volumes"),
@@ -884,6 +892,84 @@ def test_write_file_and_symlink_escape(tmp_path: Path) -> None:
     assert not any(r.startswith("cat >") for r in escape.remotes)
     entries = AuditLog(audit_path(tmp_path / ".jev")).read()
     assert all("a=1" not in json.dumps(e) for e in entries)  # contents never logged
+
+
+# ---- policy: scope-sensitive command operands (issue #204 I-3) ---------------------------
+
+
+def test_command_scope_paths() -> None:
+    """The operands whose server-resolved path the service must re-check."""
+    compose = command_scope_paths("docker compose -f /srv/app/compose.yml up -d", MEDIUM)
+    assert [(p.path, p.strictly, p.kind) for p in compose] == [
+        ("/srv/app/compose.yml", False, "compose file")
+    ]
+    assert command_scope_paths("docker-compose -f rel.yml -f /srv/app/b.yml up -d", MEDIUM) == [
+        # Relative compose files resolve against the workdir.
+        type(compose[0])("/srv/app/rel.yml", False, "compose file"),
+        type(compose[0])("/srv/app/b.yml", False, "compose file"),
+    ]
+    cp = command_scope_paths("cp -r /srv/app/build /srv/app/other /var/www/site/static", MEDIUM)
+    assert [(p.path, p.strictly) for p in cp] == [
+        ("/srv/app/build", True),
+        ("/srv/app/other", True),
+    ]
+    assert command_scope_paths("cp /srv/app/a /srv/app/b", MEDIUM) == []  # not recursive
+    pip = command_scope_paths(
+        "sudo pip install -r req.txt --requirement=/srv/app/extra.txt", MEDIUM
+    )
+    assert [(p.path, p.kind) for p in pip] == [
+        ("/srv/app/req.txt", "pip requirement file"),
+        ("/srv/app/extra.txt", "pip requirement file"),
+    ]
+    assert command_scope_paths("docker compose up -d", MEDIUM) == []  # no -f: workdir's own file
+    assert command_scope_paths("ls /srv/app", MEDIUM) == []
+    assert command_scope_paths("'unbalanced", MEDIUM) == []  # unparseable: already refused
+
+
+def test_run_command_refuses_symlinked_compose_file(tmp_path: Path) -> None:
+    """A compose file lexically inside the scope but resolving outside it never runs."""
+    fake = FakeSsh({"realpath": SshResult(0, b"/etc/docker-compose.yml\n", b"")})
+    result = _service(tmp_path, fake).run_command(
+        "web", "docker compose -f /srv/app/compose.yml up -d"
+    )
+    assert result.is_error and "outside allowed_paths" in result.text
+    assert not any("docker compose" in r for r in fake.remotes)
+
+
+def test_run_command_refuses_symlinked_recursive_cp_source(tmp_path: Path) -> None:
+    fake = FakeSsh({"realpath": SshResult(0, b"/etc\n", b"")})
+    result = _service(tmp_path, fake).run_command(
+        "web", "cp -r /srv/app/build /var/www/site/static"
+    )
+    assert result.is_error and "outside allowed_paths" in result.text
+    assert not any("cp -r" in r for r in fake.remotes)
+
+
+def test_run_command_refuses_symlinked_pip_requirement(tmp_path: Path) -> None:
+    fake = FakeSsh({"realpath": SshResult(0, b"/etc/req.txt\n", b"")})
+    result = _service(tmp_path, fake).run_command("web", "pip install -r /srv/app/req.txt")
+    assert result.is_error and "outside allowed_paths" in result.text
+    assert not any("pip install" in r for r in fake.remotes)
+
+
+def test_run_command_allows_scoped_path_resolving_inside(tmp_path: Path) -> None:
+    """A symlink to another in-scope path is fine: only the escape is refused."""
+    fake = FakeSsh({"realpath": SshResult(0, b"/var/www/site/shared\n", b"")})
+    result = _service(tmp_path, fake).run_command(
+        "web", "cp -r /srv/app/build /var/www/site/static"
+    )
+    assert not result.is_error, result.text
+    assert "cp -r" in fake.remotes[-1]
+
+
+def test_run_command_scope_realpath_failure_never_runs(tmp_path: Path) -> None:
+    """A scope path the server cannot resolve fails closed, like the file tools."""
+    fake = FakeSsh({"realpath": SshResult(1, b"", b"realpath: no such file\n")})
+    result = _service(tmp_path, fake).run_command(
+        "web", "docker compose -f /srv/app/compose.yml up -d"
+    )
+    assert result.is_error and "cannot resolve" in result.text
+    assert not any("docker compose" in r for r in fake.remotes)
 
 
 def test_upload_only_from_inside_the_repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

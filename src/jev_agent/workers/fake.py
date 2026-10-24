@@ -7,11 +7,13 @@ Roles without a scripted step get a sensible default: a one-task plan, an approv
 a clean code review, a coder that writes a small file, or a learner that learns nothing.
 
 Scripted file paths are confined to the job's workdir: absolute paths and `..` escapes are
-rejected, so a script (or the `JEV_FAKE_WORKERS=1` dry-run path) can never write outside it.
+rejected, and the resolved path (symlinks followed) must still land inside it, so a script
+(or the `JEV_FAKE_WORKERS=1` dry-run path) can never write outside it.
 """
 
 from __future__ import annotations
 
+import contextlib
 from collections import defaultdict
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
@@ -88,12 +90,14 @@ class FakeWorker:
     async def run(self, job: WorkerJob) -> WorkerOutput:
         self.jobs.append(job)
         step = self._next_step(job)
-        write_log(
-            job.log_path,
-            f"[{self.name}] role={job.role} task={job.task_id} attempt={job.attempt} "
-            f"model={job.model} effort={job.effort}\n--- prompt ---\n{job.prompt}\n"
-            f"--- result ---\nstatus={step.status} summary={step.summary}\n",
-        )
+        # Workers never raise for a log that cannot be written (issue #204).
+        with contextlib.suppress(OSError):
+            write_log(
+                job.log_path,
+                f"[{self.name}] role={job.role} task={job.task_id} attempt={job.attempt} "
+                f"model={job.model} effort={job.effort}\n--- prompt ---\n{job.prompt}\n"
+                f"--- result ---\nstatus={step.status} summary={step.summary}\n",
+            )
         if step.crash:
             raise FakeWorkerCrash(f"{self.name} crashed on {job.role} {job.task_id}")
 
@@ -104,7 +108,16 @@ class FakeWorker:
             path = Path(rel)
             if path.is_absolute() or ".." in path.parts:
                 raise ValueError(f"fake worker file {rel!r} escapes the workdir")
-            target = job.workdir / rel
+            # Resolve symlinks, not just lexical `..`: a scripted path through a
+            # symlinked directory (or a symlinked target file) must still land
+            # inside the workdir, or the fake worker would write outside it
+            # (issue #204). Writing through the resolved path — after its parent
+            # is created — cannot be redirected by a symlink swap in between,
+            # because no symlink component remains in it.
+            root = job.workdir.resolve()
+            target = (job.workdir / rel).resolve()
+            if not target.is_relative_to(root):
+                raise ValueError(f"fake worker file {rel!r} escapes the workdir")
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text(content, encoding="utf-8")
 

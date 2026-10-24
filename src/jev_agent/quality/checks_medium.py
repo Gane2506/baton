@@ -11,6 +11,7 @@ from jev_agent.quality.base import (
     PY_SUFFIXES,
     BaseCheck,
     dependency_files_changed,
+    exit_mismatch,
     from_level,
     int_or_none,
     is_python,
@@ -187,6 +188,8 @@ class BanditCheck(BaseCheck):
             for issue in data.get("results", [])
             if isinstance(issue, dict)
         ]
+        if (bad := exit_mismatch(self, result, found=bool(findings))) is not None:
+            return bad
         if data.get("errors"):  # files bandit could not scan
             return scanner_errors(self, data["errors"], findings)
         if not findings:
@@ -242,6 +245,8 @@ class SemgrepCheck(BaseCheck):
                     int_or_none((item.get("end") or {}).get("line")),
                 )
             )
+        if (bad := exit_mismatch(self, result, found=bool(findings))) is not None:
+            return bad
         if data.get("errors"):  # rules or files Semgrep could not handle
             return scanner_errors(self, data["errors"], findings)
         if not findings:
@@ -292,6 +297,8 @@ class PipAuditCheck(BaseCheck):
                         suggestion=f"upgrade (fixed in: {fixes})",
                     )
                 )
+        if (bad := exit_mismatch(self, result, found=bool(findings))) is not None:
+            return bad
         if not findings:
             return CheckResult(status="pass", detail=f"no known vulnerabilities{note}")
         return CheckResult(
@@ -353,6 +360,8 @@ class NpmAuditCheck(BaseCheck):
             for name, info in sorted(vulns.items())
             if isinstance(info, dict)
         ]
+        if (bad := exit_mismatch(self, result, found=bool(findings))) is not None:
+            return bad
         if not findings:
             return CheckResult(status="pass", detail="no known vulnerabilities")
         return CheckResult(

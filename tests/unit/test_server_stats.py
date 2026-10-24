@@ -142,9 +142,13 @@ class _FakeRunner:
         self.stdout = stdout
         self.exit_code = exit_code
         self.calls = 0
+        self.last_argv: list[str] = []
+        self.last_timeout_s: float = 0.0
 
     def __call__(self, argv: Sequence[str], *, stdin: bytes | None, timeout_s: float) -> SshResult:
         self.calls += 1
+        self.last_argv = list(argv)
+        self.last_timeout_s = timeout_s
         return SshResult(self.exit_code, self.stdout, b"", False, 0.1)
 
 
@@ -158,6 +162,28 @@ def test_collect_stats_ok(tmp_path: Path) -> None:
     assert stats.ok
     assert stats.hostname == "web-01"
     assert runner.calls == 1
+
+
+def test_parse_mount_with_spaces_in_path() -> None:
+    """A mount point with spaces is kept whole, not truncated at the first word."""
+    out = LINUX_OUTPUT.replace(
+        "/dev/sdb1 209715200 104857600 104857600 50% /data",
+        "/dev/disk1 209715200 104857600 104857600 50% /Volumes/My Drive",
+    )
+    stats = parse_stats(out)
+    assert [m.mount for m in stats.mounts] == ["/", "/Volumes/My Drive"]
+
+
+def test_collect_stats_wraps_the_timeout_once(tmp_path: Path) -> None:
+    """The remote limit is exactly the timeout (issue #204): previously the script
+    was wrapped twice and died at 27s for a 30s timeout."""
+    runner = _FakeRunner(LINUX_OUTPUT.encode())
+    stats = collect_stats(_server_config(), runner=runner, state_dir=tmp_path, timeout_s=30.0)
+    assert stats.ok
+    remote = " ".join(runner.last_argv)
+    assert remote.count("timeout -k") == 1
+    assert "timeout -k 2 30" in remote
+    assert runner.last_timeout_s == 33.0  # remote limit 30 + kill grace 2 + 1
 
 
 def test_collect_stats_ssh_failure(tmp_path: Path) -> None:

@@ -181,9 +181,19 @@ class ModelCatalog:
             return None
         if not isinstance(body, dict) or not isinstance(body.get("fetched_at"), int | float):
             return None
-        try:
-            models = [_from_cache(raw) for raw in body["data"]]
-        except (KeyError, TypeError, ValueError):
+        if not isinstance(body.get("data"), list):
+            return None
+        # One corrupt entry must not discard the whole cache (issue #204):
+        # skip entries that fail validation and keep the rest. A cache with no
+        # usable entries at all is still unusable, so it returns None and the
+        # caller refetches instead of trusting an empty catalog.
+        models = []
+        for raw in body["data"]:
+            try:
+                models.append(_from_cache(raw))
+            except (KeyError, TypeError, ValueError):
+                continue
+        if not models:
             return None
         source = body.get("source")
         return cls(models, float(body["fetched_at"]), source if isinstance(source, str) else "")

@@ -153,3 +153,14 @@ def test_append_log_sections_redacts(tmp_path: Path) -> None:
     append_log_sections(log, [("result", f"summary {SECRET}")], {})
     assert SECRET not in log.read_text()
     assert "===== result" in log.read_text()
+
+
+async def test_unwritable_log_does_not_fail_the_command(tmp_path: Path) -> None:
+    """Log writes never raise: a command that ran still returns its result (issue #204)."""
+    blocker = tmp_path / "blocker"
+    blocker.write_text("a file where the log directory should be")
+    append_log_sections(blocker / "x.log", [("result", "x")], {})  # must not raise
+    result = await run_command(
+        [PY, "-c", "print('ok')"], tmp_path, _env(), 30, log_path=blocker / "run.log"
+    )
+    assert result.exit_code == 0 and result.stdout.strip() == "ok"

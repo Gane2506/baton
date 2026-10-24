@@ -122,6 +122,29 @@ def test_cache_roundtrip_and_ttl(tmp_path: Path) -> None:
     assert not loaded.is_stale(48 * 3600)
 
 
+def test_load_cache_skips_one_corrupt_entry(tmp_path: Path) -> None:
+    """One corrupt cache entry must not discard the whole catalog (issue #204)."""
+    import json as _json
+
+    path = tmp_path / "c.json"
+    good = {
+        "id": "good/model:free",
+        "name": "good",
+        "context_length": 1000,
+        "prompt_price": 0,
+        "completion_price": 0,
+        "supported_parameters": [],
+    }
+    body = {"fetched_at": time.time(), "source": "", "data": [good, {"id": ""}, "not-an-object"]}
+    path.write_text(_json.dumps(body))
+    loaded = ModelCatalog.load(path)
+    assert loaded is not None
+    assert [m.id for m in loaded.models] == ["good/model:free"]
+    # All entries corrupt: still no usable cache, so None (the caller refetches).
+    path.write_text(_json.dumps({"fetched_at": time.time(), "data": [{"id": ""}]}))
+    assert ModelCatalog.load(path) is None
+
+
 def test_load_cache_tolerates_garbage(tmp_path: Path) -> None:
     path = tmp_path / "c.json"
     assert ModelCatalog.load(path) is None
