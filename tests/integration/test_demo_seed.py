@@ -75,28 +75,35 @@ def demo_repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     return root
 
 
-def _check(client: TestClient, page: str) -> None:
+def _check(client: TestClient, page: str, sandbox: Path) -> None:
     response = client.get(page)
     assert response.status_code == 200, page
-    assert HOME not in response.text, f"{page} leaks the home directory"
+    # The dashboard legitimately shows paths inside the sandbox it serves (the demo repo
+    # in the sidebar, the hermetic fake home). Those start with the real home whenever
+    # pytest's basetemp sits under $HOME (e.g. --basetemp under ~/workspace), so strip
+    # the sandbox prefix first: any home path left after that is a genuine leak of the
+    # operator's own environment, not the repo being served.
+    text = response.text.replace(str(sandbox), "")
+    assert HOME not in text, f"{page} leaks the home directory"
 
 
 def test_seed_demo_and_dashboard_pages(demo_repo: Path) -> None:
     settings = DashboardSettings(root=demo_repo, allowed_hosts=frozenset({"testserver"}))
     dash_app = create_app(settings, executor=_fake_executor)
+    sandbox = demo_repo.parent
     with TestClient(dash_app) as client:
         for page in PAGES:
-            _check(client, page)
+            _check(client, page, sandbox)
         with Store.open(demo_repo / ".jev" / "state.db") as store:
             runs = store.list_runs()
         assert runs, "the seed wrote no runs"
         run_id = next(r.id for r in runs if r.id)
-        _check(client, f"/runs/{run_id}")
-        _check(client, f"/runs/{run_id}/live")
+        _check(client, f"/runs/{run_id}", sandbox)
+        _check(client, f"/runs/{run_id}/live", sandbox)
         chats = list_chats(demo_repo)
         assert chats, "the seed saved no chats"
-        _check(client, f"/chats/{chats[0].chat_id}")
-        _check(client, f"/chats/{chats[0].chat_id}/live")
+        _check(client, f"/chats/{chats[0].chat_id}", sandbox)
+        _check(client, f"/chats/{chats[0].chat_id}/live", sandbox)
         with Store.open(demo_repo / ".jev" / "state.db") as store:
             running = [
                 a
