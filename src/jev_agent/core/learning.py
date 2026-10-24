@@ -272,7 +272,9 @@ def _checked_weights(profile: str, weights: object) -> dict[str, float]:
             if any(
                 not isinstance(w, (int, float)) or not math.isfinite(w) for w in weights.values()
             ):
-                problems.append("weights must be finite numbers (NaN and infinities are not allowed)")
+                problems.append(
+                    "weights must be finite numbers (NaN and infinities are not allowed)"
+                )
             elif any(w < 0 for w in weights.values()):
                 problems.append("weights must not be negative")
             elif abs(sum(weights.values()) - 1) > 1e-6:
