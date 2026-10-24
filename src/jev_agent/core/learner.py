@@ -5,8 +5,10 @@ learner role, store its changes.
    NEEDS_HUMAN) and was not scored yet, every lesson injected into the task's attempts (coder,
    reviewer) gets `uses += 1`, and `score += 1` if the task was DONE on its first attempt,
    else `-0.5`, once per task (a ledger next to the scores records it). Only lessons of the
-   run's profile are touched. A lesson whose score reaches -2 is retired. Lessons given only
-   to the planner or validator are not scored (there is no per-task outcome to credit).
+   run's profile are touched. A lesson whose score reaches -2 is retired. Run-level lessons
+   (planner, validator) have no task to credit, so they are scored once per run against the
+   run's own outcome instead (issue #202): `+1` when the run ended DONE, `-0.5` otherwise —
+   otherwise they would never gain uses or score and never auto-retire.
 2. **D7**: learn or skip, and the learner's worker, model and effort. Skipped without asking
    when the learner role has no worker or the run's budget is spent.
 3. **Learner**: a read-only role that sees a compact run card (never transcripts) and the
@@ -65,6 +67,14 @@ SHOWN_CHARS = 6_000
 SCORE_FIRST_TRY = 1.0
 SCORE_STRUGGLED = -0.5
 _ENDED = frozenset({TaskState.DONE, TaskState.FAILED, TaskState.NEEDS_HUMAN})
+# The `scored_tasks` ledger key for run-level scoring (issue #202): real task ids match
+# `^T\d+$`, so this sentinel can never collide with a task. It is the ledger row that
+# makes run-level scoring once-per-run, exactly like a task's row does for task scoring.
+RUN_LEVEL_TASK_ID = "__run__"
+# Run-level roles whose injected lessons are scored against the run's outcome. The
+# learner's run-level attempts are excluded on purpose: their ids are the lessons it was
+# shown, not guidance it followed. The designer is run-level too but out of scope here.
+_PLAN_ROLES = frozenset({"planner", "validator"})
 
 
 @dataclass(frozen=True)
@@ -169,18 +179,40 @@ def score_lessons(store: Store, run: RunRecord, db: LessonDB) -> None:
 
     Each task is scored once: `db` records the (run, task) pair in the same transaction as the
     scores, so a crash before `tasks.lessons_scored` is set never counts a task twice.
+    Run-level planner/validator lessons are scored once per run the same way, against the
+    run's outcome, under the `RUN_LEVEL_TASK_ID` ledger key (issue #202); a run that has
+    not ended yet scores nothing run-level, since its outcome is unknown. A lesson already
+    credited through a task in this run (a planner+coder lesson injected into both the
+    planner and a coder attempt) is not credited again run-level: one run credits a lesson
+    once per task, plus once run-level only when no task credited it.
     """
     profile = run.learning_profile
     assert profile is not None
     attempts = store.list_attempts(run.id)
+    scored_task_ids: set[str] = set()
     for task in store.list_tasks(run.id):
-        if task.lessons_scored or task.state not in _ENDED:
+        if task.lessons_scored:
+            scored_task_ids.add(task.id)  # credited by an earlier scoring pass
+            continue
+        if task.state not in _ENDED:
             continue
         ids = {i for a in attempts if a.task_id == task.id for i in a.lesson_ids}
         first_try = task.state is TaskState.DONE and task.attempts <= 1
         delta = SCORE_FIRST_TRY if first_try else SCORE_STRUGGLED
         db.score_task(profile, run.id, task.id, _numbers_in(db, ids), delta)
         store.mark_task_lessons_scored(run.id, task.id)
+        scored_task_ids.add(task.id)
+    if run.state in LEARN_STATES:
+        task_credited = {i for a in attempts if a.task_id in scored_task_ids for i in a.lesson_ids}
+        ids = {
+            i
+            for a in attempts
+            if a.task_id is None and a.role in _PLAN_ROLES
+            for i in a.lesson_ids
+            if i not in task_credited
+        }
+        delta = SCORE_FIRST_TRY if run.state is RunState.DONE else SCORE_STRUGGLED
+        db.score_task(profile, run.id, RUN_LEVEL_TASK_ID, _numbers_in(db, ids), delta)
 
 
 def _numbers_in(db: LessonDB, ids: set[str]) -> list[int]:

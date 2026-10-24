@@ -62,7 +62,11 @@ def _history_text(history: Sequence[Turn]) -> str:
 
 
 class ApiChatBackend:
-    """`POST {base_url}/chat/completions` with the whole conversation each turn (stateless)."""
+    """`POST {base_url}/chat/completions` with the whole conversation each turn (stateless).
+
+    Refuses to call when `budget_left_usd` is spent; it cannot cap a single call
+    server-side (no provider-wide cost ceiling exists in the chat-completions API), so
+    the session also charges calls that report no cost (see `ChatSession.say`)."""
 
     name: BackendName = "api"
     keeps_session = False
@@ -98,6 +102,13 @@ class ApiChatBackend:
         budget_left_usd: float,
         log_path: Path,
     ) -> Reply:
+        # Issue #202: the API backend used to ignore `budget_left_usd` entirely, so a
+        # call went out even with nothing left of the chat budget. Refuse before any
+        # HTTP request; the per-call overshoot of one allowed call is bounded by the
+        # session, which blocks the next call once the budget is spent (and charges
+        # unknown-cost calls, see `ChatSession.say`).
+        if budget_left_usd <= 0:
+            return Reply(False, "the chat budget is spent; no more model calls")
         key = os.environ.get(self.api_key_env, "")
         if not key:
             return Reply(False, f"{self.api_key_env} is not set")

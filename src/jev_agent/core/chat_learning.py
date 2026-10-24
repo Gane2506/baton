@@ -59,7 +59,15 @@ class ChatLearning:
         if not isinstance(data, dict):
             return cls()
         profile = data.get("profile")
-        return cls(profile if isinstance(profile, str) else None, bool(data.get("off")))
+        profile = profile if isinstance(profile, str) else None
+        off = bool(data.get("off"))
+        if profile is not None and off:
+            # Issue #202: a stored choice with both set is corrupt (the constructor
+            # forbids it), and it used to raise LearningError out of `ChatMeta.from_json`
+            # and crash chat listing for every chat. A stored choice nobody can act on
+            # degrades to the repo default instead; the chat itself stays listable.
+            return cls()
+        return cls(profile, off)
 
 
 @dataclass(frozen=True)
@@ -128,13 +136,19 @@ def check_learning_choice(choice: ChatLearning, learning: Learning) -> None:
 def chat_lessons(
     profile: str | None, learning: Learning, config: JevConfig, texts: Sequence[str] = ()
 ) -> list[Lesson]:
-    """Planner lessons for the chat's system prompt (the same selection a run's planner gets)."""
+    """Planner lessons for the chat's system prompt (the same selection a run's planner gets).
+
+    Only a profile that no longer exists yields no lessons: a chat saved with a profile
+    that was later deleted still starts, just without lessons. Any other learning
+    failure (a corrupt database, a missing table) surfaces to the caller instead of
+    being swallowed — issue #202's old behaviour ran the chat with zero lessons and
+    no warning, hiding the corruption.
+    """
     if profile is None:
         return []
-    try:
-        lessons = learning.lessons(profile)
-    except LearningError:
+    if learning.get(profile) is None:
         return []
+    lessons = learning.lessons(profile)
     terms = context_terms(texts)
     settings = config.learning
     return select_lessons(lessons, "planner", terms, settings.max_lessons, settings.max_chars)

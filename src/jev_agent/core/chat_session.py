@@ -6,6 +6,7 @@ from __future__ import annotations
 import fcntl
 import importlib
 import json
+import math
 import os
 import re
 import secrets
@@ -23,6 +24,7 @@ from jev_agent.core.chat_backends import BACKENDS, BackendName, Turn
 from jev_agent.core.chat_learning import ChatLearning
 from jev_agent.core.chat_prompts import BRIEF_REQUEST, extract_brief
 from jev_agent.core.design_system import DesignSystem, get_design_system, render_for_prompt
+from jev_agent.core.learning import LearningError
 from jev_agent.runlog.redact import redact
 
 if TYPE_CHECKING:
@@ -34,6 +36,12 @@ META_FILE = "meta.json"
 BACKEND_LOG_FILE = "backend.log"
 LOCK_FILE = "chat.lock"
 DEFAULT_BUDGET_USD = 1.00
+# Issue #202: what a successful model call that reports no cost is charged. Providers
+# without a cost field used to leave `spent_usd` untouched forever, so the budget never
+# tripped no matter how many calls ran. A cent is a floor, not an estimate — deliberately
+# small so unknown-cost providers stay usable, but the budget now trips after enough
+# such calls instead of never. The count is still kept in `unknown_cost_calls`.
+UNKNOWN_COST_USD = 0.01
 _CHAT_ID = re.compile(r"^c-\d{8}-\d{6}-[0-9a-f]{4}$")
 _CREATE_ID_RETRIES = 10  # fresh `new_chat_id()` attempts before `create()` gives up
 
@@ -92,6 +100,22 @@ class ChatMeta:
         values["learning"] = ChatLearning.from_json(data.get("learning"))
         if values.get("backend") not in BACKENDS:
             raise ChatError(f"chat {data.get('chat_id')!r} has an unknown backend")
+        # Issue #202: a hand-edited meta.json with a string (or boolean, NaN, ...) in a
+        # numeric field used to load with the wrong type and break budget arithmetic
+        # later. Reject it here, so `list_chats` skips that one chat and `load_meta`
+        # reports it, instead of crashing some unrelated operation.
+        for name in ("budget_usd", "spent_usd"):
+            value = values.get(name)
+            if value is not None and (
+                isinstance(value, bool)
+                or not isinstance(value, int | float)
+                or not math.isfinite(value)
+            ):
+                raise ChatError(f"chat {data.get('chat_id')!r} has a non-numeric {name}: {value!r}")
+        for name in ("turns", "brief_turns", "unknown_cost_calls"):
+            value = values.get(name)
+            if value is not None and (isinstance(value, bool) or not isinstance(value, int)):
+                raise ChatError(f"chat {data.get('chat_id')!r} has a non-integer {name}: {value!r}")
         return cls(**values)
 
 
@@ -210,7 +234,10 @@ def list_chats(root: Path) -> list[ChatMeta]:
     for path in sorted(base.iterdir(), reverse=True):
         try:
             found.append(ChatMeta.from_json(json.loads((path / META_FILE).read_text("utf-8"))))
-        except (OSError, ValueError, TypeError, ChatError):
+        except (OSError, ValueError, TypeError, ChatError, LearningError):
+            # LearningError: a stored learning choice `ChatLearning.from_json` could not
+            # make sense of (issue #202) — one corrupt chat must not break the listing
+            # of all the others.
             continue
     return found
 
@@ -338,7 +365,7 @@ class ChatSession:
             return ChatMeta.from_json(json.loads(path.read_text(encoding="utf-8")))
         except FileNotFoundError as exc:
             raise ChatError(f"no chat {chat_id!r}; `jev chat --list` shows saved chats") from exc
-        except (ValueError, TypeError) as exc:
+        except (ValueError, TypeError, LearningError) as exc:
             raise ChatError(f"chat {chat_id!r} cannot be read: {exc}") from exc
 
     @classmethod
@@ -437,7 +464,10 @@ class ChatSession:
         if reply.cost_usd is not None:
             self.meta.spent_usd = round(self.meta.spent_usd + reply.cost_usd, 6)
         elif reply.ok:
+            # Issue #202: a call that reports no cost still consumes budget, or a
+            # provider without a cost field would never trip it (see UNKNOWN_COST_USD).
             self.meta.unknown_cost_calls += 1
+            self.meta.spent_usd = round(self.meta.spent_usd + UNKNOWN_COST_USD, 6)
         if reply.session_id:
             self.meta.session_id = reply.session_id
         if reply.ok:
@@ -496,6 +526,7 @@ __all__ = [
     "LOCK_FILE",
     "META_FILE",
     "TRANSCRIPT_FILE",
+    "UNKNOWN_COST_USD",
     "_CHAT_ID",
     "BudgetReached",
     "ChatError",

@@ -7,6 +7,7 @@ import os
 from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 import httpx
 import pytest
@@ -28,6 +29,7 @@ from jev_agent.core.chat import (
     Turn,
     brief_title,
     chat_dir,
+    chat_lessons,
     choose_learning,
     effective_profile,
     extract_brief,
@@ -398,3 +400,131 @@ def test_session_note_after_learning_change(tmp_path: Path) -> None:
     asyncio.run(session.say("c"))
     assert sent == ["a", "[Note from jev: lessons changed]\n\nb", "c"]
     assert session.meta.unknown_cost_calls == 3 and session.meta.session_id == "sid"
+
+
+# ---- issue #202: budget, corrupt meta, swallowed learning errors ---------------------------
+
+
+def test_api_backend_refuses_when_budget_spent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The API backend used to ignore `budget_left_usd` and call with nothing left."""
+    monkeypatch.setenv("MY_CHAT_KEY", "k" * 12)
+    calls: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        return httpx.Response(200, json={"choices": [{"message": {"content": "x"}}], "usage": {}})
+
+    transport = httpx.MockTransport(handler)
+    backend = ApiChatBackend("https://x.test", "MY_CHAT_KEY", "m", transport=transport)
+    for left in (0, -0.5):
+        reply = asyncio.run(
+            backend.send(
+                "S", [], "m", session_id=None, budget_left_usd=left, log_path=tmp_path / "l"
+            )
+        )
+        assert not reply.ok and "budget is spent" in reply.text
+    assert calls == []
+
+
+def test_session_charges_unknown_cost_calls_until_budget_trips(tmp_path: Path) -> None:
+    """A provider without a cost field used to leave `spent_usd` at zero forever, so the
+    budget never tripped. Unknown-cost calls now consume the budget a cent at a time."""
+
+    class UnknownCostBackend(EchoChatBackend):
+        async def send(self, *args: object, **kwargs: object) -> Reply:
+            return Reply(True, "answer", None)
+
+    session = ChatSession.create(
+        tmp_path, UnknownCostBackend("api"), "S", ChatLearning(), None, 0.03
+    )
+    assert asyncio.run(session.say("one")).ok
+    assert asyncio.run(session.say("two")).ok
+    assert session.meta.spent_usd == pytest.approx(0.02) and session.meta.unknown_cost_calls == 2
+    assert asyncio.run(session.say("three")).ok  # 0.02 < 0.03: allowed, now at budget
+    with pytest.raises(BudgetReached, match=r"\$0.03 of its \$0.03"):
+        asyncio.run(session.say("four"))
+
+
+def _write_meta(tmp_path: Path, chat_id: str, **overrides: object) -> Path:
+    """A saved chat directory whose meta.json is `overrides` on top of a valid meta."""
+    directory = chat_dir(tmp_path, chat_id)
+    directory.mkdir(parents=True)
+    meta: dict[str, Any] = {
+        "chat_id": chat_id,
+        "created_at": "2026-01-01T00:00:00+00:00",
+        "updated_at": "2026-01-01T00:00:00+00:00",
+        "learning": {"profile": None, "off": False},
+        "profile": None,
+        "backend": "api",
+        "model": "m",
+        "session_id": None,
+        "budget_usd": 1.0,
+        "spent_usd": 0.0,
+        "unknown_cost_calls": 0,
+        "turns": 0,
+        "brief": None,
+        "brief_turns": 0,
+        "runs": [],
+        "queue_items": [],
+        "quality": None,
+        "design_system": None,
+    }
+    meta.update(overrides)
+    (directory / META_FILE).write_text(json.dumps(meta), encoding="utf-8")
+    return directory
+
+
+def test_corrupt_meta_does_not_break_chat_listing(tmp_path: Path) -> None:
+    """One chat whose stored learning choice has both profile and off set used to raise
+    LearningError out of `from_json` and break `jev chat --list` for every chat."""
+    _write_meta(tmp_path, "c-20260101-000000-aaaa")
+    _write_meta(
+        tmp_path,
+        "c-20260101-000001-bbbb",
+        learning={"profile": "p", "off": True},
+    )
+    listed = {m.chat_id: m for m in list_chats(tmp_path)}
+    assert set(listed) == {"c-20260101-000000-aaaa", "c-20260101-000001-bbbb"}
+    assert listed["c-20260101-000001-bbbb"].learning == ChatLearning()  # corrupt → default
+    assert ChatSession.load_meta(tmp_path, "c-20260101-000001-bbbb").learning == ChatLearning()
+
+
+def test_non_numeric_meta_fields_are_rejected(tmp_path: Path) -> None:
+    """A hand-edited meta.json with a string (or boolean) in a numeric field is reported,
+    and `list_chats` skips that one chat instead of loading a wrong type."""
+    _write_meta(tmp_path, "c-20260101-000000-aaaa", spent_usd="lots")
+    _write_meta(tmp_path, "c-20260101-000001-bbbb", turns=True)
+    _write_meta(tmp_path, "c-20260101-000002-cccc")
+    assert [m.chat_id for m in list_chats(tmp_path)] == ["c-20260101-000002-cccc"]
+    with pytest.raises(ChatError, match="non-numeric spent_usd"):
+        ChatSession.load_meta(tmp_path, "c-20260101-000000-aaaa")
+    with pytest.raises(ChatError, match="non-integer turns"):
+        ChatSession.load_meta(tmp_path, "c-20260101-000001-bbbb")
+
+
+def test_chat_lessons_only_missing_profile_yields_no_lessons(tmp_path: Path) -> None:
+    """`chat_lessons` used to swallow every LearningError, so a corrupt database ran the
+    chat with zero lessons and no warning. Only a vanished profile still yields []."""
+    config = JevConfig()
+    with Store.open(tmp_path / "state.db") as store:
+        learning = Learning.for_store(store, tmp_path / "shared.db")
+        try:
+            assert chat_lessons("ghost", learning, config) == []  # profile never existed
+            learning.create("p")
+            db = learning.db_for("p")
+            lesson = db.add_lesson("p", "plan well", ["planner"], [])
+            assert [x.id for x in chat_lessons("p", learning, config)] == [lesson.id]
+        finally:
+            learning.close()
+
+    class BrokenLearning:
+        def get(self, name: str) -> object:
+            return object()  # the profile exists...
+
+        def lessons(self, name: str) -> list[object]:
+            raise LearningError("no such table: lessons")  # ...but reading it fails
+
+    with pytest.raises(LearningError, match="no such table"):
+        chat_lessons("p", BrokenLearning(), JevConfig())  # type: ignore[arg-type]
