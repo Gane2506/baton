@@ -36,6 +36,12 @@ from jev_agent.dashboard.errors import friendly_error
 
 RunAction = Literal["approve", "resume", "ship", "stop", "start"]
 
+# Issue #200: the launchers keyed finished jobs by run/chat id forever, so a
+# long-lived dashboard accumulated one entry (plus a lock and a thread handle)
+# per run it ever touched. Finished entries past this cap are dropped, oldest
+# first; running jobs are never dropped.
+_MAX_JOBS = 512
+
 # (repo root, run id, action) -> a one-line outcome; raises on failure. Blocking.
 Executor = Callable[[Path, str, RunAction], str]
 
@@ -153,6 +159,29 @@ class RunLauncher:
         with self._guard:
             return self._locks.setdefault(run_id, threading.Lock())
 
+    def _prune_finished(self) -> None:
+        """Drop finished jobs past `_MAX_JOBS`, oldest first (lock held).
+
+        Only jobs whose thread has actually exited: a job between its state
+        flip and its lock release must keep its lock, or a new start for the
+        same run could run concurrently with the old thread's cleanup.
+        """
+
+        def _thread_dead(job: Job) -> bool:
+            thread = self._threads.get(job.run_id)
+            return thread is None or not thread.is_alive()
+
+        finished = sorted(
+            (job for job in self._jobs.values() if job.state != "running" and _thread_dead(job)),
+            key=lambda job: job.finished_at or job.started_at,
+        )
+        while len(self._jobs) > _MAX_JOBS and finished:
+            old = finished.pop(0)
+            self._jobs.pop(old.run_id, None)
+            self._threads.pop(old.run_id, None)
+            self._cancels.pop(old.run_id, None)
+            self._locks.pop(old.run_id, None)
+
     def busy(self, run_id: str) -> bool:
         return self._lock_for(run_id).locked()
 
@@ -174,6 +203,7 @@ class RunLauncher:
             self._jobs[run_id] = job
             self._threads[run_id] = thread
             self._cancels[run_id] = cancel
+            self._prune_finished()
         try:
             thread.start()
         except BaseException:
@@ -256,6 +286,25 @@ class ChatRunner:
         with self._guard:
             return self._locks.setdefault(chat_id, threading.Lock())
 
+    def _prune_finished(self) -> None:
+        """Drop finished turns past `_MAX_JOBS`, oldest first (lock held)."""
+
+        # Same rule as RunLauncher: only turns whose thread has exited.
+        def _thread_dead(job: ChatJob) -> bool:
+            thread = self._threads.get(job.chat_id)
+            return thread is None or not thread.is_alive()
+
+        finished = sorted(
+            (job for job in self._jobs.values() if job.state != "running" and _thread_dead(job)),
+            key=lambda job: job.finished_at or job.started_at,
+        )
+        while len(self._jobs) > _MAX_JOBS and finished:
+            old = finished.pop(0)
+            self._jobs.pop(old.chat_id, None)
+            self._threads.pop(old.chat_id, None)
+            self._cancels.pop(old.chat_id, None)
+            self._locks.pop(old.chat_id, None)
+
     def busy(self, chat_id: str) -> bool:
         return self._lock_for(chat_id).locked()
 
@@ -275,6 +324,7 @@ class ChatRunner:
             self._jobs[chat_id] = job
             self._threads[chat_id] = thread
             self._cancels[chat_id] = cancel
+            self._prune_finished()
         try:
             thread.start()
         except BaseException:

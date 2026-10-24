@@ -69,8 +69,14 @@ class ToolRunner:
     # ---- tools ------------------------------------------------------------------------------
 
     def resolve(self, tool: str) -> str | None:
-        """How to call `tool` (see `resolve_tool`); None when it is not installed."""
-        return resolve_tool(tool, (self.workdir, self.repo), self.which)
+        """How to call `tool` (see `resolve_tool`); None when it is not installed.
+
+        Only the main repository is searched besides PATH: the worktree is
+        where the coder writes arbitrary files, so a planted
+        `<workdir>/.venv/bin/ruff` printing "clean" would fake a gate pass
+        (issue #196). The worktree is never a trusted tool location.
+        """
+        return resolve_tool(tool, (self.repo,), self.which)
 
     def available(self, tool: str) -> bool:
         return self.resolve(tool) is not None
@@ -109,7 +115,12 @@ class ToolRunner:
 
 def resolve_tool(tool: str, bases: Collection[Path], which: Which) -> str | None:
     """How to call `tool`: its name when it is on PATH, else the path of a copy in a base
-    directory's `node_modules/.bin` or `.venv/bin`; None when it is not installed."""
+    directory's `node_modules/.bin` or `.venv/bin`; None when it is not installed.
+
+    Callers must only pass trusted bases: a base the coder can write to (a task
+    worktree) lets a planted binary fake a gate pass. `ToolRunner.resolve`
+    passes only the main repository for this reason.
+    """
     if which(tool):
         return tool
     for base in bases:

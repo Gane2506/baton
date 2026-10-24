@@ -123,11 +123,22 @@ def profile_sources(repo_root: Path, user_config_path: Path | None = None) -> di
 
 
 def servers_text(config: JevConfig, name: str) -> str:
-    """`name`'s servers with their effective access levels, or "none"."""
+    """`name`'s servers with their effective access levels, or "none".
+
+    A profile naming a server that no longer exists in `[servers]` renders as
+    "unknown server" instead of raising `KeyError`: one dangling name used to
+    break the entire profiles page, including every healthy profile (issue
+    #197). The access override is ignored for an unknown server — there is no
+    access level to override.
+    """
     profile = config.profiles[name]
     parts = []
     for server in profile.servers:
-        level = profile.access_overrides.get(server, config.servers[server].access)
+        known = config.servers.get(server)
+        if known is None:
+            parts.append(f"{server} (unknown server)")
+            continue
+        level = profile.access_overrides.get(server, known.access)
         parts.append(f"{server} ({level})")
     return ", ".join(parts) or "none"
 

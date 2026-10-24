@@ -383,6 +383,71 @@ def test_scoring_updates_uses_and_retires(store: Store, learning: Learning) -> N
     assert [x.id for x in learning.lessons("p")] == [good.id]
 
 
+def test_run_level_lessons_scored_against_run_outcome(store: Store, learning: Learning) -> None:
+    """Issue #202: planner/validator lessons used to never gain uses or score, so they
+    never auto-retired. They are now scored once per ended run against the run's outcome;
+    the learner's shown lessons (run-level too) are not scored, and an unfinished run
+    scores nothing run-level."""
+    learning.create("p")
+    db = learning.db_for("p")
+    planner = db.add_lesson("p", "plan in small steps", ["planner"], [])
+    validator = db.add_lesson("p", "challenge the plan", ["validator"], [])
+    shown = db.add_lesson("p", "shown to the learner", ["coder"], [])
+
+    def _run_level_run(state: RunState) -> str:
+        run = store.create_run(Idea(text="x", repo_path=Path(".")), "p")
+        for role, ids in (
+            ("planner", [planner.id]),
+            ("validator", [validator.id]),
+            ("learner", [shown.id]),
+        ):
+            aid = store.start_attempt(run.id, None, 1, role, "fake", lesson_ids=ids)  # type: ignore[arg-type]
+            store.finish_attempt(
+                aid, WorkerResult(status="success", summary="ok", raw_log_path=Path())
+            )
+        store.set_run_state(run.id, state)
+        return run.id
+
+    done_id = _run_level_run(RunState.DONE)
+    score_lessons(store, store.get_run(done_id), db)
+    score_lessons(store, store.get_run(done_id), db)  # idempotent per run
+    got = db.get_lesson(planner.number)
+    assert got is not None and (got.uses, got.score) == (1, 1.0)
+    got = db.get_lesson(validator.number)
+    assert got is not None and (got.uses, got.score) == (1, 1.0)
+    got = db.get_lesson(shown.number)
+    assert got is not None and (got.uses, got.score) == (0, 0.0)  # learner's, not scored
+
+    failed_id = _run_level_run(RunState.FAILED)
+    score_lessons(store, store.get_run(failed_id), db)
+    got = db.get_lesson(planner.number)
+    assert got is not None and (got.uses, got.score) == (2, 0.5)
+
+    # A run that has not ended yet: its outcome is unknown, so nothing is scored.
+    open_run = store.create_run(Idea(text="x", repo_path=Path(".")), "p")
+    aid = store.start_attempt(open_run.id, None, 1, "planner", "fake", lesson_ids=[planner.id])
+    store.finish_attempt(aid, WorkerResult(status="success", summary="ok", raw_log_path=Path()))
+    score_lessons(store, store.get_run(open_run.id), db)
+    got = db.get_lesson(planner.number)
+    assert got is not None and (got.uses, got.score) == (2, 0.5)
+
+    # A planner+coder lesson injected into both the planner and a coder attempt is
+    # credited once (through the task), not twice: run-level scoring must not double it.
+    both = db.add_lesson("p", "both roles", ["planner", "coder"], [])
+    run = store.create_run(Idea(text="x", repo_path=Path(".")), "p")
+    store.upsert_tasks(run.id, Plan(summary="s", tasks=[_card("T1")]))
+    aid = store.start_attempt(run.id, None, 1, "planner", "fake", lesson_ids=[both.id])
+    store.finish_attempt(aid, WorkerResult(status="success", summary="ok", raw_log_path=Path()))
+    aid = store.start_attempt(run.id, "T1", 1, "coder", "fake", lesson_ids=[both.id])
+    store.finish_attempt(aid, WorkerResult(status="success", summary="ok", raw_log_path=Path()))
+    store.set_task_state(run.id, "T1", TaskState.DONE)
+    store.increment_task_attempts(run.id, "T1")
+    store.set_run_state(run.id, RunState.DONE)
+    score_lessons(store, store.get_run(run.id), db)
+    got = db.get_lesson(both.number)
+    assert got is not None and (got.uses, got.score) == (1, 1.0)
+
+
 def test_run_card_and_signals(store: Store, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("SOME_TOKEN", "tok-value-12345678")
     run = store.create_run(Idea(text="add search", repo_path=Path(".")), "p")

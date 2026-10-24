@@ -339,7 +339,20 @@ def wizard_context(
         **extra,
     }
     if step == "stack":
-        app_type = session_state["app_type"]["app_type"]
+        # Issue #200: a POST to /stack with no prior app_type fails validation
+        # (WizardError) and then re-renders this context — the old direct index
+        # raised KeyError here, turning the friendly error into a bare 500.
+        # With no app type yet there is nothing to list: render the step with
+        # empty options and let the error message (and the step page's
+        # incomplete-step redirect) send the visitor back to App type.
+        app_type = (session_state.get("app_type") or {}).get("app_type")
+        if app_type is None:
+            context["stack_options"] = []
+            context["stack_recommended"] = ""
+            context["stack_app_type"] = ""
+            context["stack_app_type_label"] = ""
+            context["stack_rec"] = None
+            return context
         # The Jev pick, decided once when the App type step was submitted and
         # cached in the wizard state; without a cache the static default applies.
         cached = StackRecommendation.from_state(session_state.get(STACK_REC_KEY))

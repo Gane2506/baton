@@ -13,7 +13,7 @@
 </div>
 
 {% if not repo_trusted %}
-<section class="panel" aria-label="Repository trust" style="border-left: 4px solid var(--warn);">
+<section class="panel trust-accent" aria-label="Repository trust">
   <h2>{{ icon("i-shield", "sm") }} Repository not trusted</h2>
   <p class="small">This repo's <code>jev.toml</code> cannot change guarded keys (servers, API key routing,
   agent tools) until you trust it. Trusting is per-machine and stored in your user config.</p>
@@ -51,17 +51,17 @@
         {% if stats and stats.ok %}
         <div class="statbar" title="CPU: {{ stats.cpu_cores }} cores">
           <span class="statbar-label">CPU</span>
-          <span class="statbar-track"><span class="statbar-fill" style="width: {{ stats.cpu_pct }}%"></span></span>
+          <span class="statbar-track"><span class="statbar-fill" data-bar-pct="{{ stats.cpu_pct }}"></span></span>
           <span class="statbar-val mono">{{ "%.0f"|format(stats.cpu_pct) }}%</span>
         </div>
         <div class="statbar" title="RAM: {{ stats.mem_used_gb }} / {{ stats.mem_total_gb }} GiB">
           <span class="statbar-label">RAM</span>
-          <span class="statbar-track"><span class="statbar-fill" style="width: {{ stats.mem_pct }}%"></span></span>
+          <span class="statbar-track"><span class="statbar-fill" data-bar-pct="{{ stats.mem_pct }}"></span></span>
           <span class="statbar-val mono">{{ "%.0f"|format(stats.mem_pct) }}%</span>
         </div>
         <div class="statbar" title="Disk (highest mount)">
           <span class="statbar-label">Disk</span>
-          <span class="statbar-track"><span class="statbar-fill" style="width: {{ stats.disk_pct }}%"></span></span>
+          <span class="statbar-track"><span class="statbar-fill" data-bar-pct="{{ stats.disk_pct }}"></span></span>
           <span class="statbar-val mono">{{ "%.0f"|format(stats.disk_pct) }}%</span>
         </div>
         {% elif st_state == "collecting" %}

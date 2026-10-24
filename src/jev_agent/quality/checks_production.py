@@ -14,6 +14,7 @@ from jev_agent.quality.base import (
     PYRIGHT_LINE,
     TSC_LINE,
     BaseCheck,
+    exit_mismatch,
     from_level,
     iac_files,
     int_or_none,
@@ -307,6 +308,8 @@ class TrivyCheck(BaseCheck):
                         suggestion=str(item.get("Resolution", "")),
                     )
                 )
+        if (bad := exit_mismatch(self, result, found=bool(findings))) is not None:
+            return bad
         if not findings:
             return CheckResult(status="pass", detail="no misconfigurations")
         return CheckResult(status="fail", detail=f"{len(findings)} issue(s)", findings=findings)
@@ -349,6 +352,8 @@ class HadolintCheck(BaseCheck):
             for item in data
             if isinstance(item, dict)
         ]
+        if (bad := exit_mismatch(self, result, found=bool(findings))) is not None:
+            return bad
         if not findings:
             return CheckResult(status="pass", detail="no issues")
         return CheckResult(status="fail", detail=f"{len(findings)} issue(s)", findings=findings)
@@ -394,7 +399,9 @@ class CheckovCheck(BaseCheck):
                         suggestion=str(item.get("guideline") or ""),
                     )
                 )
-        if data is None and not result.ok:
+        if (bad := exit_mismatch(self, result, found=bool(findings))) is not None:
+            return bad
+        if data is None:
             return tool_error(self, result)
         if not findings:
             return CheckResult(status="pass", detail="no failed checks")

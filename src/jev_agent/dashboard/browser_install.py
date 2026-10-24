@@ -96,6 +96,12 @@ def resolve_executable(name: str) -> str | None:
 
 _LOG_FILENAME = "browser-install.log"
 _LOG_TAIL_LINES = 30
+# Issue #200: the log was appended without a cap and `status()` re-read the
+# whole file on every poll. The tail read below only ever reads the last
+# 64 KiB, and a finished install is truncated to the last 256 KiB, so neither
+# the poll cost nor the stored file grows with install history.
+_TAIL_READ_BYTES = 65_536
+_MAX_LOG_BYTES = 262_144
 
 
 class BrowserInstallBusy(RuntimeError):
@@ -169,12 +175,44 @@ class BrowserInstallRunner:
         )
 
     def _tail(self) -> tuple[str, ...]:
+        """The log's last lines, read from the tail only (never the whole file)."""
         try:
-            data = self._log_path().read_bytes()
+            with self._log_path().open("rb") as handle:
+                handle.seek(0, os.SEEK_END)
+                size = handle.tell()
+                # Read the last chunk plus one byte of overlap so a chunk that
+                # starts mid-line can drop its partial first line below.
+                start = max(0, size - _TAIL_READ_BYTES)
+                handle.seek(start)
+                data = handle.read()
         except OSError:
             return ()
+        if start and b"\n" in data:
+            # Drop the partial first line (it continues a line from before the window).
+            _, _, data = data.partition(b"\n")
         lines = data.decode("utf-8", errors="replace").splitlines()
         return tuple(lines[-_LOG_TAIL_LINES:])
+
+    def _cap_log(self) -> None:
+        """Truncate a finished install's log to its last `_MAX_LOG_BYTES`.
+
+        Called only once the installer has exited (see `_watch`), so no writer
+        holds the file anymore; a partial first line is dropped the same way
+        as in `_tail()`.
+        """
+        path = self._log_path()
+        try:
+            size = path.stat().st_size
+            if size <= _MAX_LOG_BYTES:
+                return
+            with path.open("rb") as handle:
+                handle.seek(size - _MAX_LOG_BYTES)
+                data = handle.read()
+            if b"\n" in data:
+                _, _, data = data.partition(b"\n")
+            path.write_bytes(data)
+        except OSError:
+            pass
 
     def busy(self) -> bool:
         with self._guard:
@@ -250,6 +288,8 @@ class BrowserInstallRunner:
                 self._finished_at = datetime.now(UTC)
             self._proc = None
             self._thread = None
+        # The installer has exited: its log will never grow again, so cap it now.
+        self._cap_log()
 
     def shutdown(self, timeout: float = 30.0) -> None:
         """Stop a running install and wait for its thread (the lifespan calls this)."""

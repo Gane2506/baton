@@ -53,6 +53,20 @@ SECURITY_HEADERS = {
     "Cache-Control": "no-store",
 }
 
+# Issue #200: the Design Studio showcase is a self-contained generated page
+# (inline <style> for its tokens, inline <script> for the dark/light toggle)
+# that is ALSO meant to be opened as a standalone file, so it cannot be
+# externalized like the dashboard's own templates. It gets this scoped policy
+# on its one route only: inline style/script allowed, but still no framing,
+# no third-party origins, no plugins, and no other page's policy changes.
+# The showcase is generated server-side from validated tokens (never raw
+# user HTML), so the inline allowance cannot smuggle in foreign markup.
+SHOWCASE_CONTENT_SECURITY_POLICY = (
+    "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; "
+    "img-src 'self' data:; connect-src 'self'; form-action 'self'; frame-ancestors 'none'; "
+    "base-uri 'none'; object-src 'none'"
+)
+
 
 class DashboardConfigError(ValueError):
     """The dashboard settings are unsafe or invalid (e.g. a public bind without a token)."""
@@ -142,10 +156,15 @@ def load_or_create_secret() -> bytes:
     secret = secrets.token_bytes(_SECRET_BYTES)
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        # Write atomically with restrictive permissions from the start.
+        # Write atomically with restrictive permissions from the start: the
+        # old write-then-chmod left a window where the temp file sat at the
+        # umask default. Creating with mode 0o600 closes it (issue #200).
         tmp = path.with_suffix(".tmp")
-        tmp.write_bytes(secret)
-        os.chmod(tmp, 0o600)
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        try:
+            os.write(fd, secret)
+        finally:
+            os.close(fd)
         tmp.replace(path)
     except OSError:
         pass  # fall back to the in-memory secret; forms just won't survive restart
@@ -180,7 +199,7 @@ class SecurityMiddleware(BaseHTTPMiddleware):
                 rest = [(k, v) for k, v in request.query_params.multi_items() if k != TOKEN_QUERY]
                 target = request.url.path + (f"?{urlencode(rest)}" if rest else "")
                 redirect = RedirectResponse(target, status_code=303)
-                _set_cookie(redirect, TOKEN_COOKIE, settings.token)
+                _set_cookie(redirect, TOKEN_COOKIE, settings.token, secure=_is_https(request))
                 return redirect
             given = (
                 request.cookies.get(TOKEN_COOKIE) or request.headers.get(TOKEN_HEADER) or from_query
@@ -200,12 +219,30 @@ class SecurityMiddleware(BaseHTTPMiddleware):
         request.state.csrf = csrf_token(settings, session)
         response = await call_next(request)
         if new_session:
-            _set_cookie(response, SESSION_COOKIE, session)
+            _set_cookie(response, SESSION_COOKIE, session, secure=_is_https(request))
         return response
 
 
-def _set_cookie(response: Response, name: str, value: str) -> None:
-    response.set_cookie(name, value, httponly=True, samesite="strict", path="/")
+def _is_https(request: Request) -> bool:
+    """True when this request itself arrived over HTTPS.
+
+    Deliberately the request's own scheme only — not X-Forwarded-Proto, which
+    any client can spoof and which the dashboard does not trust (it has no
+    trusted-proxy list). Behind a TLS-terminating proxy the scheme stays
+    http and the flag stays off, which is the safe direction for a cookie
+    the browser must actually send back.
+    """
+    return request.url.scheme == "https"
+
+
+def _set_cookie(response: Response, name: str, value: str, *, secure: bool = False) -> None:
+    # Issue #200: the session/token cookies lacked the Secure flag. It is set
+    # exactly when the request arrived over HTTPS: a Secure cookie on a plain
+    # HTTP dashboard (loopback, or LAN access over http) would never be sent
+    # back at all, breaking every session and the ?token= cookie swap — the
+    # existing token tests pin that flow. Over HTTPS the flag keeps the
+    # cookies out of any accidental plain-HTTP request.
+    response.set_cookie(name, value, httponly=True, samesite="strict", path="/", secure=secure)
 
 
 def same_origin(request: Request) -> bool:

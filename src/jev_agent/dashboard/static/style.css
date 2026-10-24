@@ -620,6 +620,13 @@ h2.section:first-child { margin-top: 0; }
 .btn:disabled, button:disabled, .button:disabled { opacity: 0.45; cursor: not-allowed; transform: none; }
 
 form.inline { display: inline-flex; }
+/* Issue #200: these replace inline style="" attributes (the CSP forbids
+   them, so the inline versions silently did nothing). */
+.ml-12 { margin-left: 12px; }
+.mt-s2 { margin-top: var(--s2); }
+.mt-s3 { margin-top: var(--s3); }
+.no-underline { text-decoration: none; }
+.trust-accent { border-left: 4px solid var(--warn); }
 /* Inline key-add form beside a key badge (Connections decision route): compact,
    disappears once the key is set. */
 form.key-add { align-items: center; gap: var(--s1); margin-left: var(--s2); vertical-align: middle; }
@@ -1362,6 +1369,14 @@ dialog.palette::backdrop { background: rgba(0, 0, 0, 0.45); }
   transition: border-color 0.15s ease, transform 0.15s ease;
 }
 .studio-card:hover { border-color: var(--accent); transform: translateY(-2px); }
+/* Issue #200: the "New design system" card is a POST form (starting the
+   wizard clears state), so the card itself is a <button>: reset button
+   defaults so it still looks like the link card, and style the span title
+   like the <h2> it replaces (a <button> may only contain phrasing content). */
+.studio-card-form { margin: 0; }
+button.studio-card { text-align: left; font: inherit; cursor: pointer; width: 100%; }
+.studio-card-title { display: block; font-size: var(--text-lg); font-weight: 600; }
+.studio-card-desc { color: var(--muted); font-size: var(--text-sm); flex: 1; }
 .studio-card-icon {
   display: inline-flex;
   align-items: center;

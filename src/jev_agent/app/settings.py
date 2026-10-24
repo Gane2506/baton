@@ -10,12 +10,14 @@ Nothing here prints or exits; errors are strings for the caller to show.
 
 from __future__ import annotations
 
+import hashlib
 import os
 import re
 import tempfile
 import tomllib
 import types
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
@@ -24,6 +26,11 @@ from typing import Any, Literal, Union, get_args, get_origin
 import tomlkit
 from pydantic import BaseModel, ValidationError
 from tomlkit.exceptions import ParseError as TomlkitParseError
+
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - non-POSIX platforms have no flock
+    fcntl = None  # type: ignore[assignment]
 
 from jev_agent.config.defaults import CONFIG_FILENAME
 from jev_agent.config.loader import (
@@ -365,6 +372,52 @@ def _table(doc: Any, parts: list[str]) -> Any:
     return node
 
 
+@contextmanager
+def _config_lock(path: Path) -> Iterator[None]:
+    """Hold an exclusive advisory lock for one config file (issue #197).
+
+    `save()` holds it from snapshot to write, and the low-level writers hold it
+    from parse to write, so two dashboard saves can no longer silently discard
+    each other's change (last-writer-wins): a second save serializes behind the
+    first and works from the fresh file instead of a stale snapshot. The lock
+    file lives in the cache dir (keyed by the config path's hash), never next
+    to the config, so no stray file lands in the repo. On platforms without
+    `flock` this is a no-op and the compare-and-swap check in `save()` is the
+    only guard. Lock files are never removed: removing one would let a new
+    opener lock a different inode while an old holder still holds the old one.
+    """
+    if fcntl is None:
+        yield
+        return
+    cache = Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache") / "jev" / "locks"
+    cache.mkdir(parents=True, exist_ok=True)
+    digest = hashlib.sha256(str(path.resolve()).encode("utf-8")).hexdigest()
+    with (cache / f"{digest}.lock").open("a+") as handle:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
+def entity_exists(layer: Any, section: str, name: str) -> bool:
+    """Whether `[section.name]` is already in a plain dict or a tomlkit document.
+
+    The dashboard's add flow checks this inside its `save()` mutate: `save()`
+    used to ignore the write closure that carried the duplicate check
+    (`add_entity`'s `ValueError` never ran), so a duplicate add silently
+    overwrote the existing entry (issue #197).
+    """
+    node: Any = layer
+    for part in section.split("."):
+        if not isinstance(node, dict):
+            return False
+        node = node.get(part)
+        if node is None:
+            return False
+    return isinstance(node, dict) and name in node
+
+
 def _write(path: Path, doc: Any) -> None:
     """Write `doc` to `path` atomically.
 
@@ -388,44 +441,61 @@ def _write(path: Path, doc: Any) -> None:
 
 
 def write_value(path: Path, dotted: str, value: Any) -> None:
-    """Set one key in the TOML file, keeping comments and other ordering."""
-    doc = _parse_file(path)
-    parts = dotted.split(".")
-    table = _table(doc, parts[:-1])
-    table[parts[-1]] = value
-    _write(path, doc)
+    """Set one key in the TOML file, keeping comments and other ordering.
+
+    A low-level writer: it validates nothing and runs no trust gate. Callers
+    writing a repo's jev.toml must go through `save()` instead; this stays for
+    the user config (the UI-style picker) and for `save()`'s own callers' legacy
+    closures. Held under the config lock, so it cannot interleave with a save.
+    """
+    with _config_lock(path):
+        doc = _parse_file(path)
+        parts = dotted.split(".")
+        table = _table(doc, parts[:-1])
+        table[parts[-1]] = value
+        _write(path, doc)
 
 
 def unset_value(path: Path, dotted: str) -> None:
-    """Remove one key from the TOML file (missing is fine)."""
-    doc = _parse_file(path)
-    parts = dotted.split(".")
-    table = _table(doc, parts[:-1])
-    if parts[-1] in table:
-        del table[parts[-1]]
-    _write(path, doc)
+    """Remove one key from the TOML file (missing is fine). Low-level: see `write_value`."""
+    with _config_lock(path):
+        doc = _parse_file(path)
+        parts = dotted.split(".")
+        table = _table(doc, parts[:-1])
+        if parts[-1] in table:
+            del table[parts[-1]]
+        _write(path, doc)
 
 
 def add_entity(path: Path, section: str, name: str, values: dict[str, Any]) -> None:
-    """Add `[section.name]` with `values` (a section of plain strings is stored as the value)."""
-    doc = _parse_file(path)
-    table = _table(doc, section.split("."))
-    if name in table:
-        raise ValueError(f"{section}.{name} already exists")
-    node = tomlkit.table()
-    for key, value in values.items():
-        node[key] = value
-    table[name] = node
-    _write(path, doc)
+    """Add `[section.name]` with `values` (a section of plain strings is stored as the value).
+
+    `ValueError` when the entry already exists: never silently overwrite.
+    Low-level: see `write_value` — the dashboard's add flow checks the same
+    condition inside its `save()` mutate (via `entity_exists`) instead, because
+    `save()` writes from its own snapshot rather than calling this.
+    """
+    with _config_lock(path):
+        doc = _parse_file(path)
+        table = _table(doc, section.split("."))
+        if name in table:
+            raise ValueError(f"{section}.{name} already exists")
+        node = tomlkit.table()
+        for key, value in values.items():
+            node[key] = value
+        table[name] = node
+        _write(path, doc)
 
 
 def remove_entity(path: Path, section: str, name: str) -> None:
-    doc = _parse_file(path)
-    table = _table(doc, section.split("."))
-    if name not in table:
-        raise ValueError(f"{section}.{name} does not exist")
-    del table[name]
-    _write(path, doc)
+    """Remove `[section.name]`; `ValueError` when missing. Low-level: see `write_value`."""
+    with _config_lock(path):
+        doc = _parse_file(path)
+        table = _table(doc, section.split("."))
+        if name not in table:
+            raise ValueError(f"{section}.{name} does not exist")
+        del table[name]
+        _write(path, doc)
 
 
 # ---- validation ----------------------------------------------------------------------------
@@ -454,6 +524,20 @@ def _snapshot(path: Path) -> tuple[bytes, dict[str, Any]]:
         raise CorruptConfigError(f"{path}: not valid TOML: {exc}") from exc
 
 
+def _repo_trusted(user_new: dict[str, Any], root: Path) -> bool:
+    """Whether the user layer trusts `root`; False when the user layer itself is invalid.
+
+    The merged config can validate while the user layer alone does not (a repo
+    value overrides the bad user value), and `trusts()` needs a `JevConfig` —
+    letting that `ValidationError` escape would turn a trust decision into a
+    crash, so an unvalidatable user layer counts as untrusted (issue #197).
+    """
+    try:
+        return trusts(JevConfig.model_validate(user_new), root)
+    except ValidationError:
+        return False
+
+
 def save(
     root: Path,
     target: str,
@@ -464,15 +548,27 @@ def save(
 
     `mutate` edits a copy of the chosen layer; the merged result must validate, and a repo
     change to a guarded key needs the repo trusted (then the message says how).
+    `mutate` may raise `ValueError` (the dashboard's add flow raises when the
+    entry already exists); that becomes the returned error string, never a crash
+    — the module contract is "errors are strings".
 
     The validated unit and the written unit are the same: `save()` snapshots the target
     file once, validates the mutated layer, then applies `mutate` to the TOML document
     parsed from those exact bytes (comments and ordering survive — `set_path` and
-    `remove_path` work on tomlkit documents too) and writes it atomically. A second
-    settings tab racing this save cannot slip unvalidated content into the file, and
-    the trust-gate `before` is computed from the same snapshot. `write` is retained
-    for backward compatibility and ignored: the old write closures re-parsed the live
-    file, which is the TOCTOU this fixes.
+    `remove_path` work on tomlkit documents too) and writes it atomically. The whole
+    snapshot-to-write span holds the config lock, and the file is re-read just
+    before writing (compare-and-swap): a writer that bypassed the lock and changed
+    the file mid-save aborts the save instead of discarding its change. `write`
+    is retained for backward compatibility and ignored: the old write closures
+    re-parsed the live file, which is the TOCTOU this fixes — and ignoring them
+    is what used to make the duplicate-add check dead code, so callers that
+    need a check (adding an entity) must do it in `mutate` (see `entity_exists`).
+
+    Trust gate, two cases (issue #197): when the pre-save config validates, only
+    a change to a guarded key needs trust; when it does NOT validate (`before`
+    is None), the gate cannot prove the save leaves guarded keys alone — a save
+    that fixes validation and changes a guarded key used to bypass trust
+    entirely — so any repo save needs trust in that case.
     """
     try:
         path = target_file(root, target)  # ValueError for anything but repo/user
@@ -480,37 +576,69 @@ def save(
         return str(exc)
     user_path = default_user_config_path()
     try:
-        repo_snapshot, repo_raw = _snapshot(root / CONFIG_FILENAME)
-        _user_snapshot, user_raw = _snapshot(user_path)
-    except CorruptConfigError as exc:
-        return str(exc)
-    before = _validate_or_none(deep_merge(user_raw, repo_raw))
-    layer = dict(repo_raw) if target == "repo" else dict(user_raw)
-    mutate(layer)
-    repo_new, user_new = (layer, user_raw) if target == "repo" else (repo_raw, layer)
-    merged = deep_merge(user_new, repo_new)
-    try:
-        after = JevConfig.model_validate(merged)
-    except ValidationError as exc:
-        return _error_line(exc)
-    if target == "repo" and before is not None:
-        changed = changed_guarded_keys(before, after)
-        if changed and not trusts(JevConfig.model_validate(user_new), root):
-            listed = ", ".join(sorted(changed))
-            return (
-                f"{TRUST_GATE_MARKER} {listed}: these keys change a repository's jev.toml "
-                f"only when you trust it (they decide where API keys go, which commands run "
-                f"and which tools agents get). Add the repo under Trust below, or save this "
-                f"to the user config ({user_path}) instead."
-            )
-    target_snapshot = repo_snapshot if target == "repo" else _user_snapshot
-    try:
-        doc = tomlkit.parse(target_snapshot.decode("utf-8"))
-    except TomlkitParseError as exc:  # unreachable: the same bytes parsed above
-        return f"{path}: not valid TOML: {exc}"
-    mutate(doc)
-    try:
-        _write(path, doc)
+        with _config_lock(path):
+            try:
+                repo_snapshot, repo_raw = _snapshot(root / CONFIG_FILENAME)
+                _user_snapshot, user_raw = _snapshot(user_path)
+            except CorruptConfigError as exc:
+                return str(exc)
+            before = _validate_or_none(deep_merge(user_raw, repo_raw))
+            layer = dict(repo_raw) if target == "repo" else dict(user_raw)
+            try:
+                mutate(layer)
+            except ValueError as exc:
+                return str(exc)
+            repo_new, user_new = (layer, user_raw) if target == "repo" else (repo_raw, layer)
+            merged = deep_merge(user_new, repo_new)
+            try:
+                after = JevConfig.model_validate(merged)
+            except ValidationError as exc:
+                return _error_line(exc)
+            if target == "repo":
+                if before is None:
+                    if not _repo_trusted(user_new, root):
+                        return (
+                            f"{TRUST_GATE_MARKER} this repo's jev.toml does not validate "
+                            f"as it stands, so this save cannot prove it leaves guarded "
+                            f"keys alone (they decide where API keys go, which commands "
+                            f"run and which tools agents get). Add the repo under Trust "
+                            f"below, or save this to the user config ({user_path}) instead."
+                        )
+                else:
+                    changed = changed_guarded_keys(before, after)
+                    if changed and not _repo_trusted(user_new, root):
+                        listed = ", ".join(sorted(changed))
+                        return (
+                            f"{TRUST_GATE_MARKER} {listed}: these keys change a "
+                            f"repository's jev.toml only when you trust it (they decide "
+                            f"where API keys go, which commands run and which tools "
+                            f"agents get). Add the repo under Trust below, or save this "
+                            f"to the user config ({user_path}) instead."
+                        )
+            target_snapshot = repo_snapshot if target == "repo" else _user_snapshot
+            try:
+                doc = tomlkit.parse(target_snapshot.decode("utf-8"))
+            except TomlkitParseError as exc:  # unreachable: the same bytes parsed above
+                return f"{path}: not valid TOML: {exc}"
+            try:
+                mutate(doc)
+            except ValueError as exc:
+                return str(exc)
+            try:
+                current = path.read_bytes()
+            except FileNotFoundError:
+                current = b""
+            except OSError as exc:
+                return f"{path}: could not be read: {exc}"
+            if current != target_snapshot:
+                return (
+                    f"{path}: the config changed while this save was in progress; "
+                    f"reload and try again"
+                )
+            try:
+                _write(path, doc)
+            except OSError as exc:
+                return f"{path}: could not be written: {exc}"
     except OSError as exc:
         return f"{path}: could not be written: {exc}"
     return None

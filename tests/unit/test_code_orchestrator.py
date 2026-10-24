@@ -91,6 +91,29 @@ def test_missing_confidence_is_never_trusted() -> None:
     assert outcome.confidence == 0.0
 
 
+def test_nonfinite_confidence_never_passes_the_gate() -> None:
+    # Issue #192: NaN < 0.7 is False, so a NaN-confidence "accept" used to
+    # pass the gate fail-open. NaN, +inf and -inf are distrusted as 0.0.
+    for bad in (float("nan"), float("inf"), float("-inf")):
+        outcome = gate_code_review(_grade(answer_confidence={"merge_action": bad}))
+        assert outcome.decision == "human_review", bad
+        assert outcome.confidence == 0.0, bad
+
+
+def test_nonfinite_trace_confidence_is_not_trusted_to_continue() -> None:
+    grade = AgentTraceGrade(
+        action="continue",
+        needs_review=False,
+        outcome="success",
+        risk=0,
+        urgency=0,
+        answer_confidence={"action": float("nan")},
+    )
+    outcome = gate_trace(grade)
+    assert outcome.decision == "human_review"
+    assert outcome.confidence == 0.0
+
+
 def test_request_changes_and_needs_tests_are_rework() -> None:
     for action in ("request_changes", "needs_tests"):
         assert gate_code_review(_grade(merge_action=action)).decision == "rework"
@@ -279,6 +302,291 @@ def test_apply_code_grade_low_confidence_blocks_as_human_review() -> None:
     assert result.blocked is True
     assert result.code_grade is not None
     assert result.code_grade["gate"]["decision"] == "human_review"
+
+
+def test_apply_code_grade_inference_error_blocks_fail_closed_not_unavailable() -> None:
+    """C3, gate side: an inference failure is not a missing model.
+
+    The old code let a backend exception propagate as whatever the backend
+    raised; the gate's generic handler blocked, but only by accident. Now
+    the orchestrator wraps it as CodeOrchestratorError, and the gate blocks
+    with status "error" -- never the "unavailable" path, which must stay
+    reserved for a backend that was never installed.
+    """
+
+    class _ExplodingBackend(_FakeBackend):
+        def grade_code(self, *, task: str, diff: str, tests: str) -> object:
+            raise RuntimeError("torch OOM on the grading pass")
+
+    result = apply_code_grade(
+        _result(),
+        settings=CodeOrchestratorSettings(enabled=True),
+        task_title="Fix x",
+        diff="+x\n",
+        orchestrator=CodeOrchestrator(backend=_ExplodingBackend()),
+    )
+    assert result.blocked is True
+    assert result.code_grade is not None
+    assert result.code_grade["status"] == "error"
+    assert "CodeOrchestratorError" in result.code_grade["detail"]
+
+
+# ---------------------------------------------------------------------------
+# Issue #203 fixes
+# ---------------------------------------------------------------------------
+
+
+def test_bool_label_rejects_unknown_strings_instead_of_coercing_to_false() -> None:
+    """I4: 'maybe' used to become a confident False; now it raises."""
+    base: dict[str, object] = {
+        "code_quality": 3,
+        "merge_action": "accept",
+        "answer_confidence": {"merge_action": 0.9},
+    }
+    with pytest.raises(ValueError, match="not a yes/no label"):
+        normalise_code_review({**base, "instruction_followed": "maybe", "likely_correct": "yes"})
+    with pytest.raises(ValueError, match="not a yes/no label"):
+        normalise_code_review({**base, "instruction_followed": "", "likely_correct": "yes"})
+    for spelling, expected in (
+        ("yes", True),
+        ("YES", True),
+        ("true", True),
+        ("1", True),
+        ("no", False),
+        ("No", False),
+        ("false", False),
+        ("0", False),
+    ):
+        grade = normalise_code_review(
+            {**base, "instruction_followed": spelling, "likely_correct": spelling}
+        )
+        assert grade.instruction_followed is expected
+        assert grade.likely_correct is expected
+
+
+def test_gate_trace_validates_threshold_action_and_scores() -> None:
+    """I5: gate_trace is now as strict as gate_code_review."""
+    good = AgentTraceGrade(
+        action="observe",
+        needs_review=False,
+        outcome="progress",
+        risk=1,
+        urgency=1,
+        answer_confidence={"action": 0.9},
+    )
+    with pytest.raises(ValueError, match="threshold must be 0-1"):
+        gate_trace(good, threshold=1.5)
+    with pytest.raises(ValueError, match="unknown trace action"):
+        gate_trace(
+            AgentTraceGrade(
+                action="wander",  # type: ignore[arg-type]
+                needs_review=False,
+                outcome="progress",
+                risk=1,
+                urgency=1,
+                answer_confidence={"action": 0.9},
+            )
+        )
+    for field, value in (("risk", 4), ("risk", -1), ("urgency", 9), ("risk", True)):
+        kwargs: dict[str, object] = {
+            "action": "observe",
+            "needs_review": False,
+            "outcome": "progress",
+            "risk": 1,
+            "urgency": 1,
+            "answer_confidence": {"action": 0.9},
+        }
+        kwargs[field] = value
+        with pytest.raises(ValueError, match="out of 0-3"):
+            gate_trace(AgentTraceGrade(**kwargs))  # type: ignore[arg-type]
+
+
+def test_routing_hint_is_gated_and_empty_below_threshold() -> None:
+    """I6: a low-confidence routing hint is no hint, not a weak tier."""
+    low = RoutingGrade(
+        model_tier="frontier",
+        task_difficulty=2,
+        skill="refactor",
+        answer_confidence={"model_tier": 0.4},
+    )
+    assert routing_hint(low) == {}
+    assert routing_hint(low, threshold=0.3)["model_tier"] == "frontier"
+    assert routing_hint(low, threshold=0.4)["model_tier"] == "frontier"
+    with pytest.raises(ValueError, match="threshold must be 0-1"):
+        routing_hint(low, threshold=2.0)
+    missing = RoutingGrade(
+        model_tier="frontier",
+        task_difficulty=2,
+        skill="refactor",
+        answer_confidence={},
+    )
+    assert routing_hint(missing) == {}
+
+
+def test_compact_diff_two_line_long_diff_gets_a_marker() -> None:
+    """C2: the exact case the swarm review verified -- 2 lines, 16k chars."""
+    import re
+
+    diff = "a" * 8000 + "\n" + "b" * 8000
+    compacted = compact_diff(diff)
+    assert len(compacted) <= 7000
+    match = re.search(r"\[(\d+) character\(s\) omitted to fit", compacted)
+    assert match is not None, "no omission marker on a truncated 2-line diff"
+    # The marker's count is computed from the head/tail actually returned.
+    # The full marker line, reconstructed from the match's span context:
+    # everything between the head and the tail is the marker.
+    marker_start = compacted.index("... [")
+    marker_end = compacted.index("] ...", marker_start) + len("] ...")
+    kept = len(compacted) - (marker_end - marker_start) - 2  # surrounding newlines
+    assert int(match.group(1)) == len(diff) - kept
+    assert compacted.startswith("a" * 100)
+    assert compacted.endswith("b" * 100)
+
+
+def test_compact_diff_long_lines_never_overflow_or_lose_the_marker() -> None:
+    """C2: head+tail rebalance used to overflow max_chars and slice the marker."""
+    import re
+
+    diff = "\n".join("x" * 2000 for _ in range(10))
+    compacted = compact_diff(diff, max_chars=7000)
+    assert len(compacted) <= 7000
+    match = re.search(r"\[(\d+) line\(s\) omitted to fit", compacted)
+    assert match is not None
+    kept_lines = len([line for line in compacted.splitlines() if "omitted to fit" not in line])
+    assert int(match.group(1)) == 10 - kept_lines
+
+
+def test_compact_diff_tiny_budget_still_names_the_omission() -> None:
+    compacted = compact_diff("a" * 500, max_chars=30)
+    assert len(compacted) <= 30
+    assert "omitted" in compacted
+    with pytest.raises(ValueError, match="max_chars must be positive"):
+        compact_diff("abc", max_chars=0)
+
+
+def test_backend_inference_errors_are_wrapped_not_leaked() -> None:
+    """C3: a backend exception becomes CodeOrchestratorError, never raw."""
+    from jev_agent.code_orchestrator import CodeOrchestratorError
+
+    class _ExplodingBackend(_FakeBackend):
+        def grade_code(self, *, task: str, diff: str, tests: str) -> object:
+            raise RuntimeError("boom")
+
+        def route_model(self, request: str) -> object:
+            raise TimeoutError("model call timed out")
+
+    orch = CodeOrchestrator(backend=_ExplodingBackend())
+    with pytest.raises(CodeOrchestratorError, match="backend failed"):
+        orch.grade_code(task="fix x", diff="+x\n")
+    with pytest.raises(CodeOrchestratorError, match="backend failed"):
+        orch.route("refactor billing")
+    # And the missing-model class is a subclass, so D4's single except
+    # (CodeOrchestratorError) covers both the missing and the failed case.
+    assert issubclass(CodeOrchestratorUnavailable, CodeOrchestratorError)
+
+
+def test_malformed_verdict_stays_a_value_error_not_an_inference_error() -> None:
+    """C3: wrapping must not hide a mis-shaped verdict as an inference failure."""
+
+    class _MisshapedBackend(_FakeBackend):
+        def grade_code(self, *, task: str, diff: str, tests: str) -> object:
+            return {
+                "code_quality": 3,
+                "instruction_followed": "yes",
+                "likely_correct": "yes",
+                "merge_action": "ship_it",
+                "answer_confidence": {},
+            }
+
+    orch = CodeOrchestrator(backend=_MisshapedBackend())
+    # pytest.raises(ValueError) already fails if this came back wrapped as
+    # CodeOrchestratorError, since the two classes are unrelated.
+    with pytest.raises(ValueError, match="unknown merge_action"):
+        orch.grade_code(task="fix x", diff="+x\n")
+
+
+def test_grade_code_compacts_internally_so_callers_cannot_forget() -> None:
+    """I10: the caller hands over the raw diff; the orchestrator compacts."""
+
+    class _CapturingBackend(_FakeBackend):
+        def __init__(self) -> None:
+            super().__init__()
+            self.seen_diff = ""
+
+        def grade_code(self, *, task: str, diff: str, tests: str) -> object:
+            self.seen_diff = diff
+            return super().grade_code(task=task, diff=diff, tests=tests)
+
+    backend = _CapturingBackend()
+    orch = CodeOrchestrator(backend=backend)
+    raw = "\n".join(f"+line {i}" for i in range(1000))
+    assert len(raw) > 7000
+    orch.grade_code(task="fix x", diff=raw)
+    assert len(backend.seen_diff) <= 7000
+    assert "omitted to fit" in backend.seen_diff
+    # A caller-configured budget is honoured, not just the default.
+    backend2 = _CapturingBackend()
+    orch2 = CodeOrchestrator(backend=backend2, max_diff_chars=500)
+    orch2.grade_code(task="fix x", diff=raw)
+    assert len(backend2.seen_diff) <= 500
+    with pytest.raises(ValueError, match="max_diff_chars must be positive"):
+        CodeOrchestrator(backend=_FakeBackend(), max_diff_chars=0)
+
+
+def test_trace_and_tool_call_wired_through_backend_when_exposed() -> None:
+    """I11: the trace/tool families now have a call path, not just exports."""
+    from jev_agent.code_orchestrator import normalise_tool_call, normalise_trace
+
+    class _FullBackend(_FakeBackend):
+        def grade_trace(self, trace: str) -> object:
+            assert trace == "agent did step 1"
+            return {
+                "action": "observe",
+                "needs_review": "no",
+                "outcome": "progress",
+                "risk": 1,
+                "urgency": 1,
+                "answer_confidence": {"action": 0.9},
+            }
+
+        def grade_tool_call(self, tool_call: str) -> object:
+            return {
+                "should_call_tool": "yes",
+                "call_verdict": "correct",
+                "answer_confidence": {},
+            }
+
+    orch = CodeOrchestrator(backend=_FullBackend())
+    grade = orch.grade_trace("agent did step 1")
+    assert grade.action == "observe"
+    assert gate_trace(grade).decision == "rework"
+    assert orch.grade_tool_call("read file").call_verdict == "correct"
+    # A backend without those methods fails clearly instead of guessing.
+    plain = CodeOrchestrator(backend=_FakeBackend())
+    with pytest.raises(CodeOrchestratorUnavailable, match="does not expose `grade_trace`"):
+        plain.grade_trace("agent did step 1")
+    with pytest.raises(CodeOrchestratorUnavailable, match="does not expose `grade_tool_call`"):
+        plain.grade_tool_call("read file")
+    # Normalisers validate the trace/tool families like the code family.
+    with pytest.raises(ValueError, match="unknown trace action"):
+        normalise_trace(
+            {
+                "action": "wander",
+                "needs_review": "no",
+                "outcome": "progress",
+                "risk": 1,
+                "urgency": 1,
+                "answer_confidence": {},
+            }
+        )
+    with pytest.raises(ValueError, match="not a label"):
+        normalise_tool_call({"should_call_tool": "", "call_verdict": "correct"})
+    assert (
+        normalise_tool_call(
+            {"should_call_tool": "yes", "call_verdict": "correct", "answer_confidence": {}}
+        ).should_call_tool
+        == "yes"
+    )
 
 
 def test_apply_code_grade_unavailable_never_blocks() -> None:

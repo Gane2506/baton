@@ -28,6 +28,8 @@ from jev_agent.servers.policy import (
     check_command,
     check_read_path,
     check_write_path,
+    command_scope_paths,
+    scope_violation,
     sensitive,
     within,
     within_boundary,
@@ -204,9 +206,50 @@ class ServerService:
     def run_command(self, name: str, command: str, timeout_s: float | None = None) -> ToolResult:
         if (refused := self._unknown(name, "run_command", command)) is not None:
             return refused
-        decision = check_command(command, self.context(name))
+        ctx = self.context(name)
+        decision = check_command(command, ctx)
         if not decision.allowed:
             return self._denied(name, "run_command", command, decision)
+        if ctx.access == "medium":
+            # The lexical check cannot see server symlinks: re-check every
+            # scope-sensitive operand (compose files, recursive cp sources,
+            # pip -r/-e files) against its server-resolved path before anything
+            # runs, exactly as the file tools do (issue #204 I-3). A path that
+            # cannot be resolved, or that resolves outside the scope or into a
+            # credential file, never runs.
+            for scoped in command_scope_paths(decision.command, ctx):
+                if not scoped.path:
+                    return self._denied(
+                        name,
+                        "run_command",
+                        decision.command,
+                        Decision.deny(
+                            f"{scoped.kind}: use an absolute path (or one relative to the workdir)"
+                        ),
+                    )
+                real, error = self._realpath(name, scoped.path)
+                if real is None:
+                    problem = self._log(
+                        name, ctx.access, "run_command", decision.command, False, error
+                    )
+                    return ToolResult(
+                        f"cannot run {decision.command}: cannot resolve {scoped.path} ({error})"
+                        + _audit_note(problem),
+                        True,
+                    )
+                if problem := sensitive(real):
+                    return self._denied(name, "run_command", real, Decision.deny(problem))
+                if (violation := scope_violation(real, ctx, strictly=scoped.strictly)) is not None:
+                    return self._denied(name, "run_command", real, Decision.deny(violation))
+                if scoped.kind == "recursive cp source" and any(
+                    p.lower() == ".git" for p in real.split("/")
+                ):
+                    return self._denied(
+                        name,
+                        "run_command",
+                        real,
+                        Decision.deny(f"{real}: nothing is copied from or into .git"),
+                    )
         if (failed := self._started(name, "run_command", decision.command)) is not None:
             return failed
         server = self.config.servers[name]

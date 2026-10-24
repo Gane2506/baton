@@ -214,7 +214,7 @@ validated plan. `--plan-only` always stops at the plan, whatever the setting.
 | --- | --- | --- |
 | `mode` | `"standard"` | How much jev acts on its own. `"standard"`: you approve the plan once, then it builds alone (today's behavior). `"medium"`: like `"standard"` but scoped to `project_folder`. `"ask_every_step"`: it asks before every step. `"autonomous"`: it never stops for approval. `"manual"`: it only acts when you tell it to. |
 | `access_tier` | `"basic"` | What agents may touch. `"basic"` is the safest: work inside the repo, read-only outside it. `"medium"` additionally allows writes inside `project_folder`. `"unrestricted"` removes the limits (agents run any command with your privileges) and needs `unrestricted_acknowledged = true`; never pick it casually. |
-| `project_folder` | unset | The folder the `"medium"` access tier may change. Unset means the repository root. |
+| `project_folder` | unset | The folder the `"medium"` access tier may change. Unset means the repository root. The filesystem root (`/`) is rejected: it would scope the medium tier to the whole machine. |
 | `unrestricted_acknowledged` | `false` | Explicit acknowledgment that you understand what `"unrestricted"` allows. The config is rejected while the tier is `"unrestricted"` and this is unticked; lower the tier before unticking it. |
 
 `mode` is one of the eleven beginner settings: the dashboard's Settings › The basics shows it as

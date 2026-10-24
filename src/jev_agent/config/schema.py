@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import re
 import warnings
 from pathlib import Path
@@ -50,9 +51,12 @@ def _effort_list(levels: frozenset[str]) -> str:
 
 
 # Key names that look like they hold a secret. `api_key_env` and `bearer_token_env` are
-# allowed: they name an env var.
+# allowed: they name an env var. `credential` covers `credentials`; `passwd` covers the
+# `passwd` spelling `password` misses. `token(?!izer)` keeps `tokenizer` (a model
+# component, not a secret) from false-positiving while still flagging `token`/`tokens`.
 _SECRET_KEY = re.compile(
-    r"(api_)?key$|token|secret|password|passphrase|authorization|bearer|auth",
+    r"(api_)?key$|token(?!izer)|secret|passwd|password|passphrase|credential"
+    r"|authorization|bearer|auth",
     re.IGNORECASE,
 )
 _ALLOWED_SECRET_LOOKALIKES = frozenset({"api_key_env", "bearer_token_env"})
@@ -128,13 +132,24 @@ class JevSettings(_Strict):
         description="Name of the environment variable holding the API key (never the key itself).",
     )
     timeout_s: float = Field(
-        default=30.0, gt=0, description="Seconds to wait for one Jev answer before giving up."
+        default=30.0,
+        gt=0,
+        description="Seconds to wait for one Jev answer before giving up.",
+        allow_inf_nan=False,
     )
     min_confidence: float = Field(
         default=0.55,
         ge=0,
         le=1,
-        description="Below this confidence on any answer, the plain rules decide instead of Jev.",
+        description=(
+            "Below this confidence on any answer, the plain rules decide instead of Jev. "
+            "This is deliberately NOT the code gate's 0.7: it gates Jev's own decision "
+            "answers (which fall back to rules), while [code_orchestrator] "
+            "confidence_threshold gates the Coding Decision Agent's calibrated "
+            "answer_confidence on a merge action. Different models, different "
+            "decisions, different bars (issue #203, I7)."
+        ),
+        allow_inf_nan=False,
     )
     # Instruction overrides, keyed "D4.effort" (one point) or "effort" (every point).
     instructions: dict[str, str] = Field(
@@ -228,8 +243,14 @@ class CodeOrchestratorSettings(_Strict):
         le=1,
         description=(
             "Calibrated `answer_confidence` a merge action needs to be trusted; "
-            "below it the gate asks a human instead of merging or rejecting."
+            "below it the gate asks a human instead of merging or rejecting. "
+            "It also gates routing hints (`routing_hint` returns no hint below "
+            "it). This is deliberately NOT [dispatcher.jev] min_confidence "
+            "(0.55): that gates Jev's own decision answers, this gates the "
+            "Coding Decision Agent's calibrated merge confidence -- the model "
+            "card's starting point (issue #203, I7)."
         ),
+        allow_inf_nan=False,
     )
     max_diff_chars: int = Field(
         default=7000,
@@ -263,11 +284,13 @@ class CostSettings(_Strict):
             "USD per 1M input tokens for one Jev decision call on the native TypeSafe "
             "leg (output tokens are free)."
         ),
+        allow_inf_nan=False,
     )
     openrouter_price_per_million: float = Field(
         default=0.042,
         ge=0,
         description="USD per 1M input tokens for one Jev decision call through OpenRouter.",
+        allow_inf_nan=False,
     )
     min_history_runs: int = Field(
         default=3,
@@ -299,6 +322,7 @@ class CostSettings(_Strict):
             "USD per 1M input tokens for worker calls (pricing fallback). Only a guess: "
             "set it to your own blended rate once you have run history."
         ),
+        allow_inf_nan=False,
     )
     warn_fraction: float = Field(
         default=0.8,
@@ -306,6 +330,7 @@ class CostSettings(_Strict):
         description=(
             "The estimate warns when its high end reaches this fraction of `[budget] per_run_usd`."
         ),
+        allow_inf_nan=False,
     )
     refuse_fraction: float = Field(
         default=1.0,
@@ -314,6 +339,7 @@ class CostSettings(_Strict):
             "The estimate refuses approval when its high end reaches this fraction of "
             "`[budget] per_run_usd` (advisory: `--force` still approves)."
         ),
+        allow_inf_nan=False,
     )
 
     @model_validator(mode="after")
@@ -394,11 +420,13 @@ class BudgetConfig(_Strict):
         default=5.0,
         gt=0,
         description="The most one run may spend on AI calls, in dollars; the run stops past this.",
+        allow_inf_nan=False,
     )
     per_task_usd: float = Field(
         default=1.5,
         gt=0,
         description="The most one task may spend, in dollars; cannot exceed per_run_usd.",
+        allow_inf_nan=False,
     )
     max_plan_rounds: int = Field(
         default=3,
@@ -524,6 +552,17 @@ class AutonomyConfig(_Strict):
                 'access_tier = "unrestricted" needs unrestricted_acknowledged = true: '
                 "tick the acknowledgment in Settings > Advanced first"
             )
+        if (
+            self.project_folder is not None
+            and str(self.project_folder) == self.project_folder.anchor
+        ):
+            # The filesystem root ("/") scopes the medium tier to the whole machine
+            # with no acknowledgment gate; reject it whatever the tier, so flipping
+            # the tier to medium later cannot silently activate it.
+            raise ValueError(
+                f"project_folder: {str(self.project_folder)!r} is too broad; name the project "
+                "folder the medium tier may change (for example ~/projects/app)"
+            )
         return self
 
 
@@ -586,6 +625,7 @@ class ModelsConfig(_Strict):
         default=24.0,
         gt=0,
         description=("Refetch the free-model list when the cache is older than this many hours."),
+        allow_inf_nan=False,
     )
 
 
@@ -632,6 +672,7 @@ class QualityConfig(_Strict):
             "Minimum line coverage in percent the gate demands. Unset: 60 at medium, 80 at "
             "production and scalable."
         ),
+        allow_inf_nan=False,
     )
     # Tools that must be installed: a missing one fails its check instead of skipping it.
     required_tools: list[str] = Field(
@@ -821,6 +862,7 @@ class ClaudeCodeConfig(WorkerConfig):
             "Claude Code's own spending cap per attempt, in dollars; unset means "
             "budget.per_task_usd."
         ),
+        allow_inf_nan=False,
     )
     bare: bool = Field(
         default=False, description="Run Claude Code in --bare mode (needs ANTHROPIC_API_KEY)."
@@ -1235,18 +1277,21 @@ class CacheSemanticSettings(_Strict):
         ge=0,
         le=1,
         description="Similarity floor for decisions (see `jev cache calibrate`).",
+        allow_inf_nan=False,
     )
     role_threshold: float = Field(
         default=0.98,
         ge=0,
         le=1,
         description="Similarity floor for role outputs (shadow-measured before serving).",
+        allow_inf_nan=False,
     )
     chat_threshold: float = Field(
         default=0.98,
         ge=0,
         le=1,
         description="Similarity floor for chat turns (phase 4).",
+        allow_inf_nan=False,
     )
     mode: Literal["off", "shadow", "serve"] = Field(
         default="off",
@@ -1257,14 +1302,22 @@ class CacheSemanticSettings(_Strict):
         ge=0,
         le=1,
         description="Live-sampling floor: below it, semantic serving auto-disables.",
+        allow_inf_nan=False,
     )
 
 
 class CacheTtlOverrides(_Strict):
     """`[cache.ttl_hours_overrides]`: per-kind TTLs, in hours."""
 
-    roles: float = Field(default=24, description="Role-output entries expire after this long.")
-    chat: float = Field(default=1, description="Chat entries expire after this long.")
+    roles: float = Field(
+        default=24,
+        gt=0,
+        description="Role-output entries expire after this long.",
+        allow_inf_nan=False,
+    )
+    chat: float = Field(
+        default=1, gt=0, description="Chat entries expire after this long.", allow_inf_nan=False
+    )
 
 
 class CacheSettings(_Strict):
@@ -1280,14 +1333,16 @@ class CacheSettings(_Strict):
         default=168,
         gt=0,
         description="Default entry lifetime, hours (decisions); per-kind overrides below.",
+        allow_inf_nan=False,
     )
     max_entries: int = Field(
-        default=10_000, description="LRU eviction kicks in past this many entries."
+        default=10_000, ge=0, description="LRU eviction kicks in past this many entries."
     )
     max_mb: float = Field(
         default=256,
         gt=0,
         description="Evict least-recently-hit entries past this size.",
+        allow_inf_nan=False,
     )
     cache_roles: list[str] = Field(
         default_factory=lambda: ["planner", "validator", "reviewer", "code_reviewer"],

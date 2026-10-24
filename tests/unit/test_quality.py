@@ -590,6 +590,121 @@ async def test_container_and_iac_scans(tmp_path: Path) -> None:
     assert result.findings[0].severity == "critical"
 
 
+def test_iac_files_finds_nested_dockerfiles(tmp_path: Path) -> None:
+    """Dockerfiles deeper than one level count for the container scans (issue #204)."""
+    from jev_agent.quality.base import iac_files
+
+    repo = _repo(tmp_path, {"services/api/Dockerfile": "FROM x", "Dockerfile": "FROM x"})
+    assert "services/api/Dockerfile" in iac_files(repo)
+
+
+async def test_scanner_nonzero_exit_with_valid_empty_json_is_an_error(tmp_path: Path) -> None:
+    """A scanner that errors while emitting valid empty JSON must not silently pass
+    (issue #204 I-1): exit 1 with nothing listed, and any non-findings exit code,
+    are tool errors, not clean scans."""
+    cases: list[tuple[Any, dict[str, str], str, str, str, int, str]] = [
+        (
+            BanditCheck(),
+            _PY,
+            "bandit",
+            "bandit -q -f json a.py",
+            _diff_for("a.py"),
+            1,
+            '{"results": []}',
+        ),
+        (
+            BanditCheck(),
+            _PY,
+            "bandit",
+            "bandit -q -f json a.py",
+            _diff_for("a.py"),
+            2,
+            '{"results": []}',
+        ),
+        (
+            SemgrepCheck(),
+            {"a.py": "", ".semgrep.yml": "rules: []"},
+            "semgrep",
+            _SEMGREP_CMD,
+            _diff_for("a.py"),
+            2,
+            '{"results": []}',
+        ),
+        (
+            TrivyCheck(),
+            _IAC,
+            "trivy",
+            "trivy fs --scanners misconfig,secret --format json --quiet .",
+            _diff_for("Dockerfile"),
+            1,
+            '{"Results": []}',
+        ),
+        (
+            CheckovCheck(),
+            _IAC,
+            "checkov",
+            "checkov -d . --quiet --compact -o json",
+            _diff_for("Dockerfile"),
+            1,
+            '{"results": {"failed_checks": []}}',
+        ),
+        (
+            HadolintCheck(),
+            _IAC,
+            "hadolint",
+            "hadolint -f json Dockerfile",
+            _diff_for("Dockerfile"),
+            1,
+            "[]",
+        ),
+        (
+            NpmAuditCheck(),
+            {"package-lock.json": "{}"},
+            "npm",
+            "npm audit --omit=dev --json",
+            _diff_for("package-lock.json"),
+            1,
+            '{"vulnerabilities": {}}',
+        ),
+    ]
+    for check, files, tool, cmd, diff, code, output in cases:
+        repo = _repo(tmp_path, files)
+        runner, _ = _runner(
+            repo,
+            installed=(tool,),
+            exit_codes={cmd: [code]},
+            outputs={cmd: [output]},
+            diff=diff,
+        )
+        result = await check.run(repo, runner)
+        assert result.status == "error", (check.name, code, result)
+        assert result.findings == [] and f"exit {code}" in result.detail
+
+
+async def test_scanner_clean_and_findings_exits_unchanged(tmp_path: Path) -> None:
+    """Exit 0 with empty JSON still passes, and exit 1 with findings still fails."""
+    repo = _repo(tmp_path, _PY)
+    cmd = "bandit -q -f json a.py"
+    runner, _ = _runner(
+        repo,
+        installed=("bandit",),
+        exit_codes={cmd: [0]},
+        outputs={cmd: ['{"results": []}']},
+        diff=_diff_for("a.py"),
+    )
+    assert (await BanditCheck().run(repo, runner)).status == "pass"
+    repo = _repo(tmp_path, _IAC)
+    cmd = "trivy fs --scanners misconfig,secret --format json --quiet ."
+    runner, _ = _runner(
+        repo,
+        installed=("trivy",),
+        exit_codes={cmd: [0]},
+        outputs={cmd: ['{"Results": []}']},
+        diff=_diff_for("Dockerfile"),
+    )
+    assert (await TrivyCheck().run(repo, runner)).status == "pass"
+
+
 # ---- policy ----------------------------------------------------------------------------------
 
 
@@ -951,3 +1066,23 @@ def test_error_status_in_reports_and_stored_json() -> None:
     assert GateResult.model_validate_json(gate.model_dump_json()) == gate
     old = _gate().model_dump_json()  # a report stored before the error status existed
     assert GateResult.model_validate_json(old).checks[1].status == "skipped"
+
+
+def test_worktree_binaries_are_never_gate_tools(tmp_path: Path) -> None:
+    # Issue #196: the task worktree is where the coder writes arbitrary files,
+    # so a planted `<workdir>/.venv/bin/ruff` printing "clean" must never be
+    # resolved as a gate tool. Only PATH and the main repository are trusted.
+    repo = _repo(tmp_path / "r", {"pyproject.toml": ""})
+    workdir = _repo(tmp_path / "w", {".venv/bin/ruff": "#!/bin/sh\necho clean\n"})
+    runner, _ = _runner(repo)
+    # Rebind the runner to a separate worktree (the fixture uses repo == workdir).
+    runner.workdir = workdir
+    assert runner.resolve("ruff") is None
+    # A tool in the main repository's venv is still found.
+    (repo / ".venv" / "bin").mkdir(parents=True, exist_ok=True)
+    (repo / ".venv" / "bin" / "ruff").write_text("")
+    assert runner.resolve("ruff") == str(repo / ".venv" / "bin" / "ruff")
+    # PATH lookup still wins over both.
+    runner2, _ = _runner(repo, installed=("ruff",))
+    runner2.workdir = workdir
+    assert runner2.resolve("ruff") == "ruff"

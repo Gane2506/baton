@@ -218,6 +218,7 @@ class PreviewBridge:
             last_seen=time.monotonic(),
         )
         with self._lock:
+            self._prune_unlocked()
             self._sessions[session.session_id] = session
         return session
 
@@ -234,8 +235,15 @@ class PreviewBridge:
         return max(fresh, key=lambda s: s.last_seen)
 
     def active(self) -> PreviewSession | None:
-        """The newest live session, if any (what the Preview pane shows)."""
+        """The newest live session, if any (what the Preview pane shows).
+
+        Issue #200: `prune()` had zero callers, so stale sessions (up to 2 MB
+        of frame each) accumulated forever. Every pane/frame poll goes through
+        here, so pruning here bounds the registry by live traffic alone — no
+        background thread, no new timer.
+        """
         with self._lock:
+            self._prune_unlocked()
             try:
                 return self._active_unlocked()
             except NoPreviewSession:
@@ -245,6 +253,7 @@ class PreviewBridge:
         """The newest live session driving `run_id`'s browser, if any (the chat Work pane's
         preview tab)."""
         with self._lock:
+            self._prune_unlocked()
             fresh = [s for s in self._sessions.values() if s.fresh and s.run_id == run_id]
             return max(fresh, key=lambda s: s.last_seen) if fresh else None
 
@@ -315,7 +324,11 @@ class PreviewBridge:
     def prune(self) -> int:
         """Drop sessions nobody heard from; returns how many went away."""
         with self._lock:
-            stale = [sid for sid, s in self._sessions.items() if not s.fresh]
-            for sid in stale:
-                del self._sessions[sid]
-            return len(stale)
+            return self._prune_unlocked()
+
+    def _prune_unlocked(self) -> int:
+        """`prune()` with the lock already held (the poll paths call this)."""
+        stale = [sid for sid, s in self._sessions.items() if not s.fresh]
+        for sid in stale:
+            del self._sessions[sid]
+        return len(stale)
