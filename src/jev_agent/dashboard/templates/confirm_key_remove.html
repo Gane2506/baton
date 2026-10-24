@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% from "macros.html" import csrf_input, icon with context %}
+{% block title %}Remove API key {{ name }}?{% endblock %}
+{% block content %}
+<div class="focus-page">
+  <section class="panel">
+    <h1>Remove API key {{ name }}?</h1>
+    <p>This removes <strong>{{ name }}</strong> from the secrets file.
+    Workers using it will break until a new key is added. The key value
+    itself is never shown here.</p>
+    <div class="actions">
+      <form class="inline" method="post" action="/connections/keys/remove">
+        {{ csrf_input() }}
+        <input type="hidden" name="name" value="{{ name }}">
+        <input type="hidden" name="confirm" value="yes">
+        <button class="btn btn-danger" type="submit">{{ icon("i-remove", "sm") }}Remove key</button>
+      </form>
+      <a class="btn btn-secondary" href="/connections">Keep it</a>
+    </div>
+  </section>
+</div>
+{% endblock %}

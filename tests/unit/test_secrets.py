@@ -181,9 +181,17 @@ def test_dashboard_add_and_remove_key(
     assert secret not in dclient.get("/connections/live").text
     assert sfile.read_text(encoding="utf-8") == "JEV_TEST_KEY_A=" + secret + "\n"
     assert (sfile.stat().st_mode & 0o777) == 0o600
-    # Remove round-trips the same way: the row leaves the table (the flash message
-    # confirming the removal still names it — that is the point of the message).
+    # Removal is 2-step (issue #185): the first POST renders the confirm page
+    # and deletes nothing; only confirm=yes removes. The row then leaves the
+    # table (the flash message confirming the removal still names it — that is
+    # the point of the message).
     response = _post(dclient, "/connections/keys/remove", {"name": "JEV_TEST_KEY_A"})
+    assert response.status_code == 200
+    assert "Remove API key JEV_TEST_KEY_A?" in response.text
+    assert sfile.read_text(encoding="utf-8") == "JEV_TEST_KEY_A=" + secret + "\n"
+    response = _post(
+        dclient, "/connections/keys/remove", {"name": "JEV_TEST_KEY_A", "confirm": "yes"}
+    )
     assert response.status_code == 303
     page = dclient.get("/connections").text
     rows = re.findall(r"<tr>.*?</tr>", page, re.S)

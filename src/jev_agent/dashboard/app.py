@@ -1688,17 +1688,41 @@ class Dashboard:
         return await self.act(request, "/connections", add)
 
     async def connections_key_remove(self, request: Request) -> Response:
-        """Delete a secrets-file key (POST). Keys from the real environment cannot
-        reach this path: the template only offers removal for file-backed keys."""
+        """Two steps (Tier 2), like `design_system_delete`: the first POST shows a
+        confirmation page; only `confirm=yes` deletes the secrets-file key. Keys
+        from the real environment cannot reach this path: the template only
+        offers removal for file-backed keys. The value is never rendered."""
 
-        def remove(repo: views.Repo, form: FormData) -> str:
+        form = await checked_form(request)
+        name = str(form.get("name", "")).strip()
+        if form.get("confirm") != "yes":
+
+            def describe() -> str:
+                from jev_agent.core.secrets import read_secrets
+
+                if name not in read_secrets():
+                    raise JevError(f"{name} is not in the secrets file")
+                return name
+
+            try:
+                key_name = await run_in_threadpool(describe)
+            except (JevError, ValueError) as exc:
+                self.flash(request, "error", _friendly_error(exc))
+                return self.back("/connections")
+            return self.render(request, "confirm_key_remove.html", name=key_name)
+
+        def remove() -> None:
             from jev_agent.core.secrets import delete_secret
 
-            name = str(form.get("name", "")).strip()
             delete_secret(name)
-            return f"{name} removed from the secrets file."
 
-        return await self.act(request, "/connections", remove)
+        try:
+            await run_in_threadpool(remove)
+        except (JevError, ValueError) as exc:
+            self.flash(request, "error", _friendly_error(exc))
+            return self.back("/connections")
+        self.flash(request, "ok", f"{name} removed from the secrets file.")
+        return self.back("/connections")
 
     async def connections_trust_repo(self, request: Request) -> Response:
         """Trust the current repo for guarded config keys (POST, issue #158).
@@ -2273,12 +2297,29 @@ class Dashboard:
     # ---- actions: chat and runs --------------------------------------------------------------
 
     async def chat_delete(self, request: Request) -> Response:
-        """Delete a saved chat: its transcript and brief. Runs it started are kept."""
-        await checked_form(request)  # CSRF, like every other POST; the id comes from the path
+        """Two steps (Tier 2), like `design_system_delete`: the first POST shows a
+        confirmation page; only `confirm=yes` deletes the chat. Deleting removes
+        its transcript and brief. Runs it started are kept."""
+        form = await checked_form(request)  # CSRF; the id comes from the path
         chat_id = request.path_params["chat_id"]
         if self.chat_runner.busy(chat_id):
             self.flash(request, "error", f"chat {chat_id} is replying right now; wait for it")
             return self.back("/chats")
+        if form.get("confirm") != "yes":
+
+            def describe() -> str:
+                with views.open_repo(self.settings.root) as repo:
+                    for meta, title in views.chats(repo):
+                        if meta.chat_id == chat_id:
+                            return title
+                raise ChatError(f"no chat {chat_id!r}")
+
+            try:
+                title = await run_in_threadpool(describe)
+            except (ChatError, ConfigError) as exc:
+                self.flash(request, "error", _friendly_error(exc))
+                return self.back("/chats")
+            return self.render(request, "confirm_chat_delete.html", chat_id=chat_id, title=title)
 
         def remove() -> None:
             with views.open_repo(self.settings.root) as repo:

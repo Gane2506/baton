@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% from "macros.html" import csrf_input, icon with context %}
+{% block title %}Delete chat {{ chat_id }}?{% endblock %}
+{% block content %}
+<div class="focus-page">
+  <section class="panel">
+    <h1>Delete chat {{ chat_id }}?</h1>
+    <p>This deletes the chat <strong>{{ title or chat_id }}</strong>
+    ({{ chat_id }}) — its transcript and brief go away permanently.
+    Runs it started are kept. This cannot be undone.</p>
+    <div class="actions">
+      <form class="inline" method="post" action="/chats/{{ chat_id }}/delete">
+        {{ csrf_input() }}
+        <input type="hidden" name="confirm" value="yes">
+        <button class="btn btn-danger" type="submit">{{ icon("i-remove", "sm") }}Delete chat</button>
+      </form>
+      <a class="btn btn-secondary" href="/chats/{{ chat_id | urlencode }}">Keep it</a>
+    </div>
+  </section>
+</div>
+{% endblock %}
