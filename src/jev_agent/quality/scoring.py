@@ -144,15 +144,39 @@ def _maintainability(checks: list[CheckResult], findings: list[Finding]) -> tupl
     return d.result()
 
 
+# Detail prefixes of a `skipped` check that mean "does not apply here", not "the
+# tool is missing" (issue #224). Produced by `gate._run_check` ("not applicable:",
+# "runs on ... only") and `checks_basic.TestSuiteCheck` ("no test suite
+# detected"): a project with no test suite, or a check scoped to the other
+# branch, is not a tooling failure and must not cost `tool_fit`. Every other
+# skip — `ToolRunner.missing` ("<tool> is not installed") or an unrecognised
+# detail — still counts as a missing tool, so an unknown skip reason fails
+# closed instead of silently scoring 5/5.
+_NOT_APPLICABLE_SKIP = ("not applicable:", "runs on ", "no test suite detected")
+
+
 def _tool_fit(checks: list[CheckResult]) -> tuple[int, str]:
-    """Does it use the available tools and budget well? Missing or crashing tools cost."""
+    """Does it use the available tools and budget well? Missing or crashing tools cost.
+
+    A skipped check costs only when the tool is actually missing. Checks skipped
+    because they do not apply to this project or scope are excluded from the
+    penalty (and from the "more than half skipped" rule below) — a Rust-only
+    repo must not lose points for every Python check it legitimately skips.
+    """
     d = _Deductions()
     errored = [c for c in checks if c.required and c.status == "error"]
-    skipped = [c for c in checks if c.required and c.status == "skipped"]
+    missing = [
+        c
+        for c in checks
+        if c.required and c.status == "skipped" and not c.detail.startswith(_NOT_APPLICABLE_SKIP)
+    ]
+    not_applicable = [c for c in checks if c.status == "skipped" and c not in missing]
     d.take(min(len(errored), 2), f"{len(errored)} required check(s) errored")
-    d.take(min(len(skipped), 2), f"{len(skipped)} required check(s) skipped (tool missing)")
-    if checks and sum(1 for c in checks if c.status == "skipped") > len(checks) / 2:
+    d.take(min(len(missing), 2), f"{len(missing)} required check(s) skipped (tool missing)")
+    if checks and len(missing) > len(checks) / 2:
         d.take(1, "more than half the checks skipped (tools missing)")
+    if not_applicable:
+        d.notes.append(f"{len(not_applicable)} check(s) skipped (not applicable)")
     return d.result()
 
 

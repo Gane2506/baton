@@ -167,7 +167,7 @@ def _on_color(bg: str) -> str:
     return "#FFFFFF" if (1.05 / (luminance + 0.05)) >= ((luminance + 0.05) / 0.05) else "#101418"
 
 
-def _derived_colors(light: dict[str, str]) -> dict[str, str]:
+def _derived_colors(palette: dict[str, str], *, dark: bool = False) -> dict[str, str]:
     """Fill every color role the component templates reference.
 
     Rich tokens already carry these; legacy/flat sets (e.g. STARTER_TOKENS)
@@ -176,18 +176,24 @@ def _derived_colors(light: dict[str, str]) -> dict[str, str]:
     semantic color mixed 12% into the background), so a legacy system keeps
     its own hues instead of silently swapping to another palette. Constants
     cover roles with no derivable source (`info` when absent).
+
+    `dark` switches the fallback constants to dark-appropriate values and
+    lightens (rather than darkens) the primary hover: a dark palette derived
+    with light constants would put near-white subtles on dark surfaces.
     """
-    out = dict(light)
-    bg = out.get("background") or "#FFFFFF"
+    defaults = _DARK_ROLE_DEFAULTS if dark else _LIGHT_ROLE_DEFAULTS
+    out = dict(palette)
+    bg = out.get("background") or defaults["background"]
     surface = out.get("surface") or bg
-    text = out.get("text") or "#0F172A"
-    primary = out.get("primary") or "#2563EB"
-    border = out.get("border") or "#E2E8F0"
+    text = out.get("text") or defaults["text"]
+    primary = out.get("primary") or defaults["primary"]
+    border = out.get("border") or defaults["border"]
+    hover_toward = "#FFFFFF" if dark else "#000000"
     out.setdefault("background", bg)
     out.setdefault("surface", surface)
     out.setdefault("text", text)
     out.setdefault("primary", primary)
-    out.setdefault("primary_hover", _mix(primary, "#000000", 0.88))
+    out.setdefault("primary_hover", _mix(primary, hover_toward, 0.88))
     out.setdefault("primary_text", _on_color(primary))
     out.setdefault("primary_subtle", _mix(primary, bg, 0.12))
     out.setdefault("surface_raised", _mix(surface, text, 0.94))
@@ -195,15 +201,35 @@ def _derived_colors(light: dict[str, str]) -> dict[str, str]:
     out.setdefault("text_faint", _mix(text, bg, 0.35))
     out.setdefault("border", border)
     out.setdefault("border_strong", _mix(border, text, 0.70))
-    for role, default in (
-        ("success", "#16A34A"),
-        ("warning", "#D97706"),
-        ("danger", "#DC2626"),
-        ("info", "#0284C7"),
-    ):
-        out.setdefault(role, default)
+    for role in ("success", "warning", "danger", "info"):
+        out.setdefault(role, defaults[role])
         out.setdefault(f"{role}_subtle", _mix(out[role], bg, 0.12))
     return out
+
+
+# Fallback constants for roles with no derivable source, per theme. The light
+# set is the original hard-coded one; the dark set mirrors the dark semantic
+# colors `rich_tokens` generates (brightened semantics, dark neutrals).
+_LIGHT_ROLE_DEFAULTS: dict[str, str] = {
+    "background": "#FFFFFF",
+    "text": "#0F172A",
+    "primary": "#2563EB",
+    "border": "#E2E8F0",
+    "success": "#16A34A",
+    "warning": "#D97706",
+    "danger": "#DC2626",
+    "info": "#0284C7",
+}
+_DARK_ROLE_DEFAULTS: dict[str, str] = {
+    "background": "#0F172A",
+    "text": "#F8FAFC",
+    "primary": "#60A5FA",
+    "border": "#334155",
+    "success": "#22C55E",
+    "warning": "#F59E0B",
+    "danger": "#F87171",
+    "info": "#60A5FA",
+}
 
 
 _DEFAULT_FONTS: dict[str, str] = {
@@ -240,6 +266,7 @@ def css_variables(tokens: dict[str, object]) -> str:
     """
     light, dark = _palettes(tokens)
     light = _derived_colors(light)
+    dark = _derived_colors(dark, dark=True)
     typo = _section(tokens, "typography")
     spacing = _section(tokens, "spacing")
     radii = _section(tokens, "radii")

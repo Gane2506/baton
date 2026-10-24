@@ -50,6 +50,56 @@ def _str_value(section: dict[str, str], key: str) -> str:
     return section.get(key, "")
 
 
+def _type_vars(t: dict[str, object]) -> list[str]:
+    """CSS custom properties for the type scale, from the token set.
+
+    Each typography style (`display_xl` … `overline`) is a `{"size", "weight",
+    "tracking", "leading"}` dict (`design_showcase._typography`); the
+    `.type-*` rules in `_STYLES` read these variables, so a system whose type
+    scale differs from the defaults actually renders at its own sizes. A
+    missing or non-numeric field emits nothing — the rule's `var()` fallback
+    (the historical hard-coded size) applies instead, so flat/legacy token
+    sets render exactly as before.
+    """
+    typo = t.get("typography")
+    if not isinstance(typo, dict):
+        return []
+    lines: list[str] = []
+    for key, _label in _TYPE_STYLES:
+        spec = typo.get(key)
+        if not isinstance(spec, dict):
+            continue
+        stem = f"--tw-{key.replace('_', '-')}"
+        if (px := _px_value(spec.get("size"))) is not None:
+            lines.append(f"  {stem}-size: {px};")
+        weight = spec.get("weight")
+        if isinstance(weight, (int, float)) and not isinstance(weight, bool):
+            lines.append(f"  {stem}-weight: {_css_value(weight)};")
+        tracking = spec.get("tracking")
+        if isinstance(tracking, (int, float)) and not isinstance(tracking, bool):
+            lines.append(f"  {stem}-tracking: {_css_value(tracking)}em;")
+        leading = spec.get("leading")
+        if isinstance(leading, (int, float)) and not isinstance(leading, bool):
+            lines.append(f"  {stem}-leading: {_css_value(leading)};")
+    return lines
+
+
+_TYPE_STYLES: tuple[tuple[str, str], ...] = (
+    ("display_xl", "Display XL"),
+    ("display_lg", "Display LG"),
+    ("display_md", "Display MD"),
+    ("display_sm", "Display SM"),
+    ("headline_lg", "Headline LG"),
+    ("headline_md", "Headline MD"),
+    ("headline_sm", "Headline SM"),
+    ("body_lg", "Body LG"),
+    ("body_md", "Body MD"),
+    ("body_sm", "Body SM"),
+    ("caption", "Caption"),
+    ("overline", "Overline"),
+)
+
+
 def _css_vars(colors: dict[str, str], t: dict[str, object], vibe: VibeProfile) -> str:
     """CSS custom properties from the token set (light theme defaults)."""
     lines = [":root {"]
@@ -59,6 +109,7 @@ def _css_vars(colors: dict[str, str], t: dict[str, object], vibe: VibeProfile) -
     lines.append(f"  --font-display: {_css_value(_str_value(typo, 'font_display'))};")
     lines.append(f"  --font-body: {_css_value(_str_value(typo, 'font_body'))};")
     lines.append(f"  --font-mono: {_css_value(_str_value(typo, 'font_mono'))};")
+    lines.extend(_type_vars(t))
     spacing = _dict_section(t, "spacing")
     for key, value in spacing.items():
         px = _px_value(value)
@@ -210,20 +261,7 @@ def _is_dark(hex_color: str) -> bool:
 
 def _type_section(typo: dict[str, object]) -> str:
     """Every type style rendered at scale with its spec."""
-    order = [
-        ("display_xl", "Display XL"),
-        ("display_lg", "Display LG"),
-        ("display_md", "Display MD"),
-        ("display_sm", "Display SM"),
-        ("headline_lg", "Headline LG"),
-        ("headline_md", "Headline MD"),
-        ("headline_sm", "Headline SM"),
-        ("body_lg", "Body LG"),
-        ("body_md", "Body MD"),
-        ("body_sm", "Body SM"),
-        ("caption", "Caption"),
-        ("overline", "Overline"),
-    ]
+    order = _TYPE_STYLES
     samples = {
         "display_xl": "Design is intelligence made visible",
         "display_lg": "Design is intelligence made visible",
@@ -548,68 +586,83 @@ body{
 .type-sample{line-height:1.2}
 .type-display-xl {
   font-family:var(--font-display);
-  font-size:76px;
-  font-weight:var(--tw-display,700);
-  letter-spacing:-0.025em;
-  line-height:1.02;
+  font-size:var(--tw-display-xl-size,76px);
+  font-weight:var(--tw-display-xl-weight,700);
+  letter-spacing:var(--tw-display-xl-tracking,-0.025em);
+  line-height:var(--tw-display-xl-leading,1.02);
 }
 .type-display-lg {
   font-family:var(--font-display);
-  font-size:60px;
-  font-weight:var(--tw-display,700);
-  letter-spacing:-0.025em;
-  line-height:1.05;
+  font-size:var(--tw-display-lg-size,60px);
+  font-weight:var(--tw-display-lg-weight,700);
+  letter-spacing:var(--tw-display-lg-tracking,-0.025em);
+  line-height:var(--tw-display-lg-leading,1.05);
 }
 .type-display-md {
   font-family:var(--font-display);
-  font-size:48px;
-  font-weight:var(--tw-display,700);
-  letter-spacing:-0.025em;
-  line-height:1.08;
+  font-size:var(--tw-display-md-size,48px);
+  font-weight:var(--tw-display-md-weight,700);
+  letter-spacing:var(--tw-display-md-tracking,-0.025em);
+  line-height:var(--tw-display-md-leading,1.08);
 }
 .type-display-sm {
   font-family:var(--font-display);
-  font-size:36px;
-  font-weight:var(--tw-display,700);
-  letter-spacing:-0.025em;
-  line-height:1.1;
+  font-size:var(--tw-display-sm-size,36px);
+  font-weight:var(--tw-display-sm-weight,700);
+  letter-spacing:var(--tw-display-sm-tracking,-0.025em);
+  line-height:var(--tw-display-sm-leading,1.1);
 }
 .type-headline-lg {
   font-family:var(--font-display);
-  font-size:28px;
-  font-weight:650;
-  letter-spacing:-0.01em;
-  line-height:1.2;
+  font-size:var(--tw-headline-lg-size,28px);
+  font-weight:var(--tw-headline-lg-weight,650);
+  letter-spacing:var(--tw-headline-lg-tracking,-0.01em);
+  line-height:var(--tw-headline-lg-leading,1.2);
 }
 .type-headline-md {
   font-family:var(--font-display);
-  font-size:22px;
-  font-weight:600;
-  letter-spacing:-0.008em;
-  line-height:1.25;
+  font-size:var(--tw-headline-md-size,22px);
+  font-weight:var(--tw-headline-md-weight,600);
+  letter-spacing:var(--tw-headline-md-tracking,-0.008em);
+  line-height:var(--tw-headline-md-leading,1.25);
 }
 .type-headline-sm {
   font-family:var(--font-display);
-  font-size:18px;
-  font-weight:600;
-  letter-spacing:-0.005em;
-  line-height:1.3;
+  font-size:var(--tw-headline-sm-size,18px);
+  font-weight:var(--tw-headline-sm-weight,600);
+  letter-spacing:var(--tw-headline-sm-tracking,-0.005em);
+  line-height:var(--tw-headline-sm-leading,1.3);
 }
-.type-body-lg{font-size:17px;line-height:1.6}
-.type-body-md{font-size:15px;line-height:1.6}
-.type-body-sm{font-size:13px;line-height:1.55;letter-spacing:.01em}
+.type-body-lg{
+  font-size:var(--tw-body-lg-size,17px);
+  font-weight:var(--tw-body-lg-weight,400);
+  letter-spacing:var(--tw-body-lg-tracking,0em);
+  line-height:var(--tw-body-lg-leading,1.6);
+}
+.type-body-md{
+  font-size:var(--tw-body-md-size,15px);
+  font-weight:var(--tw-body-md-weight,400);
+  letter-spacing:var(--tw-body-md-tracking,0em);
+  line-height:var(--tw-body-md-leading,1.6);
+}
+.type-body-sm{
+  font-size:var(--tw-body-sm-size,13px);
+  font-weight:var(--tw-body-sm-weight,400);
+  letter-spacing:var(--tw-body-sm-tracking,.01em);
+  line-height:var(--tw-body-sm-leading,1.55);
+}
 .type-caption {
-  font-size:12px;
-  font-weight:500;
-  letter-spacing:.02em;
-  line-height:1.45;
+  font-size:var(--tw-caption-size,12px);
+  font-weight:var(--tw-caption-weight,500);
+  letter-spacing:var(--tw-caption-tracking,.02em);
+  line-height:var(--tw-caption-leading,1.45);
   color:var(--c-text-muted);
 }
 .type-overline {
-  font-size:11px;
-  font-weight:600;
-  letter-spacing:.12em;
-  line-height:1.4;
+  font-size:var(--tw-overline-size,11px);
+  font-weight:var(--tw-overline-weight,600);
+  letter-spacing:var(--tw-overline-tracking,.12em);
+  line-height:var(--tw-overline-leading,1.4);
   color:var(--c-text-muted);
 }
 /* components */

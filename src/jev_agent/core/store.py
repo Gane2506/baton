@@ -9,6 +9,7 @@ exact. Every write runs in its own transaction.
 from __future__ import annotations
 
 import json
+import re
 import secrets
 import sqlite3
 from collections.abc import Callable, Collection, Iterator, Sequence
@@ -92,6 +93,41 @@ class StoreError(Exception):
 
 class NotFoundError(StoreError, LookupError):
     """A run, task or attempt id does not exist."""
+
+
+# Columns `_update_run` / `_update_task` may assign (issue #224). The helpers take a
+# raw SQL fragment, so without this allowlist any future caller could smuggle an
+# arbitrary assignment (or a second statement's worth of SQL) past review — the
+# values stay bound parameters, but the column list is the injection surface.
+# Keep these in sync with the callers; a column added here needs a caller that
+# sets it, and a caller that sets a new column needs an entry here.
+_RUN_UPDATE_COLUMNS = frozenset(
+    {"learning_profile", "learning_outcome", "quality_level", "spend_usd"}
+)
+_TASK_UPDATE_COLUMNS = frozenset({"lessons_scored", "spend_usd"})
+
+
+def _check_update_assignments(assignments: str, allowed: frozenset[str]) -> None:
+    """Reject an `_update_*` fragment that assigns outside `allowed`.
+
+    Each comma-separated piece must be `<column> = <expression>` with the
+    column allowlisted and the expression one of the shapes the callers use:
+    a bound parameter (`?`), an integer literal (`1`), or `<column> +|- ?`.
+    Anything else (an unknown column, a missing `=`, a `;`-smuggled second
+    statement, a function call) raises `ValueError` before any SQL runs.
+    """
+    for piece in assignments.split(","):
+        match = re.fullmatch(r"\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.+?)\s*", piece, flags=re.DOTALL)
+        if match is None:
+            raise ValueError(f"refusing UPDATE fragment outside the allowlist: {assignments!r}")
+        column, expr = match.group(1), match.group(2)
+        if column not in allowed:
+            raise ValueError(f"refusing UPDATE fragment outside the allowlist: {assignments!r}")
+        if expr == "?" or re.fullmatch(r"-?\d+", expr):
+            continue
+        ref = re.fullmatch(r"([A-Za-z_][A-Za-z0-9_]*)\s*[+-]\s*\?", expr)
+        if ref is None or ref.group(1) not in allowed:
+            raise ValueError(f"refusing UPDATE fragment outside the allowlist: {assignments!r}")
 
 
 @dataclass(frozen=True)
@@ -833,6 +869,7 @@ class Store:
             )
 
     def _update_run(self, run_id: str, assignments: str, params: tuple[object, ...]) -> None:
+        _check_update_assignments(assignments, _RUN_UPDATE_COLUMNS)
         with self._tx() as db:
             cur = db.execute(
                 f"UPDATE runs SET {assignments}, updated_at = ? WHERE id = ?",
@@ -1009,6 +1046,7 @@ class Store:
     def _update_task(
         self, run_id: str, task_id: str, assignments: str, params: tuple[object, ...]
     ) -> None:
+        _check_update_assignments(assignments, _TASK_UPDATE_COLUMNS)
         with self._tx() as db:
             cur = db.execute(
                 f"UPDATE tasks SET {assignments} WHERE run_id = ? AND id = ?",
