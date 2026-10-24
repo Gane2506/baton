@@ -112,7 +112,13 @@ def test_chat_list_has_titles_search_and_delete(client: TestClient, fixture_repo
     assert chat_id in found.text and other not in found.text
     assert "No chats match" in client.get("/chats?q=zzz-nothing-here").text
 
-    gone = _post(client, f"/chats/{chat_id}/delete")
+    # Chat deletion is 2-step (issue #185): the first POST renders the confirm
+    # page and deletes nothing; only confirm=yes deletes.
+    confirm = _post(client, f"/chats/{chat_id}/delete")
+    assert confirm.status_code == 200
+    assert f"Delete chat {chat_id}?" in confirm.text
+    assert (fixture_repo / ".jev" / "chats" / chat_id).exists()
+    gone = _post(client, f"/chats/{chat_id}/delete", {"confirm": "yes"})
     assert gone.status_code == 303
     remaining = client.get("/chats")
     assert f'action="/chats/{chat_id}/delete"' not in remaining.text  # the row is gone
