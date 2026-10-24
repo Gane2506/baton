@@ -61,7 +61,8 @@ else
   ps -Ao %cpu 2>/dev/null | awk 'NR>1 {s+=$1} END {printf "%.1f\\n", s+0}'
 fi
 echo '==DISK=='
-df -Pk 2>/dev/null | awk 'NR>1 && $1 !~ /^(tmpfs|devtmpfs|udev)$/ {print $1, $2, $3, $4, $5, $6}'
+df -Pk 2>/dev/null | awk 'NR>1 && $1 !~ /^(tmpfs|devtmpfs|udev)$/ {
+  m=$6; for (i=7; i<=NF; i++) m=m " " $i; print $1, $2, $3, $4, $5, m}'
 echo '==TOPCPU=='
 if ps -eo comm,pcpu,pmem --sort=-pcpu >/dev/null 2>&1; then
   ps -eo comm,pcpu,pmem --sort=-pcpu 2>/dev/null | head -9
@@ -175,7 +176,10 @@ def _parse_mounts(lines: list[str]) -> tuple[MountStat, ...]:
         mounts.append(
             MountStat(
                 device=parts[0],
-                mount=parts[5],
+                # A mount point may itself contain spaces ("/Volumes/My Drive"):
+                # the script joins fields 6+ with spaces, so rejoin them here
+                # instead of truncating at the first word (issue #204).
+                mount=" ".join(parts[5:]),
                 total_gb=round(total_kb / 1048576, 1),
                 used_gb=round(used_kb / 1048576, 1),
                 avail_gb=round(avail_kb / 1048576, 1),
@@ -271,11 +275,18 @@ def collect_stats(
     state_dir: Path,
     timeout_s: float = 30.0,
 ) -> ServerStats:
-    """Run the stats script on `server` via SSH and parse the result."""
-    from jev_agent.servers.ssh import SshTransport, time_limited
+    """Run the stats script on `server` via SSH and parse the result.
+
+    One timeout wrap only: `SshTransport.run` already wraps the command with
+    `time_limited`, which subtracts the kill grace (2s) plus 1s from its timeout —
+    wrapping here as well made the script die at 27s for a 30s timeout (issue #204).
+    Passing `timeout_s + 3` makes the remote limit exactly `timeout_s`, with the
+    local ssh timeout 3s behind it so the remote kill lands first.
+    """
+    from jev_agent.servers.ssh import REMOTE_KILL_GRACE_S, SshTransport
 
     transport = SshTransport(server, sockets=state_dir / "ssh", runner=runner)
-    result = transport.run(time_limited(STATS_SCRIPT, timeout_s), timeout_s=timeout_s + 15)
+    result = transport.run(STATS_SCRIPT, timeout_s=timeout_s + REMOTE_KILL_GRACE_S + 1)
     if not result.ok:
         detail = result.stderr.decode("utf-8", errors="replace").strip()[:200]
         if result.timed_out:

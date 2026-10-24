@@ -52,6 +52,25 @@ async def test_most_specific_key_wins_and_lists_are_consumed(tmp_path: Path) -> 
     assert (out.result.status, out.result.cost_usd, out.parsed) == ("quota_exhausted", 0.25, None)
 
 
+async def test_scripted_files_through_symlinks_stay_in_workdir(tmp_path: Path) -> None:
+    """A scripted path through a symlinked directory — or a symlinked target file —
+    must not let the fake worker write outside the workdir (issue #204)."""
+    outside = tmp_path.parent / f"{tmp_path.name}-outside"
+    link_dir = tmp_path / "linkdir"
+    link_dir.symlink_to(outside, target_is_directory=True)
+    fake = FakeWorker(script={"coder:T1": FakeStep(files={"linkdir/evil.txt": "x"})})
+    with pytest.raises(ValueError, match="escapes the workdir"):
+        await fake.run(_job(tmp_path, "coder", "T1"))
+    assert not (outside / "evil.txt").exists()
+
+    escape = tmp_path.parent / f"{tmp_path.name}-escape" / "alias-target.txt"
+    (tmp_path / "alias.txt").symlink_to(escape)
+    fake = FakeWorker(script={"coder:T1": FakeStep(files={"alias.txt": "x"})})
+    with pytest.raises(ValueError, match="escapes the workdir"):
+        await fake.run(_job(tmp_path, "coder", "T1"))
+    assert not escape.exists()
+
+
 async def test_scripted_files_and_crash(tmp_path: Path) -> None:
     fake = FakeWorker(
         script={

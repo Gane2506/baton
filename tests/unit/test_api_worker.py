@@ -1,5 +1,7 @@
 import json
 from collections.abc import Callable
+from datetime import UTC, datetime, timedelta
+from email.utils import format_datetime
 from pathlib import Path
 from typing import Any
 
@@ -8,9 +10,11 @@ import pytest
 
 from jev_agent.core.models import Plan, Role, ValidationResult
 from jev_agent.workers.api import (
+    ERROR_BODY_LOG_CHARS,
     PROJECT_TITLE,
     PROJECT_URL,
     ApiWorker,
+    _retry_delay,
     classify_api_error,
 )
 from jev_agent.workers.base import Worker, WorkerJob
@@ -288,6 +292,72 @@ async def test_no_retry_when_retry_after_too_long(tmp_path: Path) -> None:
     out = await _worker(rec, sleeps).run(_job(tmp_path))
     assert out.result.status == "failure"
     assert sleeps.calls == []
+
+
+def test_retry_delay_parses_http_date() -> None:
+    """`Retry-After` may be an HTTP date, not just seconds (issue #204)."""
+    now = datetime.now(UTC)
+    future = now + timedelta(seconds=5)
+    delay = _retry_delay(
+        httpx.Response(429, headers={"retry-after": format_datetime(future, usegmt=True)}),
+        now=now,
+    )
+    assert delay is not None and 4.0 < delay <= 5.0
+    past = now - timedelta(seconds=60)
+    assert (
+        _retry_delay(
+            httpx.Response(429, headers={"retry-after": format_datetime(past, usegmt=True)}),
+            now=now,
+        )
+        == 0.0
+    )
+    far = now + timedelta(hours=1)
+    assert (
+        _retry_delay(
+            httpx.Response(429, headers={"retry-after": format_datetime(far, usegmt=True)}),
+            now=now,
+        )
+        is None
+    )
+    assert _retry_delay(httpx.Response(429, headers={"retry-after": "tomorrow"}), now=now) is None
+    assert _retry_delay(httpx.Response(429, headers={"retry-after": "3"}), now=now) == 3.0
+    assert _retry_delay(httpx.Response(429), now=now) == 2.0
+
+
+async def test_retry_on_429_honours_http_date_retry_after(tmp_path: Path) -> None:
+    future = datetime.now(UTC) + timedelta(seconds=3)
+    rec = Recorder(
+        _response(429, "error_429.json", {"Retry-After": format_datetime(future, usegmt=True)}),
+        _response(200, "success_plan.json"),
+    )
+    sleeps = Sleeps()
+    out = await _worker(rec, sleeps).run(_job(tmp_path, output_schema=Plan))
+    assert out.result.status == "success"
+    assert len(sleeps.calls) == 1 and 1.5 <= sleeps.calls[0] <= 3.0
+    assert len(rec.requests) == 2
+
+
+async def test_error_body_in_log_is_capped(tmp_path: Path) -> None:
+    """A provider's error body is logged for debugging, but not unbounded (issue #204)."""
+    body = "y" * (ERROR_BODY_LOG_CHARS + 5000)
+    rec = Recorder(httpx.Response(500, content=body))
+    job = _job(tmp_path)
+    out = await _worker(rec).run(job)
+    assert out.result.status == "failure"
+    log = job.log_path.read_text()
+    assert body not in log
+    assert "[error body truncated" in log
+
+
+async def test_log_write_failure_does_not_raise(tmp_path: Path) -> None:
+    """Workers never raise: an unwritable log directory must not fail the job."""
+    blocker = tmp_path / "blocker"
+    blocker.write_text("a file where the log directory should be")
+    job = _job(tmp_path, output_schema=Plan)
+    job = job.model_copy(update={"log_path": blocker / "api.log"})
+    rec = Recorder(_response(200, "success_plan.json"))
+    out = await _worker(rec).run(job)
+    assert out.result.status == "success"
 
 
 async def test_no_retry_on_quota_429(tmp_path: Path) -> None:

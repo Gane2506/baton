@@ -220,7 +220,7 @@ async def run_gate(
     except Halt:
         raise
     except Exception as exc:
-        result = result.model_copy(
+        blocked = result.model_copy(
             update={
                 "blocked": True,
                 "reasons": [
@@ -229,6 +229,20 @@ async def run_gate(
                 ],
             }
         )
+        # The blocked record itself must survive: previously the exception
+        # above also skipped persisting, so the gate that blocked the run left
+        # no record behind (issue #204). Retry the persist best-effort — a
+        # second failure still returns the blocked result in memory, it just
+        # cannot be stored either.
+        try:
+            path = write_reports(h, run_id, blocked)
+            h.store.add_quality_report(run_id, blocked, path)
+            write_run_review(h, run_id)
+        except Halt:
+            raise
+        except Exception:
+            pass
+        result = blocked
     return result
 
 

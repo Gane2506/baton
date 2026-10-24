@@ -147,6 +147,7 @@ def iac_files(repo: Path) -> list[str]:
     patterns = (
         "Dockerfile*",
         "*/Dockerfile*",
+        "**/Dockerfile*",
         "*.tf",
         "*/*.tf",
         "docker-compose*.y*ml",
@@ -217,6 +218,25 @@ def tool_error(check: BaseCheck, result: CommandResult, problem: str = "") -> Ch
     return CheckResult(
         status="error", detail=f"{problem} (exit {result.exit_code}): {tail(result.output)}"
     )
+
+
+def exit_mismatch(check: BaseCheck, result: CommandResult, *, found: bool) -> CheckResult | None:
+    """A JSON scanner whose exit code contradicts its parsed report, or None when they
+    agree (issue #204 I-1). Scanners exit 0 for a clean scan and 1 when they found
+    something; any other code is a crash, and exit 1 with nothing listed means the scan
+    errored while emitting valid empty JSON — both silently passed before, because the
+    checks only looked at the parsed report. A mismatch is a tool error, never a pass:
+    the scan cannot be trusted to have covered anything."""
+    if result.timed_out:
+        return None  # callers already turned a timeout into a tool error
+    tool = check.tool or check.name
+    if result.exit_code not in (0, 1):
+        return tool_error(
+            check, result, f"{tool} exited {result.exit_code}, not a findings exit code"
+        )
+    if result.exit_code == 1 and not found:
+        return tool_error(check, result, f"{tool} exited 1 but listed no findings")
+    return None
 
 
 def int_or_none(value: Any) -> int | None:

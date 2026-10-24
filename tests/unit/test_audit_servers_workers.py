@@ -574,10 +574,49 @@ async def test_gate_tail_failure_records_a_blocked_gate(
         raise ValueError("weights exploded")
 
     monkeypatch.setattr(gate_mod, "score_gate", boom)
-    result = await _run_gate(tmp_path, [])
+    harness = _GateHarness(tmp_path)
+    result = await run_gate(
+        cast(Any, harness),
+        run_id="r1",
+        level="basic",
+        scope="task",
+        task=None,
+        number=1,
+        workdir=tmp_path,
+        diff="",
+        checks=[],
+    )
     assert result.blocked
     assert any("gate error" in reason for reason in result.reasons)
     assert result.score is None
+    # The blocked record itself is persisted, not just returned in memory (issue #204).
+    assert [r.result.blocked for r in harness.store.reports] == [True]
+
+
+async def test_gate_persist_failure_still_returns_a_blocked_gate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A store that cannot persist must not turn the gate into a crash either."""
+
+    class _BrokenStore(_FakeStore):
+        def add_quality_report(self, run_id: str, result: Any, path: Path) -> None:
+            raise OSError("disk full")
+
+    harness = _GateHarness(tmp_path)
+    harness._store = _BrokenStore()
+    result = await run_gate(
+        cast(Any, harness),
+        run_id="r1",
+        level="basic",
+        scope="task",
+        task=None,
+        number=1,
+        workdir=tmp_path,
+        diff="",
+        checks=[],
+    )
+    assert result.blocked
+    assert any("gate error" in reason for reason in result.reasons)
 
 
 class _OrderCheck(BaseCheck):

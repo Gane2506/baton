@@ -88,7 +88,10 @@ async def run_command(
     except PermissionError:
         result = _failed_start(EXIT_NOT_EXECUTABLE, f"command not executable: {argv[0]}", started)
     if log_path is not None:
-        log_command(log_path, argv, cwd, timeout_s, stdin_text, result, env)
+        # A log that cannot be written must not turn a finished command into a
+        # crash: workers never raise for agent failures (issue #204).
+        with contextlib.suppress(OSError):
+            log_command(log_path, argv, cwd, timeout_s, stdin_text, result, env)
     return result
 
 
@@ -239,12 +242,20 @@ def log_command(
 def append_log_sections(
     log_path: Path, sections: Sequence[tuple[str, str]], env: Mapping[str, str] | None = None
 ) -> None:
-    """Append titled sections to `log_path`, redacted against `env` (default `os.environ`)."""
+    """Append titled sections to `log_path`, redacted against `env` (default `os.environ`).
+
+    Never raises for I/O errors: a log that cannot be written is dropped, not fatal —
+    workers never raise for agent failures, and a read-only log directory must not turn
+    a finished job into a crash (issue #204).
+    """
     stamp = datetime.now(UTC).isoformat(timespec="seconds")
     text = "".join(f"===== {title} ({stamp}) =====\n{body}\n" for title, body in sections)
-    log_path.parent.mkdir(parents=True, exist_ok=True)
-    with log_path.open("a", encoding="utf-8") as f:
-        f.write(redact(text, env))
+    try:
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        with log_path.open("a", encoding="utf-8") as f:
+            f.write(redact(text, env))
+    except OSError:
+        pass
 
 
 # --- redaction -----------------------------------------------------------------------------

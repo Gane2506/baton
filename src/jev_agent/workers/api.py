@@ -10,11 +10,13 @@ never written to the log.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import os
 import re
 from collections.abc import Awaitable, Callable, Collection, Mapping
 from datetime import UTC, datetime
+from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import Any
 
@@ -41,6 +43,18 @@ RETRY_STATUSES = frozenset({429, 503})
 MAX_RETRY_AFTER_S = 10.0
 DEFAULT_BACKOFF_S = 2.0
 SUMMARY_CHARS = 500
+# Error bodies are logged for debugging, but a provider may return megabytes of
+# HTML: cap what the log keeps (issue #204).
+ERROR_BODY_LOG_CHARS = 2000
+
+
+def _capped_body(text: str) -> str:
+    """`text` clipped to what the log keeps, with a marker when anything was cut."""
+    if len(text) <= ERROR_BODY_LOG_CHARS:
+        return text
+    cut = f"\n[error body truncated: kept {ERROR_BODY_LOG_CHARS} chars]"
+    return text[:ERROR_BODY_LOG_CHARS] + cut
+
 
 # Words in a 429 body that mean "you are out of something" rather than "slow down".
 _QUOTA_WORDS = re.compile(
@@ -177,7 +191,11 @@ class ApiWorker:
             log.add("result", f"status: {exc.status}\nsummary: {exc.summary}")
             return WorkerOutput(result=self._result(job, exc.status, log.scrub(exc.summary)))
         finally:
-            log.write()
+            # Workers never raise for agent failures (base.py): a log file that
+            # cannot be written (read-only log dir, disk full) must not turn a
+            # finished job into a crash (issue #204).
+            with contextlib.suppress(OSError):
+                log.write()
 
     async def _post_with_retry(
         self, job: WorkerJob, body: dict[str, Any], api_key: str, log: _Log
@@ -199,7 +217,7 @@ class ApiWorker:
                     status = classify_api_error(
                         response.status_code, response.text, free_model=free
                     )
-                    log.add("error body", response.text)
+                    log.add("error body", _capped_body(response.text))
                     delay = _retry_delay(response)
                     retryable = response.status_code in RETRY_STATUSES and status == "failure"
                     if attempt == 1 and retryable and delay is not None:
@@ -235,7 +253,7 @@ class ApiWorker:
         try:
             data = response.json()
         except ValueError as exc:
-            log.add("raw response", response.text)
+            log.add("raw response", _capped_body(response.text))
             raise _RequestFailed("error", "response body is not JSON") from exc
         if not isinstance(data, dict):
             raise _RequestFailed("error", "response body is not a JSON object")
@@ -341,15 +359,27 @@ def _error_summary(response: httpx.Response) -> str:
     return f"HTTP {response.status_code}: {message}"
 
 
-def _retry_delay(response: httpx.Response) -> float | None:
-    """Seconds to wait before retrying, or None if `Retry-After` asks for more than 10s."""
+def _retry_delay(response: httpx.Response, *, now: datetime | None = None) -> float | None:
+    """Seconds to wait before retrying, or None if `Retry-After` asks for more than 10s.
+
+    `Retry-After` is a delay in seconds or an HTTP date (RFC 9110): a date is
+    honoured the same way — a date within the 10s cap waits until then, a date in
+    the past means retry now, a date further out means no retry (issue #204).
+    An unparseable value also means no retry, rather than a guessed delay.
+    """
     header = response.headers.get("retry-after")
     if header is None:
         return DEFAULT_BACKOFF_S
     try:
         delay = float(header)
     except ValueError:
-        return None  # an HTTP date: too far ahead to care about in v0.1
+        try:
+            when = parsedate_to_datetime(header)
+        except (TypeError, ValueError):
+            return None
+        if when.tzinfo is None:
+            when = when.replace(tzinfo=UTC)
+        delay = (when - (now or datetime.now(UTC))).total_seconds()
     return max(delay, 0.0) if delay <= MAX_RETRY_AFTER_S else None
 
 

@@ -590,6 +590,121 @@ async def test_container_and_iac_scans(tmp_path: Path) -> None:
     assert result.findings[0].severity == "critical"
 
 
+def test_iac_files_finds_nested_dockerfiles(tmp_path: Path) -> None:
+    """Dockerfiles deeper than one level count for the container scans (issue #204)."""
+    from jev_agent.quality.base import iac_files
+
+    repo = _repo(tmp_path, {"services/api/Dockerfile": "FROM x", "Dockerfile": "FROM x"})
+    assert "services/api/Dockerfile" in iac_files(repo)
+
+
+async def test_scanner_nonzero_exit_with_valid_empty_json_is_an_error(tmp_path: Path) -> None:
+    """A scanner that errors while emitting valid empty JSON must not silently pass
+    (issue #204 I-1): exit 1 with nothing listed, and any non-findings exit code,
+    are tool errors, not clean scans."""
+    cases: list[tuple[Any, dict[str, str], str, str, str, int, str]] = [
+        (
+            BanditCheck(),
+            _PY,
+            "bandit",
+            "bandit -q -f json a.py",
+            _diff_for("a.py"),
+            1,
+            '{"results": []}',
+        ),
+        (
+            BanditCheck(),
+            _PY,
+            "bandit",
+            "bandit -q -f json a.py",
+            _diff_for("a.py"),
+            2,
+            '{"results": []}',
+        ),
+        (
+            SemgrepCheck(),
+            {"a.py": "", ".semgrep.yml": "rules: []"},
+            "semgrep",
+            _SEMGREP_CMD,
+            _diff_for("a.py"),
+            2,
+            '{"results": []}',
+        ),
+        (
+            TrivyCheck(),
+            _IAC,
+            "trivy",
+            "trivy fs --scanners misconfig,secret --format json --quiet .",
+            _diff_for("Dockerfile"),
+            1,
+            '{"Results": []}',
+        ),
+        (
+            CheckovCheck(),
+            _IAC,
+            "checkov",
+            "checkov -d . --quiet --compact -o json",
+            _diff_for("Dockerfile"),
+            1,
+            '{"results": {"failed_checks": []}}',
+        ),
+        (
+            HadolintCheck(),
+            _IAC,
+            "hadolint",
+            "hadolint -f json Dockerfile",
+            _diff_for("Dockerfile"),
+            1,
+            "[]",
+        ),
+        (
+            NpmAuditCheck(),
+            {"package-lock.json": "{}"},
+            "npm",
+            "npm audit --omit=dev --json",
+            _diff_for("package-lock.json"),
+            1,
+            '{"vulnerabilities": {}}',
+        ),
+    ]
+    for check, files, tool, cmd, diff, code, output in cases:
+        repo = _repo(tmp_path, files)
+        runner, _ = _runner(
+            repo,
+            installed=(tool,),
+            exit_codes={cmd: [code]},
+            outputs={cmd: [output]},
+            diff=diff,
+        )
+        result = await check.run(repo, runner)
+        assert result.status == "error", (check.name, code, result)
+        assert result.findings == [] and f"exit {code}" in result.detail
+
+
+async def test_scanner_clean_and_findings_exits_unchanged(tmp_path: Path) -> None:
+    """Exit 0 with empty JSON still passes, and exit 1 with findings still fails."""
+    repo = _repo(tmp_path, _PY)
+    cmd = "bandit -q -f json a.py"
+    runner, _ = _runner(
+        repo,
+        installed=("bandit",),
+        exit_codes={cmd: [0]},
+        outputs={cmd: ['{"results": []}']},
+        diff=_diff_for("a.py"),
+    )
+    assert (await BanditCheck().run(repo, runner)).status == "pass"
+    repo = _repo(tmp_path, _IAC)
+    cmd = "trivy fs --scanners misconfig,secret --format json --quiet ."
+    runner, _ = _runner(
+        repo,
+        installed=("trivy",),
+        exit_codes={cmd: [0]},
+        outputs={cmd: ['{"Results": []}']},
+        diff=_diff_for("Dockerfile"),
+    )
+    assert (await TrivyCheck().run(repo, runner)).status == "pass"
+
+
 # ---- policy ----------------------------------------------------------------------------------
 
 
