@@ -19,6 +19,14 @@ from jev_agent.core.learning.models import (
 from jev_agent.core.learning.paths import normalize_module_path, qualify_module
 
 
+def _check_lesson_text(text: str) -> None:
+    """The text rule `add_lesson` and `update_lesson` share: non-empty, within the cap."""
+    if not text.strip():
+        raise LearningError("lesson text cannot be empty")
+    if len(text) > MAX_LESSON_CHARS:
+        raise LearningError(f"lesson text too long (max {MAX_LESSON_CHARS} chars)")
+
+
 class LessonLessonsMixin(LessonDBBase):
     """Lesson CRUD and scoring (one `LessonDB` concern)."""
 
@@ -41,6 +49,8 @@ class LessonLessonsMixin(LessonDBBase):
         """
         if origin not in _EDGE_ORIGINS:
             raise LearningError(f"unknown lesson origin {origin!r}")
+        _check_lesson_text(text)
+        text = text.strip()
         now = self._clock()
         with self._tx() as db:
             cur = db.execute(
@@ -57,10 +67,12 @@ class LessonLessonsMixin(LessonDBBase):
                     now,
                 ),
             )
-            assert cur.lastrowid is not None
+            if cur.lastrowid is None:
+                raise LearningError("lesson insert did not return an id")
             number = cur.lastrowid
         lesson = self.get_lesson(number)
-        assert lesson is not None
+        if lesson is None:
+            raise LearningError(f"lesson {self.lesson_id(number)} was not stored")
         if self.graph_ready():
             # Path-looking tags become `applies-to` module nodes; for shared profiles the
             # run's repo slug qualifies them (`slug:path`).
@@ -100,18 +112,26 @@ class LessonLessonsMixin(LessonDBBase):
     # another profile (issue #40).
 
     def update_text(self, profile: str, number: int, text: str) -> None:
+        """Replace a lesson's text. Raises LearningError for an empty text or a lesson
+        that is not in this profile (a silent no-op used to hide both)."""
+        _check_lesson_text(text)
         with self._tx() as db:
-            db.execute(
+            cur = db.execute(
                 "UPDATE lessons SET text = ?, updated_at = ? WHERE id = ? AND profile = ?",
-                (text, self._clock(), number, profile),
+                (text.strip(), self._clock(), number, profile),
             )
+            if cur.rowcount == 0:
+                raise LearningError(f"no lesson {self.lesson_id(number)} in profile {profile!r}")
 
     def retire(self, profile: str, number: int) -> None:
+        """Retire a lesson. Raises LearningError when it is not in this profile."""
         with self._tx() as db:
-            db.execute(
+            cur = db.execute(
                 "UPDATE lessons SET retired = 1, updated_at = ? WHERE id = ? AND profile = ?",
                 (self._clock(), number, profile),
             )
+            if cur.rowcount == 0:
+                raise LearningError(f"no lesson {self.lesson_id(number)} in profile {profile!r}")
 
     def update_lesson(
         self,
@@ -122,10 +142,7 @@ class LessonLessonsMixin(LessonDBBase):
         tags: Sequence[str],
     ) -> None:
         """Edit a lesson's text, roles, and tags (issue #161)."""
-        if not text.strip():
-            raise LearningError("lesson text cannot be empty")
-        if len(text) > MAX_LESSON_CHARS:
-            raise LearningError(f"lesson text too long (max {MAX_LESSON_CHARS} chars)")
+        _check_lesson_text(text)
         with self._tx() as db:
             cur = db.execute(
                 "UPDATE lessons SET text = ?, roles_json = ?, tags_json = ?, updated_at = ?"

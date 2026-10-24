@@ -10,7 +10,7 @@ from jev_agent.config.schema import ShipMode
 from jev_agent.core.recurrence import Schedule
 from jev_agent.quality.levels import QualityLevel, parse_level
 
-from .base import StoreBase
+from .base import _QUEUE_UPDATE_COLUMNS, StoreBase, _check_update_assignments
 from .errors import NotFoundError, StoreError
 from .records import (
     QUEUE_PRIORITIES,
@@ -66,7 +66,8 @@ class QueueMixin(StoreBase):
                     now,
                 ),
             )
-            assert cur.lastrowid is not None
+            if cur.lastrowid is None:
+                raise StoreError("queue insert did not return an id")
             item_id = cur.lastrowid
         return self.get_queue_item(item_id)
 
@@ -181,6 +182,10 @@ class QueueMixin(StoreBase):
     def _update_queue_item(
         self, item_id: int, assignments: str, params: tuple[object, ...]
     ) -> None:
+        # The fragment is caller-built, as in `_update_run`/`_update_task` (issue #224):
+        # the allowlist is what keeps a future caller from smuggling an arbitrary
+        # assignment past review.
+        _check_update_assignments(assignments, _QUEUE_UPDATE_COLUMNS)
         with self._tx() as db:
             cur = db.execute(
                 f"UPDATE queue SET {assignments}, updated_at = ? WHERE id = ?",
@@ -233,7 +238,8 @@ class QueueMixin(StoreBase):
                     self._clock(),
                 ),
             )
-            assert cur.lastrowid is not None
+            if cur.lastrowid is None:
+                raise StoreError("recurring-task insert did not return an id")
             task_id = cur.lastrowid
         return self.get_recurring_task(task_id)
 

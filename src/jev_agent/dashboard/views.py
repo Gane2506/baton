@@ -55,6 +55,7 @@ from jev_agent.core.learning import (
     LessonDB,
     Profile,
     Skill,
+    SkillProposal,
     learning_status,
     normalize_module_ref,
     split_module_ref,
@@ -646,10 +647,10 @@ class LearningView:
     lessons: list[Lesson]
     shared_path: Path
     skills: list[Skill]  # the profile's learned skills
-    proposed_skills: list[dict[str, object]]  # skill proposals awaiting approval
+    proposed_skills: list[SkillProposal]  # skill proposals awaiting approval
 
 
-def _profile_skills(repo: Repo, selected: str) -> tuple[list[Skill], list[dict[str, object]]]:
+def _profile_skills(repo: Repo, selected: str) -> tuple[list[Skill], list[SkillProposal]]:
     """The profile's learned skills, and the skill proposals for lessons not
     already covered by a skill. Both empty when the skills table does not exist
     yet (an old database)."""
@@ -658,11 +659,9 @@ def _profile_skills(repo: Repo, selected: str) -> tuple[list[Skill], list[dict[s
         skills = db.list_skills(selected)
         # Only propose skills for lessons not already covered by a skill.
         covered: set[str] = {lid for s in skills for lid in s.lesson_ids}
-        proposed_skills: list[dict[str, object]] = []
+        proposed_skills: list[SkillProposal] = []
         for p in db.propose_skills(selected):
-            ids = p["lesson_ids"]
-            assert isinstance(ids, list)
-            if not set(ids).issubset(covered):
+            if not set(p.lesson_ids).issubset(covered):
                 proposed_skills.append(p)
     except LearningError:
         # The skills table may not exist yet (old database): no skills to show.

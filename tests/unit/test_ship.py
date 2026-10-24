@@ -426,10 +426,10 @@ def test_ship_git_hang_times_out(
 ) -> None:
     import time
 
-    import jev_agent.core.ship as ship
+    import jev_agent.core.workspace as workspace
 
     repo, run_id = done_run
-    monkeypatch.setattr(ship, "GIT_QUICK_TIMEOUT_S", 0.5)
+    monkeypatch.setattr(workspace, "GIT_QUICK_TIMEOUT_S", 0.5)
     _git_wrapper(tmp_path, monkeypatch, hang_on="ls-remote")
     started = time.monotonic()
     code, output = _jev(repo, "ship", run_id, "--yes")
@@ -437,6 +437,29 @@ def test_ship_git_hang_times_out(
     assert "git ls-remote" in output and "timed out after 0.5 s" in output, output
     assert time.monotonic() - started < 20
     assert f"jev/{run_id}" not in _remote_branches(origin)
+
+
+def test_prepare_ship_calls_latest_per_gate_once(
+    done_run: tuple[Path, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """R3-02 (issue #233): the quality gate list is computed once, not twice."""
+    import jev_agent.core.ship.prepare as prepare
+    from jev_agent.config import load_config
+    from jev_agent.core.ship import Gh
+    from jev_agent.core.ship.prepare import prepare_ship
+    from jev_agent.quality.report import latest_per_gate
+
+    repo, run_id = done_run
+    calls: list[int] = []
+
+    def counting(results: list[GateResult]) -> list[Any]:
+        calls.append(1)
+        return latest_per_gate(results)
+
+    monkeypatch.setattr(prepare, "latest_per_gate", counting)
+    with _store(repo) as store:
+        prepare_ship(repo, load_config(repo), store, run_id, gh=Gh(repo), dry_run=True)
+    assert len(calls) == 1
 
 
 def test_base_branch_comes_from_the_remote_head(done_run: tuple[Path, str], gh: FakeGh) -> None:
@@ -736,7 +759,18 @@ def test_pr_lookup_reads_gh_pr_list() -> None:
         ]
     )
     assert parse_pr_list(text, "jev/r1") == ExistingPr(5, "https://x/pull/5", "closed")
-    assert parse_pr_list(json.dumps([{"number": 4}]), "jev/r1") == ExistingPr(4, None, "open")
+    # A missing headRefName is no match (issue #233): an item that does not say which
+    # branch it is for cannot be the PR for this branch.
+    assert parse_pr_list(json.dumps([{"number": 4}]), "jev/r1") is None
+    assert parse_pr_list(
+        json.dumps(
+            [
+                {"number": 4, "state": "OPEN"},
+                {"number": 6, "state": "OPEN", "headRefName": "jev/r1"},
+            ]
+        ),
+        "jev/r1",
+    ) == ExistingPr(6, None, "open")
 
 
 # ---- shipping after the D6 vote (issue #68) ------------------------------------------------

@@ -5,6 +5,7 @@ precedence between run flags, repo settings, `jev.toml`, and defaults.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Literal
 
 from jev_agent.config.schema import JevConfig
 from jev_agent.core.learning.models import SETTING_ENABLED, SETTING_PROFILE, LearningError
@@ -12,15 +13,19 @@ from jev_agent.core.learning.profiles import check_profile_name
 from jev_agent.core.learning.registry import Learning
 from jev_agent.core.store import Store
 
+# Where a status value came from: the repo switch (`jev learning ...`), jev.toml, or the
+# built-in default. A Literal, not a free string, so a typo'd source is a type error.
+StatusSource = Literal["the switch", "jev.toml", "default"]
+
 
 @dataclass(frozen=True)
 class LearningStatus:
     """The repo's learning switch and active profile, with where each value came from."""
 
     enabled: bool
-    enabled_source: str  # "the switch" | "jev.toml" | "default"
+    enabled_source: StatusSource
     profile: str
-    profile_source: str
+    profile_source: StatusSource
 
 
 def _setting_bool(value: str | None) -> bool | None:
@@ -123,8 +128,6 @@ def delete_profile(store: Store, learning: Learning, name: str) -> None:
     if store.get_setting(SETTING_PROFILE) == name:
         set_active_profile(store, None)
 
-
-# ---- selection ---------------------------------------------------------------------------
 
 __all__ = [
     "LearningStatus",

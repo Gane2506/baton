@@ -84,7 +84,8 @@ class Learning:
         if existing is not None:
             raise LearningError(f"profile {name!r} already exists ({existing.scope} scope)")
         db = self.shared(create=True) if shared else self.repo
-        assert db is not None
+        if db is None:
+            raise LearningError("the shared lesson database could not be opened")
         return db.create_profile(name)
 
     def ensure(self, name: str) -> Profile:
@@ -96,12 +97,6 @@ class Learning:
 
     def flush(self, name: str) -> int:
         return self.db_for(name).flush(name)
-
-    def laya_weights(self, name: str) -> dict[str, float] | None:
-        return self.db_for(name).get_laya_weights(name)
-
-    def set_laya_weights(self, name: str, weights: dict[str, float] | None) -> None:
-        self.db_for(name).set_laya_weights(name, weights)
 
     def delete(self, name: str) -> None:
         self.db_for(name).delete_profile(name)
@@ -127,7 +122,5 @@ class Learning:
         db.retire(lesson.profile, lesson.number)
         return lesson
 
-
-# ---- which profile a run uses ------------------------------------------------------------
 
 __all__ = ["Learning"]

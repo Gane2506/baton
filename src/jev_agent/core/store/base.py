@@ -56,6 +56,7 @@ _RUN_UPDATE_COLUMNS = frozenset(
     {"learning_profile", "learning_outcome", "quality_level", "spend_usd"}
 )
 _TASK_UPDATE_COLUMNS = frozenset({"lessons_scored", "spend_usd"})
+_QUEUE_UPDATE_COLUMNS = frozenset({"status", "run_id", "note"})
 
 
 def _check_update_assignments(assignments: str, allowed: frozenset[str]) -> None:

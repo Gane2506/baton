@@ -27,7 +27,12 @@ def _duration(seconds: float | None) -> str:
 
 def kpi_rows(k: RunKpis) -> list[tuple[str, str]]:
     """The KPI card, as (name, value) rows; shared by the PR body and the confirmation."""
-    tests = {True: "passed", False: "failed", None: "not run"}[k.tests_passed]
+    if k.tests_passed is True:
+        tests = "passed"
+    elif k.tests_passed is False:
+        tests = "failed"
+    else:
+        tests = "not run"
     diff = (
         "-"
         if k.diff_files is None

@@ -253,8 +253,18 @@ class SettingsRoutes(DashboardCore):
                 return "unknown action"
             keys = [key for key in (_text(form, "keys") or "").split(",") if key]
             kinds = (_text(form, "kinds") or "").split(",")
+            if len(keys) != len(kinds):
+                # An empty kinds field is one empty string, not zero kinds: only a
+                # key-less entry may have it. Anything else is a mismatched pair of
+                # lists, and silently truncating (zip strict=False) would drop fields.
+                if keys or kinds != [""]:
+                    return (
+                        f"keys and kinds do not match ({len(keys)} keys, {len(kinds)} kinds); "
+                        "give one kind per key"
+                    )
+                kinds = []
             entry: dict[str, Any] = {}
-            for key, entry_kind in zip(keys, kinds, strict=False):
+            for key, entry_kind in zip(keys, kinds, strict=True):
                 try:
                     value = settings.parse_value(entry_kind, values.get(f"f_{key}", ""), values)
                 except ValueError as exc:

@@ -178,11 +178,8 @@ def prepare_ship(
         raise ShipError(f"run {run_id} has no result branch {source} in this repo")
     head_oid = head.stdout.strip()
     if settings.require_quality_pass:
-        blocked = [
-            g.label
-            for g in latest_per_gate([r.result for r in store.list_quality_reports(run_id)])
-            if g.blocked
-        ]
+        latest = latest_per_gate([r.result for r in store.list_quality_reports(run_id)])
+        blocked = [g.label for g in latest if g.blocked]
         if blocked:
             raise ShipError(
                 f"the quality gate blocked run {run_id} ({', '.join(blocked)}); see "
@@ -190,7 +187,7 @@ def prepare_ship(
             )
         below_bar = [
             f"{g.label} ({g.score.total}/{g.score.threshold})"
-            for g in latest_per_gate([r.result for r in store.list_quality_reports(run_id)])
+            for g in latest
             if g.score is not None and not g.score.passed
         ]
         if below_bar:

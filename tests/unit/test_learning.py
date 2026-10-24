@@ -520,8 +520,12 @@ def test_lesson_writes_only_touch_the_given_profile(learning: Learning) -> None:
     db = learning.db_for("b")
     lesson = db.add_lesson("b", "b's lesson", ["coder"], [])
     db.record_use("a", lesson.number, -5.0)
-    db.update_text("a", lesson.number, "changed")
-    db.retire("a", lesson.number)
+    # A write naming the wrong profile raises (issue #233: update_text/retire no
+    # longer silently no-op) and leaves the lesson untouched: it belongs to b.
+    with pytest.raises(LearningError, match="no lesson L1 in profile 'a'"):
+        db.update_text("a", lesson.number, "changed")
+    with pytest.raises(LearningError, match="no lesson L1 in profile 'a'"):
+        db.retire("a", lesson.number)
     assert db.get_lesson(lesson.number) == lesson  # untouched: it belongs to b
     db.record_use("b", lesson.number, -0.5)
     got = db.get_lesson(lesson.number)
@@ -671,12 +675,11 @@ def test_propose_skills_groups_by_tag(learning: Learning) -> None:
     proposals = db.propose_skills("default")
     # "ui" and "testing" both have 2 lessons; "other" has 1 (no proposal)
     assert len(proposals) == 2
-    tags = {p["tag"] for p in proposals}
+    tags = {p.tag for p in proposals}
     assert tags == {"ui", "testing"}
     for p in proposals:
-        ids = p["lesson_ids"]
-        assert isinstance(ids, list)
-        assert len(ids) == 2
+        assert isinstance(p.lesson_ids, list)
+        assert len(p.lesson_ids) == 2
 
 
 def test_propose_skills_empty_when_no_lessons(learning: Learning) -> None:

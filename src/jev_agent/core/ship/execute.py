@@ -51,28 +51,31 @@ def execute_ship(plan: ShipPlan, store: Store, root: Path, gh: Gh | None = None)
                 f"{exc}: the outcome is unknown, GitHub may have opened the PR. "
                 f"The branch {plan.branch} is on {plan.remote}; {retry}"
             ) from exc
-    if proc.returncode != 0:
-        detail = redact((proc.stderr or proc.stdout).strip())
-        found = _lookup_after_failure(gh, plan)
-        if found is not None:
-            return _record(plan, store, found)
-        raise ShipError(
-            f"gh pr create failed: {detail}. The branch {plan.branch} is on {plan.remote}; {retry}"
-        )
-    number: int | None = None
-    url: str | None = None
-    match = _PR_URL.search(proc.stdout)
-    if match:
-        url, number = match.group(0), int(match.group(1))
-    else:
-        try:
-            data = gh.json("pr", "view", plan.branch, "--repo", plan.repo, "--json", "number,url")
-        except ShipError:
-            data = None
-        if isinstance(data, dict):
-            number = data.get("number") if isinstance(data.get("number"), int) else None
-            url = data.get("url") if isinstance(data.get("url"), str) else None
-    return _record(plan, store, number=number, url=url)
+        if proc.returncode != 0:
+            detail = redact((proc.stderr or proc.stdout).strip())
+            found = _lookup_after_failure(gh, plan)
+            if found is not None:
+                return _record(plan, store, found)
+            raise ShipError(
+                f"gh pr create failed: {detail}. The branch {plan.branch} is on "
+                f"{plan.remote}; {retry}"
+            )
+        number: int | None = None
+        url: str | None = None
+        match = _PR_URL.search(proc.stdout)
+        if match:
+            url, number = match.group(0), int(match.group(1))
+        else:
+            try:
+                data = gh.json(
+                    "pr", "view", plan.branch, "--repo", plan.repo, "--json", "number,url"
+                )
+            except ShipError:
+                data = None
+            if isinstance(data, dict):
+                number = data.get("number") if isinstance(data.get("number"), int) else None
+                url = data.get("url") if isinstance(data.get("url"), str) else None
+        return _record(plan, store, number=number, url=url)
 
 
 def _lookup_after_failure(gh: Gh, plan: ShipPlan) -> ExistingPr | None:
