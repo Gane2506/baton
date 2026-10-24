@@ -203,12 +203,32 @@ def run_task(
 
     Returns a TaskResult whose `note` explains a run that never completed
     (no result branch, harness error) instead of fabricating dimensions.
+    Unless `keep_sandbox` is set, the sandbox is removed on every exit path,
+    not just the success path.
     """
     spec = load_task(task_id, tasks_dir)
     started = datetime.now(UTC)
     parent = config.workdir or Path(tempfile.mkdtemp(prefix="capbench-"))
     parent.mkdir(parents=True, exist_ok=True)
     sandbox, base_sha = prepare_sandbox(spec, parent, config)
+    try:
+        return _run_task_in_sandbox(spec, config, started, parent, sandbox, base_sha)
+    finally:
+        # The old code only removed the sandbox on the success path, so a
+        # timed-out, failed or harness-error run leaked one sandbox per task.
+        if not config.keep_sandbox:
+            shutil.rmtree(sandbox, ignore_errors=True)
+
+
+def _run_task_in_sandbox(
+    spec: TaskSpec,
+    config: BenchmarkConfig,
+    started: datetime,
+    parent: Path,
+    sandbox: Path,
+    base_sha: str,
+) -> TaskResult:
+    """One task's run-and-grade inside an already-prepared sandbox."""
 
     async def _run() -> Any:
         with open_context(sandbox) as ctx:
@@ -251,7 +271,7 @@ def run_task(
             note=f"run ended {run.state.value}: {run.reason or 'no reason recorded'}",
         )
 
-    result_dir = _checkout_result(sandbox, record.id, parent / f"{task_id}-result")
+    result_dir = _checkout_result(sandbox, record.id, parent / f"{spec.id}-result")
     try:
         grade = run_grade_script(spec.grade_py, result_dir, run_json_path, diff_path)
     except RuntimeError as exc:
@@ -266,8 +286,6 @@ def run_task(
             ship_score=ship_score,
             note=f"grader harness error: {exc}",
         )
-    if not config.keep_sandbox:
-        shutil.rmtree(sandbox, ignore_errors=True)
     return task_result_from_grade(
         spec,
         grade,

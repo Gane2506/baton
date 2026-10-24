@@ -118,6 +118,11 @@ def stdlib_only_imports(files: Sequence[Path]) -> list[str]:
             if isinstance(node, ast.Import):
                 names = [alias.name.split(".")[0] for alias in node.names]
             elif isinstance(node, ast.ImportFrom):
+                # A relative import (`from .utils import x`, `from . import x`) is
+                # a module of the result itself, not a new dependency: `level`
+                # is 0 only for absolute imports, and only those can be non-stdlib.
+                if node.level:
+                    continue
                 names = [node.module.split(".")[0]] if node.module else []
             else:
                 continue
@@ -126,9 +131,15 @@ def stdlib_only_imports(files: Sequence[Path]) -> list[str]:
 
 
 def read_ship_score(run_json: Mapping[str, object]) -> int | None:
-    """The gate's ship score from the run JSON the runner hands to `grade.py`."""
+    """The gate's ship score from the run JSON the runner hands to `grade.py`.
+
+    Clamped to 0-100: a run record claiming 150 must not reach the
+    scoreboard. Booleans are not scores (`True` is an `int` in Python).
+    """
     score = run_json.get("ship_score")
-    return score if isinstance(score, int) else None
+    if isinstance(score, bool) or not isinstance(score, int):
+        return None
+    return max(0, min(100, score))
 
 
 def load_run_json(path: Path) -> dict[str, object]:
@@ -156,21 +167,26 @@ def run_grade_script(
     exit code disagreeing with the JSON verdict) - those are bugs in the
     grader, not failures of the graded code.
     """
-    proc = subprocess.run(
-        [
-            sys.executable,
-            str(grade_py),
-            "--result",
-            str(result_dir),
-            "--run-json",
-            str(run_json),
-            "--diff",
-            str(diff),
-        ],
-        capture_output=True,
-        text=True,
-        timeout=timeout_s,
-    )
+    try:
+        proc = subprocess.run(
+            [
+                sys.executable,
+                str(grade_py),
+                "--result",
+                str(result_dir),
+                "--run-json",
+                str(run_json),
+                "--diff",
+                str(diff),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=timeout_s,
+        )
+    except subprocess.TimeoutExpired as exc:
+        # A hung grader is a harness error like any other, not a crash of the
+        # runner: the caller records it and moves on to the next task.
+        raise RuntimeError(f"grade.py timed out after {timeout_s}s") from exc
     if proc.returncode == GRADE_ERROR:
         raise RuntimeError(f"grade.py harness error: {proc.stderr.strip() or proc.stdout.strip()}")
     if proc.returncode not in (GRADE_PASS, GRADE_FAIL):

@@ -58,9 +58,19 @@ class TaskSpec:
 
 
 def load_task(task_id: str, tasks_dir: Path | None = None) -> TaskSpec:
-    """Load one task spec; raises FileNotFoundError / ValueError for a bad task dir."""
+    """Load one task spec; raises FileNotFoundError / ValueError for a bad task dir.
+
+    The task dir must stay inside `tasks_dir`: without this, a `..` task id (or
+    an absolute one, which would replace the root entirely) landing on a dir
+    with brief.md/fixture/grade.py would load - and later execute - that
+    grade.py. Resolving both sides also catches a symlink inside the tasks
+    dir pointing out of it.
+    """
     root = tasks_dir or _tasks_dir()
-    task_dir = root / task_id
+    root_resolved = root.resolve()
+    task_dir = (root_resolved / task_id).resolve()
+    if not task_dir.is_relative_to(root_resolved):
+        raise ValueError(f"benchmark task {task_id!r}: escapes the tasks directory")
     brief_path = task_dir / "brief.md"
     if not brief_path.is_file():
         raise FileNotFoundError(f"benchmark task {task_id!r}: no brief.md in {task_dir}")
@@ -94,7 +104,10 @@ class GradeReport(BaseModel):
     diff_files: int = Field(ge=0, description="files changed in the result diff")
     diff_within_band: bool = Field(description="diff inside the task's size band")
     ship_score: int | None = Field(
-        default=None, description="quality gate 0-100 ship score, None when no gate ran"
+        default=None,
+        ge=0,
+        le=100,
+        description="quality gate 0-100 ship score, None when no gate ran",
     )
     reasons: list[str] = Field(default_factory=list, description="human-readable failures")
     details: dict[str, str] = Field(
@@ -109,10 +122,18 @@ class TaskResult(BaseModel):
     title: str
     run_id: str | None = Field(default=None, description="the jev run, None when never started")
     passed: bool = Field(description="the grader's verdict")
-    correctness: float = Field(ge=0, le=100, description="hidden-test fraction x 100")
-    ship_score: int | None = Field(default=None, description="gate ship score, None if no gate ran")
-    cost_usd: float = Field(ge=0, description="actual run spend from the run record")
-    duration_min: float = Field(ge=0, description="wall-clock minutes for the run")
+    correctness: float = Field(
+        ge=0, le=100, description="hidden-test fraction x 100", allow_inf_nan=False
+    )
+    ship_score: int | None = Field(
+        default=None, ge=0, le=100, description="gate ship score, None if no gate ran"
+    )
+    cost_usd: float = Field(
+        ge=0, description="actual run spend from the run record", allow_inf_nan=False
+    )
+    duration_min: float = Field(
+        ge=0, description="wall-clock minutes for the run", allow_inf_nan=False
+    )
     profile: str = Field(description="worker-profile label the task ran under")
     run_date: str = Field(description="ISO date the task ran")
     repeats: int = Field(default=1, description="repeats per task; Phase 1 is always 1")
@@ -139,6 +160,7 @@ class SuiteResult(BaseModel):
     per_run_usd: float | None = Field(
         default=None,
         description="the [budget] per_run_usd cap the suite ran under; None for older JSON",
+        allow_inf_nan=False,
     )
     repeats_per_task: int = Field(default=1, description="Phase 1 runs each task once")
     tasks: list[TaskResult] = Field(default_factory=list)
@@ -179,10 +201,14 @@ def unevaluated_suite(tasks: list[TaskSpec] | None = None) -> SuiteResult:
 
 
 def correctness_score(tests_passed: int, tests_total: int) -> float:
-    """Hidden-test fraction x 100 (design §3); no tests run means no evidence: 0."""
+    """Hidden-test fraction x 100 (design §3); no tests run means no evidence: 0.
+
+    Clamped to 0-100: a grader reporting more passes than tests run (5/3)
+    must not put 166.7 on the public scoreboard.
+    """
     if tests_total <= 0:
         return 0.0
-    return 100.0 * tests_passed / tests_total
+    return min(100.0, max(0.0, 100.0 * tests_passed / tests_total))
 
 
 def _linear_falling(value: float, full_at: float, zero_at: float) -> float:
