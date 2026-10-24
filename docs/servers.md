@@ -62,7 +62,7 @@ symlink pointing out of it counts as a boundary violation. An unset or out-of-bo
 workdir fails closed. Unset: the medium scope is `allowed_paths` (default: the workdir).
 
 
-Every command is checked before anything reaches `ssh` (`src/jev_agent/servers/policy.py`).
+Every command is checked before anything reaches `ssh` (`src/jev_agent/servers/policy/`).
 
 **Shape, at every level.** One command per call, optionally piped once into `grep`, `head`,
 `tail`, `wc` or `sort`. Refused: `;`, `&`, `&&`, `||`, redirects (`<`, `>`), subshells,
