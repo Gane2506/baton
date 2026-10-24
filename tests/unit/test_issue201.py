@@ -31,12 +31,12 @@ from jev_agent.core.cache import (
 )
 from jev_agent.core.commands import CommandResult
 from jev_agent.core.harness import Halt, Harness
-from jev_agent.core.integration import FailedCommand, IntegrationOutcome, IntegrationResult
+from jev_agent.core.integration import FailedCommand, IntegrationOutcome
 from jev_agent.core.models import Idea, Plan, RunState, TaskCard, TaskState
 from jev_agent.core.pipeline import Pipeline
 from jev_agent.core.store import Store
 from jev_agent.core.tasks import TaskRunner
-from jev_agent.core.workspace import GitWorkspace
+from jev_agent.core.workspace import GitWorkspace, IntegrationResult
 from jev_agent.dispatch.guard import GuardedDispatcher
 from jev_agent.dispatch.rules import RulesDispatcher
 from jev_agent.workers.fake import FakeStep, FakeWorker
