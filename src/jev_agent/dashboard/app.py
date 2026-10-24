@@ -12,8 +12,6 @@ from __future__ import annotations
 import json
 import math
 import shutil
-import sqlite3
-import subprocess
 import threading
 import time
 from collections.abc import AsyncIterator, Callable
@@ -21,9 +19,8 @@ from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
-from urllib.parse import quote, urlsplit
+from urllib.parse import quote
 
-from markupsafe import Markup, escape
 from starlette.applications import Starlette
 from starlette.concurrency import run_in_threadpool
 from starlette.datastructures import FormData, UploadFile
@@ -45,27 +42,11 @@ from jev_agent.app import chat, settings
 from jev_agent.app import profiles as app_profiles
 from jev_agent.app.board import DONE_LIMIT, state_legend
 from jev_agent.app.errors import JevError
-from jev_agent.app.format import format_answers
-from jev_agent.app.learning import (
-    create_profile as learning_create,
-)
 from jev_agent.app.learning import (
     delete as learning_delete_profile,
 )
 from jev_agent.app.learning import (
-    disable as learning_disable,
-)
-from jev_agent.app.learning import (
-    enable as learning_enable,
-)
-from jev_agent.app.learning import (
     flush as flush_lessons,
-)
-from jev_agent.app.learning import (
-    forget as learning_forget,
-)
-from jev_agent.app.learning import (
-    use_learning_profile,
 )
 from jev_agent.app.quality import review_text
 from jev_agent.app.queue import QueueOptions
@@ -76,21 +57,14 @@ from jev_agent.config.schema import BEGINNER_FIELDS, ShipMode
 from jev_agent.core.benchmarks import DEFAULT_LAST
 from jev_agent.core.budget import approval_budget_block
 from jev_agent.core.chat import (
-    BACKENDS,
     DEFAULT_BUDGET_USD,
-    BackendName,
     ChatError,
-    ChatLearning,
-    ChatMeta,
     describe_design_system,
     list_design_library,
     parse_design_system,
 )
 from jev_agent.core.design_codegen import (
-    CODEGEN_TARGETS,
     bundle_zip,
-    component_catalog,
-    generate_files,
     target_for_stack,
     validate_target,
 )
@@ -100,24 +74,18 @@ from jev_agent.core.design_library import (
     export_tokens_tailwind,
     export_tokens_w3c,
     library_system_path,
-    list_library,
     load_library_system,
-    save_library_system,
     validate_library_name,
 )
 from jev_agent.core.design_reverse import is_url_target
 from jev_agent.core.design_showcase import VIBE_PROFILES, rich_tokens, vibe_for_keywords
 from jev_agent.core.design_showcase_html import render_showcase
 from jev_agent.core.design_system import (
-    META_JSON,
-    design_dir,
     get_design_system,
-    save_design_system,
 )
-from jev_agent.core.kpi import DiffStat, diff_stat
 from jev_agent.core.learning import LearningError, learning_status
 from jev_agent.core.lease import RunInUseError
-from jev_agent.core.models import RunState, TaskState
+from jev_agent.core.models import RunState
 from jev_agent.core.pipeline import STOPPED, PipelineError, cancel_run
 from jev_agent.core.provider_auth import (
     CLAUDE_OAUTH_TOKEN_ENV,
@@ -138,18 +106,7 @@ from jev_agent.core.ship import (
 )
 from jev_agent.core.store import (
     QUEUE_PRIORITIES,
-    AttemptRecord,
-    DecisionRecord,
     NotFoundError,
-    ShippedPrRecord,
-    StoreError,
-    TaskRecord,
-)
-from jev_agent.core.workspace import (
-    GIT_QUICK_TIMEOUT_S,
-    result_branch,
-    run_git,
-    start_ref,
 )
 from jev_agent.dashboard import studio_decisions, ui_styles, views
 from jev_agent.dashboard.browser_install import (
@@ -157,12 +114,35 @@ from jev_agent.dashboard.browser_install import (
     BrowserInstallError,
     BrowserInstallRunner,
 )
+from jev_agent.dashboard.chat_helpers import (
+    _CHAT_SUGGESTIONS,
+    API_MODEL_OPTIONS,
+    _approval_cards,
+    _chat_backend_name,
+    _chat_context_bar,
+    _chat_greeting,
+    _chat_learning,
+    _chat_starters,
+    _rail_groups,
+    _step_blocks,
+)
 from jev_agent.dashboard.connection_status import (
     _conn_aggregate,
     _connection_servers,
     _dispatcher_route,
     _refresh_servers,
     ssh_runner,
+)
+from jev_agent.dashboard.design_helpers import (
+    _design_system_clone,
+    _design_system_code_view,
+    _design_system_use,
+    _design_system_view,
+    _design_systems_view,
+    _library_meta,
+    _meta_text,
+    _repo_design_source,
+    _reverse_evidence_summary,
 )
 from jev_agent.dashboard.design_reverse import (
     ReverseBusy,
@@ -181,7 +161,30 @@ from jev_agent.dashboard.design_studio import (
     wizard_context,
 )
 from jev_agent.dashboard.errors import friendly_error as _friendly_error
-from jev_agent.dashboard.nav import NAV, NavChild, NavItem, _age, _environment, _time, _usd
+from jev_agent.dashboard.helpers import (
+    _PLAN_ACTIVE_STATES,
+    _WORK_TABS,
+    _back_target,
+    _int,
+    _newest_attempt_log,
+    _record_ship_sync,
+    _run_diff,
+    _tail_lines,
+    _text,
+    palette_registry,
+)
+from jev_agent.dashboard.learning_helpers import (
+    _learning_approve_skill,
+    _learning_create,
+    _learning_delete_lesson,
+    _learning_delete_skill,
+    _learning_disable,
+    _learning_edit,
+    _learning_enable,
+    _learning_forget,
+    _learning_use,
+)
+from jev_agent.dashboard.nav import NAV, NavChild, NavItem, _age, _environment, _time
 from jev_agent.dashboard.preview import (
     PreviewBridge,
     PreviewError,
@@ -203,7 +206,6 @@ from jev_agent.dashboard.runner import (
 )
 from jev_agent.dashboard.scheduler_runner import SchedulerRunner
 from jev_agent.dashboard.security import (
-    CSRF_FIELD,
     SHOWCASE_CONTENT_SECURITY_POLICY,
     DashboardSettings,
     SecurityMiddleware,
@@ -2624,747 +2626,6 @@ class Dashboard:
         else:
             self.flash(request, "ok", f"deleted profile {name}")
         return self.back("/learning")
-
-
-def _text(form: FormData, name: str) -> str | None:
-    value = form.get(name)
-    return value.strip() if isinstance(value, str) else None
-
-
-def _back_target(request: Request) -> str:
-    """Where a sidebar-picker POST redirects: the same-origin referer, else `/`.
-
-    Only the referer's path and query are kept, so a forged absolute URL can
-    never turn the redirect into an open redirect.
-    """
-    referer = request.headers.get("referer")
-    if referer and same_origin(request):
-        target = urlsplit(referer)
-        path = target.path or "/"
-        if target.query:
-            path += "?" + target.query
-        if path.startswith("/"):
-            return path
-    return "/"
-
-
-def _chat_backend_name(value: str | None) -> BackendName:
-    """A form's worker value, or a `ChatError` (the form lists both backends)."""
-    if value in BACKENDS:
-        return value
-    raise ChatError("pick a chat backend: api or claude_code")
-
-
-def _chat_learning(value: str | None) -> ChatLearning:
-    """The New chat form's learning choice: empty is the repo default, "none" is off."""
-    if not value:
-        return ChatLearning()
-    if value == "none":
-        return ChatLearning(off=True)
-    return ChatLearning(profile=value)
-
-
-def _int(value: str) -> int:
-    try:
-        return int(value)
-    except ValueError:
-        raise HTTPException(404, "no such item") from None
-
-
-# ---- chat work pane ----------------------------------------------------------------------
-
-_WORK_TABS: tuple[str, ...] = ("plan", "diff", "tests", "preview", "terminal")
-
-# Run states whose stream produces the plan tab while the dashboard drives the run.
-_PLAN_ACTIVE_STATES = frozenset(
-    {
-        RunState.INTAKE,
-        RunState.PLANNING,
-        RunState.VALIDATING,
-        RunState.AWAITING_PLANNING,
-        RunState.AWAITING_VALIDATING,
-    }
-)
-
-_DIFF_CAP_BYTES = 200 * 1024  # the work pane's diff tab never renders more than this
-_TERMINAL_TAIL_LINES = 200
-_TERMINAL_TAIL_BYTES = 256 * 1024  # only the tail of a worker log is read
-
-
-def _newest_attempt_log(
-    repo: views.Repo, run_id: str, attempts: list[AttemptRecord]
-) -> Path | None:
-    """The newest attempt's log file strictly under the run's directory, or None. Worker logs
-    may point anywhere, so paths outside the run dir are never served."""
-    base = views.run_dir(repo, run_id).resolve()
-    for attempt in sorted(attempts, key=lambda a: a.started_at, reverse=True):
-        if attempt.log_path is None:
-            continue
-        try:
-            path = attempt.log_path.resolve()
-            path.relative_to(base)
-        except (OSError, ValueError):
-            continue
-        if path.is_file():
-            return path
-    return None
-
-
-def _tail_lines(path: Path, lines: int = _TERMINAL_TAIL_LINES) -> str:
-    """The last `lines` lines of `path` (at most the last 256KB), decoded lossily."""
-    size = path.stat().st_size
-    with path.open("rb") as handle:
-        handle.seek(max(0, size - _TERMINAL_TAIL_BYTES))
-        data = handle.read()
-    return b"\n".join(data.splitlines()[-lines:]).decode("utf-8", errors="replace")
-
-
-def _run_diff(root: Path, run_id: str) -> str | None:
-    """`git diff` of the run's result branch against its start ref, capped at 200KB; None
-    when there is no diff yet or git cannot tell (the tab shows its empty state)."""
-    try:
-        proc = run_git(
-            [
-                "diff",
-                "--no-color",
-                "--no-ext-diff",
-                f"{start_ref(run_id)}..{result_branch(run_id)}",
-            ],
-            root,
-            GIT_QUICK_TIMEOUT_S,
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        return None
-    if proc.returncode != 0 or not proc.stdout.strip():
-        return None
-    return proc.stdout[:_DIFF_CAP_BYTES]
-
-
-# ---- chat context: approvals and step timeline ---------------------------------------------
-
-_STEP_BLOCK_RUNS = 10  # newest runs considered, so one chat page stays cheap
-_STEP_BLOCK_ENTRIES = 20
-
-# Shown when the transcript is empty; the composer offers them as starting points.
-_CHAT_SUGGESTIONS: tuple[str, ...] = (
-    "Add pagination to the users API",
-    "Fix the flaky date-parsing test",
-    "Explain what run 20261014-3f1a changed",
-    "Review the open pull requests",
-)
-
-
-def _git_branch(root: Path) -> str:
-    """Current git branch of the repo root; "" when git cannot tell."""
-    try:
-        proc = run_git(["rev-parse", "--abbrev-ref", "HEAD"], root, GIT_QUICK_TIMEOUT_S)
-    except (OSError, subprocess.SubprocessError):
-        return ""
-    branch = proc.stdout.strip()
-    return branch if proc.returncode == 0 and branch else ""
-
-
-def _chat_greeting(repo_name: str) -> str:
-    """Warm empty-state greeting, aware of the time of day and the repo."""
-    hour = datetime.now().hour
-    part = "morning" if hour < 12 else "afternoon" if hour < 18 else "evening"
-    return f"Good {part} — what should we build in {repo_name} today?"
-
-
-def _chat_starters(repo: views.Repo) -> list[str]:
-    """Repo-aware empty-state starters: the static prompts plus live context
-    (queued work, the latest run) so the empty state feels alive, not blank."""
-    starters = list(_CHAT_SUGGESTIONS)
-    try:
-        queued = repo.store.list_queue()
-    except (sqlite3.Error, StoreError):
-        queued = []
-    if queued:
-        n = len(queued)
-        plural = "s" if n != 1 else ""
-        starters.insert(0, f"Review the {n} queued item{plural} waiting in the queue")
-    try:
-        runs = repo.store.list_runs()
-    except (sqlite3.Error, StoreError):
-        runs = []
-    if runs:
-        last = runs[0]
-        state = str(getattr(last.state, "name", last.state)).replace("_", " ").lower()
-        starters.append(f"Check on run {last.id} ({state})")
-    return starters[:6]
-
-
-# Rail status keys → pill labels. "running" pulses; "needs-you" is the
-# attention state (a run waiting on the person); the rest stay quiet.
-_RAIL_STATUS_LABELS = {
-    "running": "Running",
-    "needs-you": "Needs you",
-    "queued": "Queued",
-    "briefed": "Briefed",
-}
-
-
-def _rail_chat_status(runner: Any, meta: ChatMeta, *, needs_you: bool) -> str:
-    if runner.busy(meta.chat_id):
-        return "running"
-    if needs_you:
-        return "needs-you"
-    if meta.queue_items:
-        return "queued"
-    if meta.brief:
-        return "briefed"
-    return ""
-
-
-def _rail_groups(
-    runner: Any, repo: views.Repo, chat_id: str, approval_cards: list[dict[str, Any]]
-) -> list[tuple[str, list[tuple[ChatMeta, str, str, str]]]]:
-    """Rail chats grouped by recency (Today / Yesterday / This week / Older),
-    each with a status key + label. Newest chat first inside every bucket."""
-    buckets: dict[str, list[tuple[ChatMeta, str, str, str]]] = {
-        "Today": [],
-        "Yesterday": [],
-        "This week": [],
-        "Older": [],
-    }
-    today = datetime.now(UTC).date()
-    for meta, title in views.chats(repo, "")[:30]:
-        try:
-            updated = datetime.fromisoformat(meta.updated_at)
-            if updated.tzinfo is None:
-                updated = updated.replace(tzinfo=UTC)
-            age_days = (today - updated.date()).days
-        except ValueError:
-            age_days = 10**6
-        key = (
-            "Today"
-            if age_days <= 0
-            else "Yesterday"
-            if age_days == 1
-            else "This week"
-            if age_days < 7
-            else "Older"
-        )
-        status = _rail_chat_status(
-            runner, meta, needs_you=bool(approval_cards) and meta.chat_id == chat_id
-        )
-        buckets[key].append((meta, title, status, _RAIL_STATUS_LABELS.get(status, "")))
-    return [(key, items) for key, items in buckets.items() if items]
-
-
-def _chat_context_bar(repo: views.Repo, meta: ChatMeta | None) -> dict[str, str]:
-    """The quiet persistent context strip: repo · branch · backend · model."""
-    backend = meta.backend if meta is not None else ""
-    return {
-        "repo": repo.root.name,
-        "branch": _git_branch(repo.root),
-        "backend": {"api": "OpenRouter API"}.get(backend, "Claude Code") if backend else "",
-        "model": meta.model if meta is not None and meta.model else "default model",
-        "profile": meta.profile if meta is not None and meta.profile else "",
-    }
-
-
-# Curated OpenRouter model ids for the API model picker (issue #149). Shown when
-# the API backend is usable but `[workers.api] default_model` is unset; the user
-# picks one (or types their own) and it is saved to the user config. Kept short
-# and recognizable — the full catalog needs an API key to fetch.
-API_MODEL_OPTIONS: tuple[str, ...] = (
-    "anthropic/claude-sonnet-4",
-    "anthropic/claude-3.5-sonnet",
-    "openai/gpt-4o",
-    "openai/gpt-4o-mini",
-    "google/gemini-2.0-flash-001",
-    "deepseek/deepseek-chat",
-    "meta-llama/llama-3.1-405b-instruct",
-)
-
-
-def _safe_diff_stat(root: Path, base: str, head: str) -> DiffStat | None:
-    """`git diff --shortstat base..head` as numbers; None when git cannot tell."""
-    try:
-        return diff_stat(root, base, head)
-    except OSError:
-        return None
-
-
-def _format_diff_stat(stat: DiffStat | None) -> str:
-    if stat is None:
-        return "-"
-    return f"{stat.files} files, +{stat.additions}/-{stat.deletions}"
-
-
-def _approval_cards(repo: views.Repo, meta: ChatMeta) -> list[dict[str, Any]]:
-    """The chat's runs waiting on a person (plan or ship approval), for the approval rail."""
-    cards: list[dict[str, Any]] = []
-    for ref in meta.runs:
-        run_id = ref.get("run_id")
-        if not run_id:
-            continue
-        try:
-            run = repo.store.get_run(run_id)
-        except NotFoundError:
-            continue
-        if run.state not in (RunState.AWAITING_APPROVAL, RunState.AWAITING_SHIP):
-            continue
-        cards.append(
-            {
-                "run_id": run_id,
-                "kind": ref.get("kind", ""),
-                "plan_summary": run.plan.summary[:300] if run.plan else "",
-                "cost_estimate": f"${run.spend_usd:.2f}" if run.spend_usd > 0 else "unknown",
-                "diff_stat": _format_diff_stat(
-                    _safe_diff_stat(repo.root, start_ref(run_id), result_branch(run_id))
-                ),
-            }
-        )
-    return cards
-
-
-def _decision_verdict(record: DecisionRecord) -> str:
-    """The decision's outcome in a few words (the step timeline's title tail)."""
-    answers = record.decision.answers
-    point = record.decision.point
-    if point == "D3":
-        return answers.get("verdict", "")
-    if point in ("D5", "D6"):
-        return answers.get("action", "")
-    return ", ".join(f"{name}={value}" for name, value in answers.items())[:120]
-
-
-def _decision_block(record: DecisionRecord) -> dict[str, Any]:
-    """One D1-D8 decision card as a collapsed step entry."""
-    decision = record.decision
-    worker = decision.answers.get("worker", decision.dispatcher)
-    who = f"{worker}/{decision.model}" if decision.model else worker
-    scope = record.task_id or "run"
-    verdict = _decision_verdict(record)
-    lines = [format_answers(decision.answers, decision.details)]
-    if record.fallback_reason:
-        lines.append(f"rules fallback: {record.fallback_reason}")
-    if decision.cost_usd is not None:
-        lines.append(f"cost {_usd(decision.cost_usd)}")
-    return {
-        "title": f"{scope} · {who}" + (f" — {verdict}" if verdict else ""),
-        "summary": f"{decision.point} decided by {decision.dispatcher}",
-        "detail_html": Markup("<br>").join(escape(line) for line in lines),
-    }
-
-
-def _task_block(task: TaskRecord) -> dict[str, Any]:
-    """A finished task as a step entry (a run milestone)."""
-    return {
-        "title": f"{task.id} · {task.card.title} — done",
-        "summary": f"{task.attempts} attempt(s), {_usd(task.spend_usd)}",
-        "detail_html": Markup(escape(task.note)) if task.note else Markup(""),
-    }
-
-
-def _shipped_block(pr: ShippedPrRecord) -> dict[str, Any]:
-    """A shipped PR as a step entry (a run milestone)."""
-    return {
-        "title": f"shipped: {pr.title or pr.url or pr.branch}",
-        "summary": f"{pr.repo} · {pr.base} ← {pr.branch}",
-        "detail_html": Markup(""),
-    }
-
-
-def _step_blocks(repo: views.Repo, meta: ChatMeta) -> list[dict[str, Any]]:
-    """Collapsed step entries for the chat's runs: the D1-D8 decision cards plus run
-    milestones (finished tasks, shipped PRs). Newest last, capped at 20 entries."""
-    dated: list[tuple[datetime, dict[str, Any]]] = []
-    for ref in meta.runs[-_STEP_BLOCK_RUNS:]:
-        run_id = ref.get("run_id")
-        if not run_id:
-            continue
-        try:
-            run = repo.store.get_run(run_id)
-        except NotFoundError:
-            continue
-        for record in repo.store.list_decisions(run_id):
-            dated.append((record.created_at, _decision_block(record)))
-        for task in repo.store.list_tasks(run_id):
-            if task.state is TaskState.DONE:
-                dated.append((run.updated_at, _task_block(task)))
-        for pr in repo.store.list_shipped_prs(run_id):
-            dated.append((pr.created_at, _shipped_block(pr)))
-    dated.sort(key=lambda item: item[0])
-    return [block for _, block in dated[-_STEP_BLOCK_ENTRIES:]]
-
-
-def _learning_create(repo: views.Repo, form: FormData) -> str:
-    name = _text(form, "name") or ""
-    profile = learning_create(repo.learning, name, shared=form.get("shared") == "on")
-    return f"created profile {profile.name} ({profile.scope})"
-
-
-def _learning_use(repo: views.Repo, form: FormData) -> str:
-    name = _text(form, "profile") or ""
-    use_learning_profile(repo.store, repo.learning, name)
-    return f"active profile: {name}"
-
-
-def _learning_enable(repo: views.Repo, form: FormData) -> str:
-    name = _text(form, "profile") or None
-    active = learning_enable(repo.store, repo.config, repo.learning, name)
-    if name is None:
-        return f"learning is on for this repo, with profile {active}"
-    return f"profile {name} is enabled"
-
-
-def _learning_disable(repo: views.Repo, form: FormData) -> str:
-    name = _text(form, "profile") or None
-    learning_disable(repo.store, repo.learning, name)
-    if name is None:
-        return "learning is off for this repo; lessons are kept"
-    return f"profile {name} is disabled"
-
-
-def _learning_forget(repo: views.Repo, form: FormData) -> str:
-    lesson = learning_forget(repo.learning, _text(form, "lesson") or "")
-    return f"retired {lesson.id} from {lesson.profile}"
-
-
-def _learning_edit(repo: views.Repo, form: FormData) -> str:
-    """Edit a lesson's text, roles, and tags (issue #161)."""
-    from jev_agent.core.learning import LearningError
-
-    lesson_ref = _text(form, "lesson") or ""
-    text = _text(form, "text") or ""
-    roles = [r.strip() for r in (_text(form, "roles") or "").split(",") if r.strip()]
-    tags = [t.strip() for t in (_text(form, "tags") or "").split(",") if t.strip()]
-    try:
-        db, lesson = repo.learning.find_lesson(lesson_ref)
-    except LearningError as exc:
-        return f"error: {exc}"
-    db.update_lesson(lesson.profile, lesson.number, text, roles, tags)
-    return f"updated {lesson.id}"
-
-
-def _learning_delete_lesson(repo: views.Repo, form: FormData) -> str:
-    """Permanently delete a lesson (issue #161)."""
-    from jev_agent.core.learning import LearningError
-
-    lesson_ref = _text(form, "lesson") or ""
-    try:
-        db, lesson = repo.learning.find_lesson(lesson_ref)
-    except LearningError as exc:
-        return f"error: {exc}"
-    db.delete_lesson(lesson.profile, lesson.number)
-    return f"deleted {lesson.id} from {lesson.profile}"
-
-
-def _learning_approve_skill(repo: views.Repo, form: FormData) -> str:
-    """Approve a proposed skill: add it to the skills library (issue #161)."""
-    from jev_agent.core.learning import LearningError
-
-    profile = _text(form, "profile") or ""
-    name = _text(form, "name") or ""
-    description = _text(form, "description") or ""
-    raw_ids = _text(form, "lesson_ids") or ""
-    lesson_ids = [lid.strip() for lid in raw_ids.split(",") if lid.strip()]
-    try:
-        db = repo.learning.db_for(profile)
-    except LearningError as exc:
-        return f"error: {exc}"
-    try:
-        skill = db.add_skill(profile, name, description, lesson_ids, source="learned")
-    except LearningError as exc:
-        return f"error: {exc}"
-    return f"created skill '{skill.name}' from {len(lesson_ids)} lesson(s)"
-
-
-def _learning_delete_skill(repo: views.Repo, form: FormData) -> str:
-    """Delete a skill (issue #161)."""
-    from jev_agent.core.learning import LearningError
-
-    profile = _text(form, "profile") or ""
-    skill_id = _text(form, "skill_id") or ""
-    try:
-        db = repo.learning.db_for(profile)
-        db.delete_skill(profile, int(skill_id))
-    except (LearningError, ValueError) as exc:
-        return f"error: {exc}"
-    return f"deleted skill {skill_id} from {profile}"
-
-
-# ---- design systems (the user-level library, ~/.jev/design-systems/) ------------------------
-
-
-def _library_meta(name: str) -> dict[str, object]:
-    """A library system's meta.json extras; {} when it cannot be read.
-
-    Corrupt files are the library's own concern (`load_library_system` warns); the
-    dashboard stays readable even when one system is broken, like `design list`.
-    """
-    try:
-        raw = json.loads((library_system_path(name) / META_JSON).read_text(encoding="utf-8"))
-    except (OSError, ValueError, TypeError, AttributeError):
-        return {}
-    return dict(raw) if isinstance(raw, dict) else {}
-
-
-def _meta_text(meta: dict[str, object], key: str) -> str:
-    value = meta.get(key)
-    return str(value) if isinstance(value, str) and value else "-"
-
-
-def _repo_design_source(root: Path) -> str | None:
-    """The repo's installed design system's `source` (`library:<name>` after `use`)."""
-    try:
-        raw = json.loads((design_dir(root) / META_JSON).read_text(encoding="utf-8"))
-    except (OSError, ValueError, TypeError, AttributeError):
-        return None
-    source = raw.get("source") if isinstance(raw, dict) else None
-    return str(source) if isinstance(source, str) else None
-
-
-def _design_systems_view(repo: views.Repo, query: str = "") -> dict[str, Any]:
-    """The library's systems for the list page, with the repo's active one marked.
-
-    `query` filters on the system name, case-insensitively (the chats list's
-    search pattern)."""
-    active = _repo_design_source(repo.root)
-    needle = query.strip().lower()
-    systems = []
-    for name in list_library():
-        if needle and needle not in name.lower():
-            continue
-        meta = _library_meta(name)
-        systems.append(
-            {
-                "name": name,
-                "source": _meta_text(meta, "source"),
-                "app_type": _meta_text(meta, "app_type"),
-                "stack": _meta_text(meta, "stack"),
-                "version": meta.get("version", "-"),
-                "updated": meta.get("updated_at", "-"),
-                "active": active == f"library:{name}",
-            }
-        )
-    return {"systems": systems}
-
-
-def _design_system_view(repo: views.Repo, name: str) -> dict[str, Any]:
-    """One library system for the detail page: tokens and the system markdown."""
-    system = load_library_system(name)
-    if system is None:
-        raise NotFoundError(f'no design system named "{name}" in the library')
-    meta = _library_meta(name)
-    tokens = system.tokens if isinstance(system.tokens, dict) else {}
-    sections = (
-        ("Colors", tokens.get("colors")),
-        ("Type scale", tokens.get("type_scale")),
-        ("Spacing", tokens.get("spacing")),
-        ("Radii", tokens.get("radii")),
-    )
-    token_sections = [
-        {
-            "title": title,
-            "items": sorted(section.items()) if isinstance(section, dict) else [],
-        }
-        for title, section in sections
-    ]
-    return {
-        "name": name,
-        "source": _meta_text(meta, "source"),
-        "app_type": _meta_text(meta, "app_type"),
-        "stack": _meta_text(meta, "stack"),
-        "version": system.version,
-        "updated": system.updated_at,
-        "token_sections": token_sections,
-        "markdown_html": render_markdown(system.markdown),
-        "active": _repo_design_source(repo.root) == f"library:{name}",
-    }
-
-
-def _design_system_code_view(repo: views.Repo, name: str, target: str) -> dict[str, Any]:
-    """The "Get reusable elements" page: generated component files with copy buttons."""
-    system = load_library_system(name)
-    if system is None:
-        raise NotFoundError(f'no design system named "{name}" in the library')
-    tokens = system.tokens if isinstance(system.tokens, dict) else {}
-    files = generate_files(target, name, tokens)
-    catalog = component_catalog(target)
-    entries = [
-        {
-            "filename": item["filename"],
-            "title": item["title"],
-            "description": item["description"],
-            "code": files.get(item["filename"], ""),
-            "lines": files.get(item["filename"], "").count("\n") + 1,
-        }
-        for item in catalog
-    ]
-    return {
-        "name": name,
-        "target": target,
-        "targets": [
-            {"key": key, "label": info["label"], "description": info["description"]}
-            for key, info in CODEGEN_TARGETS.items()
-        ],
-        "entries": entries,
-        "stack": _meta_text(_library_meta(name), "stack"),
-    }
-
-
-def _design_system_extras(name: str) -> dict[str, object]:
-    """The library meta extras a `use`/`clone` carries over (mirrors `design_cmds`)."""
-    meta = _library_meta(name)
-    return {key: meta[key] for key in ("app_type", "stack") if isinstance(meta.get(key), str)}
-
-
-def _reverse_evidence_summary(evidence: dict[str, object]) -> dict[str, Any]:
-    """The reverse evidence dict shaped for `_design_studio_reverse_evidence.html`.
-
-    Only plain data crosses into the template: strings, counts and (hex,
-    coverage) pairs. Unknown shapes read as empty rather than raising, so a
-    future evidence format cannot break the status page.
-    """
-    if evidence.get("kind") == "url":
-        raw = evidence.get("url_evidence")
-        url_evidence = raw if isinstance(raw, dict) else {}
-        colors = url_evidence.get("colors")
-        top_colors = (
-            [(str(color), count) for color, count in list(colors.items())[:12]]
-            if isinstance(colors, dict)
-            else []
-        )
-        fonts = url_evidence.get("fonts")
-        title = url_evidence.get("title")
-        theme_color = url_evidence.get("theme_color")
-        styles = url_evidence.get("styles")
-        return {
-            "kind": "url",
-            "title": title if isinstance(title, str) else None,
-            "theme_color": theme_color if isinstance(theme_color, str) else None,
-            "fonts": [str(font) for font in fonts] if isinstance(fonts, list) else [],
-            "top_colors": top_colors,
-            "styles": str(styles)[:600] if isinstance(styles, str) else "",
-        }
-    shots = evidence.get("screenshots")
-    summaries = []
-    if isinstance(shots, list):
-        for shot in shots:
-            if not isinstance(shot, dict):
-                continue
-            palette = shot.get("palette")
-            entries = []
-            if isinstance(palette, list):
-                for entry in palette:
-                    if (
-                        isinstance(entry, (list, tuple))
-                        and len(entry) == 2
-                        and isinstance(entry[0], str)
-                    ):
-                        entries.append((entry[0], f"{float(entry[1]):.0%}"))
-            path = shot.get("path")
-            summaries.append(
-                {
-                    "name": Path(str(path)).name if isinstance(path, str) else "screenshot",
-                    "palette": entries,
-                }
-            )
-    return {"kind": "screenshots", "shots": summaries}
-
-
-def _design_system_use(repo: views.Repo, form: FormData) -> str:
-    """`jev design use <name>` (Tier 1): install the library system into the repo."""
-    name = validate_library_name((_text(form, "name") or "").strip())
-    system = load_library_system(name)
-    if system is None:
-        raise JevError(f'no design system named "{name}" in the library')
-    version = save_design_system(
-        repo.root,
-        system.markdown,
-        dict(system.tokens),
-        meta_extra={"source": f"library:{name}", **_design_system_extras(name)},
-    )
-    return f'installed "{name}" as the repo design system v{version}'
-
-
-def _design_system_clone(repo: views.Repo, form: FormData) -> str:
-    """`jev design clone <name> <new_name>` (Tier 1): copy a library system."""
-    name = validate_library_name((_text(form, "name") or "").strip())
-    new_name = validate_library_name((_text(form, "new_name") or "").strip())
-    system = load_library_system(name)
-    if system is None:
-        raise JevError(f'no design system named "{name}" in the library')
-    if library_system_path(new_name).exists():
-        raise JevError(f'a design system named "{new_name}" already exists in the library')
-    version = save_library_system(
-        new_name,
-        system.markdown,
-        dict(system.tokens),
-        meta_extra={
-            "name": new_name,
-            "source": f"clone:{name}",
-            **_design_system_extras(name),
-        },
-    )
-    return f'cloned "{name}" to "{new_name}" (library v{version})'
-
-
-# ---- command palette (issue #88) ------------------------------------------------------------
-
-
-def palette_registry(csrf_token: str) -> dict[str, Any]:
-    """The Cmd+K palette's registry: navigation entries, whitelisted POST actions and
-    CLI-only commands (greyed, with the pasteable command). Rendered as JSON into
-    base.html; `static/palette.js` filters it and handles the keyboard. No backend route
-    is needed: actions POST to the same routes their pages use, with the same confirm
-    flows (Tier 2 entries open the confirm page, they do not fire directly)."""
-    nav = [
-        ("Board: runs and the new-run form", "/#new-run"),
-        ("Run: approve, resume, cancel, ship (on the run page)", "/"),
-        ("Queue: ideas and the scheduler", "/queue#scheduler"),
-        ("Artifacts: work products", "/artifacts"),
-        ("Agents: roles, workers and models", "/agents"),
-        ("Fleet: the agent roster", "/fleet"),
-        ("Chats", "/chats"),
-        ("Learning: profiles, lessons", "/learning"),
-        ("Profiles: workspace profiles", "/profiles"),
-        ("Design systems: the design library", "/design-systems"),
-        ("Tools: MCP, skills and plugins", "/tools"),
-        ("Tools: model browser", "/tools#models"),
-        ("Tools: quality checks", "/tools#quality-checks"),
-        ("Connections: servers, keys, browser", "/connections#browser"),
-        ("Spend", "/spend"),
-        ("KPIs: shipped pull requests", "/kpis"),
-        ("Diagnostics: doctor checks", "/diagnostics"),
-        ("Settings: this dashboard", "/settings#s-readonly"),
-    ]
-    actions = [
-        ("Queue: clear all items", "/queue/clear"),
-        ("Scheduler: start", "/queue/scheduler/start"),
-        ("Scheduler: stop", "/queue/scheduler/stop"),
-        ("KPIs: sync from GitHub", "/kpis/sync"),
-        ("Connections: check servers now", "/connections/refresh"),
-        ("Connections: install the browser", "/connections/browser/install"),
-    ]
-    cli = [
-        ("init: create jev.toml and .jev/", "jev init"),
-        ("dashboard: serve the dashboard", "jev dashboard"),
-        ("mcp servers: serve MCP tools over stdio", "jev mcp servers"),
-        ("mcp runs: serve the pipeline tools over stdio", "jev mcp runs"),
-        ("doctor: also check servers over SSH", "jev doctor --connect"),
-        ("scheduler: run one item, then exit", "jev scheduler start --once"),
-        ("ship: show the PR without opening it", "jev ship --dry-run"),
-    ]
-    return {
-        "csrf_field": CSRF_FIELD,
-        "csrf_token": csrf_token,
-        "entries": [
-            *({"kind": "nav", "label": label, "target": target} for label, target in nav),
-            *({"kind": "action", "label": label, "target": target} for label, target in actions),
-            *({"kind": "cli", "label": label, "command": command} for label, command in cli),
-        ],
-    }
-
-
-def _record_ship_sync(state_dir: Path) -> None:
-    """Stamp when `ship sync --all` last ran, so the KPIs page can show its freshness."""
-    payload = json.dumps({"synced_at": datetime.now(UTC).isoformat()})
-    (state_dir / views.SHIP_SYNC_FILENAME).write_text(payload)
 
 
 JOB_SHUTDOWN_TIMEOUT_S = 30.0  # per job, for blocking steps that ignore cancellation
