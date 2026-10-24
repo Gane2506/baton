@@ -57,14 +57,19 @@ def get_design_system(repo: Path) -> DesignSystem | None:
     """The repo's current design system, or None when it has none (or it is corrupt).
 
     Never raises: a corrupt or partially written system warns on stderr and returns None.
+    A non-integer `version` in meta.json counts as corrupt (a float version is
+    not silently truncated to an int).
     """
     d = design_dir(repo)
     try:
         meta = json.loads((d / META_JSON).read_text(encoding="utf-8"))
         markdown = (d / SYSTEM_MD).read_text(encoding="utf-8")
         tokens = json.loads((d / TOKENS_JSON).read_text(encoding="utf-8"))
+        version = meta["version"]
+        if isinstance(version, bool) or not isinstance(version, int):
+            raise ValueError(f"meta.json version must be an integer, got {version!r}")
         return DesignSystem(
-            version=int(meta["version"]),
+            version=version,
             updated_at=str(meta["updated_at"]),
             markdown=markdown,
             tokens=tokens,
@@ -102,6 +107,33 @@ def _write_atomic(path: Path, text: str) -> None:
         raise
 
 
+def snapshot_corrupt_files(d: Path) -> list[str]:
+    """Preserve whatever current files exist in `d` under `*.corrupt-<ts>` names.
+
+    Used by the save functions when the current system is unreadable: saving
+    over a corrupt system must not silently destroy it. Returns the snapshot
+    file names created (empty when no current files exist). Never raises on a
+    partially readable directory — a failed copy warns and is skipped.
+    """
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S")
+    snapshots: list[str] = []
+    for current_name, snapshot_name in (
+        (SYSTEM_MD, f"design-system.corrupt-{stamp}.md"),
+        (TOKENS_JSON, f"tokens.corrupt-{stamp}.json"),
+        (META_JSON, f"meta.corrupt-{stamp}.json"),
+    ):
+        src = d / current_name
+        if not src.exists():
+            continue
+        try:
+            _write_atomic(d / snapshot_name, src.read_text(encoding="utf-8"))
+        except OSError as exc:
+            _warn(f"could not snapshot corrupt {current_name} ({exc})")
+            continue
+        snapshots.append(snapshot_name)
+    return snapshots
+
+
 def save_design_system(
     repo: Path,
     markdown: str,
@@ -124,6 +156,16 @@ def save_design_system(
     d.mkdir(parents=True, exist_ok=True)
     current = get_design_system(repo)
     version = (current.version + 1) if current is not None else 1
+    if current is None and any((d / name).exists() for name in (SYSTEM_MD, TOKENS_JSON, META_JSON)):
+        # Unreadable current files are not "no system": snapshot them first so
+        # the overwrite below cannot silently restart versioning at 1.
+        snapshots = snapshot_corrupt_files(d)
+        if snapshots:
+            _warn(
+                "existing design system is unreadable; preserved as "
+                + ", ".join(snapshots)
+                + " before overwriting"
+            )
     if current is not None:
         for name, vname in (
             (SYSTEM_MD, f"design-system.v{current.version}.md"),
@@ -192,7 +234,19 @@ def render_for_prompt(system: DesignSystem | None) -> str:
     tokens = system.tokens
     colors = tokens.get("colors")
     if isinstance(colors, dict) and colors:
-        lines.append("Colors: " + ", ".join(f"{k} {v}" for k, v in colors.items()))
+        light = colors.get("light")
+        dark = colors.get("dark")
+        if isinstance(light, dict) and isinstance(dark, dict):
+            # Theme-"both" systems nest colors as {light, dark}: unwrap them
+            # instead of stringifying the dicts into the prompt.
+            for label, palette in (("light", light), ("dark", dark)):
+                flat = ", ".join(f"{k} {v}" for k, v in palette.items() if not isinstance(v, dict))
+                if flat:
+                    lines.append(f"Colors ({label}): {flat}")
+        else:
+            flat = ", ".join(f"{k} {v}" for k, v in colors.items() if not isinstance(v, dict))
+            if flat:
+                lines.append("Colors: " + flat)
     for key in ("type_scale", "spacing", "radii"):
         value = tokens.get(key)
         if isinstance(value, dict) and value:
