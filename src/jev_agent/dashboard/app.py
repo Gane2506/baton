@@ -496,9 +496,9 @@ def _key_set(name: str) -> bool:
 def _dispatcher_route(config: JevConfig) -> _ConnRoute:
     """The effective decision-model route, mirroring `app.context.build_dispatcher`.
 
-    `consensus` is Jev (native TypeSafe, then OpenRouter) plus Laya's second vote with
-    no rules fallback; `jev` adds the rules fallback; `rules` is rules alone. Key env
-    var names are shown with set/unset; values never leave the process.
+    `jev` is Jev (native TypeSafe, then OpenRouter) with the rules dispatcher as
+    fallback; `rules` is rules alone. Key env var names are shown with set/unset;
+    values never leave the process.
     """
     primary = config.dispatcher.primary
     native_env = JevSettings.for_native().api_key_env  # "TYPESAFE_API_KEY"
@@ -528,11 +528,7 @@ def _dispatcher_route(config: JevConfig) -> _ConnRoute:
         ),
     )
     if not native.is_set and not openrouter.is_set:
-        outcome = (
-            "the run stops for a human at its first decision."
-            if primary == "consensus"
-            else "every decision uses the rules dispatcher."
-        )
+        outcome = "every decision uses the rules dispatcher."
         warning: str | None = (
             f"{native_env} and {openrouter_env} are not set, so Jev cannot be reached; {outcome}"
         )
@@ -548,20 +544,6 @@ def _dispatcher_route(config: JevConfig) -> _ConnRoute:
         )
     else:
         warning = None
-    if primary == "consensus":
-        return _ConnRoute(
-            primary="consensus",
-            legs=(
-                *jev_legs,
-                _ConnLeg(
-                    "Laya \u00b7 second vote",
-                    (),
-                    "The Laya decision matrix scores the same decision question independently.",
-                ),
-            ),
-            final="No rules fallback: when Jev and Laya disagree, the run stops for a human.",
-            warning=warning,
-        )
     return _ConnRoute(
         primary="jev",
         legs=jev_legs,
