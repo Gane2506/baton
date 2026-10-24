@@ -18,6 +18,7 @@ The distill step (the learner role, D7, scoring) lives in `core/learner.py`.
 from __future__ import annotations
 
 import json
+import math
 import os
 import re
 import sqlite3
@@ -268,7 +269,11 @@ def _checked_weights(profile: str, weights: object) -> dict[str, float]:
         if missing:
             problems.append(f"missing: {', '.join(missing)}")
         if not problems:
-            if any(not isinstance(w, (int, float)) or w < 0 for w in weights.values()):
+            if any(
+                not isinstance(w, (int, float)) or not math.isfinite(w) for w in weights.values()
+            ):
+                problems.append("weights must be finite numbers (NaN and infinities are not allowed)")
+            elif any(w < 0 for w in weights.values()):
                 problems.append("weights must not be negative")
             elif abs(sum(weights.values()) - 1) > 1e-6:
                 problems.append(
