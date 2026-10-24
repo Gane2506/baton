@@ -21,7 +21,6 @@ from jev_agent.config import JevConfig
 from jev_agent.core.models import RunState, ValidationResult
 from jev_agent.core.pipeline import cancel_run
 from jev_agent.core.store import Store
-from jev_agent.dispatch.consensus import ConsensusDispatcher
 from jev_agent.dispatch.jev import JevDispatcher
 from jev_agent.dispatch.rules import RulesDispatcher
 from jev_agent.workers.api import ApiWorker
@@ -222,9 +221,9 @@ def test_build_dispatcher_from_config(monkeypatch: pytest.MonkeyPatch) -> None:
     assert jev.settings.min_confidence == 0.8
     assert len(warnings) == 1 and "every decision will use the rules dispatcher" in warnings[0]
 
-    consensus, warnings = build_dispatcher(JevConfig())  # the default
-    assert isinstance(consensus, ConsensusDispatcher)
-    assert len(warnings) == 1 and "stop for a human at its first decision" in warnings[0]
+    jev_default, warnings = build_dispatcher(JevConfig())  # the default is jev
+    assert isinstance(jev_default, JevDispatcher)
+    assert len(warnings) == 1 and "every decision will use the rules dispatcher" in warnings[0]
 
     monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-v1-secret-value")
     jev, warnings = build_dispatcher(config)

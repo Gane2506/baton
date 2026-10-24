@@ -27,7 +27,6 @@ from jev_agent.core.models import (
 from jev_agent.core.pipeline import Pipeline, PipelineError, build_pipeline, cancel_run
 from jev_agent.core.store import RunRecord, Store
 from jev_agent.dispatch.base import Dispatcher, DispatchError
-from jev_agent.dispatch.consensus import ConsensusDispatcher, NoConsensus
 from jev_agent.dispatch.rules import RulesDispatcher
 from jev_agent.roles import ReviewResult
 from jev_agent.workers.base import WorkerJob, WorkerOutput
@@ -632,7 +631,6 @@ class _AlwaysDone:
     name = "always-done"
 
     def __init__(self) -> None:
-        from jev_agent.dispatch.rules import RulesDispatcher
 
         self.rules = RulesDispatcher()
 
@@ -811,7 +809,6 @@ class _EscalatesAtD3:
     name = "escalates"
 
     def __init__(self) -> None:
-        from jev_agent.dispatch.rules import RulesDispatcher
 
         self.rules = RulesDispatcher()
 
@@ -860,7 +857,6 @@ class _CancelsAtSecondD4:
     name = "cancels"
 
     def __init__(self, store: Store) -> None:
-        from jev_agent.dispatch.rules import RulesDispatcher
 
         self.store, self.rules, self.d4 = store, RulesDispatcher(), 0
 
@@ -911,109 +907,9 @@ async def test_another_process_driving_the_run_blocks_resume_and_approve(make_en
     assert other.store.get_run_lease(run_id) is None
 
 
-class _Consensus:
-    """Stands in for the consensus dispatcher (same name, so no rules fallback): answers like
-    the rules dispatcher, except that Jev and Laya disagree the first time at `split_at`."""
-
-    name = ConsensusDispatcher.name
-
-    def __init__(self, split_at: str) -> None:
-        self.split_at = split_at
-        self.splits = 0
-
-    async def decide(self, req: DecisionRequest) -> Decision:
-        if req.point == self.split_at and not self.splits:
-            self.splits += 1
-            raise NoConsensus("Jev and Laya did not agree after 3 round(s): action: ...")
-        decision = await RulesDispatcher().decide(req)
-        return decision.model_copy(update={"dispatcher": self.name})
-
-
-async def test_consensus_without_agreement_stops_for_a_human_and_resumes(make_env: Any) -> None:
-    consensus = _Consensus(split_at="D5")
-    env: Env = make_env({"planner": FakeStep(parsed=ONE_TASK)}, dispatcher=consensus)
-    run = await env.pipeline.start(_idea(env.repo))
-
-    assert run.state is RunState.NEEDS_HUMAN
-    assert run.reason is not None and "D5: no valid decision" in run.reason
-    assert "Jev and Laya did not agree" in run.reason
-    assert run.resume_state is RunState.EXECUTING
-    assert "D5" not in env.points(run.id)  # nothing is recorded for the failed vote
-
-    run = await env.pipeline.resume(run.id)
-    assert run.state is RunState.DONE, run.reason
-    assert all(r.fallback_reason is None for r in env.store.list_decisions(run.id))
-
-
-async def test_consensus_approval_replaces_the_human_plan_gate(make_env: Any) -> None:
-    config = JevConfig.model_validate({"approval": {}})  # require_plan_approval unset
-    assert not config.plan_approval_required
-    env: Env = make_env({"planner": FakeStep(parsed=ONE_TASK)}, config, _Consensus("none"))
-    run = await env.pipeline.start(_idea(env.repo))
-    assert run.state is RunState.DONE, run.reason
-
-    explicit = JevConfig.model_validate({"approval": {"require_plan_approval": True}})
-    env = make_env({"planner": FakeStep(parsed=ONE_TASK)}, explicit, _Consensus("none"))
-    run = await env.pipeline.start(_idea(env.repo))
-    assert run.state is RunState.AWAITING_APPROVAL
-
-
-async def test_consensus_reviews_every_task_by_default(make_env: Any) -> None:
-    config = JevConfig.model_validate({"approval": {}})  # [review] enabled unset
-    env: Env = make_env({"planner": FakeStep(parsed=ONE_TASK)}, config, _Consensus("none"))
-    run = await env.pipeline.start(_idea(env.repo))
-    assert run.state is RunState.DONE, run.reason
-    assert env.points(run.id)[3:] == ["D4", "D8", "D5", "D6"]
-    d5 = next(d for d in env.store.list_decisions(run.id) if d.request.point == "D5")
-    assert d5.request.state["review"] == "approve" and d5.decision.dispatcher == "consensus"
-
-    off = JevConfig.model_validate({"approval": {}, "review": {"enabled": False}})
-    env = make_env({"planner": FakeStep(parsed=ONE_TASK)}, off, _Consensus("none"))
-    run = await env.pipeline.start(_idea(env.repo))
-    assert run.state is RunState.DONE, run.reason
-    assert "D8" not in env.points(run.id) and env.jobs("reviewer") == []
-
-
-async def test_consensus_without_agreement_on_the_reviewer_stops_for_a_human(
-    make_env: Any,
-) -> None:
-    config = JevConfig.model_validate({"approval": {}})
-    env: Env = make_env({"planner": FakeStep(parsed=ONE_TASK)}, config, _Consensus("D8"))
-    run = await env.pipeline.start(_idea(env.repo))
-    assert run.state is RunState.NEEDS_HUMAN
-    assert run.reason is not None and "D8: no valid decision" in run.reason
-    assert env.jobs("reviewer") == []
-
-    run = await env.pipeline.resume(run.id)
-    assert run.state is RunState.DONE, run.reason
-    assert len(env.jobs("reviewer")) == 1
-
-
 def test_plan_approval_default_depends_on_the_dispatcher() -> None:
-    assert JevConfig().plan_approval_required is False  # consensus is the default
+    # Unset plan approval is on now that the consensus dispatcher is gone (issue #193).
+    assert JevConfig().plan_approval_required is True
     for primary in ("jev", "rules"):
         config = JevConfig.model_validate({"dispatcher": {"primary": primary}})
         assert config.plan_approval_required is True
-
-
-async def test_consensus_ship_vote_ships_and_a_split_stops_for_a_human(make_env: Any) -> None:
-    """With shipping on, a D6 "ship" both votes agree on goes to SHIPPING by default (here it
-    stops: the repo has no remote); a split D6 stops before anything ships."""
-    config = JevConfig.model_validate({"ship": {"enabled": True}})
-    env: Env = make_env({"planner": FakeStep(parsed=ONE_TASK)}, config, _Consensus("none"))
-    run = await env.pipeline.start(_idea(env.repo))
-    assert run.state is RunState.NEEDS_HUMAN and run.resume_state is RunState.SHIPPING
-    assert run.reason is not None and "ship: this repo has no remote 'origin'" in run.reason
-
-    env = make_env({"planner": FakeStep(parsed=ONE_TASK)}, config, _Consensus("D6"))
-    run = await env.pipeline.start(_idea(env.repo))
-    assert run.state is RunState.NEEDS_HUMAN and run.resume_state is RunState.INTEGRATING
-
-    asking = JevConfig.model_validate({"ship": {"enabled": True, "after_approval": "ask"}})
-    env = make_env({"planner": FakeStep(parsed=ONE_TASK)}, asking, _Consensus("none"))
-    run = await env.pipeline.start(_idea(env.repo))
-    assert run.state is RunState.AWAITING_SHIP, run.reason
-    with pytest.raises(PipelineError, match="waits for a person"):
-        await env.pipeline.resume(run.id)
-    run = await env.pipeline.stop_ship(run.id)
-    assert run.state is RunState.DONE and run.reason is not None and "not shipped" in run.reason

@@ -7,8 +7,7 @@ whose `criteria` keys are exactly the allowed answers.
 
 `JevDispatcher` never falls back by itself: any problem (network, HTTP error, bad or
 low-confidence answer, oversized state) raises `DispatchError`, and the harness's guard falls
-back to the rules dispatcher (the consensus dispatcher, `dispatch/consensus.py`, stops the run
-for a human instead).
+back to the rules dispatcher.
 
 `MultiProviderJevDispatcher` removes the single-provider dependency: every request tries
 the native TypeSafe API first and, only when that provider fails (unreachable, timed out,
@@ -16,8 +15,7 @@ rate-limited, auth or key problems), sends the same payload to Jev through OpenR
 Request problems that would fail on both providers (oversized state, a rejected payload)
 raise at once. `Decision.details["provider"]` records which provider answered (`"native"`
 or `"openrouter"`), so the run log shows who served each decision. After both providers
-fail, the harness's guard still applies: rules for the `jev` dispatcher, a human stop for
-consensus.
+fail, the harness's guard still applies: the rules dispatcher decides instead.
 
 With `[dispatcher.cost] prefer_cheaper_leg` (the default), the cheaper leg goes first
 when both are reachable; cost changes only the order, never the availability — both legs
@@ -75,8 +73,8 @@ NATIVE_BASE_URL = NATIVE_JEV_BASE_URL
 NATIVE_PROVIDER = "native"
 OPENROUTER_PROVIDER = "openrouter"
 
-# Key under which `post` reports which provider answered, so `decide` (and the consensus
-# dispatcher, which calls `post` directly) can record it in `Decision.details["provider"]`.
+# Key under which `post` reports which provider answered, so `decide` can record it
+# in `Decision.details["provider"]`.
 # It travels on a copy of the response body, never on shared state, so concurrent runs
 # sharing one dispatcher cannot mix it up.
 PROVIDER_KEY = "jev_provider"
@@ -551,8 +549,7 @@ class MultiProviderJevDispatcher(JevDispatcher):
     apply whichever leg answers. Every cost-influenced ordering is info-logged with its
     reason and recorded in `Decision.details["routing_reason"]`.
 
-    This is a `JevDispatcher`, so the consensus dispatcher uses it unchanged for both the
-    Jev and the Laya vote. `Decision.details["provider"]` records who answered, and every
+    `Decision.details["provider"]` records who answered, and every
     switch is warning-logged.
     """
 

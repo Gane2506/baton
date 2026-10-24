@@ -8,6 +8,8 @@ confidence first, label second, missing confidence never trusted.
 
 from __future__ import annotations
 
+import warnings
+
 import pytest
 from pydantic import ValidationError
 
@@ -223,10 +225,19 @@ def test_config_parses_enabled_section_and_rejects_bad_threshold() -> None:
 
 
 def test_laya_section_still_parses_for_backward_compatibility() -> None:
-    # Existing configs referencing Laya must migrate cleanly: they still
-    # validate, unchanged. (Deprecation is documented, not enforced.)
-    cfg = JevConfig.model_validate({"dispatcher": {"laya": {"min_margin": 0.3}}})
-    assert cfg.dispatcher.laya.min_margin == 0.3
+    # Existing configs referencing Laya must migrate cleanly (issue #193): they
+    # still validate, warn, and are treated as `primary = "jev"` — the
+    # `[dispatcher.laya]` table itself no longer exists on the config.
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        cfg = JevConfig.model_validate(
+            {"dispatcher": {"primary": "consensus", "laya": {"min_margin": 0.3}}}
+        )
+    assert cfg.dispatcher.primary == "jev"
+    assert not hasattr(cfg.dispatcher, "laya")
+    assert len(caught) == 2 and all(
+        "consensus dispatcher was removed" in str(w.message) for w in caught
+    )
 
 
 def test_apply_code_grade_blocks_on_reject_and_records_grade() -> None:

@@ -423,14 +423,14 @@ def _dispatcher_check(config: JevConfig) -> Check:
     """Which dispatcher decides, and whether either Jev key env var is set (never its value).
 
     Mirrors `context.build_dispatcher`'s two legs: the native TypeSafe API and Jev through
-    OpenRouter. Only a missing key on *both* legs fails (consensus) or warns (jev): with
+    OpenRouter. A missing key on *both* legs warns (jev): with
     one leg set the run decides fine (audit 2026-10-16: no more false "fail" on
     native-key-only setups)."""
     primary = config.dispatcher.primary
     if primary == "rules":
         return Check("dispatcher", "ok", "rules")
     jev = config.dispatcher.jev
-    who = "consensus: Jev, then Laya" if primary == "consensus" else "jev"
+    who = "jev"
     where = f"{who} ({jev.model} at {jev.base_url})"
     native_env = JevSettings.for_native().api_key_env  # "TYPESAFE_API_KEY"
     openrouter_env = jev.api_key_env
@@ -451,14 +451,6 @@ def _dispatcher_check(config: JevConfig) -> Check:
     legs = (
         f"neither {native_env} nor {openrouter_env}" if native_env != openrouter_env else native_env
     )
-    if primary == "consensus":
-        return Check(
-            "dispatcher",
-            "fail",
-            f"{where}; {legs} is not set, so every run stops for a human at its "
-            "first decision (set it via the dashboard Connections page or export it, or set "
-            '`[dispatcher] primary = "rules"`)',
-        )
     return Check(
         "dispatcher",
         "warn",

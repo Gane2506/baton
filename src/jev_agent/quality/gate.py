@@ -207,7 +207,10 @@ async def run_gate(
                 "score": score_gate(
                     result,
                     diff=diff,
-                    weights=h.config.dispatcher.laya.weights,
+                    # No weights configured any more (the consensus dispatcher's
+                    # `[dispatcher.laya]` is gone, issue #193): `score_gate` defaults
+                    # to `DEFAULT_LAYA_WEIGHTS`, as it did for a default config.
+                    weights=None,
                     threshold=h.config.quality.score_threshold,
                     skipped=skip_human,
                     skip_reason=skip_reason,

@@ -2,8 +2,9 @@
 
 Deterministic: the score is a pure function of the gate's result (check statuses,
 finding severities and categories) and the diff's size. No LLM judge, no new
-dependencies. The criterion weights are the Laya CDA weights (`[dispatcher.laya]
-weights`, default `config.schema.DEFAULT_LAYA_WEIGHTS`); the bar is
+dependencies. The criterion weights are the Laya CDA weights
+(`config.schema.DEFAULT_LAYA_WEIGHTS`, formerly configurable under
+`[dispatcher.laya]`, removed with the consensus dispatcher in issue #193); the bar is
 `[quality] score_threshold`. Each criterion scores 1-5, the Laya scale, and the
 total is the weighted sum times 20: theoretical range 20-100, practical max 96 with
 the default weights (`user_preference` is fixed at 3/5).

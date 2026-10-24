@@ -15,7 +15,7 @@ DEFAULT_CONFIG_TOML = """\
 # Never put secrets in this file: keys are read from environment variables.
 
 [dispatcher]
-# primary = "consensus"            # "consensus" | "jev" | "rules"
+# primary = "jev"                  # "jev" | "rules"
 
 # Jev via OpenRouter. For native TypeSafe use base_url = "https://api.typesafe.ai/v1",
 # model = "jev-latest" and api_key_env = "TYPESAFE_API_KEY".
@@ -29,20 +29,6 @@ DEFAULT_CONFIG_TOML = """\
 # [dispatcher.jev.instructions]    # optional: replace the instruction for a question
 # "D4.effort" = "..."              # at one decision point
 # model = "..."                    # at every decision point
-
-# Laya's vote under primary = "consensus": Jev scores every allowed answer 1-5 on six weighted
-# criteria. Both must agree confidently; otherwise the run stops for a human.
-# Deprecated for code work (issue #187): see [code_orchestrator] below.
-[dispatcher.laya]
-# min_margin = 0.2                 # Laya's lead over the runner-up, on the 1-5 weighted scale
-# follow_up_rounds = 2             # extra rounds before the run stops for a human
-# [dispatcher.laya.weights]        # must name all six criteria and add up to 1
-# correctness = 0.30
-# safety = 0.20
-# simplicity = 0.15
-# maintainability = 0.15
-# tool_fit = 0.10
-# user_preference = 0.10
 
 # Cost-aware Jev leg ordering and pre-run cost estimates (the model prices live here, not
 # in code: providers reprice). This changes the leg order, never the availability.
@@ -83,7 +69,7 @@ DEFAULT_CONFIG_TOML = """\
 # run_hooks = true                 # run the repo's git hooks on jev's task commits and merges
 
 [approval]
-# require_plan_approval = true     # human gate after plan validation; unset: off under "consensus"
+# require_plan_approval = true     # human gate after plan validation; unset: on
 
 # How much jev asks you, and what its agents may touch. The mode picker is in Settings >
 # The basics; the access tier lives under Advanced (it is safety-sensitive).
@@ -98,7 +84,7 @@ DEFAULT_CONFIG_TOML = """\
 # unrestricted_acknowledged = false # tick only if you accept what "unrestricted" means
 
 [review]
-# enabled = true                   # reviewer on each task's diff; unset: on under "consensus"
+# enabled = true                   # reviewer on each task's diff; unset: off
 
 # Quality and security gate (docs/quality.md), after each task and at integration. Levels are
 # cumulative: "none" (task tests only) | "basic" (lint, full tests, AI code review) | "medium"
@@ -142,7 +128,7 @@ DEFAULT_CONFIG_TOML = """\
 # draft = true                     # open PRs as drafts
 # labels = []                      # e.g. ["jev"]; the labels must exist in the repo
 # require_quality_pass = true      # refuse runs whose latest quality gate blocked
-# after_approval = "merge"         # or "ask"; unset: "merge" under consensus, else "ask"
+# after_approval = "merge"         # or "ask"; unset: "ask"
 # merge_method = "squash"          # or "merge", "rebase"
 # require_checks = true            # a PR with no checks stops for you instead of merging
 # checks_grace_s = 120             # how long to wait for checks to appear

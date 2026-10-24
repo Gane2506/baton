@@ -147,14 +147,18 @@ def test_compute_run_kpis(store: Store, tmp_path: Path) -> None:
     assert run_kpis(store, run.id) == k
 
 
-def test_consensus_decisions_count_as_jev_decisions(store: Store, tmp_path: Path) -> None:
+def test_historical_consensus_decisions_no_longer_count_as_jev_decisions(
+    store: Store, tmp_path: Path
+) -> None:
+    # The consensus dispatcher is gone (issue #193): a decision recorded under its
+    # name in an old state DB is history, not a Jev decision, for KPI purposes.
     run = store.create_run(Idea(text="x", repo_path=tmp_path), quality_level="basic")
     _decide(store, run.id, None, "D1", {"clear": "plan"}, dispatcher="consensus", confidence=0.8)
     _decide(store, run.id, None, "D2", {"clear": "plan"}, confidence=0.6)
     _decide(store, run.id, None, "D3", {"clear": "plan"}, dispatcher="rules")
     k = compute_run_kpis(store, run.id)
-    assert (k.decisions_total, k.jev_decisions, k.rules_fallbacks) == (3, 2, 0)
-    assert k.mean_jev_confidence == pytest.approx(0.7)
+    assert (k.decisions_total, k.jev_decisions, k.rules_fallbacks) == (3, 1, 0)
+    assert k.mean_jev_confidence == pytest.approx(0.6)
 
 
 def test_kpis_of_an_empty_run(store: Store, tmp_path: Path) -> None:

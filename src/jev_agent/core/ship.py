@@ -311,8 +311,7 @@ def render_pr_body(store: Store, run_id: str, kpis: RunKpis) -> str:
         "",
         "## Decisions",
         "",
-        f"{kpis.decisions_total} decisions: {kpis.jev_decisions} by Jev "
-        "(with Laya under consensus), "
+        f"{kpis.decisions_total} decisions: {kpis.jev_decisions} by Jev, "
         f"{kpis.rules_fallbacks} rules fallbacks ({_pct(kpis.fallback_rate)} of those asked of "
         f"Jev), {rules_only} by the rules dispatcher directly. Mean Jev confidence: "
         f"{confidence}.",
@@ -802,15 +801,15 @@ CHANGES_TITLE = "Changes requested before shipping"
 def after_approval(config: JevConfig, run_mode: ShipMode | None) -> ShipMode | None:
     """What a run does once D6 votes "ship". None: shipping is off and the run ends DONE, as
     before. Else the run's own choice (`--auto-ship` / `--ask-before-ship`), else
-    `[ship] after_approval`, else "merge" under the consensus dispatcher (whose two votes are
-    the gate) and "ask" with any other dispatcher."""
+    `[ship] after_approval`, else "ask" (the consensus dispatcher whose two votes used
+    to make the unset default "merge" is gone, issue #193)."""
     if not config.ship.enabled:
         return None
     if run_mode is not None:
         return run_mode
     if config.ship.after_approval is not None:
         return config.ship.after_approval
-    return "merge" if config.dispatcher.primary == "consensus" else "ask"
+    return "ask"
 
 
 @dataclass(frozen=True)

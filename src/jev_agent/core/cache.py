@@ -132,7 +132,7 @@ def _config_fingerprint(
 ) -> str:
     """Hash of the settings a cached answer is only valid under.
 
-    `min_confidence` gates answers, Laya weights move votes, the model and base URL
+    `min_confidence` gates answers, the model and base URL
     pick the answerer — a cached answer gated at 0.55 must never serve a run gated
     at 0.9. Profile-tuned Laya weights (`jev laya tune --apply`) are fingerprinted
     separately: they change the vote without changing jev.toml. The jev package
@@ -141,7 +141,6 @@ def _config_fingerprint(
     record = {
         "dispatcher": dispatcher_name,
         "jev": config.dispatcher.jev.model_dump(mode="json"),
-        "laya": config.dispatcher.laya.model_dump(mode="json"),
         "laya_tuned_fp": laya_weights_fp,
         "jev_version": __version__,
     }

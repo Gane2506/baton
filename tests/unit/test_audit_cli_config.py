@@ -223,13 +223,15 @@ def test_doctor_native_key_only_is_not_a_fail(
     assert "ts-test-key" not in check.detail
 
 
-def test_doctor_neither_key_still_fails_under_consensus(
+def test_doctor_neither_key_warns_under_jev(
     git_repo: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    # The consensus dispatcher is gone (issue #193): with no Jev key at all, the
+    # default jev dispatcher warns and every decision falls back to rules.
     monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
     monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
     check = _dispatcher_check(git_repo)
-    assert check.status == "fail"
+    assert check.status == "warn"
 
 
 # ---- app/doctor.py: bounded DNS lookup (audit cli-a minor 2 / app minor 8) ----

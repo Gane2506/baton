@@ -103,8 +103,9 @@ def _mean(values: Sequence[float]) -> float | None:
     return statistics.fmean(values) if values else None
 
 
-# Dispatchers whose decisions carry Jev's vote (the consensus one adds Laya's on top).
-JEV_DISPATCHERS = ("jev", "consensus")
+# Dispatchers whose decisions carry Jev's vote (the consensus dispatcher is gone,
+# issue #193, so only "jev" remains).
+JEV_DISPATCHERS = ("jev",)
 
 
 def _confidences(details: Mapping[str, Any]) -> list[float]:

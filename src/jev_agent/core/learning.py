@@ -28,9 +28,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal
 
-from pydantic import ValidationError
-
-from jev_agent.config.schema import PROFILE_NAME_PATTERN, JevConfig, LayaSettings
+from jev_agent.config.schema import LAYA_CRITERIA, PROFILE_NAME_PATTERN, JevConfig
 from jev_agent.core.migrations import SHARED_MIGRATIONS, apply_migrations, configure_connection
 from jev_agent.core.models import LESSON_ROLES
 from jev_agent.core.store import Store
@@ -256,12 +254,30 @@ def _now() -> str:
 
 
 def _checked_weights(profile: str, weights: object) -> dict[str, float]:
-    """`weights` if they are valid `[dispatcher.laya] weights`, else a LearningError."""
-    try:
-        return LayaSettings.model_validate({"weights": weights}).weights
-    except ValidationError as exc:
-        problems = "; ".join(str(e["msg"]) for e in exc.errors())
-        raise LearningError(f"profile {profile!r}: invalid Laya weights: {problems}") from exc
+    """`weights` if they are valid Laya weights (exactly the six criteria, non-negative,
+    summing to 1), else a LearningError. The criteria live on in `LAYA_CRITERIA` even
+    though the consensus dispatcher that used them is gone (issue #193)."""
+    problems: list[str] = []
+    if not isinstance(weights, dict):
+        problems.append("weights must be a mapping")
+    else:
+        unknown = sorted(set(weights) - set(LAYA_CRITERIA))
+        missing = sorted(set(LAYA_CRITERIA) - set(weights))
+        if unknown:
+            problems.append(f"unknown: {', '.join(unknown)}")
+        if missing:
+            problems.append(f"missing: {', '.join(missing)}")
+        if not problems:
+            if any(not isinstance(w, (int, float)) or w < 0 for w in weights.values()):
+                problems.append("weights must not be negative")
+            elif abs(sum(weights.values()) - 1) > 1e-6:
+                problems.append(
+                    f"weights must add up to 1 (they add up to {sum(weights.values()):g})"
+                )
+    if problems:
+        raise LearningError(f"profile {profile!r}: invalid Laya weights: {'; '.join(problems)}")
+    assert isinstance(weights, dict)
+    return {k: float(v) for k, v in weights.items()}
 
 
 def _stored_weights(profile: str, text: str | None) -> dict[str, float] | None:
