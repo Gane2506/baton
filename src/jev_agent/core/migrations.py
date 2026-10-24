@@ -156,7 +156,7 @@ LESSON_GRAPH_V1 = """
 
     -- Backfill: every existing lesson into FTS, and an `applies-to` edge (marked
     -- `backfill`) for every path-looking tag (`a/b` or `*.py`), normalized like the
-    -- live path in `core/learning.py` (`lower`, no leading/trailing slashes).
+    -- live path in `core/learning` (`lower`, no leading/trailing slashes).
     INSERT INTO lessons_fts (rowid, text, tags)
         SELECT id, text, replace(replace(replace(tags_json, '"', ' '), '[', ' '), ']', ' ')
         FROM lessons;
