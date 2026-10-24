@@ -39,20 +39,21 @@ def _need_roots(ctx: PolicyContext) -> None:
 
 
 def _writable(value: str, ctx: PolicyContext, *, strictly: bool = False) -> str:
+    """`value` resolved and inside the write scope, or `_Denied`.
+
+    The scope is the project folder when one is set, else `allowed_paths`;
+    every other check (resolvable, not a credential file, not under `.git`,
+    inside the scope) is the same either way, so it runs once.
+    """
     if (boundary := _boundary(ctx)) is not None:
         # A project folder is set: it replaces the write roots as the write scope.
         _check_boundary_ctx(ctx, boundary)
-        full = resolve(value, ctx.workdir)
-        if full is None:
-            raise _Denied(f"{value}: use an absolute path (or one relative to the workdir)")
-        if problem := sensitive(full):
-            raise _Denied(problem)
-        if _in_git_dir(full):
-            raise _Denied(f"{full}: nothing is written under .git (hooks and config run code)")
-        if not within(full, (boundary,), strictly=strictly):
-            raise _Denied(f"{full} is outside the project folder ({boundary})")
-        return full
-    _need_roots(ctx)
+        roots: Sequence[str] = (boundary,)
+        scope = f"the project folder ({boundary})"
+    else:
+        _need_roots(ctx)
+        roots = ctx.write_roots
+        scope = f"allowed_paths ({', '.join(ctx.write_roots)})"
     full = resolve(value, ctx.workdir)
     if full is None:
         raise _Denied(f"{value}: use an absolute path (or one relative to the workdir)")
@@ -60,8 +61,8 @@ def _writable(value: str, ctx: PolicyContext, *, strictly: bool = False) -> str:
         raise _Denied(problem)
     if _in_git_dir(full):
         raise _Denied(f"{full}: nothing is written under .git (hooks and config run code)")
-    if not within(full, ctx.write_roots, strictly=strictly):
-        raise _Denied(f"{full} is outside allowed_paths ({', '.join(ctx.write_roots)})")
+    if not within(full, roots, strictly=strictly):
+        raise _Denied(f"{full} is outside {scope}")
     return full
 
 
@@ -86,6 +87,36 @@ def _touch(args: list[str], ctx: PolicyContext) -> None:
         _writable(target, ctx)
 
 
+_CP_RECURSIVE = frozenset({"-r", "-R", "-a", "--recursive"})
+
+
+def _cp_scope(ctx: PolicyContext, boundary: str | None) -> tuple[Sequence[str], str]:
+    """The roots a recursive `cp` may read from, and how the denial names them."""
+    if boundary is not None:
+        return (boundary,), f"the project folder ({boundary})"
+    return ctx.write_roots, f"allowed_paths ({', '.join(ctx.write_roots)})"
+
+
+def _check_cp_source(
+    source: str,
+    ctx: PolicyContext,
+    *,
+    recursive_roots: Sequence[str] | None,
+    scope: str,
+) -> None:
+    """One `cp` source: never from `.git`, and — for a recursive copy, which can
+    sweep up credential files — strictly inside the scope (`None`: no scope check)."""
+    full = resolve(source, ctx.workdir)
+    if full is not None and _in_git_dir(full):
+        raise _Denied(f"{full}: nothing is copied from or into .git")
+    if recursive_roots is not None and (
+        full is None or not within(full, recursive_roots, strictly=True)
+    ):
+        raise _Denied(
+            f"cp: recursive cp only from inside {scope}; {source} may hold credential files"
+        )
+
+
 def _cp(args: list[str], ctx: PolicyContext) -> None:
     _only_flags(args, {"-r", "-R", "-a", "-p", "-v", "-f", "-n", "-u", "--recursive"}, "cp")
     operands = _operands(args)
@@ -95,21 +126,12 @@ def _cp(args: list[str], ctx: PolicyContext) -> None:
     boundary = _boundary(ctx)
     if boundary is not None:
         _check_boundary_ctx(ctx, boundary)
+    if _flag_set(args) & _CP_RECURSIVE:
+        roots, scope = _cp_scope(ctx, boundary)
+    else:
+        roots, scope = None, ""
     for source in operands[:-1]:
-        full = resolve(source, ctx.workdir)
-        if full is not None and _in_git_dir(full):
-            raise _Denied(f"{full}: nothing is copied from or into .git")
-        if _flag_set(args) & {"-r", "-R", "-a", "--recursive"}:
-            roots = (boundary,) if boundary is not None else ctx.write_roots
-            scope = (
-                f"the project folder ({boundary})"
-                if boundary is not None
-                else f"allowed_paths ({', '.join(ctx.write_roots)})"
-            )
-            if full is None or not within(full, roots, strictly=True):
-                raise _Denied(
-                    f"cp: recursive cp only from inside {scope}; {source} may hold credential files"
-                )
+        _check_cp_source(source, ctx, recursive_roots=roots, scope=scope)
     _writable(operands[-1], ctx)
 
 
@@ -163,6 +185,16 @@ _NPM_PACKAGE = re.compile(
 )
 
 
+def _apt_install(args: list[str], words: list[str]) -> None:
+    """`apt-get install -y PACKAGE...`: package names only, never interactive."""
+    _only_flags(args, {"-y", "-q", "--yes", "--quiet", "--no-install-recommends"}, "apt-get")
+    if not _flag_set(args) & {"-y", "--yes"}:
+        raise _Denied("apt-get install: add -y (nobody can answer a prompt)")
+    packages = words[1:]
+    if not packages or not all(_APT_PACKAGE.match(p) for p in packages):
+        raise _Denied("apt-get install: package names only (no paths or URLs)")
+
+
 def _apt(args: list[str], ctx: PolicyContext) -> None:
     words = _operands(args)
     if words == ["update"]:
@@ -170,12 +202,45 @@ def _apt(args: list[str], ctx: PolicyContext) -> None:
         return
     if not words or words[0] != "install":
         raise _Denied("apt-get: only `apt-get update` and `apt-get install -y PACKAGE...`")
-    _only_flags(args, {"-y", "-q", "--yes", "--quiet", "--no-install-recommends"}, "apt-get")
-    if not _flag_set(args) & {"-y", "--yes"}:
-        raise _Denied("apt-get install: add -y (nobody can answer a prompt)")
-    packages = words[1:]
-    if not packages or not all(_APT_PACKAGE.match(p) for p in packages):
-        raise _Denied("apt-get install: package names only (no paths or URLs)")
+    _apt_install(args, words)
+
+
+def _pip_target(target: str, ctx: PolicyContext) -> None:
+    """One `-r`/`-e` operand of `pip install`: a credential file is never read,
+    and the file itself must live inside the write scope (both run with the
+    installer's privileges).
+
+    Residual risk, documented not fixed: the *contents* of a `-r` file are
+    unchecked — a requirements file may carry its own options (`--index-url`,
+    `--extra-index-url`, `-e git+...`, nested `-r`), so a scoped file can
+    still redirect installs. It cannot be checked here: this checker runs on
+    the dashboard host, while the file lives on the server (the command is
+    only shipped there afterwards), so its bytes are unobservable at check
+    time. The file's *location* is checked twice instead — lexically here,
+    and again against its server-resolved path (`service.run_command`,
+    issue #204 I-3). A service-layer read (the transport has `read`) could
+    vet the contents before running, but it would still be TOCTOU: the file
+    can change between that read and pip's read, so it would be an advisory
+    check, not a guarantee.
+    """
+    _sensitive_args([target])
+    if (boundary := _boundary(ctx)) is not None:
+        _require_within_boundary(target, ctx, boundary)
+    else:
+        _writable(target, ctx)
+
+
+_PIP_TARGETS = frozenset({"-r", "--requirement", "-e", "--editable"})
+
+
+def _pip_package(arg: str) -> bool:
+    """True when `arg` is a bare package-name operand (options return False);
+    anything else that is not an option is denied — never a path or URL."""
+    if arg.startswith("-"):
+        return False
+    if not _PIP_PACKAGE.match(arg) or "/" in arg or ":" in arg:
+        raise _Denied(f"pip install: {arg!r} is not a package name (no paths or URLs)")
+    return True
 
 
 def _pip_install(args: list[str], ctx: PolicyContext) -> None:
@@ -185,24 +250,13 @@ def _pip_install(args: list[str], ctx: PolicyContext) -> None:
     i, packages = 0, 0
     while i < len(args):
         arg = args[i]
-        if arg in {"-r", "--requirement", "-e", "--editable"}:
+        if arg in _PIP_TARGETS:
             if i + 1 >= len(args):
                 raise _Denied(f"pip install: {arg} needs a path")
-            target = args[i + 1]
-            _sensitive_args([target])
-            if (boundary := _boundary(ctx)) is not None:
-                _require_within_boundary(target, ctx, boundary)
-            else:
-                # A `-r` file's own options are unchecked (documented residual risk),
-                # but its *location* gets the same scope check as `-e`: both run
-                # with the installer's privileges.
-                _writable(target, ctx)
+            _pip_target(args[i + 1], ctx)
             i, packages = i + 2, packages + 1
             continue
-        if not arg.startswith("-"):
-            if not _PIP_PACKAGE.match(arg) or "/" in arg or ":" in arg:
-                raise _Denied(f"pip install: {arg!r} is not a package name (no paths or URLs)")
-            packages += 1
+        packages += _pip_package(arg)
         i += 1
     if not packages:
         raise _Denied("pip install: name a package or -r requirements file")
@@ -240,15 +294,25 @@ _UNIT = re.compile(r"^[A-Za-z0-9@_.:\\-]+$")
 _SSH_UNITS = frozenset({"ssh", "sshd", "ssh.service", "sshd.service", "ssh.socket", "sshd.socket"})
 
 
+# The verbs that change service state (everything else goes to the read-only checker).
+_SYSTEMCTL_WRITE_VERBS = frozenset({"restart", "reload", "start", "stop", "try-restart"})
+
+
+def _systemctl_write(args: list[str], verbs: list[str]) -> None:
+    """`systemctl restart|reload|start|stop|try-restart UNIT...`: named units only,
+    never ssh itself (restarting or stopping it would lock the agent out)."""
+    _only_flags(args, {"--no-block", "-q", "--quiet"}, "systemctl")
+    units = verbs[1:]
+    if not units or not all(_UNIT.match(u) and not u.startswith("-") for u in units):
+        raise _Denied("systemctl: name the unit(s)")
+    if _SSH_UNITS & set(units):
+        raise _Denied("systemctl: ssh itself is never restarted or stopped (lock-out risk)")
+
+
 def _systemctl(args: list[str], ctx: PolicyContext) -> None:
     verbs = [a for a in args if not a.startswith("-")]
-    if verbs and verbs[0] in {"restart", "reload", "start", "stop", "try-restart"}:
-        _only_flags(args, {"--no-block", "-q", "--quiet"}, "systemctl")
-        units = verbs[1:]
-        if not units or not all(_UNIT.match(u) and not u.startswith("-") for u in units):
-            raise _Denied("systemctl: name the unit(s)")
-        if _SSH_UNITS & set(units):
-            raise _Denied("systemctl: ssh itself is never restarted or stopped (lock-out risk)")
+    if verbs and verbs[0] in _SYSTEMCTL_WRITE_VERBS:
+        _systemctl_write(args, verbs)
         return
     _systemctl_read(args, ctx)
 
@@ -260,31 +324,34 @@ def _docker(args: list[str], ctx: PolicyContext) -> None:
     _docker_read(args, ctx)
 
 
-def _compose(args: list[str], ctx: PolicyContext) -> None:
+def _compose_options(args: list[str], ctx: PolicyContext) -> int:
+    """Consume the leading `-f FILE` / `-p NAME` options; returns the index of the
+    subcommand. `-p` is refused outright: it selects which project's containers
+    `down`/`restart` act on, so *any* value lets the agent hit another project's
+    containers. A compose file must live inside the write scope: it decides
+    which images, volumes and env the agent brings up (lexical only — the
+    service re-checks the server-resolved path before running, so a symlink
+    out is refused)."""
     i = 0
     while i < len(args) and args[i] in {"-f", "--file", "-p", "--project-name"}:
         if i + 1 >= len(args):
             raise _Denied(f"docker compose: {args[i]} needs a value")
         if args[i] in {"-p", "--project-name"}:
-            # Disallowed, not charset-restricted: `-p` selects which project's
-            # containers `down`/`restart` act on, so *any* value lets the agent hit
-            # another project's containers, and no charset could prevent that.
-            # The default (directory-derived) project name covers the agent's own.
+            # Disallowed, not charset-restricted: no charset could prevent
+            # selecting another project. The default (directory-derived)
+            # project name covers the agent's own.
             raise _Denied("docker compose: -p/--project-name is not allowed")
         _sensitive_args([args[i + 1]])
         if (boundary := _boundary(ctx)) is not None:
             _require_within_boundary(args[i + 1], ctx, boundary)
         else:
-            # The compose file decides which images, volumes and env the agent
-            # brings up: it must live inside the agent's write scope, like `-e`.
-            # Lexical only — the service re-checks the server-resolved path
-            # (`command_scope_paths`) before running, so a symlink out is refused.
             _writable(args[i + 1], ctx)
         i += 2
-    rest = args[i:]
-    if not rest:
-        raise _Denied("docker compose: name a subcommand")
-    sub, sub_args = rest[0], rest[1:]
+    return i
+
+
+def _compose_subcommand(sub: str, sub_args: list[str]) -> None:
+    """The write subcommands of `docker compose` (ps/logs are read-only, above)."""
     if sub in {"ps", "logs"}:
         _refuse(sub_args, {"-f", "--follow"}, "docker compose logs")
         return
@@ -302,6 +369,13 @@ def _compose(args: list[str], ctx: PolicyContext) -> None:
         _only_flags(sub_args, {"-q", "--quiet", "-t", "--timeout"}, f"docker compose {sub}")
     else:
         raise _Denied("docker compose: up -d, down, restart, pull, ps and logs only")
+
+
+def _compose(args: list[str], ctx: PolicyContext) -> None:
+    rest = args[_compose_options(args, ctx) :]
+    if not rest:
+        raise _Denied("docker compose: name a subcommand")
+    _compose_subcommand(rest[0], rest[1:])
 
 
 def _npx(args: list[str], ctx: PolicyContext) -> None:
@@ -346,7 +420,7 @@ def _writes(argv: Sequence[str]) -> bool:
     if cmd == "git":
         return bool(set(words) & _GIT_WRITE)
     if cmd == "systemctl":
-        return bool(words) and words[0] in {"restart", "reload", "start", "stop", "try-restart"}
+        return bool(words) and words[0] in _SYSTEMCTL_WRITE_VERBS
     if cmd == "docker":
         return words[:1] == ["compose"] and not set(words[1:2]) & {"ps", "logs"}
     return False

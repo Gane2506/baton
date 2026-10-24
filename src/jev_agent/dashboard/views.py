@@ -7,6 +7,8 @@ writes. The board uses `jev board`'s `load_board`, the run page `jev status` / `
 
 from __future__ import annotations
 
+import json
+import math
 import os
 import re
 import sqlite3
@@ -32,6 +34,7 @@ from jev_agent.app.models import ModelListing
 from jev_agent.app.quality import CheckRow, check_rows, review_text
 from jev_agent.app.queue import item_flags
 from jev_agent.config import STATE_DIRNAME, JevConfig, load_config
+from jev_agent.config.schema import ShipConfig
 from jev_agent.core.benchmarks import DEFAULT_LAST, Summary, Trend, summarize, trends
 from jev_agent.core.budget import (
     CostEstimate,
@@ -49,6 +52,7 @@ from jev_agent.core.learning import (
     LearningError,
     LearningStatus,
     Lesson,
+    LessonDB,
     Profile,
     Skill,
     learning_status,
@@ -142,15 +146,19 @@ class BoardCard:
     item_id: int | None = None  # the queue item's id, for the board's Remove button
 
 
-def quality_badge(run: RunRecord, reports: list[QualityReportRecord]) -> str:
-    """`medium: passed`, `medium: blocked`, `medium: pending`, or `` without a gate."""
-    if run.quality_level == "none" and not reports:
-        return ""
-    if not reports:
-        return f"{run.quality_level}: pending"
+def _latest_by_task(reports: list[QualityReportRecord]) -> dict[str, QualityReportRecord]:
+    """The latest quality report per task (unkeyed reports count as "integration")."""
     latest: dict[str, QualityReportRecord] = {}
     for record in reports:
         latest[record.result.task_id or "integration"] = record
+    return latest
+
+
+def quality_badge(run: RunRecord, reports: list[QualityReportRecord]) -> str:
+    """`medium: passed`, `medium: blocked`, `medium: pending`, or `` without a gate."""
+    if not reports:
+        return "" if run.quality_level == "none" else f"{run.quality_level}: pending"
+    latest = _latest_by_task(reports)
     blocked = any(r.result.blocked for r in latest.values())
     level = run.quality_level if run.quality_level != "none" else reports[-1].result.level
     return f"{level}: {'blocked' if blocked else 'passed'}"
@@ -164,16 +172,19 @@ def board(repo: Repo, show_all: bool = False) -> list[tuple[str, list[BoardCard]
     queue_ids = {f"queue #{item.id}": item.id for item in repo.store.list_queue()}
     out: list[tuple[str, list[BoardCard]]] = []
     for name in COLUMNS:
-        cards: list[BoardCard] = []
-        for card in columns[name]:
-            run = runs.get(card.ref)
-            if run is None:
-                cards.append(BoardCard(card, None, "", queue_ids.get(card.ref)))
-                continue
-            reports = repo.store.list_quality_reports(run.id)
-            cards.append(BoardCard(card, run.id, quality_badge(run, reports)))
+        cards = [_board_card(repo, card, runs, queue_ids) for card in columns[name]]
         out.append((name, cards))
     return out
+
+
+def _board_card(
+    repo: Repo, card: Card, runs: dict[str, RunRecord], queue_ids: dict[str, int]
+) -> BoardCard:
+    """One board card: a queue card carries its item id, a run card its quality badge."""
+    run = runs.get(card.ref)
+    if run is None:
+        return BoardCard(card, None, "", queue_ids.get(card.ref))
+    return BoardCard(card, run.id, quality_badge(run, repo.store.list_quality_reports(run.id)))
 
 
 # ---- run detail --------------------------------------------------------------------------
@@ -247,6 +258,13 @@ def run_dir(repo: Repo, run_id: str) -> Path:
     return repo.state_dir / "runs" / run_id
 
 
+def _log_file_entry(base: Path, path: Path) -> LogFile | None:
+    """A regular file under the run's directory (symlinks and non-files have no entry)."""
+    if path.is_symlink() or not path.is_file():
+        return None
+    return LogFile(path.relative_to(base).as_posix(), path.stat().st_size)
+
+
 def log_files(base: Path) -> list[LogFile]:
     """Every regular file under the run's directory (logs, quality reports), sorted."""
     if not base.is_dir():
@@ -255,10 +273,10 @@ def log_files(base: Path) -> list[LogFile]:
     for dirpath, dirnames, filenames in os.walk(base, followlinks=False):
         dirnames.sort()
         for name in sorted(filenames):
-            path = Path(dirpath) / name
-            if path.is_symlink() or not path.is_file():
+            entry = _log_file_entry(base, Path(dirpath) / name)
+            if entry is None:
                 continue
-            files.append(LogFile(path.relative_to(base).as_posix(), path.stat().st_size))
+            files.append(entry)
             if len(files) >= MAX_LOG_FILES:
                 return files
     return files
@@ -278,6 +296,60 @@ def can_resume(run: RunRecord) -> bool:
 RESUME_GRACE_S = 300
 
 
+def _worker_timeout(config: JevConfig, worker: str) -> int:
+    """How long `worker`'s attempts may run before the harness kills them
+    (a worker without a configured timeout uses the harness default)."""
+    settings = getattr(config.workers, worker, None)
+    return getattr(settings, "timeout_s", 0) or DEFAULT_TIMEOUT_S
+
+
+def _live_attempt_risk(repo: Repo, run: RunRecord, now: datetime) -> str:
+    """The risk from an attempt with no result that started less than its
+    worker's timeout plus `RESUME_GRACE_S` ago (an older one is from a process
+    that died), or "" when no attempt is live."""
+    for attempt in repo.store.list_attempts(run.id):
+        if attempt.result is not None:
+            continue
+        timeout = _worker_timeout(repo.config, attempt.worker)
+        age = (now - attempt.started_at).total_seconds()
+        if age < timeout + RESUME_GRACE_S:
+            where = f"task {attempt.task_id}" if attempt.task_id else "the run"
+            return (
+                f"{attempt.role} attempt for {where} on {attempt.worker} started "
+                f"{max(int(age), 0)} s ago and has no result yet "
+                f"(the worker timeout is {timeout} s)"
+            )
+    return ""
+
+
+def _scheduler_item_matches(item: QueueItem, run: RunRecord, claimed: datetime) -> bool:
+    """Whether the scheduler's current queue item is this run's: it names the run,
+    or it is an unnamed item with the run's idea, created after the item was claimed."""
+    if item.status != "running":
+        return False
+    if item.run_id == run.id:
+        return True
+    return item.run_id is None and item.idea == run.idea.text and run.created_at >= claimed
+
+
+def _scheduler_risk(repo: Repo, run: RunRecord) -> str:
+    """The risk from a live scheduler lock whose current queue item is this run's,
+    or "" when the scheduler is not working on it."""
+    holder = scheduler_lock(repo.root).read()
+    if holder is None or holder.current_item is None:
+        return ""
+    try:
+        item = repo.store.get_queue_item(holder.current_item)
+    except NotFoundError:
+        return ""
+    if not _scheduler_item_matches(item, run, item.updated_at.replace(microsecond=0)):
+        return ""
+    return (
+        f"the scheduler (pid {holder.pid} on {holder.host}) is working on "
+        f"queue item #{item.id}, which started this run"
+    )
+
+
 def resume_risk(repo: Repo, run: RunRecord, now: datetime | None = None) -> str:
     """Why another jev process (a terminal `jev run`/`jev resume`, the scheduler) may be
     executing `run` right now, or "" when nothing suggests it. Resuming such a run starts a
@@ -294,35 +366,9 @@ def resume_risk(repo: Repo, run: RunRecord, now: datetime | None = None) -> str:
     lease = live_holder(repo.store, run.id, now)
     if lease is not None:
         return f"another jev process, {describe_holder(lease)}, is driving this run"
-    for attempt in repo.store.list_attempts(run.id):
-        if attempt.result is not None:
-            continue
-        settings = getattr(repo.config.workers, attempt.worker, None)
-        timeout = getattr(settings, "timeout_s", 0) or DEFAULT_TIMEOUT_S
-        age = (now - attempt.started_at).total_seconds()
-        if age < timeout + RESUME_GRACE_S:
-            where = f"task {attempt.task_id}" if attempt.task_id else "the run"
-            return (
-                f"{attempt.role} attempt for {where} on {attempt.worker} started "
-                f"{max(int(age), 0)} s ago and has no result yet "
-                f"(the worker timeout is {timeout} s)"
-            )
-    holder = scheduler_lock(repo.root).read()
-    if holder is not None and holder.current_item is not None:
-        try:
-            item = repo.store.get_queue_item(holder.current_item)
-        except NotFoundError:
-            return ""
-        claimed = item.updated_at.replace(microsecond=0)
-        if item.status == "running" and (
-            item.run_id == run.id
-            or (item.run_id is None and item.idea == run.idea.text and run.created_at >= claimed)
-        ):
-            return (
-                f"the scheduler (pid {holder.pid} on {holder.host}) is working on "
-                f"queue item #{item.id}, which started this run"
-            )
-    return ""
+    if risk := _live_attempt_risk(repo, run, now):
+        return risk
+    return _scheduler_risk(repo, run)
 
 
 def run_view(repo: Repo, run_id: str) -> RunView:
@@ -339,13 +385,9 @@ def run_live_view(repo: Repo, run_id: str) -> RunView:
     return _run_view(repo, run_id, light=True)
 
 
-def _run_view(repo: Repo, run_id: str, *, light: bool = False) -> RunView:
-    """The run view; `light=True` skips the parts the live fragment never shows."""
-    store = repo.store
-    run = store.get_run(run_id)  # NotFoundError for an unknown run
-    reports = store.list_quality_reports(run_id)
-    base = run_dir(repo, run_id)
-    decisions = [
+def _decision_rows(store: Store, run_id: str) -> list[DecisionRow]:
+    """The run's decisions, with Jev's confidences formatted for the page."""
+    return [
         DecisionRow(
             d.created_at,
             d.decision.point,
@@ -360,7 +402,12 @@ def _run_view(repo: Repo, run_id: str, *, light: bool = False) -> RunView:
         )
         for d in store.list_decisions(run_id)
     ]
-    attempts = []
+
+
+def _attempt_rows(store: Store, run_id: str, base: Path) -> list[AttemptRow]:
+    """The run's attempts; each log path is relative to the run's directory
+    (a log outside it has no file link)."""
+    attempts: list[AttemptRow] = []
     for a in store.list_attempts(run_id):
         log = None
         if a.log_path is not None:
@@ -377,13 +424,18 @@ def _run_view(repo: Repo, run_id: str, *, light: bool = False) -> RunView:
                 log,
             )
         )
-    integrated = run.state in (RunState.INTEGRATING, RunState.DONE) or any(
-        d.point == "D6" for d in decisions
-    )
-    pair = estimate_verdict_for(store, repo.config.budget, repo.config.dispatcher.cost, run)
+    return attempts
+
+
+def _estimate_context(
+    store: Store, config: JevConfig, run: RunRecord
+) -> tuple[CostEstimate | None, EstimateVerdict | None, str, str]:
+    """The pre-approval cost estimate, its budget verdict, the estimate line,
+    and the approve confirmation (a warning verdict prefixes its message)."""
+    pair = estimate_verdict_for(store, config.budget, config.dispatcher.cost, run)
     estimate, verdict = pair if pair is not None else (None, None)
     if estimate is not None:
-        cap = repo.config.budget.per_run_usd
+        cap = config.budget.per_run_usd
         estimate_line = f"Estimated cost: {format_estimate(estimate)} of ${cap:.2f} run budget"
     else:
         estimate_line = ""
@@ -391,6 +443,21 @@ def _run_view(repo: Repo, run_id: str, *, light: bool = False) -> RunView:
         approve_confirm = f"{verdict.message} Approve this plan and start executing it?"
     else:
         approve_confirm = "Approve this plan and start executing it?"
+    return estimate, verdict, estimate_line, approve_confirm
+
+
+def _run_view(repo: Repo, run_id: str, *, light: bool = False) -> RunView:
+    """The run view; `light=True` skips the parts the live fragment never shows."""
+    store = repo.store
+    run = store.get_run(run_id)  # NotFoundError for an unknown run
+    reports = store.list_quality_reports(run_id)
+    base = run_dir(repo, run_id)
+    decisions = _decision_rows(store, run_id)
+    attempts = _attempt_rows(store, run_id, base)
+    integrated = run.state in (RunState.INTEGRATING, RunState.DONE) or any(
+        d.point == "D6" for d in decisions
+    )
+    estimate, verdict, estimate_line, approve_confirm = _estimate_context(store, repo.config, run)
     return RunView(
         run=run,
         tasks=store.list_tasks(run_id),
@@ -417,29 +484,44 @@ def _run_view(repo: Repo, run_id: str, *, light: bool = False) -> RunView:
     )
 
 
+def _ship_note(
+    settings: ShipConfig,
+    run: RunRecord,
+    shipped: list[ShippedPrRecord],
+    reports: list[QualityReportRecord],
+) -> str:
+    """Why the run cannot be shipped (yet), or "" when the button shows."""
+    if not settings.enabled:
+        return "shipping is off (`[ship] enabled = false`)"
+    if run.state is not RunState.DONE:
+        return "only a DONE run can be shipped"
+    if shipped:
+        return "already shipped; `jev ship RUN --force-new` opens another PR"
+    if settings.require_quality_pass and any(
+        g.blocked for g in latest_per_gate([r.result for r in reports])
+    ):
+        return "the quality gate blocked this run"
+    return ""
+
+
+def _ship_preview(repo: Repo, run: RunRecord) -> tuple[ShipPreview | None, str]:
+    """The AWAITING_SHIP preview and the D6 vote line; (None, "") otherwise."""
+    if run.state is not RunState.AWAITING_SHIP:
+        return None, ""
+    preview = ship_preview(repo.root, repo.store, run.id)
+    if preview.vote is None:
+        return preview, ""
+    d = preview.vote.decision
+    return preview, f"{d.dispatcher}: {format_answers(d.answers, d.details)}"
+
+
 def ship_state(repo: Repo, run: RunRecord, reports: list[QualityReportRecord]) -> dict[str, Any]:
     """The run page's ship fields. The button shows for a DONE, not yet shipped run whose
     quality gate did not block; `jev ship` itself checks everything again (remote, gh, ...)."""
     shipped = repo.store.list_shipped_prs(run.id)
     settings = repo.config.ship
-    note = ""
-    if not settings.enabled:
-        note = "shipping is off (`[ship] enabled = false`)"
-    elif run.state is not RunState.DONE:
-        note = "only a DONE run can be shipped"
-    elif shipped:
-        note = "already shipped; `jev ship RUN --force-new` opens another PR"
-    elif settings.require_quality_pass and any(
-        g.blocked for g in latest_per_gate([r.result for r in reports])
-    ):
-        note = "the quality gate blocked this run"
-    preview = None
-    vote = ""
-    if run.state is RunState.AWAITING_SHIP:
-        preview = ship_preview(repo.root, repo.store, run.id)
-        if preview.vote is not None:
-            d = preview.vote.decision
-            vote = f"{d.dispatcher}: {format_answers(d.answers, d.details)}"
+    note = _ship_note(settings, run, shipped, reports)
+    preview, vote = _ship_preview(repo, run)
     return {
         "shipped": shipped,
         "ship_enabled": settings.enabled,
@@ -450,6 +532,15 @@ def ship_state(repo: Repo, run: RunRecord, reports: list[QualityReportRecord]) -
     }
 
 
+def _inside_run_dir(base: Path, relative: str) -> Path | None:
+    """`relative` resolved strictly inside the run's directory (or None when it
+    escapes it, is the directory itself, or is not a regular file)."""
+    candidate = (base / relative).resolve()
+    if candidate == base or not candidate.is_relative_to(base) or not candidate.is_file():
+        return None
+    return candidate
+
+
 def safe_run_file(repo: Repo, run_id: str, relative: str) -> Path | None:
     """The file `relative` under `.jev/runs/<run_id>/`, or None if it is not a regular file
     strictly inside that directory (`..`, absolute paths and symlinks out are refused)."""
@@ -458,10 +549,7 @@ def safe_run_file(repo: Repo, run_id: str, relative: str) -> Path | None:
     base = run_dir(repo, run_id).resolve()
     if not base.is_dir():
         return None
-    candidate = (base / relative).resolve()
-    if candidate == base or not candidate.is_relative_to(base) or not candidate.is_file():
-        return None
-    return candidate
+    return _inside_run_dir(base, relative)
 
 
 # ---- queue -------------------------------------------------------------------------------
@@ -511,14 +599,11 @@ def recurring_rows(repo: Repo) -> list[RecurringRow]:
     ]
 
 
-def queue_view(repo: Repo, show_all: bool = False, query: str = "") -> QueueView:
-    """`jev queue list` (with effective statuses) plus `jev scheduler status`.
-
-    `query` filters on the idea text, case-insensitively (the chats list's
-    search pattern); the counts and spent-today totals stay unfiltered."""
-    items = repo.store.list_queue()
+def _queue_rows(repo: Repo, items: list[QueueItem]) -> list[QueueRow]:
+    """One row per queue item, with its effective status (a running run's item
+    reads as running) and its flags; only queued items are movable."""
     states = run_states(repo.store, items)
-    rows = [
+    return [
         QueueRow(
             item,
             effective_status(item, states.get(item.run_id or "")),
@@ -527,6 +612,14 @@ def queue_view(repo: Repo, show_all: bool = False, query: str = "") -> QueueView
         )
         for item in items
     ]
+
+
+def queue_view(repo: Repo, show_all: bool = False, query: str = "") -> QueueView:
+    """`jev queue list` (with effective statuses) plus `jev scheduler status`.
+
+    `query` filters on the idea text, case-insensitively (the chats list's
+    search pattern); the counts and spent-today totals stay unfiltered."""
+    rows = _queue_rows(repo, repo.store.list_queue())
     needle = query.strip().lower()
     if needle:
         rows = [r for r in rows if needle in r.item.idea.lower()]
@@ -556,6 +649,27 @@ class LearningView:
     proposed_skills: list[dict[str, object]]  # skill proposals awaiting approval
 
 
+def _profile_skills(repo: Repo, selected: str) -> tuple[list[Skill], list[dict[str, object]]]:
+    """The profile's learned skills, and the skill proposals for lessons not
+    already covered by a skill. Both empty when the skills table does not exist
+    yet (an old database)."""
+    try:
+        db = repo.learning.db_for(selected)
+        skills = db.list_skills(selected)
+        # Only propose skills for lessons not already covered by a skill.
+        covered: set[str] = {lid for s in skills for lid in s.lesson_ids}
+        proposed_skills: list[dict[str, object]] = []
+        for p in db.propose_skills(selected):
+            ids = p["lesson_ids"]
+            assert isinstance(ids, list)
+            if not set(ids).issubset(covered):
+                proposed_skills.append(p)
+    except LearningError:
+        # The skills table may not exist yet (old database): no skills to show.
+        return [], []
+    return skills, proposed_skills
+
+
 def learning_view(repo: Repo, profile: str | None, include_retired: bool) -> LearningView:
     """`jev learning list` and `jev learning show PROFILE [--all]`."""
     status = learning_status(repo.store, repo.config)
@@ -565,25 +679,7 @@ def learning_view(repo: Repo, profile: str | None, include_retired: bool) -> Lea
         profile if profile in names else (status.profile if status.profile in names else None)
     )
     lessons = repo.learning.lessons(selected, include_retired) if selected else []
-    skills: list[Skill] = []
-    proposed_skills: list[dict[str, object]] = []
-    if selected:
-        try:
-            db = repo.learning.db_for(selected)
-            skills = db.list_skills(selected)
-            # Only propose skills for lessons not already covered by a skill.
-            covered: set[str] = {lid for s in skills for lid in s.lesson_ids}
-            all_proposals = db.propose_skills(selected)
-            proposed_skills = []
-            for p in all_proposals:
-                ids = p["lesson_ids"]
-                assert isinstance(ids, list)
-                if not set(ids).issubset(covered):
-                    proposed_skills.append(p)
-        except LearningError:
-            # The skills table may not exist yet (old database): no skills to show.
-            pass
-            pass
+    skills, proposed_skills = _profile_skills(repo, selected) if selected else ([], [])
     return LearningView(
         status, profiles, selected, lessons, repo.learning.shared_path, skills, proposed_skills
     )
@@ -639,6 +735,8 @@ class LearningGraph:
     links: list[GraphLink]
 
 
+# The relation facets, and the (edge, direction) each one matches
+# (`direction` None matches either way).
 RELATION_FACETS = (
     ("contradictions", "has contradictions"),
     ("supersedes", "supersedes another"),
@@ -646,21 +744,108 @@ RELATION_FACETS = (
     ("failed-runs", "from failed runs"),
 )
 
-_EDGE_COLORS = {
-    "supersedes": "#2f9e44",
-    "contradicts": "#d64545",
-    "applies-to": "#3b82f6",
-    "derived-from": "#8a8f98",
-    "co-occurs-with": "#8b5cf6",
+_RELATION_WANTS: dict[str, tuple[str, str | None]] = {
+    "contradictions": ("contradicts", None),
+    "supersedes": ("supersedes", "out"),
+    "superseded": ("supersedes", "in"),
 }
 
 
-def _failed_runs(store: Store) -> set[str]:
-    return {
-        run.id
-        for run in store.list_runs()
-        if run.state is RunState.FAILED and run.learning_profile is not None
-    }
+def _lesson_has_edge(views: list[EdgeView], edge: str, direction: str | None = None) -> bool:
+    """Whether any of the lesson's edges is `edge` (in `direction`, when given)."""
+    return any(v.edge == edge and (direction is None or v.direction == direction) for v in views)
+
+
+def _search_lessons(db: LessonDB, profile: str, lessons: list[Lesson], q: str) -> list[Lesson]:
+    """The lessons matching the search query, or the unfiltered list when there
+    is no query (or it is not a searchable one)."""
+    if not q.strip():
+        return lessons
+    try:
+        wanted = {lesson.id for lesson in db.graph_query(profile, q.strip(), limit=500)}
+    except LearningError:
+        return lessons  # not a searchable query: fall back to the unfiltered list
+    return [lesson for lesson in lessons if lesson.id in wanted]
+
+
+def _filter_by_module(
+    lessons: list[Lesson], neighborhoods: dict[int, list[EdgeView]], module: str
+) -> list[Lesson]:
+    """The lessons applied to `module` (no filter when the facet is empty)."""
+    if not module:
+        return lessons
+    return [
+        lesson
+        for lesson in lessons
+        if any(
+            v.edge == "applies-to" and _module_matches(v.other, module)
+            for v in neighborhoods[lesson.number]
+        )
+    ]
+
+
+def _filter_by_relation(
+    lessons: list[Lesson],
+    neighborhoods: dict[int, list[EdgeView]],
+    relation: str,
+    failed: set[str],
+) -> list[Lesson]:
+    """The lessons matching the relation facet (no filter when it is empty)."""
+    if relation == "failed-runs":
+        return [lesson for lesson in lessons if lesson.source_run in failed]
+    if relation in _RELATION_WANTS:
+        edge, direction = _RELATION_WANTS[relation]
+        return [
+            lesson
+            for lesson in lessons
+            if _lesson_has_edge(neighborhoods[lesson.number], edge, direction)
+        ]
+    return lessons
+
+
+def _count_edges(views: list[EdgeView]) -> tuple[dict[str, int], list[str]]:
+    """A lesson's relation counts and its applies-to modules, from its edges."""
+    counts = {"contradicts": 0, "supersedes": 0, "superseded-by": 0, "applies-to": 0}
+    modules: list[str] = []
+    for view in views:
+        if view.edge == "contradicts":
+            counts["contradicts"] += 1
+        elif view.edge == "supersedes":
+            counts["supersedes" if view.direction == "out" else "superseded-by"] += 1
+        elif view.edge == "applies-to":
+            counts["applies-to"] += 1
+            modules.append(view.other)
+    return counts, modules
+
+
+def _graph_rows(
+    lessons: list[Lesson], neighborhoods: dict[int, list[EdgeView]]
+) -> list[GraphLessonRow]:
+    """One faceted-browser row per lesson: the lesson, its relation counts, its modules."""
+    rows: list[GraphLessonRow] = []
+    for lesson in lessons:
+        counts, modules = _count_edges(neighborhoods[lesson.number])
+        rows.append(GraphLessonRow(lesson, counts, sorted(set(modules))))
+    return rows
+
+
+def _graph_focus(
+    repo: Repo, db: LessonDB, profile: str, focus_id: str
+) -> tuple[Lesson | None, list[EdgeView], list[tuple[str, int]], list[GraphNode], list[GraphLink]]:
+    """The focused lesson and its radial neighborhood, or all empty when there
+    is no focus (or it is unknown, or belongs to another profile)."""
+    if not focus_id:
+        return None, [], [], [], []
+    try:
+        _, focus = repo.learning.find_lesson(focus_id)
+    except LearningError:
+        return None, [], [], [], []
+    if focus is None or focus.profile != profile:
+        return None, [], [], [], []
+    focus_edges = db.edges_for_lesson(profile, focus.number)
+    focus_co = db.co_occurs(repo.store.connection, profile, focus.number)
+    nodes, links = _neighborhood_svg(focus, focus_edges, focus_co)
+    return focus, focus_edges, focus_co, nodes, links
 
 
 def learning_graph_view(
@@ -681,71 +866,14 @@ def learning_graph_view(
     if not db.graph_ready():
         return None
     stats = db.graph_stats(profile)
-    lessons = db.list_lessons(profile)
-    if q.strip():
-        try:
-            wanted = {lesson.id for lesson in db.graph_query(profile, q.strip(), limit=500)}
-            lessons = [lesson for lesson in lessons if lesson.id in wanted]
-        except LearningError:
-            pass  # not a searchable query: fall back to the unfiltered list
+    lessons = _search_lessons(db, profile, db.list_lessons(profile), q)
     neighborhoods = {
         lesson.number: db.edges_for_lesson(profile, lesson.number) for lesson in lessons
     }
-    if module:
-        lessons = [
-            lesson
-            for lesson in lessons
-            if any(
-                v.edge == "applies-to" and _module_matches(v.other, module)
-                for v in neighborhoods[lesson.number]
-            )
-        ]
+    lessons = _filter_by_module(lessons, neighborhoods, module)
     failed = _failed_runs(repo.store) if relation == "failed-runs" else set()
-    if relation == "failed-runs":
-        lessons = [lesson for lesson in lessons if lesson.source_run in failed]
-    elif relation in ("contradictions", "supersedes", "superseded"):
-        want = {
-            "contradictions": ("contradicts", None),
-            "supersedes": ("supersedes", "out"),
-            "superseded": ("supersedes", "in"),
-        }[relation]
-        lessons = [
-            lesson
-            for lesson in lessons
-            if any(
-                v.edge == want[0] and (want[1] is None or v.direction == want[1])
-                for v in neighborhoods[lesson.number]
-            )
-        ]
-    rows = []
-    for lesson in lessons:
-        counts = {"contradicts": 0, "supersedes": 0, "superseded-by": 0, "applies-to": 0}
-        modules: list[str] = []
-        for view in neighborhoods[lesson.number]:
-            if view.edge == "contradicts":
-                counts["contradicts"] += 1
-            elif view.edge == "supersedes":
-                counts["supersedes" if view.direction == "out" else "superseded-by"] += 1
-            elif view.edge == "applies-to":
-                counts["applies-to"] += 1
-                modules.append(view.other)
-        rows.append(GraphLessonRow(lesson, counts, sorted(set(modules))))
-    focus: Lesson | None = None
-    focus_edges: list[EdgeView] = []
-    focus_co: list[tuple[str, int]] = []
-    nodes: list[GraphNode] = []
-    links: list[GraphLink] = []
-    if focus_id:
-        try:
-            _, focus = repo.learning.find_lesson(focus_id)
-        except LearningError:
-            focus = None
-        if focus is not None and focus.profile == profile:
-            focus_edges = db.edges_for_lesson(profile, focus.number)
-            focus_co = db.co_occurs(repo.store.connection, profile, focus.number)
-            nodes, links = _neighborhood_svg(focus, focus_edges, focus_co)
-        else:
-            focus = None
+    lessons = _filter_by_relation(lessons, neighborhoods, relation, failed)
+    focus, focus_edges, focus_co, nodes, links = _graph_focus(repo, db, profile, focus_id)
     return LearningGraph(
         profile=profile,
         stats=stats,
@@ -753,13 +881,30 @@ def learning_graph_view(
         module=module,
         relation=relation,
         modules=stats.top_modules,
-        rows=rows,
+        rows=_graph_rows(lessons, neighborhoods),
         focus=focus,
         focus_edges=focus_edges,
         focus_co_occurs=focus_co,
         nodes=nodes,
         links=links,
     )
+
+
+_EDGE_COLORS = {
+    "supersedes": "#2f9e44",
+    "contradicts": "#d64545",
+    "applies-to": "#3b82f6",
+    "derived-from": "#8a8f98",
+    "co-occurs-with": "#8b5cf6",
+}
+
+
+def _failed_runs(store: Store) -> set[str]:
+    return {
+        run.id
+        for run in store.list_runs()
+        if run.state is RunState.FAILED and run.learning_profile is not None
+    }
 
 
 def _module_matches(stored: str, query: str) -> bool:
@@ -773,21 +918,24 @@ def _module_matches(stored: str, query: str) -> bool:
     return any(p == want or p.startswith(want + "/") for p in paths)
 
 
+def _edge_sub(view: EdgeView) -> str:
+    """The edge label from the focus node: direction-suffixed, except
+    `contradicts`, which reads the same either way."""
+    if view.edge == "contradicts":
+        return "contradicts"
+    return view.edge if view.direction == "out" else f"{view.edge}-by"
+
+
 def _neighborhood_svg(
     focus: Lesson, edges: list[EdgeView], co_occurs: list[tuple[str, int]]
 ) -> tuple[list[GraphNode], list[GraphLink]]:
     """Radial 1-hop neighborhood: the lesson centered, neighbors on a circle, edges labeled
     and color-coded. Deterministic, ≤ 13 nodes, no layout library."""
-    import math
-
     items: list[tuple[str, str, str, str]] = []  # (kind, label, edge, sub)
     for view in edges:
         kind = {"lesson": "lesson", "run": "run", "module": "module"}.get(view.other_type, "lesson")
         label = view.other if len(view.other) <= 26 else "…" + view.other[-25:]
-        sub = view.edge if view.direction == "out" else f"{view.edge}-by"
-        if view.edge == "contradicts":
-            sub = "contradicts"
-        items.append((kind, label, view.edge, sub))
+        items.append((kind, label, view.edge, _edge_sub(view)))
     for other, times in co_occurs[:4]:
         items.append(("lesson", other, "co-occurs-with", f"co-occurs x{times}"))
     items = items[:12]
@@ -806,21 +954,24 @@ def _neighborhood_svg(
 # ---- chats -------------------------------------------------------------------------------
 
 
+def _chat_matches(meta: ChatMeta, title: str, needle: str) -> bool:
+    """Whether the search needle appears in the chat's title, id, backend or model."""
+    if not needle:
+        return True
+    return (
+        needle in title.lower()
+        or needle in meta.chat_id.lower()
+        or needle in meta.backend.lower()
+        or needle in (meta.model or "").lower()
+    )
+
+
 def chats(repo: Repo, query: str = "") -> list[tuple[ChatMeta, str]]:
     """Saved chats, newest first, titled by their brief or their opening message. `query`
     filters on title, chat id, backend and model, case-insensitively."""
     rows = [(meta, chat_title(meta, repo.root)) for meta in list_chats(repo.root)]
     needle = query.strip().lower()
-    if not needle:
-        return rows
-    return [
-        (meta, title)
-        for meta, title in rows
-        if needle in title.lower()
-        or needle in meta.chat_id.lower()
-        or needle in meta.backend.lower()
-        or needle in (meta.model or "").lower()
-    ]
+    return [(meta, title) for meta, title in rows if _chat_matches(meta, title, needle)]
 
 
 # ---- artifacts ---------------------------------------------------------------------------
@@ -853,6 +1004,133 @@ class Artifact:
     url: str
 
 
+def _artifact_chat_map(
+    root: Path,
+) -> tuple[dict[str, tuple[str, str]], list[tuple[str, str]]]:
+    """(run id -> (chat id, chat title)) for runs started from a chat, and the
+    chat list for the filter. First chat wins when a run appears in several."""
+    run_chat: dict[str, tuple[str, str]] = {}
+    chat_options: list[tuple[str, str]] = []
+    for meta in list_chats(root):
+        title = chat_title(meta, root)
+        chat_options.append((meta.chat_id, title))
+        for entry in meta.runs:
+            run_chat.setdefault(entry["run_id"], (meta.chat_id, title))
+    return run_chat, chat_options
+
+
+def _artifact_url(cid: str | None, run_id: str, work: str, run_suffix: str = "") -> str:
+    """Deep-link to the existing viewer: the chat's work tab, else the run page."""
+    if cid:
+        return f"/chats/{cid}/work/{work}"
+    return f"/runs/{run_id}{run_suffix}"
+
+
+def _artifact(
+    kind: str,
+    title: str,
+    run: RunRecord,
+    cid: str | None,
+    ctitle: str | None,
+    created_at: datetime,
+    url: str,
+) -> Artifact:
+    return Artifact(
+        kind=kind,
+        title=title,
+        run_id=run.id,
+        run_title=run.idea.text,
+        chat_id=cid,
+        chat_title=ctitle,
+        created_at=created_at,
+        url=url,
+    )
+
+
+def _run_artifacts(
+    repo: Repo, run: RunRecord, cid: str | None, ctitle: str | None
+) -> list[Artifact]:
+    """A run's work products: its plan, its design, its diff, and its quality reports.
+    Preview and terminal streams are live-only (no stored history) and are not aggregated."""
+    out: list[Artifact] = []
+    run_title = run.idea.text
+    if run.plan is not None:
+        out.append(
+            _artifact(
+                "plan",
+                f"Plan: {run_title}",
+                run,
+                cid,
+                ctitle,
+                run.created_at,
+                _artifact_url(cid, run.id, "plan"),
+            )
+        )
+    if run.design is not None:
+        out.append(
+            _artifact(
+                "design",
+                f"Design: {run.design.title or run_title}",
+                run,
+                cid,
+                ctitle,
+                run.updated_at,
+                f"/runs/{run.id}#design",
+            )
+        )
+    if run.state in _DIFF_STATES:
+        out.append(
+            _artifact(
+                "diff",
+                f"Diff: {run_title}",
+                run,
+                cid,
+                ctitle,
+                run.updated_at,
+                _artifact_url(cid, run.id, "diff"),
+            )
+        )
+    for report in repo.store.list_quality_reports(run.id):
+        out.append(
+            _artifact(
+                "tests",
+                f"Quality report {report.result.label}: {run_title}",
+                run,
+                cid,
+                ctitle,
+                report.created_at,
+                _artifact_url(cid, run.id, "tests", "#quality-review"),
+            )
+        )
+    return out
+
+
+def _artifact_matches(a: Artifact, kind: str, chat_id: str, needle: str) -> bool:
+    """Whether one artifact passes the kind/chat/search filters (`q` searches
+    titles, run titles and chat titles case-insensitively)."""
+    if kind and a.kind != kind:
+        return False
+    if chat_id and a.chat_id != chat_id:
+        return False
+    if not needle:
+        return True
+    return (
+        needle in a.title.lower()
+        or needle in a.run_title.lower()
+        or needle in (a.chat_title or "").lower()
+    )
+
+
+def _filter_artifacts(
+    items: list[Artifact], kind: str = "", chat_id: str = "", q: str = ""
+) -> list[Artifact]:
+    """The kind/chat/search filters, newest first."""
+    needle = q.strip().lower()
+    rows = [a for a in items if _artifact_matches(a, kind, chat_id, needle)]
+    rows.sort(key=lambda a: a.created_at, reverse=True)
+    return rows
+
+
 def artifacts(
     repo: Repo, kind: str = "", chat_id: str = "", q: str = ""
 ) -> tuple[list[Artifact], list[tuple[str, str]]]:
@@ -860,91 +1138,16 @@ def artifacts(
 
     Plans come from runs with a validated plan, diffs from runs that reached the
     integration states, test reports from the quality-gate table, and designs from
-    runs that went through the DESIGNING stage. Preview and
-    terminal streams are live-only (no stored history) and are not aggregated here.
+    runs that went through the DESIGNING stage.
     `kind` filters to one artifact type, `chat_id` to one chat, `q` searches titles,
     run titles and chat titles case-insensitively.
     """
-    run_chat: dict[str, tuple[str, str]] = {}
-    chat_options: list[tuple[str, str]] = []
-    for meta in list_chats(repo.root):
-        title = chat_title(meta, repo.root)
-        chat_options.append((meta.chat_id, title))
-        for entry in meta.runs:
-            run_chat.setdefault(entry["run_id"], (meta.chat_id, title))
-
+    run_chat, chat_options = _artifact_chat_map(repo.root)
     out: list[Artifact] = []
     for run in repo.store.list_runs():
         cid, ctitle = run_chat.get(run.id, (None, None))
-        run_title = run.idea.text
-        if run.plan is not None:
-            out.append(
-                Artifact(
-                    kind="plan",
-                    title=f"Plan: {run_title}",
-                    run_id=run.id,
-                    run_title=run_title,
-                    chat_id=cid,
-                    chat_title=ctitle,
-                    created_at=run.created_at,
-                    url=f"/chats/{cid}/work/plan" if cid else f"/runs/{run.id}",
-                )
-            )
-        if run.design is not None:
-            out.append(
-                Artifact(
-                    kind="design",
-                    title=f"Design: {run.design.title or run_title}",
-                    run_id=run.id,
-                    run_title=run_title,
-                    chat_id=cid,
-                    chat_title=ctitle,
-                    created_at=run.updated_at,
-                    url=f"/runs/{run.id}#design",
-                )
-            )
-        if run.state in _DIFF_STATES:
-            out.append(
-                Artifact(
-                    kind="diff",
-                    title=f"Diff: {run_title}",
-                    run_id=run.id,
-                    run_title=run_title,
-                    chat_id=cid,
-                    chat_title=ctitle,
-                    created_at=run.updated_at,
-                    url=f"/chats/{cid}/work/diff" if cid else f"/runs/{run.id}",
-                )
-            )
-        for report in repo.store.list_quality_reports(run.id):
-            out.append(
-                Artifact(
-                    kind="tests",
-                    title=f"Quality report {report.result.label}: {run_title}",
-                    run_id=run.id,
-                    run_title=run_title,
-                    chat_id=cid,
-                    chat_title=ctitle,
-                    created_at=report.created_at,
-                    url=f"/chats/{cid}/work/tests" if cid else f"/runs/{run.id}#quality-review",
-                )
-            )
-
-    needle = q.strip().lower()
-    rows = [
-        a
-        for a in out
-        if (not kind or a.kind == kind)
-        and (not chat_id or a.chat_id == chat_id)
-        and (
-            not needle
-            or needle in a.title.lower()
-            or needle in a.run_title.lower()
-            or needle in (a.chat_title or "").lower()
-        )
-    ]
-    rows.sort(key=lambda a: a.created_at, reverse=True)
-    return rows, chat_options
+        out += _run_artifacts(repo, run, cid, ctitle)
+    return _filter_artifacts(out, kind, chat_id, q), chat_options
 
 
 # ---- repo KPIs ---------------------------------------------------------------------------
@@ -975,6 +1178,58 @@ class RepoKpis:
     latest: LatestRun | None
 
 
+def _first_pass_rates(store: Store, done: list[RunRecord]) -> list[float]:
+    """The DONE runs' first-pass rates, skipping runs without one."""
+    rates: list[float] = []
+    for run in done:
+        value = compute_run_kpis(store, run.id).first_pass_rate
+        if value is not None:
+            rates.append(float(value))
+    return rates
+
+
+def _fallback_rate(store: Store, runs: list[RunRecord]) -> float | None:
+    """The share of decisions that fell back, or None when no decision was taken."""
+    asked = fallbacks = 0
+    for run in runs:
+        for decision in store.list_decisions(run.id):
+            asked += 1
+            fallbacks += 1 if decision.fallback_reason else 0
+    return (fallbacks / asked) if asked else None
+
+
+def _quality_pass_rate(store: Store, quality_runs: list[RunRecord]) -> float | None:
+    """The share of gated runs whose latest gate passed, or None with no gated runs."""
+    if not quality_runs:
+        return None
+    quality_ok = sum(
+        1
+        for r in quality_runs
+        if quality_badge(r, store.list_quality_reports(r.id)).endswith("passed")
+    )
+    return quality_ok / len(quality_runs)
+
+
+def _latest_run(store: Store, done: list[RunRecord]) -> LatestRun | None:
+    """The most recently updated DONE run, with its task counts and quality badge."""
+    if not done:
+        return None
+    newest = max(done, key=lambda r: r.updated_at)
+    tasks = store.list_tasks(newest.id)
+    return LatestRun(
+        newest,
+        sum(1 for t in tasks if t.state is TaskState.DONE),
+        len(tasks),
+        result_branch(newest.id),
+        quality_badge(newest, store.list_quality_reports(newest.id)),
+    )
+
+
+def _median(values: list[float]) -> float | None:
+    """The median of `values`, or None when there are none."""
+    return float(statistics.median(values)) if values else None
+
+
 def product_kpis(repo: Repo) -> RepoKpis:
     """Aggregates over all of the repo's runs; the PR KPIs (`jev kpi`) are a separate view."""
     runs = repo.store.list_runs()
@@ -985,51 +1240,21 @@ def product_kpis(repo: Repo) -> RepoKpis:
         RunState.BUDGET_EXCEEDED,
         RunState.CANCELLED,
     }
-
-    def median(values: list[float]) -> float | None:
-        return float(statistics.median(values)) if values else None
-
-    first_pass: list[float] = []
-    for run in done:
-        value = compute_run_kpis(repo.store, run.id).first_pass_rate
-        if value is not None:
-            first_pass.append(float(value))
-    asked = fallbacks = 0
-    for run in runs:
-        for decision in repo.store.list_decisions(run.id):
-            asked += 1
-            fallbacks += 1 if decision.fallback_reason else 0
-    quality_runs = [r for r in runs if r.quality_level != "none"]
-    quality_ok = sum(
-        1
-        for r in quality_runs
-        if quality_badge(r, repo.store.list_quality_reports(r.id)).endswith("passed")
-    )
-    latest = None
-    if done:
-        newest = max(done, key=lambda r: r.updated_at)
-        tasks = repo.store.list_tasks(newest.id)
-        latest = LatestRun(
-            newest,
-            sum(1 for t in tasks if t.state is TaskState.DONE),
-            len(tasks),
-            result_branch(newest.id),
-            quality_badge(newest, repo.store.list_quality_reports(newest.id)),
-        )
     counts = Counter(str(r.state) for r in runs)
+    quality_runs = [r for r in runs if r.quality_level != "none"]
     return RepoKpis(
         total=len(runs),
         done=len(done),
         unfinished=sum(1 for r in runs if r.state in unfinished_states),
         by_state=sorted(counts.items(), key=lambda item: (-item[1], item[0])),
-        median_cost_usd=median([r.spend_usd for r in runs]),
-        median_wall_clock_h=median(
+        median_cost_usd=_median([r.spend_usd for r in runs]),
+        median_wall_clock_h=_median(
             [(r.updated_at - r.created_at).total_seconds() / 3600 for r in runs]
         ),
-        median_first_pass=median(first_pass),
-        fallback_rate=(fallbacks / asked) if asked else None,
-        quality_pass_rate=(quality_ok / len(quality_runs)) if quality_runs else None,
-        latest=latest,
+        median_first_pass=_median(_first_pass_rates(repo.store, done)),
+        fallback_rate=_fallback_rate(repo.store, runs),
+        quality_pass_rate=_quality_pass_rate(repo.store, quality_runs),
+        latest=_latest_run(repo.store, done),
     )
 
 
@@ -1150,8 +1375,6 @@ SHIP_SYNC_FILENAME = "ship_sync.json"  # in the state dir: {"synced_at": isoform
 
 def ship_last_synced(repo: Repo) -> datetime | None:
     """When `jev ship sync --all` last refreshed the shipped PRs (any surface), if ever."""
-    import json
-
     try:
         raw = json.loads((repo.state_dir / SHIP_SYNC_FILENAME).read_text())
         return datetime.fromisoformat(raw["synced_at"])
@@ -1190,6 +1413,21 @@ class EnvVar:
         return "Set" if self.from_secrets else "Set (environment)"
 
 
+def _mcp_env_entries(config: JevConfig) -> list[tuple[str, str]]:
+    """(variable, used-for) pairs from the MCP servers' env, bearer-token and
+    header settings — the one place that enumerates them."""
+    entries: list[tuple[str, str]] = []
+    for name, server in config.tools.mcp.items():
+        entries += [(var, f"[tools.mcp.{name}] env_from") for var in server.env_from]
+        if server.bearer_token_env:
+            entries.append((server.bearer_token_env, f"[tools.mcp.{name}] bearer_token_env"))
+        entries += [
+            (var, f"[tools.mcp.{name}] headers_from_env")
+            for var in server.headers_from_env.values()
+        ]
+    return entries
+
+
 def env_var_names(config: JevConfig) -> list[str]:
     """Variable names the config points at — the datalist for the add-key form.
     The test hook is excluded; it is not a real key."""
@@ -1197,11 +1435,7 @@ def env_var_names(config: JevConfig) -> list[str]:
     # Provider auth the Connections page manages directly (subscription OAuth
     # tokens + API-key fallbacks for the claude/codex CLI workers).
     names += [CLAUDE_OAUTH_TOKEN_ENV, ANTHROPIC_API_KEY_ENV, OPENAI_API_KEY_ENV]
-    for _name, server in config.tools.mcp.items():
-        names += list(server.env_from)
-        if server.bearer_token_env:
-            names.append(server.bearer_token_env)
-        names += list(server.headers_from_env.values())
+    names += [name for name, _ in _mcp_env_entries(config)]
     return sorted({n for n in names if n and n != FAKE_WORKERS_ENV})
 
 
@@ -1213,14 +1447,7 @@ def env_vars(config: JevConfig) -> list[EnvVar]:
         (config.dispatcher.jev.api_key_env, "[dispatcher.jev] api_key_env"),
         (config.workers.api.api_key_env, "[workers.api] api_key_env"),
     ]
-    for name, server in config.tools.mcp.items():
-        wanted += [(var, f"[tools.mcp.{name}] env_from") for var in server.env_from]
-        if server.bearer_token_env:
-            wanted.append((server.bearer_token_env, f"[tools.mcp.{name}] bearer_token_env"))
-        wanted += [
-            (var, f"[tools.mcp.{name}] headers_from_env")
-            for var in server.headers_from_env.values()
-        ]
+    wanted += _mcp_env_entries(config)
     wanted.append((FAKE_WORKERS_ENV, "test hook: fake workers"))
     seen: dict[str, list[str]] = {}
     for name, used in wanted:
@@ -1251,6 +1478,26 @@ def cli_providers(config: JevConfig) -> list[ProviderAuth]:
     ]
 
 
+def _worker_summary_rows(c: JevConfig) -> list[tuple[str, str]]:
+    """One (`workers.<name>`, `enabled/disabled; <command>`) row per worker."""
+    rows: list[tuple[str, str]] = []
+    for name in c.workers.names():
+        worker = getattr(c.workers, name)
+        detail = "enabled" if worker.enabled else "disabled"
+        command = getattr(worker, "command", None) or getattr(worker, "base_url", "")
+        rows.append((f"workers.{name}", f"{detail}; {command}"))
+    return rows
+
+
+def _role_summary_rows(c: JevConfig) -> list[tuple[str, str]]:
+    """One (`roles.<role>`, `workers ...; models ...`) row per role."""
+    rows: list[tuple[str, str]] = []
+    for role, settings in c.roles.items():
+        models = ", ".join(settings.models) or "default"
+        rows.append((f"roles.{role}", f"workers {', '.join(settings.workers)}; models {models}"))
+    return rows
+
+
 def config_summary(repo: Repo) -> list[tuple[str, str]]:
     """The effective settings that matter most, as (key, value) rows. No secrets: the config
     cannot hold any (keys named like secrets are rejected), and env vars are listed by name."""
@@ -1272,14 +1519,8 @@ def config_summary(repo: Repo) -> list[tuple[str, str]]:
         ("learning.profile", f"{status.profile} ({status.profile_source})"),
         ("models.prefer_free", str(c.models.prefer_free).lower()),
     ]
-    for name in c.workers.names():
-        worker = getattr(c.workers, name)
-        detail = "enabled" if worker.enabled else "disabled"
-        command = getattr(worker, "command", None) or getattr(worker, "base_url", "")
-        rows.append((f"workers.{name}", f"{detail}; {command}"))
-    for role, settings in c.roles.items():
-        models = ", ".join(settings.models) or "default"
-        rows.append((f"roles.{role}", f"workers {', '.join(settings.workers)}; models {models}"))
+    rows += _worker_summary_rows(c)
+    rows += _role_summary_rows(c)
     if os.environ.get(FAKE_WORKERS_ENV) == "1":
         rows.append(("workers (test hook)", f"{FAKE_WORKERS_ENV}=1: every worker is a fake"))
     return rows
@@ -1395,52 +1636,59 @@ class FleetAgent:
     grants: list[tuple[str, str]]
 
 
+def _fleet_run_agents(repo: Repo, run: RunRecord, now: datetime) -> list[FleetAgent]:
+    """The currently-running agents on one run: attempts with no result. An
+    attempt outliving its worker's timeout plus `RESUME_GRACE_S` is flagged
+    `stale` instead of hidden — the same rule `resume_risk` uses.
+
+    The attempt records no server; the "server" column is the role's server
+    grants in the run (`servers/access.py::server_grants`): an agent can only
+    act on the servers its role was granted, each at its tier. When the run's
+    workspace profile is unreadable, the role's configured servers are used
+    (ProfileError falls back rather than failing the whole page). Nothing
+    secret is exposed: server names and tier names only.
+    """
+    tasks = {t.id: t for t in repo.store.list_tasks(run.id)}
+    try:
+        profile = read_run_profile(repo.state_dir, run.id)
+    except ProfileError:
+        profile = None
+    agents: list[FleetAgent] = []
+    for attempt in repo.store.list_attempts(run.id):
+        if attempt.result is not None:
+            continue
+        task = tasks.get(attempt.task_id) if attempt.task_id else None
+        timeout = _worker_timeout(repo.config, attempt.worker)
+        age = (now - attempt.started_at).total_seconds()
+        agents.append(
+            FleetAgent(
+                run_id=run.id,
+                run_idea=run.idea.text,
+                run_state=run.state,
+                task_id=attempt.task_id,
+                task_title=task.card.title if task is not None else None,
+                task_state=task.state if task is not None else None,
+                role=attempt.role,
+                worker=attempt.worker,
+                model=attempt.model,
+                started_at=attempt.started_at,
+                stale=age > timeout + RESUME_GRACE_S,
+                grants=sorted(server_grants(repo.config, attempt.role, profile).items()),
+            )
+        )
+    return agents
+
+
 def fleet(repo: Repo, now: datetime | None = None) -> list[FleetAgent]:
     """Every active agent across all runs and servers, newest first.
 
     An attempt with no result means its worker is still running it — unless the run has
-    stopped (then the attempt is a leftover of a dead pipeline and is skipped), or the
-    attempt outlived its worker's timeout plus `RESUME_GRACE_S` (the harness kills the
-    worker at the timeout and then records the result, so it is flagged `stale` instead of
-    hidden — the same rule `resume_risk` uses).
-
-    The attempt records no server; the "server" column is the role's server grants in the
-    run (`servers/access.py::server_grants`): an agent can only act on the servers its role
-    was granted, each at its tier. When the run's workspace profile is unreadable, the
-    role's configured servers are used (ProfileError falls back rather than failing the
-    whole page). Nothing secret is exposed: server names and tier names only.
+    stopped (then the attempt is a leftover of a dead pipeline and is skipped).
     """
     now = now or datetime.now(UTC)
     agents: list[FleetAgent] = []
     for run in repo.store.list_runs():
         if run.state in STOPPED:
             continue
-        tasks = {t.id: t for t in repo.store.list_tasks(run.id)}
-        try:
-            profile = read_run_profile(repo.state_dir, run.id)
-        except ProfileError:
-            profile = None
-        for attempt in repo.store.list_attempts(run.id):
-            if attempt.result is not None:
-                continue
-            task = tasks.get(attempt.task_id) if attempt.task_id else None
-            settings = getattr(repo.config.workers, attempt.worker, None)
-            timeout = getattr(settings, "timeout_s", 0) or DEFAULT_TIMEOUT_S
-            age = (now - attempt.started_at).total_seconds()
-            agents.append(
-                FleetAgent(
-                    run_id=run.id,
-                    run_idea=run.idea.text,
-                    run_state=run.state,
-                    task_id=attempt.task_id,
-                    task_title=task.card.title if task is not None else None,
-                    task_state=task.state if task is not None else None,
-                    role=attempt.role,
-                    worker=attempt.worker,
-                    model=attempt.model,
-                    started_at=attempt.started_at,
-                    stale=age > timeout + RESUME_GRACE_S,
-                    grants=sorted(server_grants(repo.config, attempt.role, profile).items()),
-                )
-            )
+        agents += _fleet_run_agents(repo, run, now)
     return sorted(agents, key=lambda a: a.started_at, reverse=True)

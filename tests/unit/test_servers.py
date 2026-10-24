@@ -564,6 +564,7 @@ def test_medium_allows_recursive_cp_inside_allowed_paths() -> None:
     "command",
     [
         "cp hook /srv/app/.git/hooks/pre-commit",
+        "cp /srv/app/.git/config /srv/app/x",  # non-recursive copy *from* .git
         "mv /srv/app/x /srv/app/.git/config",
         "touch /srv/app/.git/hooks/post-checkout",
         "mkdir -p /srv/app/sub/.git/hooks",
