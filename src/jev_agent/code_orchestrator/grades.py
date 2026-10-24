@@ -23,6 +23,18 @@ never on a label alone. A merge action is trusted only when its
 `answer_confidence` reaches the configured threshold (0.7 by default). Below
 it, the outcome is `human_review` whatever the label says: an unconfident
 "accept" is not an accept.
+
+Two confidence bars, deliberately different (issue #203, I7): Jev's own
+`[dispatcher.jev] min_confidence` (0.55) gates Jev's *decision answers* --
+below it the whole decision falls back to the rules dispatcher, because Jev
+is choosing among allowed answers, not merging code. The 0.7 here gates the
+Coding Decision Agent's *calibrated* `answer_confidence` on a merge action,
+the model card's starting point for trusting a merge. They measure different
+models' confidences on different decisions, so they are not one bar with two
+values; aligning them would either let uncalibrated merge actions through
+or send ordinary Jev decisions to rules for no reason. A routing hint is
+gated on this same 0.7 bar (see `routing_hint`): a hint Jev is told to
+prefer must clear the merge-grade bar, not Jev's lower fallback bar.
 """
 
 from __future__ import annotations
@@ -222,6 +234,20 @@ def gate_code_review(
     )
 
 
+def validate_trace_grade(grade: AgentTraceGrade) -> None:
+    """A trace grade's fields, checked the way `gate_code_review`'s inputs are.
+
+    Unlike `gate_code_review`, this also validates the grade itself: an
+    unknown action used to fall through to the `observe` branch and be
+    reported as `observe`, and `risk`/`urgency` were printed unvalidated.
+    """
+    if grade.action not in ("continue", "observe", "human_review", "stop"):
+        raise ValueError(f"coding decision agent: unknown trace action {grade.action!r}")
+    for name, value, limit in (("risk", grade.risk, 3), ("urgency", grade.urgency, 3)):
+        if not isinstance(value, int) or isinstance(value, bool) or not 0 <= value <= limit:
+            raise ValueError(f"coding decision agent: {name} out of 0-{limit} ({value!r})")
+
+
 def gate_trace(
     grade: AgentTraceGrade, *, threshold: float = DEFAULT_CONFIDENCE_THRESHOLD
 ) -> GateOutcome:
@@ -232,7 +258,15 @@ def gate_trace(
     `human_review`. `observe` maps to `rework` in gate terms (keep going, but
     watch the next step); callers that only need the raw action should read
     `grade.action` directly.
+
+    The threshold is validated exactly like `gate_code_review`'s, and the
+    grade itself is validated (`validate_trace_grade`): an unknown action
+    raises instead of being mislabelled `observe`, and `risk`/`urgency`
+    outside 0-3 raise instead of being printed as if they were scores.
     """
+    if not 0.0 <= threshold <= 1.0:
+        raise ValueError(f"threshold must be 0-1, got {threshold}")
+    validate_trace_grade(grade)
     confidence = grade.confidence_for("action")
     if grade.action in ("human_review", "stop"):
         decision: GateDecision = "human_review" if grade.action == "human_review" else "block"
@@ -260,6 +294,8 @@ def gate_trace(
             merge_action="continue",
             confidence=confidence,
         )
+    # Only "observe" can reach here: the other actions returned above, and
+    # validate_trace_grade rejected anything else.
     return GateOutcome(
         decision="rework",
         reason=f"coding decision agent trace action: observe (outcome={grade.outcome})",
@@ -268,14 +304,32 @@ def gate_trace(
     )
 
 
-def routing_hint(grade: RoutingGrade) -> dict[str, str]:
-    """A routing grade as a plain hint for Jev's D4 decision.
+def routing_hint(
+    grade: RoutingGrade, *, threshold: float = DEFAULT_CONFIDENCE_THRESHOLD
+) -> dict[str, str]:
+    """A routing grade as a plain hint for Jev's D4 decision, or `{}`.
 
     This is a hint, not an assignment: Jev still picks worker/model/effort at
     D4, and the hint is only added to the D4 request state (see tasks.py).
     The tier-to-effort mapping is a starting heuristic, not a model claim:
     `reasoning` work gets the highest effort, `small_fast` the lowest.
+
+    The hint is gated on the same bar as the merge gate (0.7 by default,
+    the caller's configured `[code_orchestrator] confidence_threshold` when
+    it passes one): below it the hint is `{}` -- no hint at all -- rather
+    than a low-confidence tier Jev might follow as if it were trusted.
+    Callers must check for `{}` (tasks.py only sets `state["code_routing"]`
+    on a non-empty hint; the CLI refuses to print an empty one). When the
+    hint is present, D4's instructions point Jev at `state.code_routing`
+    (see `dispatch.jev.CODE_ROUTING_INSTRUCTION`): the hint reaches Jev
+    both in state and in words, and Jev still chooses among its allowed
+    answers.
     """
+    if not 0.0 <= threshold <= 1.0:
+        raise ValueError(f"threshold must be 0-1, got {threshold}")
+    confidence = grade.confidence_for("model_tier")
+    if confidence < threshold:
+        return {}
     effort = {
         "small_fast": "low",
         "mid": "medium",
@@ -287,8 +341,12 @@ def routing_hint(grade: RoutingGrade) -> dict[str, str]:
         "skill": grade.skill,
         "task_difficulty": str(grade.task_difficulty),
         "suggested_effort": effort,
-        "confidence": f"{grade.confidence_for('model_tier'):.2f}",
+        "confidence": f"{confidence:.2f}",
     }
+
+
+def _omission_marker(dropped: int, unit: str) -> str:
+    return f"\n... [{dropped} {unit} omitted to fit the coding decision model's context] ...\n"
 
 
 def compact_diff(diff: str, *, max_chars: int = MAX_CONTEXT_CHARS) -> str:
@@ -297,29 +355,74 @@ def compact_diff(diff: str, *, max_chars: int = MAX_CONTEXT_CHARS) -> str:
     Short diffs pass through untouched. A long diff keeps its head (where the
     change starts) and its tail (where it ends), with an explicit truncation
     marker in the middle, so a grader never silently scores a partial diff as
-    if it were whole. The marker names how many lines were dropped.
+    if it were whole. The marker names how much was dropped, and the count
+    is computed from the head/tail that are actually returned -- never from
+    a pre-truncation plan (issue #203, C2).
+
+    Two rules the old version broke, now enforced: the marker is emitted
+    for *every* truncation, including a 2-line diff of very long lines
+    (which used to return a bare `diff[:max_chars]` slice), and the result
+    is never sliced after the marker is built (the old head+tail rebalance
+    ignored the marker's length, then `result[:max_chars]` could cut the
+    marker or the tail off silently). When single lines are themselves too
+    long, the head/tail lines are character-trimmed -- the marker and the
+    dropped count survive, because the trim touches kept lines, not the
+    marker, and a trimmed line still counts as kept.
     """
+    if max_chars <= 0:
+        raise ValueError(f"max_chars must be positive, got {max_chars}")
     if len(diff) <= max_chars:
         return diff
     lines = diff.splitlines()
     if len(lines) <= 2:
-        return diff[:max_chars]
+        # No line split is possible: split by characters instead, and let
+        # the marker name the dropped characters, not lines that were kept.
+        head_chars = max_chars // 2
+        tail_chars = max_chars - head_chars
+        while True:
+            head = diff[:head_chars]
+            tail = diff[len(diff) - tail_chars :] if tail_chars else ""
+            dropped = len(diff) - len(head) - len(tail)
+            marker = _omission_marker(dropped, "character(s)")
+            if len(head) + len(marker) + len(tail) <= max_chars or (
+                head_chars == 0 and tail_chars == 0
+            ):
+                break
+            if len(head) >= len(tail) and head_chars > 0:
+                head_chars -= 1
+            elif tail_chars > 0:
+                tail_chars -= 1
+            else:
+                break
+        if len(head) + len(marker) + len(tail) > max_chars:
+            # The budget cannot hold even the marker plus one kept char:
+            # keep the marker's meaning, not a silent slice of the diff.
+            return "... [omitted to fit the coding decision model's context] ..."[:max_chars]
+        return head + marker + tail
     # Split the budget roughly 60/40 head/tail; the marker itself costs a line.
     head_count = max(1, int(len(lines) * 0.6))
     tail_count = max(1, len(lines) - head_count - 1)
-    # Rebalance by characters, not just lines: very long lines still fit.
-    head = "\n".join(lines[:head_count])
-    tail = "\n".join(lines[len(lines) - tail_count :])
-    while len(head) + len(tail) > max_chars and (head_count > 1 or tail_count > 1):
-        if len(head) >= len(tail) and head_count > 1:
+    while True:
+        dropped = len(lines) - head_count - tail_count
+        marker = _omission_marker(dropped, "line(s)")
+        head = "\n".join(lines[:head_count])
+        tail = "\n".join(lines[len(lines) - tail_count :])
+        if len(head) + len(marker) + len(tail) <= max_chars:
+            break
+        if head_count > 1 and len(head) >= len(tail):
             head_count -= 1
-            head = "\n".join(lines[:head_count])
         elif tail_count > 1:
             tail_count -= 1
-            tail = "\n".join(lines[len(lines) - tail_count :])
         else:
             break
-    dropped = len(lines) - head_count - tail_count
-    marker = f"\n... [{dropped} line(s) omitted to fit the coding decision model's context] ...\n"
-    result = head + marker + tail
-    return result[:max_chars] if len(result) > max_chars else result
+    if len(head) + len(marker) + len(tail) > max_chars:
+        # One kept line is itself longer than the budget: trim kept lines,
+        # never the marker, so the dropped-line count stays exact.
+        budget = max_chars - len(marker)
+        if budget <= 0:
+            return "... [omitted to fit the coding decision model's context] ..."[:max_chars]
+        head_budget = budget // 2
+        tail_budget = budget - head_budget
+        head = head[:head_budget]
+        tail = tail[-tail_budget:] if tail_budget else ""
+    return head + marker + tail

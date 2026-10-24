@@ -10,6 +10,7 @@ from jev_agent.core.assign import Assignment, fit_free
 from jev_agent.core.models import DecisionPoint, DecisionRequest
 from jev_agent.dispatch.base import Dispatcher, DispatchError
 from jev_agent.dispatch.jev import (
+    CODE_ROUTING_INSTRUCTION,
     GENERIC_INSTRUCTION,
     PAIRING_INSTRUCTION,
     PRICE_PER_INPUT_TOKEN_USD,
@@ -120,6 +121,28 @@ async def test_payload_shape() -> None:
     assert list(effort) == ["low", "medium", "high"]
     assert all(isinstance(v, str) for v in effort.values())
     assert body["questions"]["model"]["criteria"] == dict.fromkeys(MODELS)
+
+
+def test_d4_instructions_name_code_routing_only_when_present() -> None:
+    """I6: the routing hint is inert unless D4's instructions name it."""
+    questions = {"worker": ["claude_code"], "model": ["m"], "effort": ["low"]}
+    without = JevDispatcher().build_payload("D4", {}, questions)["questions"]
+    for question in without.values():
+        assert CODE_ROUTING_INSTRUCTION not in question["instructions"]
+    hint = {
+        "model_tier": "frontier",
+        "skill": "refactor",
+        "task_difficulty": "2",
+        "suggested_effort": "high",
+        "confidence": "0.90",
+    }
+    with_hint = JevDispatcher().build_payload("D4", {"code_routing": hint}, questions)["questions"]
+    for name in ("worker", "model", "effort"):
+        assert CODE_ROUTING_INSTRUCTION in with_hint[name]["instructions"]
+    # And a non-D4 point never gets it, even with the hint in state.
+    other = JevDispatcher().build_payload("D2", {"code_routing": hint}, questions)["questions"]
+    for question in other.values():
+        assert CODE_ROUTING_INSTRUCTION not in question["instructions"]
 
 
 def test_worker_instructions_do_not_reference_unsent_state() -> None:

@@ -209,6 +209,18 @@ POINT_QUESTION_INSTRUCTIONS: dict[tuple[DecisionPoint, str], str] = {
     ),
 }
 
+# Appended to the worker, model and effort instructions at D4 when the code
+# orchestrator's routing hint is in state (issue #203, I6). Before this, the
+# hint sat in `state.code_routing` with no instruction ever naming it, so
+# nothing directed Jev to use it: it was possibly inert. The hint is gated
+# at the code gate's 0.7 bar before it reaches state (see
+# `grades.routing_hint`), and Jev still chooses among its allowed answers --
+# this tells it to prefer the hint when it fits, not to obey it blindly.
+CODE_ROUTING_INSTRUCTION = (
+    "The coding decision agent's routing hint is in state.code_routing "
+    "(model_tier, skill, task_difficulty, suggested_effort): prefer it when "
+    "it fits the allowed answers, but you still make this decision."
+)
 # Appended to the model (and worker) instructions when `state.models.prefer_free` is set.
 PREFER_FREE_INSTRUCTION = (
     "Prefer free models unless the task is hard or earlier attempts failed; free models are "
@@ -441,6 +453,17 @@ class JevDispatcher:
                 text = f"{text} {FREE_WORKER_INSTRUCTION}"
             if mismatch and name in ("worker", "model"):
                 text = f"{text} {PAIRING_INSTRUCTION}"
+            if (
+                point == "D4"
+                and "code_routing" in state
+                and name
+                in (
+                    "worker",
+                    "model",
+                    "effort",
+                )
+            ):
+                text = f"{text} {CODE_ROUTING_INSTRUCTION}"
             return text
 
         return {
@@ -473,7 +496,10 @@ class JevDispatcher:
         """Send one System One request (`{state, model, questions}`) and return the body."""
         key = os.environ.get(self.settings.api_key_env, "").strip()
         if not key:
-            raise DispatchError(f"jev: API key env var {self.settings.api_key_env} is not set")
+            raise DispatchError(
+                f"jev: API key env var {self.settings.api_key_env} is not set",
+                provider_failure=True,
+            )
         check_size(payload)
         return await self._post(payload, key)
 
@@ -490,7 +516,8 @@ class JevDispatcher:
                     return await self._post_with_retry(client, url, payload, headers, key)
         except TimeoutError as exc:
             raise DispatchError(
-                f"jev: request timed out after {self.settings.timeout_s:g}s"
+                f"jev: request timed out after {self.settings.timeout_s:g}s",
+                provider_failure=True,
             ) from exc
 
     async def _post_with_retry(
@@ -510,30 +537,38 @@ class JevDispatcher:
                 )
             except httpx.TimeoutException as exc:
                 raise DispatchError(
-                    f"jev: request timed out after {self.settings.timeout_s:g}s"
+                    f"jev: request timed out after {self.settings.timeout_s:g}s",
+                    provider_failure=True,
                 ) from exc
             except httpx.ConnectError as exc:
                 if attempt == 1:
                     await self._sleep(DEFAULT_BACKOFF_S)
                     continue
-                raise DispatchError(f"jev: network error ({type(exc).__name__})") from exc
+                raise DispatchError(
+                    f"jev: network error ({type(exc).__name__})", provider_failure=True
+                ) from exc
             except httpx.HTTPError as exc:
-                raise DispatchError(f"jev: network error ({type(exc).__name__})") from exc
+                raise DispatchError(
+                    f"jev: network error ({type(exc).__name__})", provider_failure=True
+                ) from exc
 
             status = resp.status_code
             if status == 200:
                 try:
                     body = resp.json()
                 except ValueError as exc:
-                    raise DispatchError("jev: response is not JSON") from exc
+                    raise DispatchError("jev: response is not JSON", provider_failure=True) from exc
                 if not isinstance(body, dict):
-                    raise DispatchError("jev: response is not a JSON object")
+                    raise DispatchError("jev: response is not a JSON object", provider_failure=True)
                 return body
             retryable = status in RETRY_STATUSES or status >= 500
             if retryable and attempt == 1:
                 await self._sleep(retry_delay(resp))
                 continue
-            raise DispatchError(http_error_message(resp, self.settings.api_key_env, key))
+            raise DispatchError(
+                http_error_message(resp, self.settings.api_key_env, key),
+                provider_failure=status in (401, 403) or retryable,
+            )
         raise AssertionError("unreachable")  # pragma: no cover
 
 
@@ -673,22 +708,16 @@ def _leg_key_set(dispatcher: JevDispatcher) -> bool:
 
 
 def _provider_failed(exc: DispatchError) -> bool:
-    """Whether the native provider failed in a way the OpenRouter leg might survive."""
-    return str(exc).startswith(_FAILOVER_PREFIXES)
+    """Whether the provider failed in a way the other leg might survive.
 
-
-# `DispatchError` messages built in this module that mean "this provider cannot serve this
-# request right now". Everything else (oversized state, a 422 rejection, another 4xx)
-# would fail on the other provider too, so it propagates without a retry there.
-_FAILOVER_PREFIXES = (
-    "jev: API key env var",
-    "jev: request timed out",
-    "jev: network error",
-    "jev: unavailable after retry",
-    "jev: auth failed",
-    "jev: response is not JSON",
-    "jev: response is not a JSON object",
-)
+    Structured, not textual (issue #203, I9): `DispatchError.provider_failure`
+    is set at the raise site in this module, so rewording a message cannot
+    silently disable failover, and a message that merely *mentions* a
+    provider failure cannot accidentally enable it. Errors raised elsewhere
+    (oversized state, a 422 rejection, bad answers) leave the flag False
+    and propagate without a retry on the other leg.
+    """
+    return bool(getattr(exc, "provider_failure", False))
 
 
 def check_size(payload: dict[str, Any]) -> None:

@@ -10,11 +10,14 @@ from __future__ import annotations
 
 from jev_agent.code_orchestrator.backend import (
     CodeOrchestrator,
+    CodeOrchestratorError,
     CodeOrchestratorUnavailable,
     GraderBackend,
     load_backend,
     normalise_code_review,
     normalise_routing,
+    normalise_tool_call,
+    normalise_trace,
 )
 from jev_agent.code_orchestrator.grades import (
     DEFAULT_CONFIDENCE_THRESHOLD,
@@ -37,6 +40,7 @@ __all__ = [
     "MAX_CONTEXT_CHARS",
     "AgentTraceGrade",
     "CodeOrchestrator",
+    "CodeOrchestratorError",
     "CodeOrchestratorUnavailable",
     "CodeReviewGrade",
     "GateOutcome",
@@ -49,5 +53,7 @@ __all__ = [
     "load_backend",
     "normalise_code_review",
     "normalise_routing",
+    "normalise_tool_call",
+    "normalise_trace",
     "routing_hint",
 ]

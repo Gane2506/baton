@@ -16,7 +16,6 @@ from pathlib import Path
 from jev_agent.code_orchestrator import (
     CodeOrchestrator,
     CodeOrchestratorUnavailable,
-    compact_diff,
     gate_code_review,
 )
 from jev_agent.config.schema import CodeOrchestratorSettings, JevConfig
@@ -59,23 +58,28 @@ def apply_code_grade(
     silently passes or silently rejects. A missing model is recorded, not
     fatal: grading is opt-in (`enabled`), and a user who enabled it without
     installing the model gets "unavailable" in the report, not a broken run.
-    A mis-shaped verdict, by contrast, blocks fail-closed: a grade that
-    cannot be trusted must not let code through.
+    An inference failure or a mis-shaped verdict, by contrast, blocks
+    fail-closed: a grade that was attempted and cannot be trusted must not
+    let code through, and that asymmetry with the missing-model case is
+    deliberate (issue #203, C3), not an oversight. Compaction is the
+    orchestrator's job now (`grade_code` compacts internally), so a caller
+    cannot forget it and send an over-context diff.
     """
-    orch = orchestrator or CodeOrchestrator(model_id=settings.model_id)
+    orch = orchestrator or CodeOrchestrator(
+        model_id=settings.model_id, max_diff_chars=settings.max_diff_chars
+    )
     try:
-        grade = orch.grade_code(
-            task=task_title,
-            diff=compact_diff(diff, max_chars=settings.max_diff_chars),
-            tests="",
-        )
+        grade = orch.grade_code(task=task_title, diff=diff, tests="")
     except CodeOrchestratorUnavailable as exc:
         return result.model_copy(
             update={"code_grade": {"status": "unavailable", "detail": str(exc)}}
         )
     except Halt:
         raise
-    except Exception as exc:  # a verdict that cannot be normalised must not pass code
+    except Exception as exc:
+        # Inference failures (CodeOrchestratorError) and mis-shaped verdicts
+        # (ValueError) block fail-closed; the broad tail keeps any other
+        # surprise from passing code.
         return result.model_copy(
             update={
                 "blocked": True,
