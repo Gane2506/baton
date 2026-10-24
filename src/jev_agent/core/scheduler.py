@@ -155,7 +155,8 @@ class SchedulerLock:
 
     def _write(self) -> None:
         # In place: replacing the file would leave the flock on the old inode.
-        assert self._fd is not None and self._info is not None
+        if self._fd is None or self._info is None:
+            raise SchedulerLocked("scheduler lock is not held; cannot record the current item")
         data = json.dumps({**self._info.__dict__, "flock": True}).encode("utf-8")
         os.pwrite(self._fd, data, 0)
         os.ftruncate(self._fd, len(data))
@@ -346,7 +347,11 @@ class Scheduler:
 
         A missing or terminal previous occurrence is cleared so the task can fire.
         """
-        assert task.active_item_id is not None
+        if task.active_item_id is None:
+            raise RuntimeError(
+                f"recurring task {task.id} has no active queue item; "
+                "it cannot tell whether its previous occurrence is still running"
+            )
         try:
             item = self.store.get_queue_item(task.active_item_id)
         except NotFoundError:

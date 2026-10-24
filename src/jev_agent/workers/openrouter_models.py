@@ -97,8 +97,7 @@ def parse_model(raw: Mapping[str, Any]) -> ModelInfo | None:
     model_id = raw.get("id")
     if not isinstance(model_id, str) or not model_id:
         return None
-    pricing = raw.get("pricing") if isinstance(raw.get("pricing"), dict) else {}
-    assert isinstance(pricing, dict)
+    pricing = raw_pricing if isinstance(raw_pricing := raw.get("pricing"), dict) else {}
     params = raw.get("supported_parameters")
     supported = tuple(p for p in params if isinstance(p, str)) if isinstance(params, list) else None
     context = raw.get("context_length")

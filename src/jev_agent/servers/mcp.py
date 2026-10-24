@@ -112,9 +112,7 @@ class McpServer:
 
     def dispatch(self, method: str, params: dict[str, Any]) -> dict[str, Any]:
         meta = params.get("_meta")
-        modern = isinstance(meta, dict) and VERSION_META in meta
-        if modern:
-            assert isinstance(meta, dict)
+        if isinstance(meta, dict) and VERSION_META in meta:
             requested = meta[VERSION_META]
             if requested not in SUPPORTED_VERSIONS:
                 raise _RpcError(

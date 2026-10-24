@@ -65,7 +65,8 @@ def require_ship_enabled(
 
 
 def _learning(ctx: RepoContext | AppContext) -> Learning:
-    assert ctx.learning is not None
+    if ctx.learning is None:
+        raise JevError("learning is not available: no learning registry was loaded for this repo")
     return ctx.learning
 
 

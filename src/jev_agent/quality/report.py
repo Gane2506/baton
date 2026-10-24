@@ -107,7 +107,8 @@ def _ship_score_summary(gates: Sequence[GateResult]) -> list[str]:
     if not scored:
         return []
     score = scored[-1].score
-    assert score is not None
+    if score is None:
+        raise ValueError("latest integration gate has no ship score")
     if score.skipped:
         state = f"skipped ({score.skip_reason or 'human-authored code'})"
     elif score.passed:

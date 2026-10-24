@@ -385,7 +385,11 @@ class CodexDeviceFlow:
         process = self._process
         output: list[str] = []
         try:
-            assert process is not None and process.stdout is not None
+            if process is None or process.stdout is None:
+                raise DeviceFlowError(
+                    "codex sign-in ended before its output could be read; "
+                    "try signing in again from the Connections page"
+                )
             for line in process.stdout:
                 output.append(line)
                 url, code = parse_device_output("".join(output))
@@ -571,7 +575,11 @@ class ClaudeSetupTokenFlow:
         process = self._process
         output: list[str] = []
         try:
-            assert process is not None and process.stdout is not None
+            if process is None or process.stdout is None:
+                raise DeviceFlowError(
+                    "claude sign-in ended before its output could be read; "
+                    "try signing in again from the Connections page"
+                )
             for line in process.stdout:
                 output.append(line)
                 url, code_prompt = parse_setup_token_output("".join(output))

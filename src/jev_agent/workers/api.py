@@ -238,7 +238,7 @@ class ApiWorker:
             transient = isinstance(exc, httpx.NetworkError | httpx.RemoteProtocolError)
             kind: WorkerStatus = "failure" if transient else "error"
             raise _RequestFailed(kind, f"network error: {type(exc).__name__}: {exc}") from exc
-        raise AssertionError("unreachable")  # pragma: no cover
+        raise _RequestFailed("error", "api request failed after retries")  # pragma: no cover
 
     async def _post(
         self, url: str, body: dict[str, Any], headers: dict[str, str], timeout_s: int

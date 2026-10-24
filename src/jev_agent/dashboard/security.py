@@ -214,7 +214,8 @@ class SecurityMiddleware(BaseHTTPMiddleware):
         new_session = session is None or len(session) != 43
         if new_session:
             session = secrets.token_urlsafe(32)
-        assert session is not None
+        if session is None:
+            raise RuntimeError("could not create a dashboard session")
         request.state.session = session
         request.state.csrf = csrf_token(settings, session)
         response = await call_next(request)
