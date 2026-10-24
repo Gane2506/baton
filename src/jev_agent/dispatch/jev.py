@@ -576,7 +576,9 @@ class JevDispatcher:
                 await self._sleep(retry_delay(resp))
                 continue
             return body
-        raise AssertionError("unreachable")  # pragma: no cover
+        raise DispatchError(  # pragma: no cover
+            "jev: request failed after retries", provider_failure=True
+        )
 
 
 async def _send_once(
