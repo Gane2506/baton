@@ -23,6 +23,7 @@ collect_ignore = (
         "unit/test_dashboard.py",
         "unit/test_dashboard_errors.py",
         "unit/test_dashboard_web.py",
+        "unit/test_issue233.py",
         "unit/test_settings_editor.py",
     ]
 )

@@ -267,13 +267,15 @@ def test_boundary_symlink_escape_is_a_violation(tmp_path: Path) -> None:
     os.symlink(outside, link)
     ctx = PolicyContext("medium", proj, (proj,), project_boundary=proj)
 
-    lexical = os.path.join(link, "secret")
+    # "data", not "secret": a file named `secret` is refused as a credential file by
+    # the stem rule (issue #233), which would hide the boundary behaviour under test.
+    lexical = os.path.join(link, "data")
     # Lexically inside the folder: the policy alone cannot see the remote symlink.
     assert check_write_path(lexical, ctx).allowed
     # The server-resolved path is outside: a boundary violation, refused on re-check —
     # this is what the service layer does with `realpath -m` before touching the file.
     resolved = os.path.realpath(lexical)
-    assert resolved == os.path.join(outside, "secret")
+    assert resolved == os.path.join(outside, "data")
     assert not within_boundary(resolved, ctx)
     assert within_boundary(os.path.join(proj, "file"), ctx)
     assert not check_read_path(resolved, ctx).allowed
