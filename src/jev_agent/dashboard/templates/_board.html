@@ -24,6 +24,16 @@
     {% else %}
       {% if name == "Backlog" %}
       <div class="empty-inline"><a href="/queue">Queue an idea</a> to fill this column.</div>
+      {% elif name == "Planning" %}
+      <div class="empty-inline">Runs appear here once planning starts.</div>
+      {% elif name == "Awaiting approval" %}
+      <div class="empty-inline">Runs waiting for your approval appear here.</div>
+      {% elif name == "Running" %}
+      <div class="empty-inline">Runs appear here while they execute.</div>
+      {% elif name == "Done" %}
+      <div class="empty-inline">Finished runs appear here.</div>
+      {% elif name == "Blocked" %}
+      <div class="empty-inline">Runs needing attention appear here.</div>
       {% else %}
       <div class="empty-inline">Empty</div>
       {% endif %}

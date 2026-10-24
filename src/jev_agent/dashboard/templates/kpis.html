@@ -101,7 +101,7 @@ red points: worse than 1.5x (rates: 15 points past) the median of the PRs before
 {% for t in k.trends %}
   <section class="panel trend-card{% if t.regressed %} regressed{% endif %}">
     <h3>{{ t.kpi.label }}{% if t.latest %} <span class="muted small">latest {{ t.kpi.format(t.latest.value) }}</span>{% endif %}</h3>
-    {{ trend_chart_svg(t, "No data yet (use Sync from GitHub above).") }}
+    {{ trend_chart_svg(t, "No data yet — ship data appears here after runs ship as pull requests.") }}
   </section>
 {% endfor %}
 </div>
