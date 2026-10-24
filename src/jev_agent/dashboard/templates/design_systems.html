@@ -48,8 +48,8 @@
 {% else %}
 <div class="empty">
   <div class="title">{% if q %}No design systems match "{{ q }}"{% else %}No design systems in the library{% endif %}</div>
-  <p>{% if q %}Try another word, or <a href="/design-systems">clear the search</a>.{% else %}Reverse-engineer one from a website or screenshots, or build one with the
-  interactive wizard — start in the <a href="/design-studio">Design studio</a>.{% endif %}</p>
+  <p>{% if q %}Try another word, or <a href="/design-systems">clear the search</a>.{% else %}<a href="/design-studio/reverse">Reverse-engineer one from a website or screenshots</a>, or build one with the
+  <a href="/design-studio/new">interactive wizard</a>.{% endif %}</p>
 </div>
 {% endif %}
 {% endblock %}
