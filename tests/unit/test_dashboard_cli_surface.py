@@ -15,6 +15,9 @@ from typing import Any, cast
 
 import httpx
 import pytest
+
+pytest.importorskip("starlette", reason="dashboard extra not installed")
+
 from starlette.testclient import TestClient
 
 from jev_agent.cli.wiring import FAKE_WORKERS_ENV

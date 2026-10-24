@@ -13,6 +13,9 @@ import sys
 from pathlib import Path
 
 import pytest
+
+pytest.importorskip("starlette", reason="dashboard extra not installed")
+
 from starlette.testclient import TestClient
 from typer.testing import CliRunner
 

@@ -20,6 +20,9 @@ from typing import Any, cast
 
 import pytest
 
+pytest.importorskip("starlette", reason="dashboard extra not installed")
+
+
 from jev_agent.config.schema import JevConfig
 from jev_agent.config.servers_schema import AccessLevel
 from jev_agent.core.commands import FakeCommandRunner

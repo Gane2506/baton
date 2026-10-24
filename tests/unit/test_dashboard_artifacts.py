@@ -11,6 +11,9 @@ from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
+
+pytest.importorskip("starlette", reason="dashboard extra not installed")
+
 from starlette.testclient import TestClient
 
 from jev_agent.core.models import Idea, Plan, RunState, TaskCard

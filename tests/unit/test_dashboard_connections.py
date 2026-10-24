@@ -9,6 +9,9 @@ from collections.abc import Iterator, Sequence
 from pathlib import Path
 
 import pytest
+
+pytest.importorskip("starlette", reason="dashboard extra not installed")
+
 from starlette.testclient import TestClient
 
 from jev_agent.dashboard import app as dashboard_app

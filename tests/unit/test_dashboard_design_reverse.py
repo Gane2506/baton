@@ -23,6 +23,9 @@ from typing import Any, cast
 
 import httpx
 import pytest
+
+pytest.importorskip("starlette", reason="dashboard extra not installed")
+
 from starlette.datastructures import FormData, UploadFile
 from starlette.testclient import TestClient
 
