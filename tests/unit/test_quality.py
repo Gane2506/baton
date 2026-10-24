@@ -951,3 +951,23 @@ def test_error_status_in_reports_and_stored_json() -> None:
     assert GateResult.model_validate_json(gate.model_dump_json()) == gate
     old = _gate().model_dump_json()  # a report stored before the error status existed
     assert GateResult.model_validate_json(old).checks[1].status == "skipped"
+
+
+def test_worktree_binaries_are_never_gate_tools(tmp_path: Path) -> None:
+    # Issue #196: the task worktree is where the coder writes arbitrary files,
+    # so a planted `<workdir>/.venv/bin/ruff` printing "clean" must never be
+    # resolved as a gate tool. Only PATH and the main repository are trusted.
+    repo = _repo(tmp_path / "r", {"pyproject.toml": ""})
+    workdir = _repo(tmp_path / "w", {".venv/bin/ruff": "#!/bin/sh\necho clean\n"})
+    runner, _ = _runner(repo)
+    # Rebind the runner to a separate worktree (the fixture uses repo == workdir).
+    runner.workdir = workdir
+    assert runner.resolve("ruff") is None
+    # A tool in the main repository's venv is still found.
+    (repo / ".venv" / "bin").mkdir(parents=True, exist_ok=True)
+    (repo / ".venv" / "bin" / "ruff").write_text("")
+    assert runner.resolve("ruff") == str(repo / ".venv" / "bin" / "ruff")
+    # PATH lookup still wins over both.
+    runner2, _ = _runner(repo, installed=("ruff",))
+    runner2.workdir = workdir
+    assert runner2.resolve("ruff") == "ruff"

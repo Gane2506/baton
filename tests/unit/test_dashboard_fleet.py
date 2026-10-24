@@ -50,6 +50,7 @@ def _config_with_server(repo: Path) -> None:
     user_config.parent.mkdir(parents=True, exist_ok=True)
     user_config.write_text(
         '[dispatcher]\nprimary = "rules"\n'
+        '[trust]\nrepos = ["*"]\n'
         '[servers.devbox]\nhost = "devbox.example.test"\naccess = "medium"\n'
         '[roles.coder]\nservers = ["devbox"]\n'
     )

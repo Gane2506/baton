@@ -1094,9 +1094,18 @@ class Dashboard:
             )
 
         error = await run_in_threadpool(job)
-        self.flash(
-            request, "error" if error else "ok", error or f"saved the additional prompt for {role}"
-        )
+        # Trust gate blocked the save: offer one-click trust (issue #158).
+        # prompt_addendum is a guarded key (issue #194), so an untrusted repo
+        # hits this path; the trust flash renders the "Trust this repo" button.
+        if error and settings.TRUST_GATE_MARKER in error:
+            clean = error.replace(settings.TRUST_GATE_MARKER, "").strip()
+            self.flash(request, "trust", clean)
+        else:
+            self.flash(
+                request,
+                "error" if error else "ok",
+                error or f"saved the additional prompt for {role}",
+            )
         return self.back(to)
 
     def profiles_page(self, request: Request) -> Response:
