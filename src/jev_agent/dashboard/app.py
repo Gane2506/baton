@@ -203,6 +203,7 @@ from jev_agent.dashboard.runner import (
 from jev_agent.dashboard.scheduler_runner import SchedulerRunner
 from jev_agent.dashboard.security import (
     CSRF_FIELD,
+    SHOWCASE_CONTENT_SECURITY_POLICY,
     DashboardSettings,
     SecurityMiddleware,
     checked_form,
@@ -737,6 +738,16 @@ class Dashboard:
             return self.render(request, "error.html", 500, title="State error", message=str(exc))
         except (NotFoundError, ChatError) as exc:
             return self.render(request, "error.html", 404, title="Not found", message=str(exc))
+        except Exception as exc:  # issue #200: anything else used to escape to
+            # Starlette's plain-text 500. Render the friendly error page instead;
+            # the message is the friendly rewrite, never a traceback.
+            return self.render(
+                request,
+                "error.html",
+                500,
+                title="Something went wrong",
+                message=_friendly_error(exc),
+            )
         return self.render(request, template, **context)
 
     def back(self, to: str) -> RedirectResponse:
@@ -768,6 +779,9 @@ class Dashboard:
             ShipError,
             ValueError,
         ) as exc:
+            self.flash(request, "error", _friendly_error(exc))
+        except Exception as exc:  # issue #200: an unexpected failure used to
+            # escape to Starlette's plain-text 500; flash it and redirect instead.
             self.flash(request, "error", _friendly_error(exc))
         else:
             # Trust gate blocked the save: offer one-click trust (issue #158).
@@ -1217,7 +1231,14 @@ class Dashboard:
         return Response(
             html,
             media_type="text/html; charset=utf-8",
-            headers={"X-Content-Type-Options": "nosniff"},
+            headers={
+                "X-Content-Type-Options": "nosniff",
+                # Issue #200: the showcase's own inline <style>/<script> would
+                # be blocked by the dashboard's strict CSP (the middleware
+                # only setdefaults, so this explicit header wins, on this
+                # route alone).
+                "Content-Security-Policy": SHOWCASE_CONTENT_SECURITY_POLICY,
+            },
         )
 
     def design_code_page(self, request: Request) -> Response:
@@ -1287,8 +1308,14 @@ class Dashboard:
         """The studio landing: two entry cards — a new system, or reverse a site."""
         return self.render(request, "design_studio.html")
 
-    def design_studio_start(self, request: Request) -> Response:
-        """Begin (or restart) the new-system wizard at its first step."""
+    async def design_studio_start(self, request: Request) -> Response:
+        """Begin (or restart) the new-system wizard at its first step.
+
+        Issue #200: this clears the session's wizard state, so it is a POST
+        with a CSRF check — a GET here was a state-changing GET (a stray
+        prefetch or a link could silently wipe an in-progress wizard).
+        """
+        await checked_form(request)
         self.studio_wizard.clear(request.state.session)
         return self.back("/design-studio/new/purpose")
 
@@ -3919,7 +3946,7 @@ def create_app(
         Route("/design-systems/{name}/code/download", dash.design_code_download),
         Route("/design-systems/{action}", dash.design_systems_action, methods=["POST"]),
         Route("/design-studio", dash.design_studio_page),
-        Route("/design-studio/new", dash.design_studio_start),
+        Route("/design-studio/new", dash.design_studio_start, methods=["POST"]),
         Route("/design-studio/new/{step}", dash.design_studio_step_page),
         # The generate POST is registered before the generic step POST so it wins.
         Route("/design-studio/new/generate", dash.design_studio_generate, methods=["POST"]),
