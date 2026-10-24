@@ -617,6 +617,8 @@ async def test_gate_persist_failure_still_returns_a_blocked_gate(
     )
     assert result.blocked
     assert any("gate error" in reason for reason in result.reasons)
+    # The second failure is recorded on the returned result, not swallowed.
+    assert any("gate persist error" in reason for reason in result.reasons)
 
 
 class _OrderCheck(BaseCheck):

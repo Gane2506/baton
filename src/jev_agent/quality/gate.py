@@ -232,16 +232,19 @@ async def run_gate(
         # The blocked record itself must survive: previously the exception
         # above also skipped persisting, so the gate that blocked the run left
         # no record behind (issue #204). Retry the persist best-effort — a
-        # second failure still returns the blocked result in memory, it just
-        # cannot be stored either.
+        # second failure is recorded on the returned result (it cannot be
+        # stored anywhere else by definition) and the run still sees it blocked.
         try:
             path = write_reports(h, run_id, blocked)
             h.store.add_quality_report(run_id, blocked, path)
             write_run_review(h, run_id)
         except Halt:
             raise
-        except Exception:
-            pass
+        except Exception as persist_exc:
+            detail = redact(f"{type(persist_exc).__name__}: {persist_exc}")
+            blocked = blocked.model_copy(
+                update={"reasons": [*blocked.reasons, f"gate persist error: {detail}"]}
+            )
         result = blocked
     return result
 
