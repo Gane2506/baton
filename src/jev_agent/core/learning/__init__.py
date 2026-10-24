@@ -75,7 +75,7 @@ from jev_agent.core.learning.selection import (
     tag_overlap,
 )
 from jev_agent.core.learning.skills import LessonSkillsMixin, SkillProposal
-from jev_agent.core.learning.weights import _checked_weights, _stored_weights
+from jev_agent.core.learning.weights import _checked_weights
 from jev_agent.core.models import LESSON_ROLES
 
 __all__ = [
@@ -104,7 +104,6 @@ __all__ = [
     "SkillProposal",
     "Suppression",
     "_checked_weights",
-    "_stored_weights",
     "check_profile_name",
     "co_injected",
     "context_terms",

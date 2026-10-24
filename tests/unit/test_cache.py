@@ -20,7 +20,6 @@ from jev_agent.core.cache import (
     repo_fingerprint,
     role_cache_key,
     strip_volatile,
-    tuned_laya_fingerprint,
 )
 from jev_agent.core.harness import Harness
 from jev_agent.core.models import (
@@ -222,24 +221,6 @@ def test_decision_key_changes_with_min_confidence(tmp_path: Path) -> None:
     key1 = decision_cache_key(_req(), dispatcher_name="stub", config=JevConfig(), run_id="r")
     changed = JevConfig.model_validate({"dispatcher": {"jev": {"min_confidence": 0.9}}})
     key2 = decision_cache_key(_req(), dispatcher_name="stub", config=changed, run_id="r")
-    assert key1.key_hash != key2.key_hash
-
-
-def test_decision_key_changes_with_tuned_laya_weights(tmp_path: Path) -> None:
-    from jev_agent.config.schema import DEFAULT_LAYA_WEIGHTS
-
-    config = JevConfig()
-    key1 = decision_cache_key(_req(), dispatcher_name="consensus", config=config, run_id="r")
-    tuned = {**DEFAULT_LAYA_WEIGHTS, "correctness": 0.5, "safety": 0.0}
-    total = sum(tuned.values())
-    tuned = {k: v / total for k, v in tuned.items()}
-    key2 = decision_cache_key(
-        _req(),
-        dispatcher_name="consensus",
-        config=config,
-        run_id="r",
-        laya_weights_fp=tuned_laya_fingerprint(tuned),
-    )
     assert key1.key_hash != key2.key_hash
 
 

@@ -1,15 +1,16 @@
-"""Learning-profile Laya weights: validation and stored-JSON decoding.
+"""Laya weights: validation of a six-criterion weight set.
 
-The consensus dispatcher that used these weights is gone (issue #193), but the
-criteria live on in `LAYA_CRITERIA` and tuned weights are still stored on
-profiles. The finite check here is the NaN guard moved out of the deleted
-`LayaSettings` (PR #217): NaN and infinities are rejected, because an all-NaN
-set used to pass the sum check.
+The consensus dispatcher that used these weights is gone (issue #193), and the
+profile-stored weights API (`set/get_laya_weights`, issue #232) is gone with it —
+nothing stores tuned weights any more. The validator stays: it is the finite/sum
+check pinned by the issue #205 regression tests, and the criteria live on in
+`LAYA_CRITERIA` (the quality gate scores against them). The finite check here is
+the NaN guard moved out of the deleted `LayaSettings` (PR #217): NaN and
+infinities are rejected, because an all-NaN set used to pass the sum check.
 """
 
 from __future__ import annotations
 
-import json
 import math
 
 from jev_agent.config.schema import LAYA_CRITERIA
@@ -45,18 +46,12 @@ def _checked_weights(profile: str, weights: object) -> dict[str, float]:
                 )
     if problems:
         raise LearningError(f"profile {profile!r}: invalid Laya weights: {'; '.join(problems)}")
-    assert isinstance(weights, dict)
+    if not isinstance(weights, dict):
+        # Unreachable: a non-mapping always adds a problem above and raises. The
+        # explicit check (instead of `assert`) keeps `-O` runs and the type
+        # checker honest about the narrowing below.
+        raise LearningError(f"profile {profile!r}: invalid Laya weights: weights must be a mapping")
     return {k: float(v) for k, v in weights.items()}
 
 
-def _stored_weights(profile: str, text: str | None) -> dict[str, float] | None:
-    if text is None:
-        return None
-    try:
-        value = json.loads(text)
-    except json.JSONDecodeError as exc:
-        raise LearningError(f"profile {profile!r}: stored Laya weights are not JSON") from exc
-    return _checked_weights(profile, value)
-
-
-__all__ = ["_checked_weights", "_stored_weights"]
+__all__ = ["_checked_weights"]

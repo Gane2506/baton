@@ -63,7 +63,6 @@ __all__ = [
     "role_cache_key",
     "role_normalized_text",
     "strip_volatile",
-    "tuned_laya_fingerprint",
 ]
 
 #: Appended to a worker summary when the output was served from the cache.
@@ -137,21 +136,16 @@ def canonical_json(obj: Any) -> str:
     return json.dumps(obj, sort_keys=True, separators=(",", ":"), default=str)
 
 
-def _config_fingerprint(
-    config: JevConfig, dispatcher_name: str, laya_weights_fp: str | None = None
-) -> str:
+def _config_fingerprint(config: JevConfig, dispatcher_name: str) -> str:
     """Hash of the settings a cached answer is only valid under.
 
-    `min_confidence` gates answers, the model and base URL
-    pick the answerer — a cached answer gated at 0.55 must never serve a run gated
-    at 0.9. Profile-tuned Laya weights (`jev laya tune --apply`) are fingerprinted
-    separately: they change the vote without changing jev.toml. The jev package
-    version is included so upgrades invalidate.
+    `min_confidence` gates answers, the model and base URL pick the answerer — a
+    cached answer gated at 0.55 must never serve a run gated at 0.9. The jev
+    package version is included so upgrades invalidate.
     """
     record = {
         "dispatcher": dispatcher_name,
         "jev": config.dispatcher.jev.model_dump(mode="json"),
-        "laya_tuned_fp": laya_weights_fp,
         "jev_version": __version__,
     }
     return hashlib.sha256(canonical_json(record).encode()).hexdigest()
@@ -192,7 +186,6 @@ def decision_cache_key(
     dispatcher_name: str,
     config: JevConfig,
     run_id: str,
-    laya_weights_fp: str | None = None,
 ) -> CacheKey:
     """Exact-match key for a dispatcher decision (phase 1)."""
     text = decision_normalized_text(req)
@@ -202,17 +195,12 @@ def decision_cache_key(
         "point": req.point,
         "questions": req.questions,
         "state": strip_volatile(req.state),
-        "config_fp": _config_fingerprint(config, dispatcher_name, laya_weights_fp),
+        "config_fp": _config_fingerprint(config, dispatcher_name),
         # run_id/decision_id are provenance, filled in on put — not key material,
         # so a resumed run hits the same entry.
         "simhash": SimHashEmbedder().fingerprint(text),
     }
     return _build("decision", components, text, config.cache.ttl_hours)
-
-
-def tuned_laya_fingerprint(weights: dict[str, float]) -> str:
-    """Fingerprint for profile-tuned Laya weights, so a retuned profile is a new key."""
-    return hashlib.sha256(canonical_json(weights).encode()).hexdigest()
 
 
 def normalize_prompt(prompt: str, repo: Path) -> str:

@@ -220,7 +220,6 @@ class Harness:
         rules-fallback answers, never D6 unless `[cache] d6_decisions`.
         """
         dispatcher = self.dispatcher
-        laya_weights_fp: str | None = None
         key = None
         entry = None
         if self._decisions_cached(dispatcher) and self._decision_cacheable(req):
@@ -229,7 +228,6 @@ class Harness:
                 dispatcher_name=dispatcher.primary.name,
                 config=self.config,
                 run_id=run_id,
-                laya_weights_fp=laya_weights_fp,
             )
             entry = self.cache.get(key)
         shadow: list[tuple[CacheEntry, float]] = []
