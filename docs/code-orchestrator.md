@@ -61,9 +61,17 @@ order, deliberately:
   ship score are unchanged and still run.
 - **D4 routing (coding strategy).** When enabled, the task runner adds the
   routing hint (`model_tier`, `skill`, `task_difficulty`,
-  `suggested_effort`) to the D4 request state as `code_routing`. Jev still
+  `suggested_effort`) to the D4 request state as `code_routing` — but only
+  when the hint clears the configured confidence threshold (0.7 by default):
+  a low-confidence hint is no hint at all (`routing_hint` returns `{}`),
+  never a weak tier Jev might follow as if it were trusted. When the hint
+  is present, D4's worker/model/effort instructions name
+  `state.code_routing` and tell Jev to prefer it when it fits the allowed
+  answers (`dispatch.jev.CODE_ROUTING_INSTRUCTION`). Jev still
   picks worker/model/effort at D4 — the hint informs that decision, it does
-  not replace it.
+  not replace it. A missing model, a failed inference, or a mis-shaped
+  verdict never crashes D4: it proceeds without a hint, exactly as before
+  the feature (issue #203, C3).
 - **CLI.** `jev code status` (enabled? model? backend present?),
   `jev code grade --task "..." --diff-file change.diff [--tests-file ...]`
   (the same gate the quality gate applies, printed as a table), and
@@ -123,9 +131,37 @@ The model's context is 2048 tokens (`head_max_len` 320 for the options, the
 rest for the state). Diffs are compacted before scoring
 (`grades.compact_diff`, default 7000 characters): short diffs pass through
 untouched; a long diff keeps its head and tail with an explicit marker
-naming how many lines were dropped, so a grader never silently scores a
+naming how much was dropped, so a grader never silently scores a
 partial diff as if it were whole. The character budget is an approximation
 (≈4 characters per token), not a token count — no tokenizer is a dependency.
+Compaction is `CodeOrchestrator.grade_code`'s job, not the caller's: any
+caller that forgot used to send an over-context diff to the model, and a
+2-line diff of very long lines used to be sliced with no marker at all
+(issue #203, C2/I10). The marker's count is computed from the head/tail
+actually returned, and the result is never sliced after the marker is built.
+
+## Error taxonomy (decided, not accidental)
+
+- Missing backend → `CodeOrchestratorUnavailable`. The quality gate records
+  "unavailable" and does not block; D4 proceeds without a hint; the CLI
+  reports it and stops.
+- Backend failed during inference → `CodeOrchestratorError`. The quality
+  gate blocks fail-closed: a grade was attempted and cannot be trusted,
+  which is not the same as no grade being configured. D4 still proceeds
+  without a hint (a hint is advisory); the CLI reports it and stops.
+- Mis-shaped verdict (unknown label, out-of-range score, a yes/no field
+  that is neither — "maybe" is not a "no") → `ValueError`. Same handling
+  as an inference failure: fail-closed at the gate, no hint at D4, a clear
+  CLI error instead of a traceback.
+
+## Two confidence bars, on purpose
+
+`[dispatcher.jev] min_confidence` (0.55) gates Jev's own decision answers:
+below it the decision falls back to the rules dispatcher. The code gate's
+0.7 gates the Coding Decision Agent's *calibrated* `answer_confidence` on a
+merge action (the model card's starting point), and the same 0.7 gates
+routing hints. They are different models' confidences on different
+decisions, not one bar with two values (issue #203, I7).
 
 ## What changed about Laya, and what did not
 
@@ -149,14 +185,20 @@ partial diff as if it were whole. The character budget is an approximation
 ## Not yet wired (honest gaps)
 
 - `tool_call` and `agent_trace` grading: the model card documents their
-  labels, and `grades.py` has pure types plus `gate_trace` for traces, but
-  the card shows a public call shape only for `grade_code` and
-  `route_model`. They are not wired on a guessed signature.
+  families, and `grades.py` has pure types plus `gate_trace` for traces.
+  Since issue #203 (I11) they are wired through `CodeOrchestrator`
+  (`grade_trace`, `grade_tool_call`, `jev code trace`) — but only when the
+  installed backend actually exposes those methods. Baton still does not
+  invent a call shape or question wording for them: a backend without the
+  method raises `CodeOrchestratorUnavailable` instead of scoring against
+  an untrained wording.
 - The quality gate grades the diff and task title only (`tests=""`): the
   test outcome is already a gate input (a failed task test never reaches
   the gate), but the model does not currently see the test log text.
 - No live-model evaluation was run for this change: the model was not
   installed in CI (see Install above), so the gates are proven by unit
-  tests against fake backends, not by a real grading run. Measure the 0.7
+  tests against fake backends, not by a real grading run — but
+  `tests/live/test_code_orchestrator_live.py` now exists for the run that
+  does have the model installed (`JEV_LIVE_TESTS=1`). Measure the 0.7
   threshold on your own traces before gating production merges on it, as
   the model card itself advises.

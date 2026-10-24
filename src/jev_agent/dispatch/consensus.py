@@ -2,7 +2,14 @@
 
 Laya is Jev inside the Laya CDA decision matrix: every allowed answer is scored 1-5 on six
 weighted criteria (`[dispatcher.laya] weights`), and the highest weighted total is Laya's
-pick. Laya is asked separately from Jev and never sees Jev's vote in the first round.
+pick. Laya is asked separately from Jev and never sees Jev's vote -- not in
+the first round and not in follow-up rounds either: the follow-up state sent
+to Laya strips `previous_rounds`, which would otherwise hand Laya Jev's
+earlier choices (issue #203, I8). Jev's own follow-up votes *are*
+deliberative, not independent: Jev re-votes with its earlier rounds in
+state, which is the point of a follow-up. The two votes are therefore
+independent in the sense that matters for a second vote -- Laya never
+scores in Jev's shadow -- even though Jev deliberates across rounds.
 
 A question is settled when all of these hold:
 - Jev's choice has at least `[dispatcher.jev] min_confidence`;
@@ -276,7 +283,15 @@ def _cells_to_score(
 
 
 def _laya_payload(jev_payload: dict[str, Any], cells: dict[str, list[Cell]]) -> dict[str, Any]:
-    """One `score` question per cell, built from the question Jev was asked."""
+    """One `score` question per cell, built from the question Jev was asked.
+
+    The state Laya sees is Jev's state *without* `previous_rounds`: those
+    summaries name Jev's earlier choices and Laya's earlier totals, and
+    sending them would let Laya score in Jev's shadow on follow-up rounds
+    (issue #203, I8). Laya scores a candidate on a criterion; it needs the
+    task state, not the history of the vote it is seconding.
+    """
+    state = {k: v for k, v in jev_payload["state"].items() if k != "previous_rounds"}
     questions: dict[str, Any] = {}
     for q, q_cells in cells.items():
         asked = jev_payload["questions"][q]
@@ -291,7 +306,7 @@ def _laya_payload(jev_payload: dict[str, Any], cells: dict[str, list[Cell]]) -> 
                 ),
                 "criteria": LEVELS,
             }
-    return {"state": jev_payload["state"], "model": jev_payload["model"], "questions": questions}
+    return {"state": state, "model": jev_payload["model"], "questions": questions}
 
 
 def _parse_scores(
@@ -313,7 +328,17 @@ def _parse_scores(
             assert isinstance(score, int | float) and isinstance(confidence, int | float)
             if not 0.0 <= confidence <= 1.0:  # above 1 would never count as uncertain
                 raise DispatchError(f"laya: invalid confidence for {q}={cell[0]} on {cell[1]}")
-            value = min(max(float(score), 0.0), HIGHEST - LOWEST) + LOWEST
+            # The score is a level index, 0..4 (see LEVELS: the fake and real
+            # servers answer `level - 1`). It used to be silently clamped
+            # into 1..5, so a wild score of 9 counted as a perfect 5 and a
+            # score of -2 counted as a 1 (issue #203, I8). Out-of-range now
+            # raises, like an out-of-range confidence does.
+            if not 0.0 <= float(score) <= HIGHEST - LOWEST:
+                raise DispatchError(
+                    f"laya: invalid score for {q}={cell[0]} on {cell[1]} "
+                    f"(expected 0-{HIGHEST - LOWEST:g}, got {score})"
+                )
+            value = float(score) + LOWEST
             parsed.setdefault(q, {})[cell] = Score(value, float(confidence))
     return parsed
 

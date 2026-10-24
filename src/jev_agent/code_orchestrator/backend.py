@@ -37,22 +37,47 @@ from typing import Any, Protocol, cast
 
 from jev_agent.code_orchestrator.grades import (
     DEFAULT_MODEL_ID,
+    MAX_CONTEXT_CHARS,
+    AgentTraceGrade,
     CodeReviewGrade,
     RoutingGrade,
+    ToolCallGrade,
+    compact_diff,
+    validate_trace_grade,
 )
 
 __all__ = [
     "CodeOrchestrator",
+    "CodeOrchestratorError",
     "CodeOrchestratorUnavailable",
     "GraderBackend",
     "load_backend",
     "normalise_code_review",
     "normalise_routing",
+    "normalise_tool_call",
+    "normalise_trace",
 ]
 
 
-class CodeOrchestratorUnavailable(Exception):
-    """The Coding Decision Agent backend is not installed or cannot load."""
+class CodeOrchestratorError(Exception):
+    """The Coding Decision Agent backend failed while grading or routing.
+
+    This is the inference-failure class (issue #203, C3): a backend that
+    raised, timed out, or returned something unusable is not a missing
+    backend, and callers must not treat it as one by accident. Its subclass
+    `CodeOrchestratorUnavailable` is the missing-backend case only.
+    """
+
+
+class CodeOrchestratorUnavailable(CodeOrchestratorError):
+    """The Coding Decision Agent backend is not installed or cannot load.
+
+    Callers that can proceed without a grade (the quality gate) record this
+    as "unavailable" and do not block; callers that cannot (the `jev code`
+    CLI) report it and stop. See the error-taxonomy note on
+    `CodeOrchestrator.grade_code` for why an inference failure is *not*
+    this class, and blocks at the quality gate instead.
+    """
 
 
 class GraderBackend(Protocol):
@@ -72,11 +97,27 @@ def _confidence_map(raw: Any) -> dict[str, float]:
     return {}
 
 
+_YES_LABELS = ("yes", "true", "1")
+_NO_LABELS = ("no", "false", "0")
+
+
 def _bool_label(value: Any, *, field: str) -> bool:
+    """A documented yes/no label into a bool, nothing else (issue #203, I4).
+
+    Only `yes`/`no`, `true`/`false`, `1`/`0` (case-insensitive, whitespace
+    trimmed) are accepted. The old version returned `False` for any other
+    string, so "maybe" silently became a confident "no" -- exactly the
+    silent coercion a mis-shaped verdict must never get. Anything else
+    raises `ValueError`, and the quality gate blocks fail-closed on it.
+    """
     if isinstance(value, bool):
         return value
     if isinstance(value, str):
-        return value.strip().lower() in ("yes", "true", "1")
+        lowered = value.strip().lower()
+        if lowered in _YES_LABELS:
+            return True
+        if lowered in _NO_LABELS:
+            return False
     raise ValueError(f"coding decision agent: {field} is not a yes/no label ({value!r})")
 
 
@@ -138,6 +179,58 @@ def normalise_routing(raw: Any) -> RoutingGrade:
     )
 
 
+def normalise_trace(raw: Any) -> AgentTraceGrade:
+    """A model trace verdict object (or dict) into an `AgentTraceGrade`.
+
+    Validated exactly like the trace gate validates it: unknown actions,
+    out-of-range `risk`/`urgency`, and non-yes/no `needs_review` raise
+    `ValueError` instead of being coerced into a loop decision.
+    """
+    action = _field(raw, "action")
+    if action not in ("continue", "observe", "human_review", "stop"):
+        raise ValueError(f"coding decision agent: unknown trace action {action!r}")
+    risk = _field(raw, "risk")
+    if not isinstance(risk, int) or isinstance(risk, bool) or not 0 <= risk <= 3:
+        raise ValueError(f"coding decision agent: risk out of 0-3 ({risk!r})")
+    urgency = _field(raw, "urgency")
+    if not isinstance(urgency, int) or isinstance(urgency, bool) or not 0 <= urgency <= 3:
+        raise ValueError(f"coding decision agent: urgency out of 0-3 ({urgency!r})")
+    outcome = _field(raw, "outcome")
+    if not isinstance(outcome, str):
+        raise ValueError(f"coding decision agent: outcome is not a string ({outcome!r})")
+    grade = AgentTraceGrade(
+        action=action,
+        needs_review=_bool_label(_field(raw, "needs_review"), field="needs_review"),
+        outcome=outcome,
+        risk=risk,
+        urgency=urgency,
+        answer_confidence=_confidence_map(_field(raw, "answer_confidence")),
+    )
+    validate_trace_grade(grade)
+    return grade
+
+
+def normalise_tool_call(raw: Any) -> ToolCallGrade:
+    """A model tool-call verdict object (or dict) into a `ToolCallGrade`.
+
+    The model card documents the `tool_call` family's questions but no
+    closed label set for `should_call_tool`/`call_verdict` (unlike
+    `merge_action`), so this validates shape only -- both fields must be
+    non-empty strings -- and refuses to invent a label set to coerce into.
+    """
+    should = _field(raw, "should_call_tool")
+    verdict = _field(raw, "call_verdict")
+    if not isinstance(should, str) or not should.strip():
+        raise ValueError(f"coding decision agent: should_call_tool is not a label ({should!r})")
+    if not isinstance(verdict, str) or not verdict.strip():
+        raise ValueError(f"coding decision agent: call_verdict is not a label ({verdict!r})")
+    return ToolCallGrade(
+        should_call_tool=should,
+        call_verdict=verdict,
+        answer_confidence=_confidence_map(_field(raw, "answer_confidence")),
+    )
+
+
 def load_backend(model_id: str = DEFAULT_MODEL_ID) -> GraderBackend:
     """Load the real backend, or raise `CodeOrchestratorUnavailable`.
 
@@ -177,10 +270,33 @@ class CodeOrchestrator:
     `CodeOrchestratorUnavailable` from `grade_code`/`route`, never as a fake
     grade. Pass an explicit backend (a fake in tests, a loaded model in
     production) to skip loading.
+
+    Error taxonomy, decided consciously (issue #203, C3) because the old
+    code left it implicit and inconsistent:
+
+    - Missing backend -> `CodeOrchestratorUnavailable`. The quality gate
+      records "unavailable" and does NOT block (grading is opt-in; a user
+      who enabled it without installing the model gets a note, not a
+      broken run), and D4 proceeds without a hint.
+    - Backend raised during inference, or the backend object itself is
+      unusable -> `CodeOrchestratorError` (not the subclass above). The
+      quality gate blocks fail-closed on it: a grade was attempted and
+      cannot be trusted, which is not the same as no grade being
+      configured. D4 still proceeds without a hint -- a routing hint is
+      advisory, so a failed hint must never crash `_assign`.
+    - Mis-shaped verdict -> `ValueError` from the normalisers. The quality
+      gate blocks fail-closed on it (same reasoning as an inference
+      failure); D4 proceeds without a hint. The CLI reports both cases
+      with `fail(...)`, never a traceback.
     """
 
     model_id: str = DEFAULT_MODEL_ID
     backend: GraderBackend | None = None
+    max_diff_chars: int = MAX_CONTEXT_CHARS
+
+    def __post_init__(self) -> None:
+        if self.max_diff_chars <= 0:
+            raise ValueError(f"max_diff_chars must be positive, got {self.max_diff_chars}")
 
     def _backend(self) -> GraderBackend:
         if self.backend is None:
@@ -198,17 +314,65 @@ class CodeOrchestrator:
             return False
         return True
 
+    def _call(self, method: str, *args: Any, **kwargs: Any) -> Any:
+        """One backend call, with inference failures wrapped (C3).
+
+        Only the backend call itself is wrapped: normalisation runs
+        outside this, so a mis-shaped verdict stays a `ValueError` and is
+        not mistaken for an inference failure.
+        """
+        backend = self._backend()
+        fn = getattr(backend, method, None)
+        if fn is None:
+            raise CodeOrchestratorUnavailable(
+                f"the installed Coding Decision Agent backend does not expose "
+                f"`{method}`; install the backend from the "
+                f"S4MPL3BI4S/Coding_Decision_Agent model repo that does, or "
+                f"use grade_code/route_model."
+            )
+        try:
+            return fn(*args, **kwargs)
+        except CodeOrchestratorError:
+            raise
+        except Exception as exc:
+            raise CodeOrchestratorError(
+                f"coding decision agent backend failed on `{method}`: {type(exc).__name__}: {exc}"
+            ) from exc
+
     def grade_code(self, *, task: str, diff: str, tests: str = "") -> CodeReviewGrade:
-        """Grade a diff. The caller compacts the diff first (see `grades`)."""
-        return normalise_code_review(self._backend().grade_code(task=task, diff=diff, tests=tests))
+        """Grade a diff, compacting it first (issue #203, I10).
+
+        Compaction lives here, not in the caller: the old contract ("the
+        caller compacts first") meant any caller that forgot sent an
+        over-context diff to the model. Callers may still pre-compact --
+        `compact_diff` is idempotent for diffs already within budget --
+        but they no longer have to remember. `max_diff_chars` is the
+        caller's configured budget (the quality gate and CLI pass
+        `[code_orchestrator] max_diff_chars`); the default is the model's
+        7000-character budget.
+        """
+        compacted = compact_diff(diff, max_chars=self.max_diff_chars)
+        return normalise_code_review(
+            self._call("grade_code", task=task, diff=compacted, tests=tests)
+        )
 
     def route(self, request: str) -> RoutingGrade:
         """Route a coding task to a model tier and skill."""
-        return normalise_routing(self._backend().route_model(request))
+        return normalise_routing(self._call("route_model", request))
 
-    # Note: the model card also documents `tool_call` and `agent_trace`
-    # families (their labels live in `grades.py`, and `gate_trace` is pure
-    # and tested). They are NOT wired here: the card shows a public call
-    # shape only for `grade_code` and `route_model`, and wiring the other
-    # two on a guessed signature would score against an untrained wording.
-    # See docs/code-orchestrator.md "Not yet wired".
+    def grade_trace(self, trace: str) -> AgentTraceGrade:
+        """Grade an agent trace: what a running coding agent should do next.
+
+        Wired through the backend only when the installed backend exposes
+        `grade_trace` (issue #203, I11): Baton does not invent a call
+        shape or question wording for the trace family, so a backend
+        without the method raises `CodeOrchestratorUnavailable` instead
+        of scoring against an untrained wording. The returned grade is
+        gated by `gate_trace` in `grades.py`, never trusted raw.
+        """
+        return normalise_trace(self._call("grade_trace", trace))
+
+    def grade_tool_call(self, tool_call: str) -> ToolCallGrade:
+        """Grade a tool call, on the same backend-if-exposed terms as
+        `grade_trace` (issue #203, I11)."""
+        return normalise_tool_call(self._call("grade_tool_call", tool_call))

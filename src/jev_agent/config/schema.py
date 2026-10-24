@@ -140,7 +140,14 @@ class JevSettings(_Strict):
         default=0.55,
         ge=0,
         le=1,
-        description="Below this confidence on any answer, the plain rules decide instead of Jev.",
+        description=(
+            "Below this confidence on any answer, the plain rules decide instead of Jev. "
+            "This is deliberately NOT the code gate's 0.7: it gates Jev's own decision "
+            "answers (which fall back to rules), while [code_orchestrator] "
+            "confidence_threshold gates the Coding Decision Agent's calibrated "
+            "answer_confidence on a merge action. Different models, different "
+            "decisions, different bars (issue #203, I7)."
+        ),
         allow_inf_nan=False,
     )
     # Instruction overrides, keyed "D4.effort" (one point) or "effort" (every point).
@@ -287,7 +294,12 @@ class CodeOrchestratorSettings(_Strict):
         le=1,
         description=(
             "Calibrated `answer_confidence` a merge action needs to be trusted; "
-            "below it the gate asks a human instead of merging or rejecting."
+            "below it the gate asks a human instead of merging or rejecting. "
+            "It also gates routing hints (`routing_hint` returns no hint below "
+            "it). This is deliberately NOT [dispatcher.jev] min_confidence "
+            "(0.55): that gates Jev's own decision answers, this gates the "
+            "Coding Decision Agent's calibrated merge confidence -- the model "
+            "card's starting point (issue #203, I7)."
         ),
         allow_inf_nan=False,
     )
