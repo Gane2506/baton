@@ -21,7 +21,7 @@ from typing import TypeVar
 
 from jev_agent.code_orchestrator import (
     CodeOrchestrator,
-    CodeOrchestratorUnavailable,
+    CodeOrchestratorError,
     routing_hint,
 )
 from jev_agent.core.assign import Assignment, can_reassign, escalate, quota_fallback, reassign
@@ -114,15 +114,27 @@ class TaskRunner:
         if self.h.config.code_orchestrator.enabled:
             # The code orchestrator routes the coding task; Jev still decides
             # at D4, but with this hint in the request state instead of
-            # deciding blind. A missing model is not fatal: D4 proceeds
-            # without the hint, exactly as it did before this feature.
+            # deciding blind. A missing model, a failed inference, or a
+            # mis-shaped verdict is not fatal here: D4 proceeds without the
+            # hint, exactly as it did before this feature (issue #203, C3
+            # -- the old code caught only the missing-model case, so one
+            # bad verdict crashed `_assign` instead of proceeding without
+            # a hint). The hint itself is gated at the configured
+            # confidence threshold before it reaches state, so Jev is
+            # never pointed at a low-confidence tier.
             try:
-                orchestrator = CodeOrchestrator(model_id=self.h.config.code_orchestrator.model_id)
+                orchestrator = CodeOrchestrator(
+                    model_id=self.h.config.code_orchestrator.model_id,
+                    max_diff_chars=self.h.config.code_orchestrator.max_diff_chars,
+                )
                 if orchestrator.available:
-                    req.state["code_routing"] = routing_hint(
-                        orchestrator.route(f"{task.card.title}: {task.card.description}")
+                    hint = routing_hint(
+                        orchestrator.route(f"{task.card.title}: {task.card.description}"),
+                        threshold=self.h.config.code_orchestrator.confidence_threshold,
                     )
-            except CodeOrchestratorUnavailable:
+                    if hint:
+                        req.state["code_routing"] = hint
+            except (CodeOrchestratorError, ValueError):
                 pass
         decision = await self.h.decide(run_id, task.id, req)
         a = self.h.assignment("coder", decision.answers)

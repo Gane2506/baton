@@ -283,14 +283,17 @@ async def test_follow_up_reasks_only_unsettled_questions_with_previous_rounds() 
     assert set(jev_2["questions"]) == {"worker"}
     assert {q for q, _, _ in _cells(server.laya[1])} == {"worker"}
 
-    # The earlier round goes into the state, and the note points both voters at it.
+    # The earlier round goes into Jev's state, and the note points both voters at it.
     rounds = decision.details["rounds"]
     assert rounds == [{"round": 1, "worker": rounds[0]["worker"]}]
     assert rounds[0]["worker"]["jev"] == {"choice": "codex", "confidence": 0.9}
     assert rounds[0]["worker"]["reasons"] == ["Jev picked codex, Laya ranked claude_code first"]
     assert "previous_rounds" not in jev_1["state"]
+    assert jev_2["state"]["previous_rounds"] == rounds
+    # But NOT into Laya's state: previous_rounds names Jev's earlier choices,
+    # and Laya must never score in Jev's shadow (issue #203, I8).
+    assert "previous_rounds" not in server.laya[1]["state"]
     for payload in server.requests[2:]:
-        assert payload["state"]["previous_rounds"] == rounds
         for question in payload["questions"].values():
             assert FOLLOW_UP_NOTE in question["instructions"]
     assert jev_2["questions"]["worker"]["instructions"].endswith(FOLLOW_UP_NOTE)
@@ -403,6 +406,15 @@ def _first_is(value: Any) -> Callable[[dict[str, Any]], dict[str, Any]]:
         (_set_first(confidence=None), "laya: no score for effort=low on correctness"),
         (_set_first(confidence=1.5), "laya: invalid confidence for effort=low on correctness"),
         (_set_first(confidence=-0.1), "laya: invalid confidence for effort=low on correctness"),
+        # I8: out-of-range scores used to be silently clamped into 1..5.
+        (
+            _set_first(score=9),
+            "laya: invalid score for effort=low on correctness (expected 0-4, got 9)",
+        ),
+        (
+            _set_first(score=-1),
+            "laya: invalid score for effort=low on correctness (expected 0-4, got -1)",
+        ),
     ],
 )
 async def test_bad_laya_answers_raise(

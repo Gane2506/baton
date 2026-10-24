@@ -41,8 +41,9 @@ def _assert_clean_error(result: object, fragment: str) -> None:
 class _FakeOrchestrator:
     """A canned Coding Decision Agent, standing in for the real backend."""
 
-    def __init__(self, model_id: str | None = None) -> None:
+    def __init__(self, model_id: str | None = None, max_diff_chars: int = 7000) -> None:
         self.model_id = model_id
+        self.max_diff_chars = max_diff_chars
         self.available = True
 
     def grade_code(self, *, task: str, diff: str, tests: str = "") -> CodeReviewGrade:

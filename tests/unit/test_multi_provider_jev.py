@@ -179,6 +179,19 @@ async def test_missing_both_keys_raises(monkeypatch: pytest.MonkeyPatch) -> None
     assert rec.requests == []
 
 
+def test_failover_keys_on_the_structured_marker_not_the_message() -> None:
+    """I9: rewording a provider-failure message must not disable failover,
+    and a message that merely mentions one must not enable it."""
+    from jev_agent.dispatch.jev import _provider_failed
+
+    assert _provider_failed(DispatchError("totally reworded outage", provider_failure=True))
+    assert not _provider_failed(
+        DispatchError("jev: network error (but this is not a provider failure)")
+    )
+    assert not _provider_failed(DispatchError("jev: request rejected (HTTP 422): nope"))
+    assert _provider_failed(DispatchError("jev: auth failed (HTTP 401)", provider_failure=True))
+
+
 async def test_auth_failure_fails_over() -> None:
     rec = Recorder(httpx.Response(401, json={"error": {"message": "bad key"}}), _ok())
     dispatcher, _ = _failover(rec)
