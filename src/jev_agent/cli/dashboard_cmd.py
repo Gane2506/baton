@@ -8,6 +8,7 @@ it. Binds 127.0.0.1 by default. Any other address needs a token, generated here 
 from __future__ import annotations
 
 import secrets
+import socket
 import threading
 import webbrowser
 from pathlib import Path
@@ -24,6 +25,30 @@ from jev_agent.dashboard import INSTALL_HINT, missing_dependencies
 console = Console()
 
 TOKEN_ENV = "JEV_DASHBOARD_TOKEN"
+
+
+def _check_port_free(host: str, port: int) -> None:
+    """Fail with an `error:` line when the dashboard cannot bind (issue #198).
+
+    Uvicorn does not raise on a busy port: it logs `ERROR: ... address
+    already in use` and exits 3, so without this pre-check the user's
+    first-run path ends in a bare server log line, not the CLI's `error:`
+    line. The bind here is a probe only (closed at once); the residual race
+    with another process grabbing the port in between is caught below,
+    where `uvicorn.run`'s startup failure is also turned into `fail()`.
+    """
+    try:
+        family, _, _, _, sockaddr = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)[0]
+        probe = socket.socket(family)
+        try:
+            probe.bind(sockaddr)
+        finally:
+            probe.close()
+    except OSError as exc:
+        raise fail(
+            f"could not start the dashboard on {host}:{port}: {exc}. "
+            "Stop the process already using that port, or pass --port."
+        ) from exc
 
 
 def dashboard_url(host: str, port: int, token: str | None) -> str:
@@ -80,6 +105,7 @@ def dashboard(
             root=root, host=host, port=port, token=token, secret=load_or_create_secret()
         )
     )
+    _check_port_free(host, port)
     url = dashboard_url(host, port, token)
     if not loopback:
         console.print(
@@ -95,4 +121,17 @@ def dashboard(
     )
     if open_browser:
         threading.Timer(1.0, webbrowser.open, (url,)).start()
-    uvicorn.run(app, host=host, port=port, log_level="warning")
+    try:
+        uvicorn.run(app, host=host, port=port, log_level="warning")
+    except OSError as exc:
+        raise fail(f"could not start the dashboard on {host}:{port}: {exc}") from exc
+    except SystemExit as exc:
+        # Uvicorn exits (rather than raising) on startup failure, e.g. the
+        # port was grabbed after the probe above. A clean exit (Ctrl-C is
+        # swallowed inside uvicorn) is not an error; anything else is.
+        if exc.code not in (None, 0):
+            raise fail(
+                f"could not start the dashboard on {host}:{port}: the server "
+                "failed to start (is the port already in use? pass --port)."
+            ) from exc
+        raise

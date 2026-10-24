@@ -248,8 +248,15 @@ def start_run_from_chat(root: Path, chat_id: str, *, plan_only: bool) -> str:
 
 
 def queue_from_chat(root: Path, chat_id: str, priority: str = "normal") -> int:
-    """`/queue`: add the chat's brief to the idea queue with the chat's flags."""
-    with open_repo(root) as repo:
+    """`/queue`: add the chat's brief to the idea queue with the chat's flags.
+
+    The whole thing runs under `hold_chat`: recording the queue item on the
+    chat mutates its meta, and doing that outside the lock let a reply in
+    flight interleave with the queue recording (issue #197). Holding the lock
+    first also means a chat open elsewhere fails before anything is queued,
+    instead of leaving an orphan queue item behind a failed recording.
+    """
+    with hold_chat(root, chat_id), open_repo(root) as repo:
         meta = ChatSession.load_meta(root, chat_id)
         if not meta.brief:
             raise ChatError("no brief yet; write one first (the Write brief button)")

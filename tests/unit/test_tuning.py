@@ -146,13 +146,13 @@ def test_skips_other_dispatchers_and_missing_scores(store: Store) -> None:
     ]
 
 
-def _sample(outcome: str, **scores: float) -> Sample:
+def _sample(outcome: str, decision_id: int = 1, question: str = "clear", **scores: float) -> Sample:
     return Sample(
         run_id="r",
         task_id=None,
-        decision_id=1,
+        decision_id=decision_id,
         point="D1",
-        question="clear",
+        question=question,
         answer="plan",
         scores=_scores(3.0) | scores,
         outcome=outcome,  # type: ignore[arg-type]
@@ -160,7 +160,9 @@ def _sample(outcome: str, **scores: float) -> Sample:
 
 
 def test_no_suggestion_without_enough_outcomes() -> None:
-    samples = [_sample("passed")] * 5 + [_sample("failed")] * 4
+    samples = [_sample("passed", decision_id=i) for i in range(5)] + [
+        _sample("failed", decision_id=100 + i) for i in range(4)
+    ]
     result = suggest(samples, DEFAULT_LAYA_WEIGHTS)
     assert result.weights is None and (result.passed, result.failed) == (5, 4)
     assert result.reason == (
@@ -169,11 +171,30 @@ def test_no_suggestion_without_enough_outcomes() -> None:
     assert suggest(samples, DEFAULT_LAYA_WEIGHTS, min_outcomes=4).weights is not None
 
 
+def test_one_decision_with_many_questions_is_one_outcome() -> None:
+    """Issue #202: one decision with six questions used to satisfy MIN_OUTCOMES=5 alone,
+    because the gate counted samples. Six questions from one passed decision and six from
+    one failed decision are two outcomes, not twelve."""
+    samples = [_sample("passed", question=f"q{i}") for i in range(6)] + [
+        _sample("failed", decision_id=2, question=f"q{i}") for i in range(6)
+    ]
+    result = suggest(samples, DEFAULT_LAYA_WEIGHTS)
+    assert result.weights is None and (result.passed, result.failed) == (1, 1)
+    assert result.reason == (
+        "need at least 5 passed and 5 failed outcomes (have 1 passed, 1 failed)"
+    )
+    distinct = [_sample("passed", decision_id=i) for i in range(5)] + [
+        _sample("failed", decision_id=100 + i) for i in range(5)
+    ]
+    result = suggest(distinct, DEFAULT_LAYA_WEIGHTS)
+    assert result.weights is not None and (result.passed, result.failed) == (5, 5)
+
+
 def test_predictive_criteria_gain_weight() -> None:
     # High safety scores came with passing work, high simplicity with failing work.
-    samples = [_sample("passed", safety=5.0, simplicity=2.0)] * 6 + [
-        _sample("failed", safety=2.0, simplicity=4.0)
-    ] * 6
+    samples = [_sample("passed", decision_id=i, safety=5.0, simplicity=2.0) for i in range(6)] + [
+        _sample("failed", decision_id=100 + i, safety=2.0, simplicity=4.0) for i in range(6)
+    ]
     result = suggest(samples, DEFAULT_LAYA_WEIGHTS)
     assert result.weights is not None
     LayaSettings(weights=result.weights)  # adds up to 1, names every criterion
@@ -186,7 +207,9 @@ def test_predictive_criteria_gain_weight() -> None:
 
 
 def test_one_tune_moves_a_weight_by_at_most_half() -> None:
-    samples = [_sample("passed", safety=5.0)] * 5 + [_sample("failed", safety=1.0)] * 5
+    samples = [_sample("passed", decision_id=i, safety=5.0) for i in range(5)] + [
+        _sample("failed", decision_id=100 + i, safety=1.0) for i in range(5)
+    ]
     result = suggest(samples, DEFAULT_LAYA_WEIGHTS)
     assert result.weights is not None
     raw_safety = DEFAULT_LAYA_WEIGHTS["safety"] * (1 + MAX_STEP)  # exp(0.25 * 4) is capped
@@ -195,8 +218,12 @@ def test_one_tune_moves_a_weight_by_at_most_half() -> None:
 
 def test_zero_weight_stays_zero_and_no_gap_changes_nothing() -> None:
     weights = DEFAULT_LAYA_WEIGHTS | {"tool_fit": 0.0, "user_preference": 0.2}
-    samples = [_sample("passed", tool_fit=5.0)] * 5 + [_sample("failed", tool_fit=1.0)] * 5
+    samples = [_sample("passed", decision_id=i, tool_fit=5.0) for i in range(5)] + [
+        _sample("failed", decision_id=100 + i, tool_fit=1.0) for i in range(5)
+    ]
     result = suggest(samples, weights)
     assert result.weights == weights
-    flat = [_sample("passed")] * 5 + [_sample("failed")] * 5
+    flat = [_sample("passed", decision_id=i) for i in range(5)] + [
+        _sample("failed", decision_id=100 + i) for i in range(5)
+    ]
     assert suggest(flat, DEFAULT_LAYA_WEIGHTS).weights == DEFAULT_LAYA_WEIGHTS

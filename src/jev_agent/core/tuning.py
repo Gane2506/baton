@@ -49,7 +49,9 @@ Outcome = Literal["passed", "failed"]
 RATE = 0.25
 # One tune moves a weight by at most half of itself, up or down, before renormalising.
 MAX_STEP = 0.5
-# Fewer passed or failed samples than this: no suggestion (the gap would be noise).
+# Fewer passed or failed decisions than this: no suggestion (the gap would be noise).
+# Decisions, not samples: one decision with many questions is one outcome, so correlated
+# samples from a single run cannot satisfy the gate on their own (issue #202).
 MIN_OUTCOMES = 5
 
 _ENDED = {RunState.DONE, RunState.FAILED, RunState.BUDGET_EXCEEDED}
@@ -83,6 +85,8 @@ class CriterionEvidence:
 @dataclass(frozen=True)
 class Suggestion:
     current: dict[str, float]
+    # Distinct decisions (run_id, decision_id) per side — not sample counts. One decision
+    # with six questions is one outcome (issue #202).
     passed: int
     failed: int
     # None when there are too few outcomes; `reason` says why.
@@ -173,19 +177,23 @@ def suggest(
     Per criterion: gap = mean score of the chosen answers in passed work minus in failed work.
     The weight is multiplied by exp(RATE * gap), kept within MAX_STEP of itself, and all weights
     are renormalised to add up to 1 (rounded to 3 decimals). A criterion with weight 0 stays 0.
+    The gate counts distinct decisions, not samples: the means still use every sample, but
+    one decision's questions cannot satisfy `min_outcomes` on their own (issue #202).
     """
     passed = [s for s in samples if s.outcome == "passed"]
     failed = [s for s in samples if s.outcome == "failed"]
-    if len(passed) < min_outcomes or len(failed) < min_outcomes:
+    passed_decisions = len({(s.run_id, s.decision_id) for s in passed})
+    failed_decisions = len({(s.run_id, s.decision_id) for s in failed})
+    if passed_decisions < min_outcomes or failed_decisions < min_outcomes:
         return Suggestion(
             current=current,
-            passed=len(passed),
-            failed=len(failed),
+            passed=passed_decisions,
+            failed=failed_decisions,
             weights=None,
             evidence=(),
             reason=(
                 f"need at least {min_outcomes} passed and {min_outcomes} failed outcomes "
-                f"(have {len(passed)} passed, {len(failed)} failed)"
+                f"(have {passed_decisions} passed, {failed_decisions} failed)"
             ),
         )
     means = {
@@ -203,7 +211,7 @@ def suggest(
     evidence = tuple(
         CriterionEvidence(c, means[c][0], means[c][1], current[c], weights[c]) for c in current
     )
-    return Suggestion(current, len(passed), len(failed), weights, evidence)
+    return Suggestion(current, passed_decisions, failed_decisions, weights, evidence)
 
 
 def _chosen_scores(vote: Any, answer: str | None) -> dict[str, float] | None:
