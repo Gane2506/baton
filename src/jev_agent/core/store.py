@@ -389,7 +389,7 @@ class Store:
 
     @property
     def connection(self) -> sqlite3.Connection:
-        """The underlying connection, for the repo-scope lesson tables (`core/learning.py`)."""
+        """The underlying connection, for the repo-scope lesson tables (`core/learning`)."""
         return self._conn
 
     @property
