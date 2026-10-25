@@ -16,7 +16,7 @@ import stat
 import time
 from collections.abc import Iterator
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import httpx
 import pytest
@@ -60,13 +60,18 @@ def _csrf(client: TestClient) -> str:
 
 
 def _post(client: TestClient, url: str, data: dict[str, str] | None = None) -> httpx.Response:
-    response: httpx.Response = client.post(
-        url,
-        data={"csrf_token": _csrf(client), **(data or {})},
-        follow_redirects=False,
+    # The TestClient returns httpx2.Response when httpx2 is installed (it
+    # is, via the code-orchestrator extra -> huggingface_hub) and
+    # httpx.Response otherwise; cast to the declared type (both share the
+    # same response API).
+    return cast(
+        httpx.Response,
+        client.post(
+            url,
+            data={"csrf_token": _csrf(client), **(data or {})},
+            follow_redirects=False,
+        ),
     )
-    assert isinstance(response, httpx.Response)
-    return response
 
 
 # ---- 1. wizard 500 on skipped step -------------------------------------------------------
@@ -90,7 +95,9 @@ def test_wizard_start_get_does_not_clear_post_does(client: TestClient) -> None:
     # Issue #200, as fixed after the screenshots job caught it: a GET must
     # not change state (it only redirects), while the POST clears (CSRF).
     # The GET redirect is also what examples/demo/screenshots.py walks.
-    response = client.get("/design-studio/new", follow_redirects=False)
+    # The TestClient returns httpx2.Response when httpx2 is installed; cast
+    # so this variable keeps one type alongside `_post`'s httpx.Response.
+    response = cast(httpx.Response, client.get("/design-studio/new", follow_redirects=False))
     assert response.status_code == 303
     assert response.headers["location"] == "/design-studio/new/purpose"
     response = _post(client, "/design-studio/new")

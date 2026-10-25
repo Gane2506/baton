@@ -8,6 +8,7 @@ confidence first, label second, missing confidence never trusted.
 
 from __future__ import annotations
 
+import importlib.util
 import warnings
 
 import pytest
@@ -28,7 +29,8 @@ from jev_agent.code_orchestrator import (
 )
 from jev_agent.code_orchestrator.grades import AgentTraceGrade
 from jev_agent.config.schema import CodeOrchestratorSettings, JevConfig
-from jev_agent.quality.gate import apply_code_grade
+from jev_agent.core.models import TaskCard
+from jev_agent.quality.gate import _code_grade_task_text, apply_code_grade
 from jev_agent.quality.models import GateResult
 
 
@@ -71,6 +73,20 @@ class _FakeBackend:
             "skill": "refactor",
             "answer_confidence": {"model_tier": 0.8},
         }
+
+
+class _UnavailableBackend:
+    """A backend that is missing: every call raises Unavailable."""
+
+    def grade_code(self, *, task: str, diff: str, tests: str) -> object:
+        raise CodeOrchestratorUnavailable(
+            "the Coding Decision Agent is not installed: install `laya`"
+        )
+
+    def route_model(self, request: str) -> object:
+        raise CodeOrchestratorUnavailable(
+            "the Coding Decision Agent is not installed: install `laya`"
+        )
 
 
 def test_confident_accept_passes() -> None:
@@ -215,9 +231,18 @@ def test_normalise_rejects_unknown_labels() -> None:
         )
 
 
-def test_backend_missing_is_a_clear_error_not_a_traceback_shape() -> None:
-    # The package is not installed in the test env; the loader must say so
-    # plainly and name the install, not raise ImportError.
+def test_backend_missing_is_a_clear_error_not_a_traceback_shape(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Simulate the package being absent: the loader must say so plainly
+    # and name the install, not raise ImportError. (laya IS installed in
+    # the --all-extras test env, so the absence is stubbed, not assumed.)
+    orig_find_spec = importlib.util.find_spec
+    monkeypatch.setattr(
+        importlib.util,
+        "find_spec",
+        lambda name: None if name == "laya" else orig_find_spec(name),
+    )
     with pytest.raises(CodeOrchestratorUnavailable, match="not installed"):
         load_backend("S4MPL3BI4S/Coding_Decision_Agent")
 
@@ -263,11 +288,26 @@ def test_laya_section_still_parses_for_backward_compatibility() -> None:
     )
 
 
+def test_code_grade_task_text_uses_title_plus_description() -> None:
+    """The gate grades against title + description, not a bare title.
+
+    Measured live (issue #259): a bare title makes instruction_followed
+    say "no" and merge_action say "request_changes" on a known-good diff.
+    """
+    task = TaskCard(id="T1", title="Fix x", description="The widget must not crash on empty input.")
+    assert _code_grade_task_text(task) == "Fix x\n\nThe widget must not crash on empty input."
+    assert _code_grade_task_text(TaskCard(id="T1", title="Fix x", description="")) == "Fix x"
+    assert _code_grade_task_text(None) == "integration"
+    long = TaskCard(id="T1", title="Fix x", description="d" * 3000)
+    text = _code_grade_task_text(long)
+    assert text.startswith("Fix x\n\n" + "d" * 1993) and text.endswith("[task truncated]")
+
+
 def test_apply_code_grade_blocks_on_reject_and_records_grade() -> None:
     result = apply_code_grade(
         _result(),
         settings=CodeOrchestratorSettings(enabled=True),
-        task_title="Fix x",
+        task_text="Fix x",
         diff="+x\n",
         orchestrator=CodeOrchestrator(backend=_FakeBackend("reject", 0.95)),
     )
@@ -282,7 +322,7 @@ def test_apply_code_grade_accept_passes_without_blocking() -> None:
     result = apply_code_grade(
         _result(),
         settings=CodeOrchestratorSettings(enabled=True),
-        task_title="Fix x",
+        task_text="Fix x",
         diff="+x\n",
         orchestrator=CodeOrchestrator(backend=_FakeBackend("accept", 0.95)),
     )
@@ -295,7 +335,7 @@ def test_apply_code_grade_low_confidence_blocks_as_human_review() -> None:
     result = apply_code_grade(
         _result(),
         settings=CodeOrchestratorSettings(enabled=True),
-        task_title="Fix x",
+        task_text="Fix x",
         diff="+x\n",
         orchestrator=CodeOrchestrator(backend=_FakeBackend("accept", 0.4)),
     )
@@ -321,7 +361,7 @@ def test_apply_code_grade_inference_error_blocks_fail_closed_not_unavailable() -
     result = apply_code_grade(
         _result(),
         settings=CodeOrchestratorSettings(enabled=True),
-        task_title="Fix x",
+        task_text="Fix x",
         diff="+x\n",
         orchestrator=CodeOrchestrator(backend=_ExplodingBackend()),
     )
@@ -590,12 +630,15 @@ def test_trace_and_tool_call_wired_through_backend_when_exposed() -> None:
 
 
 def test_apply_code_grade_unavailable_never_blocks() -> None:
+    # The backend is missing (simulated: laya IS installed in the
+    # --all-extras test env), so the gate records "unavailable" and does
+    # not block.
     result = apply_code_grade(
         _result(),
         settings=CodeOrchestratorSettings(enabled=True),
-        task_title="Fix x",
+        task_text="Fix x",
         diff="+x\n",
-        orchestrator=CodeOrchestrator(backend=None),
+        orchestrator=CodeOrchestrator(backend=_UnavailableBackend()),
     )
     assert result.blocked is False
     assert result.code_grade is not None

@@ -22,7 +22,11 @@ from typer.testing import CliRunner
 from jev_agent.cli import code_cmds
 from jev_agent.cli.app import app
 from jev_agent.cli.wiring import FAKE_WORKERS_ENV
-from jev_agent.code_orchestrator import CodeReviewGrade, RoutingGrade
+from jev_agent.code_orchestrator import (
+    CodeOrchestratorUnavailable,
+    CodeReviewGrade,
+    RoutingGrade,
+)
 from jev_agent.workers.base import WorkerJob, WorkerOutput
 from jev_agent.workers.registry import WorkerRegistry
 
@@ -71,11 +75,37 @@ def fake_orchestrator(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(code_cmds, "CodeOrchestrator", _FakeOrchestrator)
 
 
+class _MissingOrchestrator:
+    """A Coding Decision Agent that is not installed: every call raises Unavailable."""
+
+    def __init__(self, model_id: str | None = None, max_diff_chars: int = 7000) -> None:
+        self.model_id = model_id
+        self.max_diff_chars = max_diff_chars
+        self.available = False
+
+    def grade_code(self, *, task: str, diff: str, tests: str = "") -> CodeReviewGrade:
+        raise CodeOrchestratorUnavailable(
+            "the Coding Decision Agent is not installed: install `laya` (`pip install laya`)"
+        )
+
+    def route(self, request: str) -> RoutingGrade:
+        raise CodeOrchestratorUnavailable(
+            "the Coding Decision Agent is not installed: install `laya` (`pip install laya`)"
+        )
+
+
+@pytest.fixture
+def missing_orchestrator(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The real backend IS installed in the --all-extras test env (the
+    # code-orchestrator extra), so "not installed" is simulated, not assumed.
+    monkeypatch.setattr(code_cmds, "CodeOrchestrator", _MissingOrchestrator)
+
+
 def test_code_status_table_reports_backend_unavailable(
     fixture_repo: Path,
 ) -> None:
-    # No fake: the real backend is not installed in the test env, so
-    # `backend_available` is "no" — and status still exits 0 with a table.
+    # Status still exits 0 with a table whether the backend is installed or
+    # not; it reports `backend_available` either way.
     result = runner.invoke(app, ["code", "status", "--repo", str(fixture_repo)])
     assert result.exit_code == 0, result.output
     assert result.exception is None
@@ -167,7 +197,7 @@ def test_code_grade_non_utf8_and_missing_tests_files_are_clean_errors(
 
 
 def test_code_grade_unavailable_backend_is_a_clean_error(
-    fixture_repo: Path, tmp_path: Path
+    fixture_repo: Path, tmp_path: Path, missing_orchestrator: None
 ) -> None:
     diff = tmp_path / "change.diff"
     diff.write_text("diff --git a/x.py b/x.py\n+print(1)\n", encoding="utf-8")
@@ -198,6 +228,7 @@ def test_code_route_output(fixture_repo: Path, fake_orchestrator: None) -> None:
 
 def test_code_route_unavailable_backend_is_a_clean_error(
     fixture_repo: Path,
+    missing_orchestrator: None,
 ) -> None:
     result = runner.invoke(app, ["code", "route", "Refactor billing", "--repo", str(fixture_repo)])
     _assert_clean_error(result, "not installed")

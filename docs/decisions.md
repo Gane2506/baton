@@ -2,6 +2,51 @@
 
 Deviations from [PLAN.md](../PLAN.md) and choices it left open. Newest first.
 
+## 2026-10-24: Live Coding Decision Agent backend via `laya` (#259)
+
+- **The model now runs.** `LayaBackend` (`code_orchestrator/laya_backend.py`)
+  loads the `S4MPL3BI4S/Coding_Decision_Agent` checkpoint through the `laya`
+  runtime and asks it the questions it was trained on. `jev code grade` /
+  `route` / `trace` and the quality gate grade real diffs; the
+  `coding_decision_agent` package is no longer required.
+- **The question wording is data from the training dataset, not a guess.**
+  `coding_decision_agent` is not on PyPI and the training repo is
+  unpublished, so the fixed wording was recovered verbatim from the public
+  case dataset `S4MPL3BI4S/coding-decision-cases` (its rows carry the exact
+  `questions` dicts) and is pinned by a fixture test
+  (`tests/unit/fixtures/coding_decision_questions.json`). If the wording
+  drifts, re-extract from the dataset; never edit the constants by hand.
+  State shapes mirror the training rows (`code_review` carries
+  family/task/language/diff_stats/diff/notes; test output goes in `notes`,
+  since no training row has a separate `tests` key).
+- **Still optional, still lazy.** `laya` + torch are not a hard dependency:
+  `import laya` pulls torch, so even the availability check uses
+  `find_spec` and the import happens on first grade only. A missing backend
+  is `CodeOrchestratorUnavailable` (gate records `unavailable`, no block);
+  a failed inference is `CodeOrchestratorError` (gate blocks fail-closed).
+- **`tool_call` / `agent_trace` are wired through the live backend**, with
+  the trained wording. The caveat is the state shape, not the wording:
+  training states are structured dicts and Baton passes free text, which
+  the model reads as given.
+- **The input must look like training.** Measured live on a known-good
+  merged diff (84eb7a7), 2x2: the diff format alone moves code_quality
+  2 -> 4, and only the training format plus the full task text flips
+  instruction_followed to yes and merge_action to accept. So the backend
+  reformats diffs into the training compact shape
+  (`format_training_diff`: `### <path>` headers, unchanged lines
+  collapsed) and the quality gate grades against title + description,
+  capped at 2000 characters. `likely_correct` stayed "no" (0.86-0.90) in
+  all four variants — the state carries no test evidence — and
+  merge_action confidence stayed low (0.37-0.45) even in-distribution,
+  so the 0.7 threshold sends most good diffs to human_review.
+- **`laya` is a declared optional dependency** (`code-orchestrator`
+  extra in `pyproject.toml`), not a transitive-only import: the
+  packaging test requires every third-party import to be declared, and
+  the honest fix is to declare it.
+- **Threshold measured on real diffs** during #259 (see its report); the
+  0.7 default stands/falls on those numbers, not on the model card's
+  starting point alone.
+
 ## 2026-10-24: Laya second vote removed (#193, docs track)
 
 - **Jev is the main orchestrator; the Coding Decision Agent is the code orchestrator.**

@@ -52,20 +52,31 @@ def _csrf(client: TestClient) -> str:
 
 
 def _new_chat(client: TestClient) -> str:
-    response: httpx.Response = client.post(
-        "/chats/new",
-        data={"worker": "api", "learning": "", "budget_usd": "1.00", "csrf_token": _csrf(client)},
-        follow_redirects=False,
+    response = cast(
+        httpx.Response,
+        client.post(
+            "/chats/new",
+            data={
+                "worker": "api",
+                "learning": "",
+                "budget_usd": "1.00",
+                "csrf_token": _csrf(client),
+            },
+            follow_redirects=False,
+        ),
     )
     assert response.status_code == 303
     return response.headers["location"].rsplit("/", 1)[1]
 
 
 def _say(client: TestClient, chat_id: str, text: str) -> None:
-    response: httpx.Response = client.post(
-        f"/chats/{chat_id}/send",
-        data={"text": text, "csrf_token": _csrf(client)},
-        follow_redirects=False,
+    response = cast(
+        httpx.Response,
+        client.post(
+            f"/chats/{chat_id}/send",
+            data={"text": text, "csrf_token": _csrf(client)},
+            follow_redirects=False,
+        ),
     )
     assert response.status_code == 303
     dashboard = cast(Any, client.app).state.dashboard

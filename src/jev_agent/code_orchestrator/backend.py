@@ -5,14 +5,19 @@ not "fix" them into a bug:
 
 1. `coding_decision_agent` is NOT on PyPI (checked 2026-10-24: the PyPI JSON
    endpoint 404s, and the model card's install block only says
-   `pip install laya`). The card says the fixed question wording "ships in
-   the `coding_decision_agent` package and in `configs/schema.py` of the
-   training repo". So this module does NOT invent question wording and does
-   NOT call `laya.load(...)` with guessed questions: a guessed wording would
-   score against a distribution the model was never trained on, and the
-   calibrated confidence would be meaningless. The supported backend is the
-   real `coding_decision_agent.CodingDecisionAgent` (from the training repo /
-   the model repo's package, installed alongside `laya`).
+   `pip install laya`). The training repo is unpublished too, so the model
+   card's `CodingDecisionAgent` class ships nowhere importable. What Baton
+   does instead (issue #259): the fixed question wording was recovered
+   verbatim from the public training dataset the model card itself names,
+   `S4MPL3BI4S/coding-decision-cases` -- its rows carry the exact
+   `questions` dicts the model was trained and benchmarked on -- and
+   `laya_backend.LayaBackend` asks those questions through the `laya`
+   runtime. The wording is data from the dataset, pinned by tests, not a
+   guess: a guessed wording would score against a distribution the model was
+   never trained on, and the calibrated confidence would be meaningless. If
+   the `coding_decision_agent` package ever becomes installable,
+   `load_backend` prefers it; until then the built-in backend is the real
+   one.
 2. The model is heavy (a 421M ModernBERT derivative, via `laya` + torch) and
    must never become a hard dependency of `jev`: importing this module must
    not import torch, and CI must not download weights. Loading is lazy, and
@@ -20,6 +25,9 @@ not "fix" them into a bug:
    `CodeOrchestratorUnavailable` instead of a traceback or a faked grade.
    Callers that can proceed without a grade (the quality gate) treat that as
    "not graded"; callers that cannot (the `jev code` CLI) report it and stop.
+   Note `import laya` itself imports torch (via `laya.router`), so even the
+   availability check uses `importlib.util.find_spec` rather than importing
+   the package: `jev code status` must stay cheap.
 
 A backend is any object with `grade_code(task, diff, tests)` and
 `route_model(request)` returning objects with the attributes the model card
@@ -32,6 +40,7 @@ loader below is the only place the real package is touched.
 from __future__ import annotations
 
 import importlib
+import importlib.util
 from dataclasses import dataclass
 from typing import Any, Protocol, cast
 
@@ -235,30 +244,45 @@ def load_backend(model_id: str = DEFAULT_MODEL_ID) -> GraderBackend:
     """Load the real backend, or raise `CodeOrchestratorUnavailable`.
 
     Import is done here (not at module import) so `jev` starts without torch.
+    Preference order, both cheap to check:
+
+    1. The model card's `coding_decision_agent.CodingDecisionAgent`, if
+       installed (the training repo's package; unpublished as of 2026-10-24,
+       so this branch is for the day it exists).
+    2. Baton's built-in `LayaBackend` (`laya_backend.py`): the same
+       checkpoint through the `laya` runtime, with the trained question
+       wording from the public case dataset. Presence is checked with
+       `find_spec`, not an import -- `import laya` pulls torch, and this
+       loader must stay cheap enough for `jev code status`.
+
+    Neither branch downloads weights: both backends load lazily on first
+    grade, so merely checking availability never fetches the ~842 MB
+    checkpoint.
     """
     try:
         module = importlib.import_module("coding_decision_agent")
-    except ImportError as exc:
+    except ImportError:
+        module = None
+    if module is not None:
+        factory = getattr(module, "CodingDecisionAgent", None)
+        if factory is not None:
+            try:
+                return cast(GraderBackend, factory(model_id))
+            except Exception as exc:
+                raise CodeOrchestratorUnavailable(
+                    f"could not load Coding Decision Agent {model_id!r}: {exc}"
+                ) from exc
+    if importlib.util.find_spec("laya") is None:
         raise CodeOrchestratorUnavailable(
             "the Coding Decision Agent is not installed: install `laya` "
-            "(`pip install laya`) and the `coding_decision_agent` package from "
-            "the S4MPL3BI4S/Coding_Decision_Agent model repo, then retry. "
-            "Baton does not bundle the model, and it will not guess the "
-            "model's fixed question wording through a raw `laya` call."
-        ) from exc
-    factory = getattr(module, "CodingDecisionAgent", None)
-    if factory is None:
-        raise CodeOrchestratorUnavailable(
-            "the installed `coding_decision_agent` package has no "
-            "`CodingDecisionAgent` class; install the package from the "
-            "S4MPL3BI4S/Coding_Decision_Agent model repo."
+            "(`pip install laya`; CPU-only torch works -- see "
+            "docs/code-orchestrator.md), then retry. Baton does not bundle "
+            "the model, and it will not guess the model's fixed question "
+            "wording through a raw `laya` call."
         )
-    try:
-        return cast(GraderBackend, factory(model_id))
-    except Exception as exc:
-        raise CodeOrchestratorUnavailable(
-            f"could not load Coding Decision Agent {model_id!r}: {exc}"
-        ) from exc
+    from jev_agent.code_orchestrator.laya_backend import LayaBackend
+
+    return LayaBackend(model_id)
 
 
 @dataclass

@@ -15,7 +15,7 @@ import xml.etree.ElementTree as ET
 from collections.abc import Callable, Iterator
 from datetime import UTC, date, datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 from unittest import mock
 
 import httpx
@@ -150,9 +150,15 @@ def _post(client: TestClient, url: str, data: dict[str, str] | None = None) -> h
     token: str | None = getattr(client, "jev_csrf", None)  # one per session: fetch it once
     if token is None:
         token = _csrf(client, "/queue")
-        client.jev_csrf = token
-    response: httpx.Response = client.post(
-        url, data={"csrf_token": token, **(data or {})}, follow_redirects=False
+        # A per-client cache. TestClient has no `jev_csrf` attribute in its
+        # types when httpx2 is installed (the code-orchestrator extra), so
+        # the assignment needs the ignore; without httpx2 mypy treats the
+        # client loosely and the ignore is unused, but CI always installs
+        # all extras.
+        client.jev_csrf = token  # type: ignore[attr-defined]
+    response = cast(
+        httpx.Response,
+        client.post(url, data={"csrf_token": token, **(data or {})}, follow_redirects=False),
     )
     return response
 

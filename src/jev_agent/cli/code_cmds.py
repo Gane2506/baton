@@ -86,10 +86,12 @@ def status(repo: RepoOption = Path(".")) -> None:
         console.print(table)
         if settings.enabled and not available:
             console.print(
-                "Enabled but the model is not installed: install `laya` and the "
-                "`coding_decision_agent` package from the model repo "
-                "(docs/code-orchestrator.md). Until then the quality gate records "
-                "grades as unavailable instead of blocking.",
+                "Enabled but the model is not installed: install `laya` "
+                "(`pip install laya`; CPU-only torch works -- see "
+                "docs/code-orchestrator.md). The first grade downloads the "
+                "~842 MB checkpoint into the Hugging Face cache. Until then "
+                "the quality gate records grades as unavailable instead of "
+                "blocking.",
                 markup=False,
             )
 

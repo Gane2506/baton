@@ -81,33 +81,71 @@ order, deliberately:
 
 ```bash
 pip install laya
-# plus the coding_decision_agent package from the model repo, then:
+# or, with Baton's own extra (same thing, declared in pyproject.toml):
+pip install "jev-agent[code-orchestrator]"
 ```
 
-```python
-from coding_decision_agent import CodingDecisionAgent
+That is the whole install: no `coding_decision_agent` package is needed.
+Baton ships the model's fixed question wording itself (recovered verbatim
+from the public training dataset `S4MPL3BI4S/coding-decision-cases`; see
+`src/jev_agent/code_orchestrator/laya_backend.py`) and runs the
+`S4MPL3BI4S/Coding_Decision_Agent` checkpoint through the `laya` runtime.
+If the `coding_decision_agent` package ever becomes installable, Baton
+prefers it; until then the built-in backend is the real one.
 
-grader = CodingDecisionAgent("S4MPL3BI4S/Coding_Decision_Agent")
-verdict = grader.grade_code(task="...", diff=open("change.diff").read(), tests="...")
-print(verdict.merge_action, verdict.answer_confidence["merge_action"])
+```bash
+# Verify it works (grade a diff the way the quality gate does):
+jev code status    # backend_available: yes
+jev code grade --task "Fix the off-by-one in paginate()" --diff-file change.diff
 ```
 
-Baton deliberately does **not** add the model as a hard dependency: it is a
-421M model behind `laya` + torch, and CI must not download weights. The
-backend loads lazily, only when grading is enabled and a grade is actually
-requested. If the package is absent, `jev code grade`/`route` fail with a
-clear message, and the quality gate records the grade as `unavailable`
-instead of blocking the run. A grade that did not run must never look like
-a grade.
+### What the first grade downloads, and what it needs
 
-> **Verified gap (2026-10-24):** `coding_decision_agent` is not on PyPI
-> (its PyPI JSON endpoint 404s; the model card's install block only lists
-> `pip install laya`). Do not `pip install coding_decision_agent` and
-> expect it to work — get the package from the model/training repo. For the
-> same reason Baton does not call `laya.load(...)` with invented question
-> wording: the card says the fixed wording ships in the
-> `coding_decision_agent` package, and scoring against guessed wording would
-> make the calibrated confidence meaningless.
+- **Weights:** the first grade downloads the ~842 MB checkpoint
+  (`model.safetensors`, bf16) into the Hugging Face cache
+  (`~/.cache/huggingface/hub`, or `$HF_HOME`). Later grades reuse it;
+  set `HF_HUB_OFFLINE=1` to run fully offline after the first download.
+  **TMPDIR matters:** `laya.load` reconstructs the checkpoint through
+  the temp dir, and the default /tmp is a 512M tmpfs on the dev VM --
+  smaller than the model, so the first load fails with "No space left on
+  device". Point TMPDIR at a directory on the home disk before the first
+  grade (e.g. `TMPDIR=~/workspace/baton-program/cda/tmpdir`).
+- **Torch:** `pip install laya` pulls the default torch wheel, which
+  includes CUDA libraries (~2.5 GB). On a CPU-only machine install the CPU
+  wheel first, then `laya` without its torch dependency resolution
+  fighting you:
+  ```bash
+  pip install torch --index-url https://download.pytorch.org/whl/cpu
+  pip install laya
+  ```
+- **Hardware:** a GPU is used automatically when CUDA is available, but
+  none is required — the model runs on CPU. On a 2-core CPU VM a grade
+  takes on the order of a minute: measured 2026-10-24, model load ~50 s
+  (warm cache; the first load also downloads the weights), one
+  `code_review` predict 76–209 s depending on state size — the training
+  compact format is about half the tokens of a raw unified diff and
+  roughly twice as fast. Memory: roughly 2–3 GB RSS for torch + the bf16
+  weights. If that does not fit, keep the feature off — the gate records
+  `unavailable` and the run proceeds exactly as before.
+- **Never a hard dependency:** `laya` is a declared *optional*
+  dependency (`[project.optional-dependencies] code-orchestrator` in
+  `pyproject.toml`), not a core one: it is a 421M model behind `laya` +
+  torch, and CI must not download weights. The backend loads lazily,
+  only when grading is enabled and a grade is actually requested, and
+  importing Baton never imports torch. If the package is absent, `jev
+  code grade`/`route` fail with a clear message, and the quality gate
+  records the grade as `unavailable` instead of blocking the run. A grade
+  that did not run must never look like a grade.
+
+> **History (2026-10-24):** `coding_decision_agent` is not on PyPI (its
+> PyPI JSON endpoint 404s; the model card's install block only lists
+> `pip install laya`), and the training repo is unpublished, so the model
+> card's `CodingDecisionAgent` class ships nowhere importable. Baton
+> therefore does not call `laya.load(...)` with invented question wording:
+> the fixed wording ships in the `coding_decision_agent` package the card
+> names, and scoring against guessed wording would make the calibrated
+> confidence meaningless. The wording Baton uses is the dataset's own
+> (`S4MPL3BI4S/coding-decision-cases`), pinned by a fixture test.
 
 ## Configuration
 
@@ -139,6 +177,78 @@ caller that forgot used to send an over-context diff to the model, and a
 2-line diff of very long lines used to be sliced with no marker at all
 (issue #203, C2/I10). The marker's count is computed from the head/tail
 actually returned, and the result is never sliced after the marker is built.
+
+## The input must look like training (measured, issue #259)
+
+The model was trained on compacted diffs and full issue bodies, and a raw
+unified diff plus a one-line task is out-of-distribution for it. Measured
+live on commit 84eb7a7 (a known-good merged diff), 2×2:
+
+| Input | code_quality | instruction_followed | likely_correct | merge_action |
+| --- | --- | --- | --- | --- |
+| raw diff + subject | 2 (0.42) | no (0.75) | no (0.90) | request_changes (0.43) |
+| raw diff + full task | 2 (0.40) | no (0.52) | no (0.89) | request_changes (0.37) |
+| training format + subject | 4 (0.38) | no (0.77) | no (0.89) | request_changes (0.39) |
+| training format + full task | 4 (0.77) | yes (0.59) | no (0.86) | accept (0.45) |
+
+The **diff format drives code_quality** (raw → 2, training → 4, whatever
+the task), and **instruction_followed and merge_action need both** the
+training format and the full task text. So the backend reformats every
+diff into the training rows' compact shape before sending it
+(`laya_backend.format_training_diff`: `### <path>` file headers, `@@`
+hunk headers kept, runs of unchanged lines collapsed to
+`  ... (N unchanged lines)`), and the quality gate grades against the
+task's title **plus description** (`quality.gate._code_grade_task_text`,
+capped at 2000 characters), not the title alone. The reformat also
+roughly halves the state, so it grades about twice as fast on CPU.
+
+Two honest caveats from the same measurement: **likely_correct stayed
+"no" (0.86–0.90) in all four variants** — the state carries no evidence
+the tests pass, and the model will not assume they do. Passing the test
+outcome in `notes` moved its confidence 0.86 → 0.60 but did not flip it
+(see "Measured threshold" below). And **merge_action confidence stayed
+low (0.37–0.45) even in-distribution** — below the 0.7 threshold, so
+this diff gates to human_review, the safe direction. The threshold
+measurement on six known-good diffs (the four largest planned diffs were
+not graded — the run was OOM-killed by concurrent Rust jobs on the VM,
+and the gate grades single-task diffs, not 88 KB merges) decides whether
+0.7 is right or needs adjusting; see below.
+
+## Measured threshold: 0.7 stays (issue #259)
+
+Measured live on the CPU VM (13 grades, `live_measurements.json` in the
+issue notes): six known-good merged diffs, one synthetic bad diff (a real
+fix with its guard removed), one tests-variant, and five per-file regrade
+samples. The verdict is **keep 0.7 — do not lower it**.
+
+- **merge_action confidence is 0.36–0.52 on every grade** — good diffs,
+  the bad diff, and regrade samples alike. Nothing clears 0.7, so at 0.7
+  the gate sends everything to human_review. The auto-accept and
+  auto-reject paths are effectively dead on CPU-measured Baton diffs.
+- **No threshold separates good from bad.** The bad diff scored
+  request_changes at 0.44 — squarely inside the good diffs' 0.36–0.51
+  range. Lowering the bar to ~0.45 would auto-accept three good diffs
+  but rests on seven data points and a model whose benchmark
+  merge_action accuracy is 0.59; it is not a calibration, it is a guess.
+- **code_quality separates weakly.** Good diffs scored 4 on 5 of 6 (one
+  2, on a large multi-file round); the bad diff scored 2. A 2 is not
+  proof of bad — one good diff scored it too.
+- **likely_correct is always "no"** (13 of 13, including the known-good
+  diffs). Passing the test outcome in `notes` moved its confidence
+  0.86 → 0.60 but did not flip it. It is not a usable gate signal; the
+  gate already knows the test outcome from its own checks.
+- **Regrade vs the swarm grades: mean absolute difference 1.0** (2 of 6
+  agree, 2 off by 1 in the model's favour, 1 off by 1 against, 1 off by
+  3 — nav.py model 1 vs swarm 4). The model grades the *change*, the
+  swarm graded the *file*; they are not the same judgement, and the
+  model does not reproduce the swarm's file grades.
+
+So the feature's value is the human_review routing, the code_quality
+signal, and the recorded grade — not auto-merge. The gate's 0.7 default
+stands, and the model is a second opinion that can only block on a
+confident reject (which never fired in 13 grades) or send work to a
+human. That is the safe, honest configuration until a much larger
+calibration set exists.
 
 ## Error taxonomy (decided, not accidental)
 
@@ -179,21 +289,22 @@ decisions, not one bar with two values (issue #203, I7).
 
 ## Not yet wired (honest gaps)
 
-- `tool_call` and `agent_trace` grading: the model card documents their
-  families, and `grades.py` has pure types plus `gate_trace` for traces.
-  Since issue #203 (I11) they are wired through `CodeOrchestrator`
-  (`grade_trace`, `grade_tool_call`, `jev code trace`) — but only when the
-  installed backend actually exposes those methods. Baton still does not
-  invent a call shape or question wording for them: a backend without the
-  method raises `CodeOrchestratorUnavailable` instead of scoring against
-  an untrained wording.
-- The quality gate grades the diff and task title only (`tests=""`): the
-  test outcome is already a gate input (a failed task test never reaches
-  the gate), but the model does not currently see the test log text.
-- No live-model evaluation was run for this change: the model was not
-  installed in CI (see Install above), so the gates are proven by unit
-  tests against fake backends, not by a real grading run — but
-  `tests/live/test_code_orchestrator_live.py` now exists for the run that
-  does have the model installed (`JEV_LIVE_TESTS=1`). Measure the 0.7
-  threshold on your own traces before gating production merges on it, as
-  the model card itself advises.
+- `tool_call` and `agent_trace` grading are wired through the live
+  `laya` backend (`LayaBackend.grade_trace` / `grade_tool_call`,
+  `jev code trace`) with the trained question wording from the case
+  dataset. The caveat is the state shape, not the wording: the training
+  states are structured dicts, and Baton's callers pass free text, which
+  the model reads as given. A caller with a structured trace or tool call
+  should build the dict state instead of passing text.
+- The quality gate grades the diff against the task's title **plus
+  description** (`tests=""`): the test outcome is already a gate input
+  (a failed task test never reaches the gate), but the model does not
+  currently see the test log text. `jev code grade --tests-file` passes
+  test output through as the state's `notes` field when a human asks for
+  it. (Whether the gate should pass its test summary through is being
+  measured — see "The input must look like training" above.)
+- Live-model evaluation (issue #259): the model now runs, and
+  `tests/live/test_code_orchestrator_live.py` is the smoke test for a run
+  that has it installed (`JEV_LIVE_TESTS=1`). The 0.7 threshold was
+  measured on real Baton diffs during that issue; see its report for the
+  numbers before trusting the default in production.
