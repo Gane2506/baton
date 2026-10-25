@@ -206,6 +206,9 @@ class LearningRoutes(DashboardCore):
             message = await run_in_threadpool(work)
         except (JevError, LearningError) as exc:
             self.flash(request, "error", _friendly_error(exc))
+        except Exception as exc:  # issue #200: an unexpected failure used to
+            # escape to Starlette's plain-text 500; flash it and redirect instead.
+            self.flash(request, "error", _friendly_error(exc))
         else:
             self.flash(request, "ok", message)
         target = "/learning"
