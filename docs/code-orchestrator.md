@@ -84,8 +84,22 @@ order, deliberately:
   installed?) and, when the backend is missing, the install guidance
   instead of a grade -- a grade that did not run never looks like a grade.
   Config stays on the Settings page's Code orchestrator section. Grading
-  runs the model on this machine and can take a few minutes the first time;
-  the page says so before you click.
+  runs in the background (issue #267): the POST only starts the job and the
+  result waits on the **status page** (`/code-grade/status`), which polls
+  the job and shows the loading stage, the elapsed time, and the grade when
+  it lands -- leaving the page, closing the tab, or a dropped connection
+  loses nothing, and the grade can be cancelled there (the model call
+  itself cannot be stopped mid-inference, so a cancel discards the result
+  and the job drains in the background; the status page says so). A grade
+  takes a few minutes on CPU: the model loads first (about a minute), then
+  grades (1-3 minutes for a small diff, up to about 10 for a large one).
+  The grade result leads with the gate decision and its reason, then the
+  detail table; `likely_correct` is almost always "no" (the model will not
+  assume tests pass) and the page says so. The run review
+  (`jev quality show`, the dashboard's Quality review section) now lists
+  each gate's code grade -- merge action, confidence, and human_review
+  routing -- instead of showing a blocked gate with no trace of the grade
+  behind it.
 
 ## Install
 

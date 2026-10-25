@@ -30,6 +30,7 @@ from jev_agent.core.ship import ShipError
 from jev_agent.core.store import NotFoundError
 from jev_agent.dashboard import ui_styles, views
 from jev_agent.dashboard.browser_install import BrowserInstallRunner
+from jev_agent.dashboard.code_grade_runner import CodeGradeExecutor, CodeGradeRunner
 from jev_agent.dashboard.design_reverse import ReverseExecutor, ReverseRunner
 from jev_agent.dashboard.design_studio import StudioWizard
 from jev_agent.dashboard.errors import friendly_error as _friendly_error
@@ -54,6 +55,7 @@ class DashboardCore:
         settings: DashboardSettings,
         launcher: RunLauncher,
         reverse_executor: ReverseExecutor | None = None,
+        code_grade_executor: CodeGradeExecutor | None = None,
     ) -> None:
         self.settings = settings
         self.launcher = launcher
@@ -65,6 +67,7 @@ class DashboardCore:
             if reverse_executor is not None
             else ReverseRunner(settings.root)
         )
+        self.code_grade_runner = CodeGradeRunner(executor=code_grade_executor)
         self.codex_flow = CodexDeviceFlow()
         self.claude_flow = ClaudeSetupTokenFlow()
         self.server_stats = ServerStatsCache()
@@ -106,6 +109,7 @@ class DashboardCore:
         self.scheduler_runner.stop()
         self.browser_installer.shutdown()
         self.reverse_runner.shutdown()
+        self.code_grade_runner.shutdown()
         self.codex_flow.shutdown()
         self.claude_flow.shutdown()
         return [

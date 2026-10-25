@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% block title %}Code Grade status{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div class="titles">
+    <h1>Code Grade status</h1>
+    <p class="lede">Grades and routes run in the background — the model call can take a
+    few minutes. This page updates on its own; the result waits here even if you leave
+    the page or close the tab.</p>
+  </div>
+  <div class="actions">
+    <a class="btn btn-secondary" href="/code-grade">Grade another diff</a>
+  </div>
+</div>
+
+<div id="code-grade-live" data-live="/code-grade/live" data-live-every="3000">
+  {% include "_code_grade_live.html" %}
+</div>
+{% endblock %}

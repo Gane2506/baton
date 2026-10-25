@@ -115,6 +115,30 @@ def test_code_status_table_reports_backend_unavailable(
     assert "model" in text
 
 
+def test_code_status_missing_backend_shows_install_guidance_when_disabled(
+    fixture_repo: Path,
+    missing_orchestrator: None,
+) -> None:
+    # Issue #267: the guidance used to print only when grading was enabled,
+    # so a machine without the laya extra (e.g. the Mac) reported nothing
+    # at all when grading was off (the fixture repo's default).
+    result = runner.invoke(app, ["code", "status", "--repo", str(fixture_repo)])
+    assert result.exit_code == 0, result.output
+    text = " ".join(result.output.split())
+    assert "backend_available" in text and "no" in text
+    assert "The model is not installed" in text
+    assert "pip install laya" in text
+
+
+def test_code_status_available_notes_grade_timing(
+    fixture_repo: Path,
+    fake_orchestrator: None,
+) -> None:
+    result = runner.invoke(app, ["code", "status", "--repo", str(fixture_repo)])
+    assert result.exit_code == 0, result.output
+    assert "takes minutes on CPU" in " ".join(result.output.split())
+
+
 def test_code_grade_happy_path(fixture_repo: Path, fake_orchestrator: None, tmp_path: Path) -> None:
     diff = tmp_path / "change.diff"
     diff.write_text("diff --git a/x.py b/x.py\n+print(1)\n", encoding="utf-8")

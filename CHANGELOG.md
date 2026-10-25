@@ -9,6 +9,20 @@ All notable changes to this project are documented here. The format is based on
 
 ### Added
 
+- **Code Grade runs in the background (issue #267).** Grading a diff from `/code-grade`
+  no longer holds the request for the minutes the model takes: the POST starts one
+  background job and redirects to a **status page** (`/code-grade/status`) that polls the
+  job, shows the loading stage (model load, then grading) with the elapsed time, and keeps
+  the result waiting even if the user leaves the page, closes the tab, or the connection
+  drops. One grade runs at a time, and the status page offers cancel — honestly: the
+  model call cannot be stopped mid-inference, so cancelling discards the result and the
+  job drains in the background. The grade result leads with the gate decision and its
+  reason, and explains that `likely_correct` is almost always "no". The run review
+  (`jev quality show` and the dashboard's Quality review section) now lists each gate's
+  code grade — merge action, confidence, and human_review routing. `jev code status`
+  prints the install guidance whenever the backend is missing (not only when grading is
+  enabled) and notes that a grade takes minutes on CPU when it is present.
+
 - **Cache dashboard UI (issue #254).** The Tools page (`/tools`) gains a **Cache** section:
   `jev cache stats` as a live table (entries, hits, dollars saved, size, shadow agreement,
   semantic mode and thresholds), a **Clear cache** form (all/decisions/roles, optional
