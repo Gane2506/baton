@@ -103,6 +103,7 @@
   --s7: 32px;
 
   --sidebar-w: 236px;
+  --submenu-w: 232px;
   --wrap: 1440px;
   color-scheme: dark;
 }
@@ -387,7 +388,7 @@ pre code { background: none; padding: 0; }
 .submenu-panel {
   position: fixed; z-index: 40;
   top: 0; bottom: 0; left: var(--sidebar-w);
-  width: 232px;
+  width: var(--submenu-w);
   display: flex; flex-direction: column; gap: 2px;
   padding: var(--s5) var(--s3);
   background: var(--surface);
@@ -455,6 +456,10 @@ pre code { background: none; padding: 0; }
      rows (see base.html) provide the tooltips. */
   body.submenu-open { --sidebar-w: 60px; }
   body.submenu-open .sidebar { padding: var(--s4) var(--s2); }
+  /* The flyout panel is fixed over the content column: shift the content
+     right by the panel width, so the page is never hidden behind it (audit 5:
+     /chats rendered with its heading, form and table clipped under the panel). */
+  body.submenu-open .content { margin-left: var(--submenu-w); }
   body.submenu-open .sidebar .brand { justify-content: center; padding: 0; }
   body.submenu-open .sidebar .brand .name,
   body.submenu-open .sidebar .brand .ver,
@@ -531,6 +536,9 @@ pre code { background: none; padding: 0; }
 }
 .provider .panel-head { justify-content: flex-start; margin-bottom: var(--s2); }
 .provider .panel-head h3 { margin: 0; }
+/* Sign-in buttons with an explanatory hint: the hint reads as its own line
+   under the button instead of wrapping ragged beside it (audit 5). */
+.provider form > span.hint { display: block; margin-top: var(--s1); }
 
 /* Prominent API key provider cards (issue #153): grid of cards, each with a
    direct inline Add when the key is unset (disappear-when-set). */
@@ -620,6 +628,10 @@ h2.section:first-child { margin-top: 0; }
 .btn:disabled, button:disabled, .button:disabled { opacity: 0.45; cursor: not-allowed; transform: none; }
 
 form.inline { display: inline-flex; }
+/* Inline forms (the run page's bisect finder): labels keep their natural
+   width instead of squeezing onto two lines when the row is tight — the
+   inputs take the shrink. */
+form.inline label { flex-shrink: 0; }
 /* Issue #200: these replace inline style="" attributes (the CSP forbids
    them, so the inline versions silently did nothing). */
 .ml-12 { margin-left: 12px; }
@@ -1211,6 +1223,12 @@ details.panel[open] > summary { margin-bottom: var(--s3); }
   border-bottom: 1px solid var(--border);
 }
 .field-row:last-of-type { border-bottom: 0; }
+/* Label-less field rows (provider key cards, token/code/model forms) are
+   control + actions only: the settings 3-column grid reserves 200px minimums
+   for a label column that isn't there, which overflows narrow cards (the
+   "Add key" button poked out of the provider cards) and parks the button
+   mid-panel elsewhere. Two columns instead (audit 5). */
+.field-row:not(:has(> label)) { grid-template-columns: minmax(0, 1fr) auto; }
 .field-row > label {
   margin: 0; display: flex; flex-direction: column; gap: 2px;
   font-weight: 600; color: var(--fg); font-size: var(--text-xs);
@@ -1373,8 +1391,30 @@ dialog.palette::backdrop { background: rgba(0, 0, 0, 0.45); }
    wizard clears state), so the card itself is a <button>: reset button
    defaults so it still looks like the link card, and style the span title
    like the <h2> it replaces (a <button> may only contain phrasing content). */
-.studio-card-form { margin: 0; }
-button.studio-card { text-align: left; font: inherit; cursor: pointer; width: 100%; }
+.studio-card-form { display: flex; margin: 0; }
+button.studio-card {
+  display: block;
+  text-align: left; font: inherit; cursor: pointer;
+  flex: 1; min-width: 0; height: 100%; padding: 0;
+  /* Chrome's button UA style is white-space: nowrap, inherited by the
+     description, so the text ran as one line and clipped at the card edge;
+     the card's copy must wrap like the link card's. */
+  white-space: normal;
+  /* Chrome sizes a button's scrollable overflow from its unwrapped text, so
+     the multi-line description widened the whole page even though it wraps
+     visually; clipping the button's overflow keeps the page at viewport
+     width. Outlines are unaffected by overflow. */
+  overflow: hidden;
+}
+/* The card is a <button> (POST form, issue #200), and Chrome does not lay a
+   button's children out as a flex container: the column collapsed to one
+   line and the content spilled over the card, the page, and the viewport
+   (audit 5). The flex layout lives on an inner span instead; the button
+   itself is a plain block that stretches to the form. */
+.studio-card-inner {
+  display: flex; flex-direction: column; gap: var(--s2);
+  height: 100%; padding: var(--s5);
+}
 .studio-card-title { display: block; font-size: var(--text-lg); font-weight: 600; }
 .studio-card-desc { color: var(--muted); font-size: var(--text-sm); flex: 1; }
 .studio-card-icon {

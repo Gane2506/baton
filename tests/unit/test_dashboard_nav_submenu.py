@@ -143,6 +143,11 @@ def test_submenu_css(client: TestClient) -> None:
     assert ".submenu-panel" in css and ".nav-parent" in css
     assert "body.submenu-open" in css
     assert "--sidebar-w: 60px" in css
+    # Audit 5: the flyout is fixed over the content column, so the content
+    # shifts right by the panel width instead of hiding behind it.
+    assert "--submenu-w: 232px" in css
+    assert "body.submenu-open .content" in css
+    assert "margin-left: var(--submenu-w)" in css
     # The collapse is desktop-only; the drawer keeps full width on mobile.
     assert "@media (min-width: 1081px)" in css
     # No hardcoded palette colors: the collapsed state must work in every style.
