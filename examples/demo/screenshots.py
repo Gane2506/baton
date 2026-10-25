@@ -59,7 +59,7 @@ SHOTS = [
     Shot(
         "dashboard-learning-graph.png",
         "/learning?profile=graph-demo&tab=graph&lesson=S2",
-        height=1400,
+        height=2200,
     ),
     Shot("dashboard-spend.png", "/spend", height=1580),
     Shot("dashboard-kpis.png", "/kpis", height=1700),
