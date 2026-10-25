@@ -632,6 +632,15 @@ form.inline { display: inline-flex; }
    width instead of squeezing onto two lines when the row is tight — the
    inputs take the shrink. */
 form.inline label { flex-shrink: 0; }
+/* The bisect form has three labeled controls in one row: keep each label on
+   one line and let the row wrap instead of squeezing the labels (audit 5). */
+form.bisect { flex-wrap: wrap; gap: var(--s1); align-items: center; }
+form.bisect label { white-space: nowrap; }
+/* Controls are width:100% globally; in this one-row form they size to their
+   content instead, so the row stays a row and the labels stay whole. */
+form.bisect select, form.bisect input[type="text"] { width: auto; flex: none; }
+form.bisect input[type="text"]#bisect-task { width: 13em; }
+form.bisect input[type="text"]#bisect-mark { width: 5em; }
 /* Issue #200: these replace inline style="" attributes (the CSP forbids
    them, so the inline versions silently did nothing). */
 .ml-12 { margin-left: 12px; }
