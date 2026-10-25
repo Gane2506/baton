@@ -1440,7 +1440,7 @@ button.studio-card { text-align: left; font: inherit; cursor: pointer; width: 10
 .studio-step .lede { color: var(--muted); margin-top: calc(-1 * var(--s2)); }
 
 /* The studio's stack recommendation (DS-03): a stepper-native card, not a chat
-   thread — the Jev+Laya pick (or the honest static fallback) with one line of why. */
+   thread — the Jev pick (or the honest static fallback) with one line of why. */
 .studio-rec {
   border: 1px solid var(--border);
   border-left: 3px solid var(--accent);
@@ -1450,7 +1450,6 @@ button.studio-card { text-align: left; font: inherit; cursor: pointer; width: 10
   margin: var(--s3) 0;
 }
 .studio-rec-head { display: flex; align-items: center; gap: var(--s2); flex-wrap: wrap; }
-.studio-rec-laya { font-size: var(--text-sm); color: var(--muted); }
 .studio-rec-why { margin: var(--s2) 0 0; color: var(--muted); font-size: var(--text-sm); }
 
 .radio-cards {

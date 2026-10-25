@@ -246,7 +246,7 @@ class RunView:
     ship_note: str = ""  # why it cannot be shipped (yet), when ship is enabled
     # AWAITING_SHIP: the PR it would open, the D6 votes and the diff, for approve/modify/stop.
     ship_preview: ShipPreview | None = None
-    ship_vote: str = ""  # the D6 answers with Jev's confidence and Laya's margin
+    ship_vote: str = ""  # the D6 decision: dispatcher name plus Jev's answers
     # AWAITING_APPROVAL: the pre-approval cost estimate and its budget verdict, shown on
     # the approval card and enforced when approving (the same gate as `jev approve`).
     estimate: CostEstimate | None = None
