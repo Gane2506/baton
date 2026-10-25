@@ -181,6 +181,13 @@ def test_studio_landing_has_two_entry_cards(client: TestClient, home: Path) -> N
     assert "/design-studio/new" in page.text
     assert "Reverse from URL or screenshots" in page.text
     assert "/design-studio/reverse" in page.text
+    # Audit 5: the wizard card is a <button> (POST form, issue #200) and Chrome
+    # does not lay a button's children out as a flex container, so the column
+    # lives on an inner span; the button itself is a plain block.
+    assert "studio-card-inner" in page.text
+    css = client.get("/static/style.css").text
+    assert ".studio-card-inner" in css
+    assert "button.studio-card" in css
 
 
 # ---- the wizard steps --------------------------------------------------------------------

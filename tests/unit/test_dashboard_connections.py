@@ -206,3 +206,18 @@ def test_refresh_post_checks_servers_and_audits(
 def test_refresh_needs_post_and_csrf(client: TestClient) -> None:
     assert client.get("/connections/refresh").status_code == 405
     assert client.post("/connections/refresh", data={}).status_code == 403
+
+
+def test_audit5_polish_css_rules(client: TestClient) -> None:
+    """Audit 5 (issue #269): the provider key cards and inline forms keep
+    their layout inside narrow containers."""
+    css = client.get("/static/style.css").text
+    # Label-less field rows (provider key cards, token/code/model forms) are
+    # control + actions only: two columns, not the settings 3-column grid
+    # whose 200px minimums pushed "Add key" out of the card.
+    assert ".field-row:not(:has(> label))" in css
+    assert "grid-template-columns: minmax(0, 1fr) auto" in css
+    # Sign-in hints read as their own line under the button.
+    assert ".provider form > span.hint" in css
+    # Inline-form labels keep their natural width (run page bisect finder).
+    assert "form.inline label" in css

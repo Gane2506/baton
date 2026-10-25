@@ -20,12 +20,14 @@
   <form method="post" action="/design-studio/new" class="studio-card-form">
     {{ csrf_input() }}
     <button class="studio-card" type="submit">
-      <span class="studio-card-icon">{{ icon("i-plus") }}</span>
-      <span class="studio-card-title">New design system</span>
-      <span class="studio-card-desc">Answer five guided questions — purpose, app type, stack, brand, generate —
-      and the studio builds a complete kit: design tokens, system markdown, logo
-      mark and favicons, saved to your library.</span>
-      <span class="studio-card-cta"><span class="btn btn-primary">Start the wizard</span></span>
+      <span class="studio-card-inner">
+        <span class="studio-card-icon">{{ icon("i-plus") }}</span>
+        <span class="studio-card-title">New design system</span>
+        <span class="studio-card-desc">Answer five guided questions — purpose, app type, stack, brand, generate —
+        and the studio builds a complete kit: design tokens, system markdown, logo
+        mark and favicons, saved to your library.</span>
+        <span class="studio-card-cta"><span class="btn btn-primary">Start the wizard</span></span>
+      </span>
     </button>
   </form>
   <a class="studio-card" href="/design-studio/reverse">
