@@ -11,6 +11,7 @@ import re
 import time
 from collections.abc import Iterator
 from pathlib import Path
+from typing import cast
 
 import httpx
 import pytest
@@ -54,8 +55,9 @@ def _csrf(client: TestClient) -> str:
 
 
 def _post(client: TestClient, url: str, data: dict[str, str]) -> httpx.Response:
-    response: httpx.Response = client.post(
-        url, data={**data, "csrf_token": _csrf(client)}, follow_redirects=False
+    response = cast(
+        httpx.Response,
+        client.post(url, data={**data, "csrf_token": _csrf(client)}, follow_redirects=False),
     )
     return response
 

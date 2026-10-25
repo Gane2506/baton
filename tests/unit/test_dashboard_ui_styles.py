@@ -10,6 +10,7 @@ from __future__ import annotations
 import re
 from collections.abc import Iterator
 from pathlib import Path
+from typing import cast
 
 import httpx
 import pytest
@@ -131,13 +132,18 @@ def _csrf(client: TestClient) -> str:
 
 
 def _post(client: TestClient, data: dict[str, str]) -> httpx.Response:
-    response = client.post(
-        "/ui-style",
-        data={**data, "csrf_token": _csrf(client)},
-        follow_redirects=False,
+    # The TestClient returns httpx2.Response when httpx2 is installed (it
+    # is, via the code-orchestrator extra -> huggingface_hub) and
+    # httpx.Response otherwise; cast to the declared type (both share the
+    # same response API).
+    return cast(
+        httpx.Response,
+        client.post(
+            "/ui-style",
+            data={**data, "csrf_token": _csrf(client)},
+            follow_redirects=False,
+        ),
     )
-    assert isinstance(response, httpx.Response)
-    return response
 
 
 def test_picker_rendered_with_sixteen_options(client: TestClient) -> None:

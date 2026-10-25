@@ -7,6 +7,7 @@ import html
 import re
 from collections.abc import Iterator
 from pathlib import Path
+from typing import cast
 
 import httpx
 import pytest
@@ -58,13 +59,18 @@ def _csrf(client: TestClient) -> str:
 
 def _post(client: TestClient, url: str, data: dict[str, str] | None = None) -> httpx.Response:
     """POST with a valid CSRF token, following redirects."""
-    response = client.post(
-        url,
-        data={"csrf_token": _csrf(client), **(data or {})},
-        follow_redirects=True,
+    # The TestClient returns httpx2.Response when httpx2 is installed (it
+    # is, via the code-orchestrator extra -> huggingface_hub) and
+    # httpx.Response otherwise; cast to the declared type (both share the
+    # same response API).
+    return cast(
+        httpx.Response,
+        client.post(
+            url,
+            data={"csrf_token": _csrf(client), **(data or {})},
+            follow_redirects=True,
+        ),
     )
-    assert isinstance(response, httpx.Response)
-    return response
 
 
 def _wizard(client: TestClient, **overrides: str) -> None:
@@ -183,12 +189,17 @@ def test_studio_landing_has_two_entry_cards(client: TestClient, home: Path) -> N
 def test_start_redirects_to_purpose(client: TestClient, home: Path) -> None:
     # Issue #200: only the POST clears wizard state (CSRF-checked); a GET is
     # a pure redirect to Purpose, so it can never wipe an in-progress wizard.
-    response = client.get("/design-studio/new", follow_redirects=False)
+    # The TestClient returns httpx2.Response when httpx2 is installed; cast
+    # so this variable keeps one type alongside `_post`'s httpx.Response.
+    response = cast(httpx.Response, client.get("/design-studio/new", follow_redirects=False))
     assert response.status_code in (302, 303)
     assert response.headers["location"] == "/design-studio/new/purpose"
     response = _post(client, "/design-studio/new", {})
     assert response.request.url.path == "/design-studio/new/purpose"
-    response = client.post("/design-studio/new", data={}, follow_redirects=False)  # no CSRF token
+    response = cast(
+        httpx.Response,
+        client.post("/design-studio/new", data={}, follow_redirects=False),  # no CSRF token
+    )
     assert response.status_code == 403
 
 

@@ -70,10 +70,13 @@ def _csrf(client: TestClient) -> str:
 
 
 def _post(client: TestClient, url: str, data: dict[str, str] | None = None) -> httpx.Response:
-    response: httpx.Response = client.post(
-        url,
-        data={**(data or {}), "csrf_token": _csrf(client)},
-        follow_redirects=False,
+    response = cast(
+        httpx.Response,
+        client.post(
+            url,
+            data={**(data or {}), "csrf_token": _csrf(client)},
+            follow_redirects=False,
+        ),
     )
     return response
 
@@ -85,10 +88,13 @@ def _register(client: TestClient, run_id: str = "run1", role: str = "coder") -> 
 
 
 def _frame(client: TestClient, session_id: str, body: bytes = PNG) -> httpx.Response:
-    response: httpx.Response = client.post(
-        f"/preview/agent/frame?session={session_id}&url=https://example.com",
-        content=body,
-        headers={"content-type": "image/png"},
+    response = cast(
+        httpx.Response,
+        client.post(
+            f"/preview/agent/frame?session={session_id}&url=https://example.com",
+            content=body,
+            headers={"content-type": "image/png"},
+        ),
     )
     return response
 

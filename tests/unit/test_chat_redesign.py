@@ -162,7 +162,12 @@ def _post(client: TestClient, url: str, data: dict[str, str] | None = None) -> h
     token: str | None = getattr(client, "jev_csrf", None)
     if token is None:
         token = _csrf(client)
-        client.jev_csrf = token
+        # A per-client cache. TestClient has no `jev_csrf` attribute in its
+        # types when httpx2 is installed (the code-orchestrator extra), so
+        # the assignment needs the ignore; without httpx2 mypy treats the
+        # client loosely and the ignore is unused, but CI always installs
+        # all extras.
+        client.jev_csrf = token  # type: ignore[attr-defined]
     return cast(
         httpx.Response,
         client.post(url, data={"csrf_token": token, **(data or {})}, follow_redirects=False),

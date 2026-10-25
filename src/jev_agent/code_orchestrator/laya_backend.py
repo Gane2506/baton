@@ -464,7 +464,11 @@ class LayaBackend:
         if self._agent is not None:
             return self._agent
         try:
-            import laya  # type: ignore[import-not-found]  # optional dependency
+            # Bare ignore on purpose: the error code differs by environment --
+            # `import-not-found` when laya is absent, `import-untyped` when
+            # it is installed (it ships no type stubs). A coded ignore would
+            # be flagged unused in one of the two.
+            import laya  # type: ignore  # optional dependency
         except ImportError as exc:
             raise CodeOrchestratorUnavailable(
                 "the Coding Decision Agent is not installed: install `laya` "

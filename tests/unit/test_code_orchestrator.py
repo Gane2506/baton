@@ -8,6 +8,7 @@ confidence first, label second, missing confidence never trusted.
 
 from __future__ import annotations
 
+import importlib.util
 import warnings
 
 import pytest
@@ -72,6 +73,20 @@ class _FakeBackend:
             "skill": "refactor",
             "answer_confidence": {"model_tier": 0.8},
         }
+
+
+class _UnavailableBackend:
+    """A backend that is missing: every call raises Unavailable."""
+
+    def grade_code(self, *, task: str, diff: str, tests: str) -> object:
+        raise CodeOrchestratorUnavailable(
+            "the Coding Decision Agent is not installed: install `laya`"
+        )
+
+    def route_model(self, request: str) -> object:
+        raise CodeOrchestratorUnavailable(
+            "the Coding Decision Agent is not installed: install `laya`"
+        )
 
 
 def test_confident_accept_passes() -> None:
@@ -216,9 +231,18 @@ def test_normalise_rejects_unknown_labels() -> None:
         )
 
 
-def test_backend_missing_is_a_clear_error_not_a_traceback_shape() -> None:
-    # The package is not installed in the test env; the loader must say so
-    # plainly and name the install, not raise ImportError.
+def test_backend_missing_is_a_clear_error_not_a_traceback_shape(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Simulate the package being absent: the loader must say so plainly
+    # and name the install, not raise ImportError. (laya IS installed in
+    # the --all-extras test env, so the absence is stubbed, not assumed.)
+    orig_find_spec = importlib.util.find_spec
+    monkeypatch.setattr(
+        importlib.util,
+        "find_spec",
+        lambda name: None if name == "laya" else orig_find_spec(name),
+    )
     with pytest.raises(CodeOrchestratorUnavailable, match="not installed"):
         load_backend("S4MPL3BI4S/Coding_Decision_Agent")
 
@@ -606,12 +630,15 @@ def test_trace_and_tool_call_wired_through_backend_when_exposed() -> None:
 
 
 def test_apply_code_grade_unavailable_never_blocks() -> None:
+    # The backend is missing (simulated: laya IS installed in the
+    # --all-extras test env), so the gate records "unavailable" and does
+    # not block.
     result = apply_code_grade(
         _result(),
         settings=CodeOrchestratorSettings(enabled=True),
         task_text="Fix x",
         diff="+x\n",
-        orchestrator=CodeOrchestrator(backend=None),
+        orchestrator=CodeOrchestrator(backend=_UnavailableBackend()),
     )
     assert result.blocked is False
     assert result.code_grade is not None

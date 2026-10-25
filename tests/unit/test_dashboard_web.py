@@ -71,10 +71,13 @@ def _csrf(client: TestClient) -> str:
 
 
 def _post(client: TestClient, url: str, data: dict[str, str] | None = None) -> httpx.Response:
-    response: httpx.Response = client.post(
-        url,
-        data={**(data or {}), "csrf_token": _csrf(client)},
-        follow_redirects=False,
+    response = cast(
+        httpx.Response,
+        client.post(
+            url,
+            data={**(data or {}), "csrf_token": _csrf(client)},
+            follow_redirects=False,
+        ),
     )
     return response
 

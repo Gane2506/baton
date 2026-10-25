@@ -8,6 +8,7 @@ import json
 import re
 from collections.abc import Iterator
 from pathlib import Path
+from typing import cast
 
 import httpx
 import pytest
@@ -68,13 +69,18 @@ def _csrf(client: TestClient) -> str:
 
 def _post(client: TestClient, url: str, data: dict[str, str] | None = None) -> httpx.Response:
     """POST with a valid CSRF token, following redirects so flashes are visible."""
-    response = client.post(
-        url,
-        data={"csrf_token": _csrf(client), **(data or {})},
-        follow_redirects=True,
+    # The TestClient returns httpx2.Response when httpx2 is installed (it
+    # is, via the code-orchestrator extra -> huggingface_hub) and
+    # httpx.Response otherwise; cast to the declared type (both share the
+    # same response API).
+    return cast(
+        httpx.Response,
+        client.post(
+            url,
+            data={"csrf_token": _csrf(client), **(data or {})},
+            follow_redirects=True,
+        ),
     )
-    assert isinstance(response, httpx.Response)
-    return response
 
 
 def _visible(response: httpx.Response) -> str:

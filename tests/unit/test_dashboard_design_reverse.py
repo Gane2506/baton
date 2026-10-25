@@ -521,14 +521,19 @@ def test_runner_records_failure_and_cleans_tmpdir(tmp_path: Path) -> None:
 def _post(
     client: TestClient, data: dict[str, str] | None = None, files: dict[str, Any] | None = None
 ) -> httpx.Response:
-    response = client.post(
-        "/design-studio/reverse",
-        data={"csrf_token": _csrf(client), **(data or {})},
-        files=files,
-        follow_redirects=True,
+    # The TestClient returns httpx2.Response when httpx2 is installed (it
+    # is, via the code-orchestrator extra -> huggingface_hub) and
+    # httpx.Response otherwise; cast to the declared type (both share the
+    # same response API).
+    return cast(
+        httpx.Response,
+        client.post(
+            "/design-studio/reverse",
+            data={"csrf_token": _csrf(client), **(data or {})},
+            files=files,
+            follow_redirects=True,
+        ),
     )
-    assert isinstance(response, httpx.Response)
-    return response
 
 
 def test_reverse_page_renders_both_modes(client: TestClient, home: Path) -> None:

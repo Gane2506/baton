@@ -12,7 +12,7 @@ import sys
 from collections.abc import Iterator, Sequence
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 
 import httpx
 import pytest
@@ -465,8 +465,9 @@ def _dash_csrf(client: TestClient) -> str:
 
 
 def _dash_post(client: TestClient, url: str, data: dict[str, str]) -> httpx.Response:
-    response: httpx.Response = client.post(
-        url, data={**data, "csrf_token": _dash_csrf(client)}, follow_redirects=False
+    response = cast(
+        httpx.Response,
+        client.post(url, data={**data, "csrf_token": _dash_csrf(client)}, follow_redirects=False),
     )
     return response
 
