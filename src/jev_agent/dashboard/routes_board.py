@@ -18,6 +18,8 @@ from jev_agent.app.errors import JevError
 from jev_agent.app.runs import RunOptions, require_ship_enabled
 from jev_agent.config import ConfigError
 from jev_agent.config.schema import ShipMode
+from jev_agent.core.backfill import BackfillError, backfill_run
+from jev_agent.core.bisect import bisect_run
 from jev_agent.core.budget import approval_budget_block
 from jev_agent.core.learning import LearningError
 from jev_agent.core.lease import RunInUseError
@@ -88,7 +90,94 @@ class BoardRoutes(DashboardCore):
 
     def run_page(self, request: Request) -> Response:
         run_id = request.path_params["run_id"]
-        return self.page(request, "run.html", lambda repo: self._run_context(repo, run_id))
+        return self.page(
+            request,
+            "run.html",
+            lambda repo: {
+                **self._run_context(repo, run_id),
+                **self._bisect_context(repo, run_id, request),
+            },
+        )
+
+    def _bisect_context(self, repo: views.Repo, run_id: str, request: Request) -> dict[str, Any]:
+        """`jev bisect` from the run page's GET form: the first bad event and its
+        blame path, or why the request itself was invalid. Only computed when the
+        form was submitted (`?bisect=...`); otherwise the form renders empty.
+        One criterion per scan (the CLI combines flags; the form picks one)."""
+        params = request.query_params
+        criterion = params.get("bisect") or ""
+        form = {
+            "criterion": criterion,
+            "task": params.get("bisect_task") or "",
+            "mark": params.get("bisect_mark") or "",
+        }
+        context: dict[str, Any] = {"bisect": None, "bisect_error": None, "bisect_form": form}
+        if not criterion:
+            return context
+        if criterion not in ("gate", "test", "task", "mark"):
+            context["bisect_error"] = (
+                f"unknown bisect criterion {criterion!r}: pick a blocked gate, failed "
+                "tests, a failed task, or a marked event"
+            )
+            return context
+        if not repo.store.events_enabled:
+            context["bisect_error"] = "event log disabled for this repo ([events] enabled = false)"
+            return context
+        mark: int | None = None
+        if criterion == "mark":
+            try:
+                mark = int(form["mark"])
+            except ValueError:
+                context["bisect_error"] = f"mark needs an event number, not {form['mark']!r}"
+                return context
+            if not any(e.run_seq == mark for e in repo.store.list_events(run_id)):
+                context["bisect_error"] = f"no event #{mark} in this run's log"
+                return context
+        task = form["task"] or None
+        result = bisect_run(
+            repo.store,
+            run_id,
+            gate=criterion == "gate",
+            test=criterion == "test",
+            task=task if criterion == "task" else None,
+            task_any=criterion == "task" and not task,
+            mark=mark,
+        )
+        if result is None:
+            label = {
+                "gate": "a blocked gate",
+                "test": "failed tests or a failed attempt",
+                "task": f"task {task} failing" if task else "any task failing",
+                "mark": f"event #{mark}",
+            }[criterion]
+            context["bisect"] = {"criterion": label, "bad": None, "chain": []}
+            return context
+        context["bisect"] = {
+            "criterion": result.criterion,
+            "bad": views.event_row(result.bad),
+            "chain": [views.event_row(e) for e in result.chain],
+        }
+        return context
+
+    async def events_backfill(self, request: Request) -> Response:
+        """`jev events backfill` for a run whose log is empty: synthesize its history
+        from the snapshot tables (one click instead of a terminal trip). A run that
+        already has events is refused by `backfill_run` and flashes the reason."""
+        run_id: str = request.path_params["run_id"]
+        to = f"/runs/{run_id}"
+        if not views.valid_run_id(run_id):
+            raise HTTPException(404, "no such action")
+
+        def backfill(repo: views.Repo, form: FormData) -> str:
+            try:
+                count = backfill_run(repo.store, run_id)
+            except BackfillError as exc:
+                # `act` only flashes JevError and friends; a refused backfill is a
+                # plain user error, so surface it the same way without a traceback.
+                raise JevError(str(exc)) from exc
+            return f"backfilled {count} synthetic events for run {run_id}"
+
+        return await self.act(request, to, backfill)
 
     def _run_live_context(self, repo: views.Repo, run_id: str) -> dict[str, Any]:
         """The 3-second live poll's context: the lightweight view, no log-dir walk."""

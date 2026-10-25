@@ -1,6 +1,14 @@
 {% extends "base.html" %}
-{% from "macros.html" import badge, state_badge, icon, copy_button with context %}
+{% from "macros.html" import badge, state_badge, icon, copy_button, csrf_input with context %}
 {% set run = v.run %}
+{% macro event_row(e, prefix="event", bad_seq=none) %}
+  <tr id="{{ prefix }}-{{ e.seq }}">
+    <td class="num mono">{{ e.seq }}</td>
+    <td class="mono">{{ e.at | time }}</td>
+    <td><span class="mono">{{ e.type }}</span>{% if e.synthetic %} {{ badge("synthetic", "info") }}{% endif %}{% if e.parent_seq %} <a class="mono small" href="#event-{{ e.parent_seq }}" title="Caused by event {{ e.parent_seq }}">←{{ e.parent_seq }}</a>{% endif %}<br><span class="small">{{ e.summary }}</span>{% if bad_seq is not none and e.seq == bad_seq %} {{ badge("first bad", "fail") }}{% endif %}</td>
+    <td>{{ e.actor }}</td>
+  </tr>
+{% endmacro %}
 {% block title %}{{ run.idea.text }}{% endblock %}
 {% block content %}
 <div class="crumbs"><a href="/">Board</a>{{ icon("i-right", "sm") }}<span class="mono crumb-id" title="{{ run.id }}">{{ run.id }}</span></div>
@@ -87,6 +95,57 @@
 </table></div>
 {% else %}
 <div class="empty"><div class="title">No attempts yet</div><p>Worker calls appear here with their model, effort, cost and log.</p></div>
+{% endif %}
+
+<h2 class="section" id="event-timeline">Event timeline</h2>
+{% if not v.events_enabled %}
+<div class="empty"><div class="title">Event log disabled</div><p>The event log is off for this repo (<code>[events] enabled = false</code>); <code>jev events</code>, <code>jev replay</code> and <code>jev bisect</code> report the same.</p></div>
+{% elif v.events %}
+<p class="muted small">{{ v.events|length }} events, oldest first — the run's story in order. An event marked synthetic was rebuilt from snapshots for a run that predates the event log.</p>
+<div class="table-wrap table-scroll"><table>
+  <thead><tr><th>#</th><th>Time</th><th>Event</th><th>Actor</th></tr></thead>
+  <tbody>
+  {% for e in v.events %}
+    {{ event_row(e) }}
+  {% endfor %}
+  </tbody>
+</table></div>
+
+<h3 class="section">Find where it went bad</h3>
+<p class="muted small">The dashboard form of <code>jev bisect</code>: the first event matching one criterion, and the chain of events that led to it.</p>
+<form class="inline" method="get" action="/runs/{{ run.id }}#event-timeline">
+  <label for="bisect">Bad means</label>
+  <select id="bisect" name="bisect">
+    <option value="gate"{{ " selected" if bisect_form.criterion == "gate" }}>a blocked quality gate</option>
+    <option value="test"{{ " selected" if bisect_form.criterion == "test" }}>failed tests or a failed attempt</option>
+    <option value="task"{{ " selected" if bisect_form.criterion == "task" }}>a task failing</option>
+    <option value="mark"{{ " selected" if bisect_form.criterion == "mark" }}>a marked event</option>
+  </select>
+  <label for="bisect-task">Task</label>
+  <input type="text" id="bisect-task" name="bisect_task" value="{{ bisect_form.task }}" placeholder="T1 (blank: any task)" maxlength="40">
+  <label for="bisect-mark">Event #</label>
+  <input type="text" id="bisect-mark" name="bisect_mark" value="{{ bisect_form.mark }}" placeholder="42" inputmode="numeric" maxlength="10">
+  <button class="btn btn-secondary" type="submit">Find it</button>
+</form>
+{% if bisect_error %}<p class="flash error">{{ bisect_error }}</p>{% endif %}
+{% if bisect %}
+  {% if bisect.bad %}
+  <p><strong>First bad ({{ bisect.criterion }}):</strong></p>
+  <div class="table-wrap"><table>
+    <thead><tr><th>#</th><th>Time</th><th>Event</th><th>Actor</th></tr></thead>
+    <tbody>
+    {% for e in bisect.chain %}
+      {{ event_row(e, prefix="bisect", bad_seq=bisect.bad.seq) }}
+    {% endfor %}
+    </tbody>
+  </table></div>
+  {% else %}
+  <p class="flash ok">No bad event found: the run looks fine by {{ bisect.criterion }}.</p>
+  {% endif %}
+{% endif %}
+{% else %}
+<div class="empty"><div class="title">No events recorded for this run yet</div><p>This run predates the event log, or its events were never recorded. Backfill rebuilds the history from the run's snapshots — every rebuilt event is marked synthetic, and the rebuilt log supports timeline viewing but not full verification.</p>
+<form method="post" action="/runs/{{ run.id }}/events/backfill">{{ csrf_input() }}<button class="btn btn-secondary" type="submit">Backfill events</button></form></div>
 {% endif %}
 
 <nav class="crumbs" aria-label="Breadcrumb"><a href="/">Board</a>{{ icon("i-right", "sm") }}<a href="/runs/{{ run.id }}">run {{ run.id[-4:] }}</a>{{ icon("i-right", "sm") }}<span aria-current="page">Quality review</span></nav>

@@ -44,6 +44,8 @@ from jev_agent.core.budget import (
 )
 from jev_agent.core.cache import Cache, CacheStats
 from jev_agent.core.chat import ChatMeta, list_chats, read_transcript
+from jev_agent.core.events import Event
+from jev_agent.core.events import summarize as summarize_event
 from jev_agent.core.harness import DEFAULT_TIMEOUT_S
 from jev_agent.core.kpi import PrKpis, compute_run_kpis, load_pr_kpis
 from jev_agent.core.learning import (
@@ -121,7 +123,12 @@ def open_repo(root: Path) -> Iterator[Repo]:
     """
     config = load_config(root)
     try:
-        with Store.open(root / STATE_DIRNAME / STATE_DB_FILENAME) as store:
+        with Store.open(
+            root / STATE_DIRNAME / STATE_DB_FILENAME,
+            # The `[events]` kill switch, like the CLI's `repo_context`: with the log
+            # off, dashboard writes (queue, cancel, ...) emit no events either.
+            events_enabled=config.events.enabled,
+        ) as store:
             learning = Learning.for_store(store)
             try:
                 yield Repo(root, config, store, learning)
@@ -221,6 +228,21 @@ class LogFile:
     size: int
 
 
+@dataclass(frozen=True)
+class EventRow:
+    """One row of the run page's event timeline: the CLI's `summarize` line,
+    plus the envelope fields the page shows (sequence, time, actor, synthetic
+    marker, causal parent)."""
+
+    seq: int
+    at: datetime
+    type: str
+    summary: str
+    actor: str
+    synthetic: bool = False
+    parent_seq: int | None = None
+
+
 @dataclass
 class RunView:
     run: RunRecord
@@ -254,6 +276,11 @@ class RunView:
     estimate_verdict: EstimateVerdict | None = None
     estimate_line: str = ""  # "Estimated cost: $1.20-$3.40 (basis) of $5.00 run budget"
     approve_confirm: str = "Approve this plan and start executing it?"
+    # The run's event timeline (`jev events`): [] when the log is empty, and
+    # `events_enabled` False when the repo turned the log off. The live fragment
+    # (`run_live_view`) never loads them: the timeline is history, not live state.
+    events: list[EventRow] = field(default_factory=list)
+    events_enabled: bool = True
 
 
 def run_dir(repo: Repo, run_id: str) -> Path:
@@ -429,6 +456,26 @@ def _attempt_rows(store: Store, run_id: str, base: Path) -> list[AttemptRow]:
     return attempts
 
 
+def event_row(event: Event) -> EventRow:
+    """One event as a timeline row (the CLI's one-line summary)."""
+    return EventRow(
+        event.run_seq,
+        event.ts,
+        event.type.value,
+        summarize_event(event),
+        event.actor,
+        event.synthetic,
+        event.parent_run_seq,
+    )
+
+
+def _event_rows(store: Store, run_id: str) -> list[EventRow]:
+    """The run's event timeline (`jev events`), oldest first, with the CLI's
+    one-line summary per event. The summary is payload fields only, never
+    secrets (see `core.events.summarize`)."""
+    return [event_row(e) for e in store.list_events(run_id)]
+
+
 def _estimate_context(
     store: Store, config: JevConfig, run: RunRecord
 ) -> tuple[CostEstimate | None, EstimateVerdict | None, str, str]:
@@ -460,6 +507,7 @@ def _run_view(repo: Repo, run_id: str, *, light: bool = False) -> RunView:
         d.point == "D6" for d in decisions
     )
     estimate, verdict, estimate_line, approve_confirm = _estimate_context(store, repo.config, run)
+    events_enabled = store.events_enabled
     return RunView(
         run=run,
         tasks=store.list_tasks(run_id),
@@ -482,6 +530,8 @@ def _run_view(repo: Repo, run_id: str, *, light: bool = False) -> RunView:
         estimate_verdict=verdict,
         estimate_line=estimate_line,
         approve_confirm=approve_confirm,
+        events=[] if light or not events_enabled else _event_rows(store, run_id),
+        events_enabled=events_enabled,
         **ship_state(repo, run, reports),
     )
 

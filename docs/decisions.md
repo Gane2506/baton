@@ -2,6 +2,46 @@
 
 Deviations from [PLAN.md](../PLAN.md) and choices it left open. Newest first.
 
+## 2026-10-25: Events, replay and capbench in the dashboard — what belongs in the browser (#254)
+
+- **The event timeline and `jev bisect` now live on the run page; `jev replay` and
+  `jev capbench` stay CLI-only.** The bar was the standing browser-first rule
+  ("CLI is CLI, this is browser 1st") read honestly: a dashboard UI earns its
+  place only when a non-terminal user would realistically need it while operating
+  the dashboard. A dev-only diagnostic with no operator workflow stays in the
+  terminal.
+- **`jev events` timeline: built.** The run page shows the run's events oldest
+  first, with the CLI's one-line summary per event (`core.events.summarize`, now
+  shared by the CLI and the dashboard so the two never drift), synthetic markers
+  for backfilled events, and causal parent links (`←412`). This closes the
+  deferral in `docs/events.md`: the `--export` HTML was "the visualization until
+  the dashboard renders the log natively". A run with no events offers a
+  **Backfill events** button (`jev events backfill`, one click) instead of a
+  terminal trip; a repo with `[events] enabled = false` says so instead.
+- **`jev bisect`: built.** "Find where it went bad" on the run page: one
+  criterion per scan (blocked gate, failed tests, a failing task, a marked
+  event), the first bad event and its blame path. It answers "why did my run
+  fail?" from the page the failure is already on. The CLI keeps the combinable
+  flags and `--good`; the form does not need them.
+- **`jev replay`: CLI-only.** Verify mode is an integrity audit of the event
+  system itself — envelope gaps, decision-contract drift, snapshot agreement —
+  whose audience is the developer maintaining the log, not the run operator: a
+  divergence has no in-UI remediation, and the dashboard already shows the
+  snapshots replay would check. `--step` is an interactive terminal debugger by
+  design, and `--to` state reconstruction is a debugging aid. If divergences
+  ever need surfacing, the timeline section is where they would go.
+- **`jev capbench`: CLI-only.** `run` spends real model money (up to `--budget`
+  per task, 30–90 minutes per task) and is deliberately manual-trigger-only
+  with no schedule; a dashboard button would invite accidental spend and long
+  unsupervised jobs the dashboard's job launcher is not built to supervise.
+  `grade` is a grader-debugging aid, `report` regenerates repo docs, and
+  `tasks` is a dev listing; the scoreboard already publishes to
+  `docs/benchmarks.md`.
+- **The `[events]` kill switch now binds the dashboard too.** `views.open_repo`
+  passes `config.events.enabled` to `Store.open`, like the CLI's `repo_context`;
+  before this, the dashboard always opened the store with the log on, so its own
+  writes would have emitted events into a log the repo had turned off.
+
 ## 2026-10-24: Live Coding Decision Agent backend via `laya` (#259)
 
 - **The model now runs.** `LayaBackend` (`code_orchestrator/laya_backend.py`)

@@ -78,7 +78,11 @@ links (`←412`) and synthetic markers (`~`):
 ```
 
 Filters: `--type/-t` (repeatable), `--after`, `--limit/-n`, `--json` (raw JSON
-lines). `jev events backfill RUN` synthesizes a history for runs that predate
+lines). The same timeline is on the run page in the dashboard
+([dashboard.md](dashboard.md)), with a backfill button for runs with no events
+and a "Find where it went bad" form (`jev bisect`).
+
+`jev events backfill RUN` synthesizes a history for runs that predate
 the log, from the snapshot tables — every event `synthetic=true`, no causal
 links, ordered by timestamp. Backfill runs once per run and refuses runs that
 already have events; backfilled runs support timeline viewing and `--mark`
@@ -154,9 +158,10 @@ blame path:
 ```
 
 `--export timeline.html` writes a self-contained HTML timeline (grouped by
-task, colored by actor, decision answers inline) — the visualization until
-the dashboard renders the log natively (deferred; the dashboard keeps reading
-the snapshot tables).
+task, colored by actor, decision answers inline) — a standalone file for
+sharing. The dashboard renders the same log natively on the run page (the Event
+timeline section, with the bisect form alongside it); the export remains for a
+portable copy.
 
 ## Schema notes
 
