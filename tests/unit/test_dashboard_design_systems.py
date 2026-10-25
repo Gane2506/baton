@@ -193,7 +193,9 @@ def test_detail_flattens_light_dark_colors(client: TestClient, home: Path) -> No
         "radii": {"md": 8},
     }
     save_library_system("cxm", MARKDOWN, tokens, {"source": "wizard"})
-    response = client.get("/design-systems/cxm")
+    # TestClient returns httpx2.Response when httpx2 is installed (via the
+    # code-orchestrator extra); cast like _post does — same response API.
+    response = cast(httpx.Response, client.get("/design-systems/cxm"))
     assert response.status_code == 200
     page = _visible(response)
     assert "light.primary" in page
