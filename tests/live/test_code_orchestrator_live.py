@@ -11,6 +11,12 @@ task, and asserts only the documented contract: a closed merge-action
 label, a 0-4 quality score, and a routing tier/skill from the documented
 sets. It does not assert a particular grade -- a live model's verdict on a
 sample diff is not a stable assertion.
+
+TMPDIR: `laya.load` reconstructs the checkpoint through the temp dir, and
+the default /tmp is a 512M tmpfs on this VM -- smaller than the 842 MB
+model, so the load fails with "No space left on device". Point TMPDIR at
+a directory on the home disk before running this test (and before a first
+grade anywhere): `TMPDIR=~/workspace/baton-program/cda/tmpdir`.
 """
 
 import math

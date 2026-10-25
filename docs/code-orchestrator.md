@@ -105,6 +105,11 @@ jev code grade --task "Fix the off-by-one in paginate()" --diff-file change.diff
   (`model.safetensors`, bf16) into the Hugging Face cache
   (`~/.cache/huggingface/hub`, or `$HF_HOME`). Later grades reuse it;
   set `HF_HUB_OFFLINE=1` to run fully offline after the first download.
+  **TMPDIR matters:** `laya.load` reconstructs the checkpoint through
+  the temp dir, and the default /tmp is a 512M tmpfs on the dev VM --
+  smaller than the model, so the first load fails with "No space left on
+  device". Point TMPDIR at a directory on the home disk before the first
+  grade (e.g. `TMPDIR=~/workspace/baton-program/cda/tmpdir`).
 - **Torch:** `pip install laya` pulls the default torch wheel, which
   includes CUDA libraries (~2.5 GB). On a CPU-only machine install the CPU
   wheel first, then `laya` without its torch dependency resolution
@@ -199,12 +204,51 @@ roughly halves the state, so it grades about twice as fast on CPU.
 
 Two honest caveats from the same measurement: **likely_correct stayed
 "no" (0.86–0.90) in all four variants** — the state carries no evidence
-the tests pass, and the model will not assume they do. Whether passing
-the test outcome in `notes` flips it is being measured (issue #259). And
-**merge_action confidence stayed low (0.37–0.45) even in-distribution** —
-below the 0.7 threshold, so this diff gates to human_review, the safe
-direction. The threshold measurement on ten known-good diffs decides
-whether 0.7 is right or needs adjusting; see below.
+the tests pass, and the model will not assume they do. Passing the test
+outcome in `notes` moved its confidence 0.86 → 0.60 but did not flip it
+(see "Measured threshold" below). And **merge_action confidence stayed
+low (0.37–0.45) even in-distribution** — below the 0.7 threshold, so
+this diff gates to human_review, the safe direction. The threshold
+measurement on six known-good diffs (the four largest planned diffs were
+not graded — the run was OOM-killed by concurrent Rust jobs on the VM,
+and the gate grades single-task diffs, not 88 KB merges) decides whether
+0.7 is right or needs adjusting; see below.
+
+## Measured threshold: 0.7 stays (issue #259)
+
+Measured live on the CPU VM (13 grades, `live_measurements.json` in the
+issue notes): six known-good merged diffs, one synthetic bad diff (a real
+fix with its guard removed), one tests-variant, and five per-file regrade
+samples. The verdict is **keep 0.7 — do not lower it**.
+
+- **merge_action confidence is 0.36–0.52 on every grade** — good diffs,
+  the bad diff, and regrade samples alike. Nothing clears 0.7, so at 0.7
+  the gate sends everything to human_review. The auto-accept and
+  auto-reject paths are effectively dead on CPU-measured Baton diffs.
+- **No threshold separates good from bad.** The bad diff scored
+  request_changes at 0.44 — squarely inside the good diffs' 0.36–0.51
+  range. Lowering the bar to ~0.45 would auto-accept three good diffs
+  but rests on seven data points and a model whose benchmark
+  merge_action accuracy is 0.59; it is not a calibration, it is a guess.
+- **code_quality separates weakly.** Good diffs scored 4 on 5 of 6 (one
+  2, on a large multi-file round); the bad diff scored 2. A 2 is not
+  proof of bad — one good diff scored it too.
+- **likely_correct is always "no"** (13 of 13, including the known-good
+  diffs). Passing the test outcome in `notes` moved its confidence
+  0.86 → 0.60 but did not flip it. It is not a usable gate signal; the
+  gate already knows the test outcome from its own checks.
+- **Regrade vs the swarm grades: mean absolute difference 1.0** (2 of 6
+  agree, 2 off by 1 in the model's favour, 1 off by 1 against, 1 off by
+  3 — nav.py model 1 vs swarm 4). The model grades the *change*, the
+  swarm graded the *file*; they are not the same judgement, and the
+  model does not reproduce the swarm's file grades.
+
+So the feature's value is the human_review routing, the code_quality
+signal, and the recorded grade — not auto-merge. The gate's 0.7 default
+stands, and the model is a second opinion that can only block on a
+confident reject (which never fired in 13 grades) or send work to a
+human. That is the safe, honest configuration until a much larger
+calibration set exists.
 
 ## Error taxonomy (decided, not accidental)
 
