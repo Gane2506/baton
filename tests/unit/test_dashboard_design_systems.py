@@ -181,6 +181,30 @@ def test_detail_shows_tokens_and_system(client: TestClient, home: Path) -> None:
     assert "Export tokens" in page.text
 
 
+def test_detail_flattens_light_dark_colors(client: TestClient, home: Path) -> None:
+    """Issue #279: a light/dark colors dict renders as flattened rows, not reprs."""
+    tokens: dict[str, object] = {
+        "colors": {
+            "light": {"primary": "#DBA724", "background": "#FFFFFF"},
+            "dark": {"primary": "#DBA724", "background": "#18150C"},
+        },
+        "type_scale": {"base": 16},
+        "spacing": {"md": 16},
+        "radii": {"md": 8},
+    }
+    save_library_system("cxm", MARKDOWN, tokens, {"source": "wizard"})
+    # TestClient returns httpx2.Response when httpx2 is installed (via the
+    # code-orchestrator extra); cast like _post does — same response API.
+    response = cast(httpx.Response, client.get("/design-systems/cxm"))
+    assert response.status_code == 200
+    page = _visible(response)
+    assert "light.primary" in page
+    assert "dark.background" in page
+    assert "#18150C" in page
+    assert "{'primary'" not in page
+    assert "primary_hover" not in page  # no repr fragments leak through
+
+
 def test_detail_unknown_name_404(client: TestClient, home: Path) -> None:
     assert client.get("/design-systems/nope").status_code == 404
 
