@@ -56,6 +56,13 @@ to paste. It is the fastest way to check whether a `jev` command has a dashboard
   latency), attempts (role, worker, model, effort, status, cost, lessons injected, log link),
   learning outcome, the quality review (`review.md`, rendered as sanitized HTML), the result
   branch name, and every file under `.jev/runs/<id>/` (served read-only as plain text).
+  The **event timeline** (`jev events`) lists every state change oldest first with the CLI's
+  one-line summary, synthetic markers for backfilled events and causal parent links
+  (`←412`); a run with no events offers a **Backfill events** button, and a repo with the log
+  off says so instead. **Find where it went bad** (`jev bisect`) scans for the first blocked
+  gate, failed tests, failing task or marked event and shows the blame path that led to it.
+  `jev replay` and `jev capbench` stay CLI-only by design (see
+  [decisions.md](decisions.md#2026-10-25-events-replay-and-capbench-in-the-dashboard--what-belongs-in-the-browser-254)).
   Buttons:
   - **Approve and run** for a run awaiting approval (`jev approve`).
   - **Resume** for an interrupted run or a NEEDS_HUMAN run with a resume point (`jev resume`).
@@ -80,6 +87,8 @@ to paste. It is the fastest way to check whether a `jev` command has a dashboard
   (issue #61) keeps a terminal `jev resume`, `jev approve` or the scheduler from driving the
   same run at the same time: whichever starts second fails with "run ... is in use by another
   jev process".
+
+  ![The run page's event timeline: every state change oldest first, with the "Find where it went bad" form](images/dashboard-events.png)
 - **Queue** (`/queue`): items in scheduler order with their effective status and flags; add an
   idea (priority, plan only, learning profile or none, quality level, workspace profile name),
   move an item to the top, up or down, remove it, or clear the whole queue (asks for

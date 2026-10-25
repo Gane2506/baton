@@ -112,6 +112,7 @@ def create_app(
         Route("/runs/{run_id}", dash.run_page),
         Route("/runs/{run_id}/live", dash.run_fragment),
         Route("/runs/{run_id}/files/{path:path}", dash.run_file),
+        Route("/runs/{run_id}/events/backfill", dash.events_backfill, methods=["POST"]),
         Route("/runs/{run_id}/{action}", dash.run_action, methods=["POST"]),
         Route("/queue", dash.queue_page),
         Route("/queue/add", dash.queue_add, methods=["POST"]),
