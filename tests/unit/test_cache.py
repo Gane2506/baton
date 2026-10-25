@@ -15,6 +15,7 @@ from jev_agent.core.assign import Assignment
 from jev_agent.core.cache import (
     Cache,
     SimHashEmbedder,
+    calibrate_thresholds,
     decision_cache_key,
     normalize_prompt,
     repo_fingerprint,
@@ -741,3 +742,84 @@ def test_similar_skips_incompatible_entry_and_records(
         "RuntimeError" in rec.getMessage() and "cross-embedder mismatch" in rec.getMessage()
         for rec in caplog.records
     )
+
+
+# ---- calibration (issue #254: shared by `jev cache calibrate` and the dashboard) ----
+
+
+def _record(
+    store: Store, run_id: str, point: str, answer: str, dispatcher: str = "consensus"
+) -> None:
+    store.record_decision(
+        run_id,
+        None,
+        DecisionRequest(
+            point=point,  # type: ignore[arg-type]
+            state={},
+            questions={"action": ["plan", "ask"]},
+        ),
+        Decision(
+            point=point,  # type: ignore[arg-type]
+            answers={"action": answer},
+            dispatcher=dispatcher,  # type: ignore[arg-type]
+        ),
+    )
+
+
+def test_calibrate_empty_history(store: Store) -> None:
+    result = calibrate_thresholds(store)
+    assert result.pairs == 0
+    assert result.points == 0
+    assert result.best is None
+    assert all(row.pairs == 0 and row.probability is None for row in result.rows)
+
+
+def test_calibrate_identical_decisions_agree(store: Store, run_id: str) -> None:
+    _record(store, run_id, "D1", "plan")
+    _record(store, run_id, "D1", "plan")
+    result = calibrate_thresholds(store)
+    assert result.pairs == 1
+    assert result.points == 1
+    assert result.best == 0.99
+    for row in result.rows:
+        assert row.pairs == 1
+        assert row.probability == 1.0
+
+
+def test_calibrate_disagreement_blocks_candidate(store: Store, run_id: str) -> None:
+    _record(store, run_id, "D1", "plan")
+    _record(store, run_id, "D1", "plan")
+    _record(store, run_id, "D1", "ask")
+    result = calibrate_thresholds(store)
+    assert result.pairs == 3
+    assert result.best is None
+    for row in result.rows:
+        assert row.pairs == 3
+        assert row.probability == pytest.approx(1 / 3)
+
+
+def test_calibrate_ignores_rules_fallback(store: Store, run_id: str) -> None:
+    _record(store, run_id, "D1", "plan")
+    _record(store, run_id, "D1", "plan")
+    _record(store, run_id, "D1", "ask", dispatcher="rules")
+    result = calibrate_thresholds(store)
+    assert result.pairs == 1
+    assert result.points == 1
+    assert result.best == 0.99
+
+
+# ---- cache_count (issue #254: the clear confirmation counts what it clears) --------
+
+
+def test_cache_count_matches_clear_filters(store: Store) -> None:
+    store.cache_put("a1", "decision", "{}", "{}", 0.1, 168)
+    store.cache_put("a2", "decision", "{}", "{}", 0.1, 168)
+    store.cache_put("b1", "role", "{}", "{}", 0.1, 168)
+    assert store.cache_count() == 3
+    assert store.cache_count(kind="decision") == 2
+    assert store.cache_count(kind="role") == 1
+    assert store.cache_count(older_than_hours=0) == 3
+    assert store.cache_count(older_than_hours=10000) == 0
+    assert store.cache_count(kind="decision", older_than_hours=10000) == 0
+    assert store.cache_clear(kind="decision") == 2
+    assert store.cache_count() == 1
