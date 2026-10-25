@@ -13,6 +13,8 @@ from starlette.responses import (
 )
 
 from jev_agent.app import settings
+from jev_agent.app.errors import JevError
+from jev_agent.app.models import fetch_catalog
 from jev_agent.config import ConfigError
 from jev_agent.config.schema import BEGINNER_FIELDS
 from jev_agent.core.benchmarks import DEFAULT_LAST
@@ -107,6 +109,22 @@ class SettingsRoutes(DashboardCore):
             }
 
         return self._settings_page(request, "tools", "tools.html", extra)
+
+    async def models_refresh(self, request: Request) -> Response:
+        """Refresh the OpenRouter model catalog from the browser (issue #251):
+        the dashboard never fetches on render, but this user-initiated POST may.
+        A failed fetch keeps the stale cache and reports its warning; with no
+        cache at all the warning is the error.
+        """
+
+        def refresh(repo: views.Repo, form: FormData) -> str:
+            catalog, warning = fetch_catalog(repo.root, repo.config, refresh=True)
+            if catalog is None:
+                raise JevError(warning or "could not fetch the model catalog")
+            note = f"refreshed the model catalog ({len(catalog.models)} models)"
+            return note if not warning else f"{note} — {warning}"
+
+        return await self.act(request, "/tools", refresh)
 
     def _settings_page(
         self,

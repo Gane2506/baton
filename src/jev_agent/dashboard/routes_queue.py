@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from typing import Any, cast
+from zoneinfo import ZoneInfo
 
 from starlette.concurrency import run_in_threadpool
 from starlette.datastructures import FormData
@@ -19,10 +20,14 @@ from jev_agent.config import ConfigError
 from jev_agent.config.schema import ShipMode
 from jev_agent.core.pipeline import PipelineError
 from jev_agent.core.queue import Move, QueueError, add_idea, move_item, queue_counts, remove_item
-from jev_agent.core.scheduler import SchedulerLocked, spent_today
-from jev_agent.core.store import (
-    QUEUE_PRIORITIES,
+from jev_agent.core.recurrence import (
+    describe,
+    local_timezone_name,
+    next_due,
+    parse_schedule,
 )
+from jev_agent.core.scheduler import SchedulerLocked, spent_today
+from jev_agent.core.store import QUEUE_PRIORITIES
 from jev_agent.dashboard import views
 from jev_agent.dashboard.core import DashboardCore
 from jev_agent.dashboard.errors import friendly_error as _friendly_error
@@ -110,6 +115,38 @@ class QueueRoutes(DashboardCore):
             return f"removed item {item_id}"
 
         return await self.act(request, "/queue", remove)
+
+    async def queue_recurring_add(self, request: Request) -> Response:
+        """Create a recurring task from the browser (issue #251): the same
+        `parse_schedule` DSL as `jev queue add --repeat`, so the browser and
+        the CLI accept exactly the same schedules. A bad schedule flashes the
+        parser's message (it already lists the valid formats) instead of a 500.
+
+        Learning/profile/quality/ship options stay CLI-only for recurring
+        tasks; this form covers brief, schedule, priority and plan-only.
+        """
+
+        def add(repo: views.Repo, form: FormData) -> str:
+            brief = _text(form, "brief") or ""
+            if not brief:
+                raise JevError("the brief is empty")
+            priority = _text(form, "priority") or "normal"
+            if priority not in QUEUE_PRIORITIES:
+                raise JevError(f"unknown priority {priority!r}")
+            schedule = parse_schedule(_text(form, "schedule") or "")
+            tz_name = local_timezone_name()
+            tz = ZoneInfo(tz_name)
+            task = repo.store.add_recurring_task(
+                brief,
+                schedule,
+                tz_name,
+                next_due(schedule, datetime.now(tz), tz),
+                priority=priority,
+                plan_only=form.get("plan_only") == "on",
+            )
+            return f"recurring task {task.id}: {describe(schedule)}"
+
+        return await self.act(request, "/queue", add)
 
     async def queue_recurring_pause(self, request: Request) -> Response:
         task_id = _int(request.path_params["id"])

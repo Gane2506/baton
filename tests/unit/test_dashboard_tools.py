@@ -8,6 +8,7 @@ section headers with plain-language blurbs. No network, no real models.
 from __future__ import annotations
 
 import re
+import time
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -19,8 +20,10 @@ pytest.importorskip("starlette", reason="dashboard extra not installed")
 from starlette.testclient import TestClient
 
 from jev_agent.cli.wiring import FAKE_WORKERS_ENV
+from jev_agent.dashboard import routes_settings
 from jev_agent.dashboard.app import create_app
 from jev_agent.dashboard.security import DashboardSettings
+from jev_agent.workers.openrouter_models import ModelCatalog, ModelInfo
 
 
 @pytest.fixture(autouse=True)
@@ -130,3 +133,41 @@ def test_tools_entry_rows_use_title_case_labels_and_btn_classes(client: TestClie
     assert ">Env from</label>" in html
     assert '<button class="btn btn-sm btn-secondary" type="submit">Save</button>' in html
     assert "Remove github" in html
+
+
+# ---- cycle 4 (issue #251): the model catalog refresh used to be CLI-only ------
+
+
+def test_models_refresh_button_present(client: TestClient) -> None:
+    html = _tools_html(client)
+    assert "/tools/models/refresh" in html
+    assert "Fetch the model list" in html  # the empty state: no catalog yet
+
+
+def test_models_refresh_success(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    catalog = ModelCatalog(
+        models=[ModelInfo(id="a/b"), ModelInfo(id="c/d")],
+        fetched_at=time.time(),
+    )
+    monkeypatch.setattr(
+        routes_settings, "fetch_catalog", lambda root, config, refresh: (catalog, None)
+    )
+    response = _post(client, "/tools/models/refresh", {})
+    assert response.status_code == 303
+    assert "refreshed the model catalog (2 models)" in client.get("/tools").text
+
+
+def test_models_refresh_failure_is_a_message(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        routes_settings,
+        "fetch_catalog",
+        lambda root, config, refresh: (
+            None,
+            "cannot fetch https://example.test/models: boom; no cached model list",
+        ),
+    )
+    response = _post(client, "/tools/models/refresh", {})
+    assert response.status_code == 303
+    assert "cannot fetch https://example.test/models" in client.get("/tools").text

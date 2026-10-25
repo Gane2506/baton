@@ -584,8 +584,9 @@ class QueueView:
 
 
 def recurring_rows(repo: Repo) -> list[RecurringRow]:
-    """The recurring tasks (`jev queue add --repeat`), next-due first, with each schedule in
-    plain words and each run time in the viewer's local timezone."""
+    """The recurring tasks (`jev queue add --repeat`, or the Queue page's form),
+    next-due first, with each schedule in plain words and each run time in the
+    viewer's local timezone."""
     local = ZoneInfo(local_timezone_name())
     return [
         RecurringRow(

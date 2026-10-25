@@ -335,6 +335,39 @@ def test_queue_page_and_actions(client: TestClient, planned: tuple[Path, str]) -
         assert len(store.list_queue()) == 1
 
 
+def test_queue_recurring_add_from_browser(client: TestClient, planned: tuple[Path, str]) -> None:
+    # Cycle 4 (issue #251): recurring-task creation used to be CLI-only
+    # (`jev queue add --repeat`). The Queue page now has the form.
+    repo, _ = planned
+    page = client.get("/queue")
+    assert "/queue/recurring/add" in page.text
+    response = _post(
+        client,
+        "/queue/recurring/add",
+        {"brief": "weekly report", "schedule": "weekly@mon-09:00", "priority": "low"},
+    )
+    assert response.status_code == 303
+    page = client.get("/queue")
+    assert "recurring task 1: Every week on Monday at 09:00" in page.text
+    assert "weekly report" in page.text
+    with _store(repo) as store:
+        tasks = store.list_recurring_tasks()
+        assert len(tasks) == 1
+        assert tasks[0].brief == "weekly report"
+        assert tasks[0].schedule == "0 9 * * 1"
+        assert tasks[0].priority == "low"
+
+    # Errors come back as messages, nothing is created.
+    _post(client, "/queue/recurring/add", {"brief": "bad", "schedule": "not-a-schedule"})
+    assert "invalid schedule" in client.get("/queue").text
+    _post(client, "/queue/recurring/add", {"brief": "   ", "schedule": "daily"})
+    assert "the brief is empty" in client.get("/queue").text
+    _post(client, "/queue/recurring/add", {"brief": "x", "schedule": "daily", "priority": "top"})
+    assert "unknown priority" in client.get("/queue").text
+    with _store(repo) as store:
+        assert len(store.list_recurring_tasks()) == 1
+
+
 def test_queue_search_filters_by_idea(client: TestClient) -> None:
     # Cycle 3 workstream C (issue #184): the queue list searches like chats do --
     # server-side, on the idea text, case-insensitively, with a clearable
