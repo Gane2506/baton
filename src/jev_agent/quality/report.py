@@ -101,6 +101,40 @@ def _code_grade(result: GateResult) -> list[str]:
     ]
 
 
+def _code_grade_summary(gates: Sequence[GateResult]) -> list[str]:
+    """The Coding Decision Agent's grade per gate (issue #267).
+
+    The run review is what the dashboard's Quality review section renders
+    and what `jev quality show` prints, and it used to show a blocked gate
+    with no trace of the grade behind it: the grade, its merge-action
+    confidence, and the human_review routing only existed in the per-gate
+    report file. One line per gate that has a grade, so the routing is
+    visible where the verdict is.
+    """
+    graded = [g for g in gates if g.code_grade is not None]
+    if not graded:
+        return []
+    lines = ["## Code orchestrator", ""]
+    for g in graded:
+        grade = cast(dict[str, Any], g.code_grade)
+        if grade.get("status") != "graded":
+            lines.append(
+                f"- {g.label}: not graded "
+                f"({grade.get('status', 'unknown')}: {grade.get('detail', '')})."
+            )
+            continue
+        gate = grade.get("gate")
+        gate_d: dict[str, Any] = gate if isinstance(gate, dict) else {}
+        lines.append(
+            f"- {g.label}: code_quality {grade.get('code_quality')}/4, "
+            f"merge_action `{grade.get('merge_action')}` "
+            f"(confidence {gate_d.get('confidence', '')}) -> "
+            f"gate {gate_d.get('decision', '')} ({gate_d.get('reason', '')})."
+        )
+    lines.append("")
+    return lines
+
+
 def _ship_score_summary(gates: Sequence[GateResult]) -> list[str]:
     """One line on the latest integration gate's ship score, for the run review."""
     scored = [g for g in gates if g.scope == "integration" and g.score is not None]
@@ -252,6 +286,9 @@ def render_run_review(run_id: str, level: QualityLevel, results: Sequence[GateRe
         verdict = "**blocked**" if g.blocked else "passed"
         summary = g.review.summary if g.review else f"({g.review_status})"
         lines.append(f"| {cell(g.label)} | {verdict} | {cell(counts)} | {cell(summary)} |")
+    code_grade_lines = _code_grade_summary(gates)
+    if code_grade_lines:
+        lines += ["", *code_grade_lines]
     notes = [(g.label, n) for g in gates if g.review for n in g.review.walkthrough]
     findings = [(g.label, f) for g in gates for f in sort_findings(g.findings())]
     findings.sort(key=lambda pair: SEVERITIES.index(pair[1].severity))

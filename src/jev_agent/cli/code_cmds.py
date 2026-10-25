@@ -84,14 +84,24 @@ def status(repo: RepoOption = Path(".")) -> None:
         table.add_row("max_diff_chars", str(settings.max_diff_chars))
         table.add_row("backend_available", "yes" if available else "no")
         console.print(table)
-        if settings.enabled and not available:
+        if not available:
+            # The guidance names the install whether grading is enabled or
+            # not (issue #267): a disabled-but-uninstalled backend used to
+            # report nothing at all, so a Mac without the laya extra looked
+            # identical to a machine with it.
             console.print(
-                "Enabled but the model is not installed: install `laya` "
+                "The model is not installed: install `laya` "
                 "(`pip install laya`; CPU-only torch works -- see "
                 "docs/code-orchestrator.md). The first grade downloads the "
                 "~842 MB checkpoint into the Hugging Face cache. Until then "
                 "the quality gate records grades as unavailable instead of "
                 "blocking.",
+                markup=False,
+            )
+        else:
+            console.print(
+                "A grade runs on this machine and takes minutes on CPU "
+                "(model load ~50 s, then 1-3 min for a small diff).",
                 markup=False,
             )
 

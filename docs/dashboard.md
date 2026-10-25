@@ -135,9 +135,12 @@ to paste. It is the fastest way to check whether a `jev` command has a dashboard
 - **Code Grade** (`/code-grade`): the browser-first `jev code grade` / `jev code route` —
   paste a diff (or upload a diff file), describe the task, and grade it with the Coding
   Decision Agent (code_quality / merge_action / confidence, plus the gate decision), or route
-  a coding task to a model tier and skill. Shows the model's status and, when the backend is
-  not installed, the install guidance instead of a grade. Config lives under Settings →
-  Code orchestrator. See [code-orchestrator.md](code-orchestrator.md).
+  a coding task to a model tier and skill. Grading runs in the background: the POST starts
+  the job and the result waits on the **status page** (`/code-grade/status`), which shows
+  the loading stage and elapsed time, survives leaving the page or a dropped connection,
+  and offers cancel. The result leads with the gate decision and its reason. Shows the
+  model's status and, when the backend is not installed, the install guidance instead of a
+  grade. Config lives under Settings → Code orchestrator. See [code-orchestrator.md](code-orchestrator.md).
 - **Connections** (`/connections`): servers, the decision route and key health (as before),
   plus the **Browser** panel: the doctor's browser check and the **Install browser** button,
   which asks for confirmation naming the exact command, then runs the install in the

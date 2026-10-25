@@ -1,0 +1,108 @@
+{# The code-grade status fragment, polled by live.js into #code-grade-live. #}
+{% from "macros.html" import badge, csrf_input with context %}
+{% if status.state == "running" %}
+<section class="panel" aria-label="Grade in progress">
+  <div class="panel-head"><h2>{{ "Grading&hellip;" if status.kind == "grade" else "Routing&hellip;" }}</h2></div>
+  <p>{{ status.task }}</p>
+  {% if elapsed_s is not none and elapsed_s < 60 %}
+  <p role="status">Loading the model — the first grade in a while takes about a minute
+  to load the model into memory. Running for {{ elapsed_s }} s.</p>
+  {% elif elapsed_s is not none %}
+  <p role="status">{{ "Grading the diff" if status.kind == "grade" else "Routing the task" }} —
+  small diffs usually take 1–3 minutes, large ones up to about 10.
+  Running for {{ elapsed_s // 60 }} min {{ elapsed_s % 60 }} s.</p>
+  {% endif %}
+  <p class="small muted">Started {{ status.started_at | time }}. You can leave this
+  page — the {{ status.kind }} keeps running and the result waits here.</p>
+  <form method="post" action="/code-grade/cancel">
+    {{ csrf_input() }}
+    <button class="btn btn-secondary" type="submit">Cancel {{ status.kind }}</button>
+  </form>
+  <p class="hint">Cancelling discards the result, but the model call itself cannot be
+  stopped mid-grade — it finishes in the background, then a new grade can start.</p>
+</section>
+{% elif status.state == "done" and status.result and status.kind == "grade" %}
+<section class="panel" aria-label="Grade result">
+  <div class="panel-head"><h2>Grade: {{ badge(status.result.gate.decision, "ok" if status.result.gate.decision == "accept" else ("warn" if status.result.gate.decision == "human_review" or status.result.gate.decision == "rework" else "fail")) }}</h2></div>
+  <p><strong>{{ status.result.gate.reason }}</strong></p>
+  <p class="hint">What this means:
+  {% if status.result.gate.decision == "accept" %}the model confidently accepts the diff — the gate passes it.
+  {% elif status.result.gate.decision == "human_review" %}a human must decide — the model was not confident enough to merge, whatever the label says.
+  {% elif status.result.gate.decision == "rework" %}the diff goes back for rework before it can merge.
+  {% else %}the diff is blocked from merging.
+  {% endif %}</p>
+  <h3>Grade</h3>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Field</th><th>Value</th></tr></thead>
+    <tbody>
+      <tr><td>task</td><td class="wrap">{{ status.task }}</td></tr>
+      <tr><td>code_quality</td><td>{{ status.result.code_quality }}/4</td></tr>
+      <tr><td>instruction_followed</td><td>{{ "yes" if status.result.instruction_followed else "no" }}</td></tr>
+      <tr><td>likely_correct</td><td>{{ "yes" if status.result.likely_correct else "no" }}</td></tr>
+      <tr><td>merge_action</td><td>{{ status.result.merge_action }}</td></tr>
+      {% for question, confidence in status.result.answer_confidence.items() %}
+      <tr><td>confidence[{{ question }}]</td><td>{{ "%.2f" | format(confidence) }}</td></tr>
+      {% endfor %}
+    </tbody>
+  </table></div>
+  <p class="hint">The gate trusts a merge action only when its confidence reaches
+  {{ "%.2f" | format(status.threshold) }} — below it, a human decides, whatever
+  the label says. And <code>likely_correct</code> is almost always “no”: the model will not
+  assume tests pass — the gate already knows the test outcome from its own checks, so
+  a “no” here does not mean the diff is wrong.</p>
+  <div class="actions">
+    <a class="btn btn-primary" href="/code-grade">Grade another diff</a>
+  </div>
+</section>
+{% elif status.state == "done" and status.result and status.kind == "route" %}
+<section class="panel" aria-label="Route result">
+  <div class="panel-head"><h2>Routing</h2></div>
+  <p>{{ status.task }}</p>
+  {% if status.result.hint %}
+  <h3>Routing hint</h3>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Field</th><th>Value</th></tr></thead>
+    <tbody>
+      <tr><td>model_tier</td><td>{{ status.result.hint.model_tier }}</td></tr>
+      <tr><td>skill</td><td>{{ status.result.hint.skill }}</td></tr>
+      <tr><td>task_difficulty</td><td>{{ status.result.hint.task_difficulty }}</td></tr>
+      <tr><td>suggested_effort</td><td>{{ status.result.hint.suggested_effort }}</td></tr>
+      <tr><td>confidence</td><td>{{ status.result.hint.confidence }}</td></tr>
+    </tbody>
+  </table></div>
+  <p class="hint">A hint, not an assignment: Jev still picks the worker, model and effort.</p>
+  {% else %}
+  <p class="flash warn" role="note">The Coding Decision Agent is not confident enough to route
+  (model_tier {{ status.result.model_tier }} at {{ "%.2f" | format(status.result.confidence) }} &lt;
+  {{ "%.2f" | format(status.result.threshold) }}); no routing hint is shown.</p>
+  {% endif %}
+  <div class="actions">
+    <a class="btn btn-primary" href="/code-grade">Route another task</a>
+  </div>
+</section>
+{% elif status.state == "failed" %}
+<section class="panel" aria-label="Grade failed">
+  <div class="panel-head"><h2>{{ "Grade failed" if status.kind == "grade" else "Route failed" }}</h2></div>
+  <p class="flash error" role="alert">{{ status.error }}</p>
+  <div class="actions">
+    <a class="btn btn-primary" href="/code-grade">Try again</a>
+  </div>
+</section>
+{% elif status.state == "cancelled" %}
+<section class="panel" aria-label="Grade cancelled">
+  <div class="panel-head"><h2>Cancelled</h2></div>
+  <p>{{ status.message }}</p>
+  {% if status.draining %}
+  <p class="hint">Still finishing in the background — a new grade can start once it is done.</p>
+  {% endif %}
+  <div class="actions">
+    <a class="btn btn-primary" href="/code-grade">Grade another diff</a>
+  </div>
+</section>
+{% else %}
+<div class="empty">
+  <div class="title">No grade has run yet</div>
+  <p>Grade a diff or route a coding task from the
+  <a href="/code-grade">Code Grade page</a> — the result waits here.</p>
+</div>
+{% endif %}
