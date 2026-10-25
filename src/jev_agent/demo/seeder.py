@@ -39,6 +39,7 @@ board ages and the spend chart look like a couple of weeks of use.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import re
 import sys
@@ -1043,6 +1044,31 @@ def cache_demo_models(root: Path) -> None:
     catalog.save(cache_path(root))
 
 
+def seed_cache(store: Store, clock: Clock, now: datetime, run_id: str) -> None:
+    """A few warm cache entries with hits, so the Tools page's Cache section (and
+    the Spend page's "Saved by cache") show real numbers in the demo (issue #254).
+
+    The clock is set to `now` first: entries created at the seed's older timestamps
+    would already be past their TTL when the dashboard reads them with the real
+    clock.
+    """
+    clock.set(now)
+    entries = [
+        ("decision", 0.42, 3),
+        ("decision", 0.18, 1),
+        ("decision", 0.09, 2),
+        ("role", 0.31, 2),
+    ]
+    for i, (kind, cost, hits) in enumerate(entries):
+        key_hash = hashlib.sha256(f"demo-cache-{kind}-{i}".encode()).hexdigest()
+        key_json = json.dumps({"run_id": run_id, "demo": i})
+        store.cache_put(key_hash, kind, key_json, "{}", cost, 168)
+        for _ in range(hits):
+            store.cache_get(key_hash)
+    store.cache_shadow_log("demo-shadow-1", "decision", True, 0.99)
+    store.cache_shadow_log("demo-shadow-2", "decision", True, 1.0)
+
+
 def configure_demo(root: Path) -> None:
     """Demo settings in jev.toml, an example skill folder and an offline model list."""
     path = root / "jev.toml"
@@ -1363,6 +1389,7 @@ def seed(root: Path, *, demo_config: bool = True) -> str:
         seed_queue(store, clock, now)
         seed_chat(root, clock, now - timedelta(hours=4, minutes=10))
         seed_shipped(store, clock, now)
+        seed_cache(store, clock, now, rich)
     return f"Seeded demo state in {root / STATE_DIRNAME}; richest run: {rich}"
 
 

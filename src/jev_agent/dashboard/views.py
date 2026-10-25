@@ -42,6 +42,7 @@ from jev_agent.core.budget import (
     estimate_verdict_for,
     format_estimate,
 )
+from jev_agent.core.cache import Cache, CacheStats
 from jev_agent.core.chat import ChatMeta, list_chats, read_transcript
 from jev_agent.core.harness import DEFAULT_TIMEOUT_S
 from jev_agent.core.kpi import PrKpis, compute_run_kpis, load_pr_kpis
@@ -1537,6 +1538,36 @@ def browser_check(repo: Repo) -> Check | None:
         if check.name == "browser":
             return check
     return None
+
+
+@dataclass(frozen=True)
+class CacheView:
+    """The Tools page's Cache section: `jev cache stats` plus the semantic settings
+    that decide what the cache may serve (issue #254)."""
+
+    enabled: bool
+    stats: CacheStats
+    semantic_mode: str  # "off" | "shadow" | "serve"
+    semantic_enabled: bool
+    embedder: str
+    decision_threshold: float
+    role_threshold: float
+
+
+def cache_view(repo: Repo) -> CacheView:
+    """`jev cache stats` for the Tools page: entries, hits, dollars saved, size and
+    shadow-mode agreement, with the `[cache.semantic]` settings beside them."""
+    cache = Cache(repo.store, repo.config.cache, repo.root)
+    semantic = repo.config.cache.semantic
+    return CacheView(
+        enabled=cache.usable,
+        stats=cache.stats(),
+        semantic_mode=cache.semantic_mode,
+        semantic_enabled=cache.semantic_enabled,
+        embedder=semantic.embedder,
+        decision_threshold=semantic.decision_threshold,
+        role_threshold=semantic.role_threshold,
+    )
 
 
 def model_listing(repo: Repo) -> tuple[ModelListing | None, str | None]:

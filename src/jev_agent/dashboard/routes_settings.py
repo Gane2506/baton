@@ -16,8 +16,9 @@ from jev_agent.app import settings
 from jev_agent.app.errors import JevError
 from jev_agent.app.models import fetch_catalog
 from jev_agent.config import ConfigError
-from jev_agent.config.schema import BEGINNER_FIELDS
+from jev_agent.config.schema import BEGINNER_FIELDS, CacheSemanticSettings
 from jev_agent.core.benchmarks import DEFAULT_LAST
+from jev_agent.core.cache import CalibrationResult, calibrate_thresholds
 from jev_agent.core.ship import (
     Gh,
     ShipError,
@@ -25,6 +26,7 @@ from jev_agent.core.ship import (
 )
 from jev_agent.dashboard import ui_styles, views
 from jev_agent.dashboard.core import DashboardCore
+from jev_agent.dashboard.errors import friendly_error as _friendly_error
 from jev_agent.dashboard.helpers import (
     _back_target,
     _record_ship_sync,
@@ -35,6 +37,27 @@ from jev_agent.dashboard.security import (
     checked_form,
 )
 from jev_agent.quality.levels import LEVEL_SUMMARY
+
+
+def _cache_clear_filters(form: FormData) -> tuple[str | None, float | None, str]:
+    """The clear form's filters, validated like the CLI's (issue #223): a bad kind
+    is an error, never a silent clear of everything. Returns the store kind
+    (`"decision"`/`"role"`/None), the age filter in hours, and the form kind
+    (`"decisions"`/`"roles"`/`""`) for the confirmation page."""
+    kind = _text(form, "kind") or ""
+    if kind not in ("", "decisions", "roles"):
+        raise ValueError('--type must be "decisions" or "roles"')
+    raw = _text(form, "older_than") or ""
+    older_than: float | None = None
+    if raw:
+        try:
+            older_than = float(raw)
+        except ValueError:
+            raise ValueError(f"older-than hours must be a number, got {raw!r}") from None
+        if older_than < 0:
+            raise ValueError("older-than hours must be 0 or more")
+    store_kind = {"decisions": "decision", "roles": "role"}.get(kind) if kind else None
+    return store_kind, older_than, kind
 
 
 class SettingsRoutes(DashboardCore):
@@ -104,11 +127,117 @@ class SettingsRoutes(DashboardCore):
             return {
                 "models_listing": listing,
                 "models_warning": warning,
+                "cache_view": views.cache_view(repo),
                 "quality_rows": views.quality_checks(repo),
                 "level_summaries": LEVEL_SUMMARY,
             }
 
         return self._settings_page(request, "tools", "tools.html", extra)
+
+    async def cache_clear(self, request: Request) -> Response:
+        """Two steps (Tier 2), like `queue_clear`: the first POST counts what the
+        filters would delete and shows it on a confirmation page; only
+        `confirm=yes` clears (clearing is destructive and cannot be undone)."""
+        form = await checked_form(request)
+        to = "/tools#cache"
+        try:
+            store_kind, older_than, kind = _cache_clear_filters(form)
+        except ValueError as exc:
+            self.flash(request, "error", _friendly_error(exc))
+            return self.back(to)
+        if form.get("confirm") != "yes":
+
+            def count() -> int:
+                with views.open_repo(self.settings.root) as repo:
+                    return repo.store.cache_count(kind=store_kind, older_than_hours=older_than)
+
+            try:
+                matching = await run_in_threadpool(count)
+            except (JevError, ConfigError) as exc:
+                self.flash(request, "error", _friendly_error(exc))
+                return self.back(to)
+            if matching == 0:
+                self.flash(request, "ok", "the cache is already empty for those filters")
+                return self.back(to)
+            return self.render(
+                request,
+                "confirm_cache_clear.html",
+                matching=matching,
+                kind=kind,
+                older_than=older_than,
+            )
+
+        def clear() -> int:
+            with views.open_repo(self.settings.root) as repo:
+                return repo.store.cache_clear(kind=store_kind, older_than_hours=older_than)
+
+        try:
+            deleted = await run_in_threadpool(clear)
+        except (JevError, ConfigError) as exc:
+            self.flash(request, "error", _friendly_error(exc))
+        else:
+            noun = "entry" if deleted == 1 else "entries"
+            self.flash(request, "ok", f"cleared {deleted} cache {noun}")
+        return self.back(to)
+
+    async def cache_calibrate(self, request: Request) -> Response:
+        """`jev cache calibrate` behind a button: run the pairwise-SimHash curve over
+        stored decision history and show the table, the candidate threshold (if any)
+        and the one-click apply for it. Read-only: nothing is served or configured
+        until the user applies a threshold and turns serving on."""
+        await checked_form(request)
+        to = "/tools#cache"
+
+        def job() -> tuple[CalibrationResult, CacheSemanticSettings]:
+            with views.open_repo(self.settings.root) as repo:
+                return calibrate_thresholds(repo.store), repo.config.cache.semantic
+
+        try:
+            result, semantic = await run_in_threadpool(job)
+        except (JevError, ConfigError) as exc:
+            self.flash(request, "error", _friendly_error(exc))
+            return self.back(to)
+        except Exception as exc:  # issue #200: a failed calibration flashes, never 500s
+            self.flash(request, "error", _friendly_error(exc))
+            return self.back(to)
+        return self.render(
+            request,
+            "cache_calibrate.html",
+            calibration=result,
+            semantic=semantic,
+        )
+
+    async def cache_apply_threshold(self, request: Request) -> Response:
+        """Apply a calibration candidate: set `[cache.semantic] decision_threshold`
+        in the repo (or user) config, through the same validated `settings.save`
+        the settings editor uses — including its trust gate. Serving still needs
+        `mode = "serve"` under Settings; this only moves the floor."""
+
+        def apply(repo: views.Repo, form: FormData) -> str:
+            raw = _text(form, "threshold") or ""
+            try:
+                threshold = float(raw)
+            except ValueError:
+                raise ValueError(
+                    f"threshold must be a number between 0 and 1, got {raw!r}"
+                ) from None
+            if not 0.0 <= threshold <= 1.0:
+                raise ValueError("threshold must be between 0 and 1")
+            target = _text(form, "target") or "repo"
+            error = settings.save(
+                self.settings.root,
+                target,
+                lambda layer: settings.set_path(
+                    layer, "cache.semantic.decision_threshold", threshold
+                ),
+            )
+            if error:
+                if settings.TRUST_GATE_MARKER in error:
+                    return error  # act() flashes it as a one-click trust offer
+                raise JevError(error)
+            return f"set cache.semantic.decision_threshold to {threshold:.2f} ({target})"
+
+        return await self.act(request, "/tools#cache", apply)
 
     async def models_refresh(self, request: Request) -> Response:
         """Refresh the OpenRouter model catalog from the browser (issue #251):
