@@ -670,6 +670,66 @@ def test_learning_page_and_actions(client: TestClient, planned: tuple[Path, str]
     assert "learning is off for this repo" in client.get("/learning").text
 
 
+def test_learning_graph_link_and_unlink(client: TestClient, planned: tuple[Path, str]) -> None:
+    """The Graph tab links and unlinks edges from the browser (issue #254): the link
+    form, per-edge Remove buttons, and friendly flashes for every failure — no 500s."""
+    repo, _ = planned
+    _post(client, "/learning/create", {"name": "web", "shared": "on"})
+    _post(client, "/learning/use", {"profile": "web"})
+    _post(client, "/learning/enable")
+    with _store(repo) as store:
+        learning = Learning.for_store(store)
+        # A shared profile: only the shared database has the graph tables, so only
+        # it has a Graph tab (repo-scope profiles fall back to the list).
+        db = learning.db_for("web")
+        first = db.add_lesson("web", "Run the tests first", ["coder"], ["tests"])
+        second = db.add_lesson("web", "Keep diffs small", ["coder"], [])
+        learning.close()
+
+    page = client.get("/learning?profile=web&tab=graph").text
+    assert "2 lessons" in page and "Link lessons" in page
+    assert 'action="/learning/graph-link"' in page
+
+    def graph_page(focus: str) -> str:
+        return client.get(f"/learning?profile=web&tab=graph&lesson={focus}").text
+
+    link = {"profile": "web", "src": second.id, "edge": "supersedes", "dst": first.id}
+    response = _post(client, "/learning/graph-link", link)
+    assert response.status_code == 303
+    assert response.headers["location"].startswith(
+        f"/learning?profile=web&tab=graph&lesson={second.id}"
+    )
+    page = graph_page(second.id)
+    assert f"Recorded: {second.id} supersedes {first.id}." in page
+    assert "advisory: the old lesson stays active" in page
+    assert "supersedes 1" in page and f"Neighborhood of {second.id}" in page
+    assert 'action="/learning/graph-unlink"' in page
+
+    _post(client, "/learning/graph-link", link)
+    assert "already recorded" in graph_page(second.id)
+    _post(client, "/learning/graph-link", {**link, "edge": "nope"})
+    assert "unknown edge" in graph_page(second.id)
+    _post(client, "/learning/graph-link", {**link, "src": "S99"})
+    assert "no lesson" in graph_page(second.id)
+
+    response = _post(client, "/learning/graph-unlink", link)
+    assert response.status_code == 303
+    page = graph_page(second.id)
+    assert f"Removed: {second.id} supersedes {first.id}." in page
+    assert "supersedes 1" not in page
+    _post(client, "/learning/graph-unlink", link)
+    assert "No such edge" in graph_page(second.id)
+
+    _post(
+        client,
+        "/learning/graph-link",
+        {"profile": "web", "src": first.id, "edge": "applies-to", "dst": "src/auth/"},
+    )
+    page = graph_page(first.id)
+    assert f"Recorded: {first.id} applies-to src/auth/." in page
+    assert "src/auth/" in page
+
+
 def _repo_toggle_buttons(page_text: str) -> tuple[int, int]:
     """`(on buttons, off buttons)` for the repo-level learning switch."""
     return page_text.count(">Turn learning on</button>"), page_text.count(

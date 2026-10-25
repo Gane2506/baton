@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from typing import Any
+from urllib.parse import quote
 
 from starlette.concurrency import run_in_threadpool
 from starlette.datastructures import FormData
@@ -36,6 +37,8 @@ from jev_agent.dashboard.learning_helpers import (
     _learning_edit,
     _learning_enable,
     _learning_forget,
+    _learning_graph_link,
+    _learning_graph_unlink,
     _learning_use,
 )
 from jev_agent.dashboard.security import (
@@ -98,6 +101,10 @@ class LearningRoutes(DashboardCore):
             return await self.learning_flush(request)
         if action == "delete":
             return await self.learning_delete(request)
+        if action == "graph-link":
+            return await self.learning_graph_edge(request, _learning_graph_link)
+        if action == "graph-unlink":
+            return await self.learning_graph_edge(request, _learning_graph_unlink)
         handlers: dict[str, Callable[[views.Repo, FormData], str]] = {
             "create": _learning_create,
             "use": _learning_use,
@@ -178,3 +185,32 @@ class LearningRoutes(DashboardCore):
         else:
             self.flash(request, "ok", f"deleted profile {name}")
         return self.back("/learning")
+
+    async def learning_graph_edge(
+        self,
+        request: Request,
+        handler: Callable[[views.Repo, FormData], str],
+    ) -> Response:
+        """Run a graph link/unlink (issue #254), then send the user back to the Graph tab
+        focused on the source lesson, so the recorded/removed edge is visible at once.
+        Errors flash with `friendly_error`, never a bare 500 or traceback."""
+        form = await checked_form(request)
+        profile = _text(form, "profile") or ""
+        src = _text(form, "src") or ""
+
+        def work() -> str:
+            with views.open_repo(self.settings.root) as repo:
+                return handler(repo, form)
+
+        try:
+            message = await run_in_threadpool(work)
+        except (JevError, LearningError) as exc:
+            self.flash(request, "error", _friendly_error(exc))
+        else:
+            self.flash(request, "ok", message)
+        target = "/learning"
+        if profile:
+            target = f"/learning?profile={quote(profile)}&tab=graph"
+            if src:
+                target += f"&lesson={quote(src)}"
+        return self.back(target)

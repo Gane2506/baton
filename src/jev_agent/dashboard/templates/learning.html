@@ -104,6 +104,22 @@
     {% endfor %}
   </div>
 </section>
+<section class="panel">
+  <h3>Link lessons</h3>
+  <form method="post" action="/learning/graph-link" class="actions">
+    {{ csrf_input() }}
+    <input type="hidden" name="profile" value="{{ lv.selected }}">
+    <input type="text" name="src" value="{{ graph.focus.id if graph.focus else '' }}" required maxlength="10" placeholder="L12" aria-label="Source lesson">
+    <select name="edge" aria-label="Edge type">
+      <option value="supersedes">supersedes</option>
+      <option value="contradicts">contradicts</option>
+      <option value="applies-to">applies-to</option>
+    </select>
+    <input type="text" name="dst" required maxlength="120" placeholder="L31 or src/auth/" aria-label="Target lesson or module">
+    <button class="btn btn-primary" type="submit">Link</button>
+  </form>
+  <p class="hint">Target is a lesson id — or a module path for <span class="mono">applies-to</span>. <span class="mono">supersedes</span> and <span class="mono">contradicts</span> are advisory: the old lesson stays active until a human retires it, and both sides of a contradiction stay active.</p>
+</section>
 {% if graph.focus %}
 <section class="panel">
   <h3>Neighborhood of {{ graph.focus.id }}</h3>
@@ -120,7 +136,22 @@
   </svg>
   <ul class="small">
     {% for edge in graph.focus_edges %}
-    <li><span class="mono">{{ edge.direction }}</span> {{ edge.edge }} <span class="mono">{{ edge.other }}</span> <span class="muted">({{ edge.origin }})</span></li>
+    <li><span class="mono">{{ edge.direction }}</span> {{ edge.edge }} <span class="mono">{{ edge.other }}</span> <span class="muted">({{ edge.origin }})</span>
+    {% if edge.edge in ["supersedes", "contradicts", "applies-to"] %}
+    <form class="inline" method="post" action="/learning/graph-unlink" data-confirm="Remove this edge?">
+      {{ csrf_input() }}
+      <input type="hidden" name="profile" value="{{ lv.selected }}">
+      {% if edge.direction == "out" %}
+      <input type="hidden" name="src" value="{{ graph.focus.id }}">
+      <input type="hidden" name="dst" value="{{ edge.other }}">
+      {% else %}
+      <input type="hidden" name="src" value="{{ edge.other }}">
+      <input type="hidden" name="dst" value="{{ graph.focus.id }}">
+      {% endif %}
+      <input type="hidden" name="edge" value="{{ edge.edge }}">
+      <button class="btn btn-sm btn-secondary" type="submit">Remove</button>
+    </form>
+    {% endif %}</li>
     {% endfor %}
     {% for other, times in graph.focus_co_occurs %}
     <li>co-occurs-with <span class="mono">{{ other }}</span> <span class="muted">(injected together {{ times }}×)</span></li>
