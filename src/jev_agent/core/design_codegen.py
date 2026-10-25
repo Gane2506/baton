@@ -65,7 +65,10 @@ def _palettes(tokens: dict[str, object]) -> tuple[dict[str, str], dict[str, str]
     """(light, dark) flat color dicts from rich ``design_tokens``.
 
     Falls back to the legacy flat ``colors`` dict when rich tokens are absent
-    (older library systems), using it for both themes.
+    (older library systems), using it for both themes. A legacy ``colors``
+    dict that itself nests ``{"light": {...}, "dark": {...}}`` (the cxm
+    shape) unwraps the same way — passing the nested dicts through
+    ``_str_dict`` used to stringify them into Python reprs as CSS values.
     """
     rich = tokens.get("design_tokens")
     if isinstance(rich, dict):
@@ -79,14 +82,36 @@ def _palettes(tokens: dict[str, object]) -> tuple[dict[str, str], dict[str, str]
                 flat = _str_dict(light)
                 return flat, flat
     legacy = tokens.get("colors")
-    flat = _str_dict(legacy) if isinstance(legacy, dict) else {}
-    return flat, flat
+    if isinstance(legacy, dict):
+        light_raw = legacy.get("light")
+        dark_raw = legacy.get("dark")
+        if isinstance(light_raw, dict) or isinstance(dark_raw, dict):
+            light = _str_dict(light_raw) if isinstance(light_raw, dict) else {}
+            dark = _str_dict(dark_raw) if isinstance(dark_raw, dict) else light
+            return light, dark
+        flat = _str_dict(legacy)
+        return flat, flat
+    return {}, {}
 
 
 def _str_dict(value: object) -> dict[str, str]:
+    """A dict flattened to string keys/values.
+
+    Nested dicts flatten with ``_``-joined keys (``primary: {base, hover}``
+    becomes ``primary_base`` / ``primary_hover``) instead of stringifying
+    into a Python repr — a repr is not a CSS value, and ``_css_value``
+    stripping its braces used to leave ``'primary': '#...'`` as a
+    declaration value.
+    """
+    out: dict[str, str] = {}
     if isinstance(value, dict):
-        return {str(k): str(v) for k, v in value.items()}
-    return {}
+        for key, item in value.items():
+            if isinstance(item, dict):
+                for sub_key, sub_value in _str_dict(item).items():
+                    out[f"{key}_{sub_key}"] = sub_value
+            else:
+                out[str(key)] = str(item)
+    return out
 
 
 def _section(tokens: dict[str, object], key: str) -> dict[str, object]:

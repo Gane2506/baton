@@ -78,6 +78,27 @@ def _design_systems_view(repo: views.Repo, query: str = "") -> dict[str, Any]:
     return {"systems": systems}
 
 
+def _flatten_token_section(section: object) -> list[tuple[str, object]]:
+    """(key, value) rows for a token section, nested dicts flattened.
+
+    A ``{"light": {...}, "dark": {...}}`` colors section becomes
+    ``light.primary`` / ``dark.primary`` rows instead of rendering the dict
+    repr as the value (the template prints each row's value verbatim).
+    Flat sections render exactly as before, keys sorted at each level.
+    """
+    rows: list[tuple[str, object]] = []
+
+    def walk(value: object, prefix: str) -> None:
+        if isinstance(value, dict):
+            for key, item in sorted(value.items(), key=lambda kv: str(kv[0])):
+                walk(item, f"{prefix}{key}.")
+        else:
+            rows.append((prefix.rstrip("."), value))
+
+    walk(section, "")
+    return rows
+
+
 def _design_system_view(repo: views.Repo, name: str) -> dict[str, Any]:
     """One library system for the detail page: tokens and the system markdown."""
     system = load_library_system(name)
@@ -92,11 +113,7 @@ def _design_system_view(repo: views.Repo, name: str) -> dict[str, Any]:
         ("Radii", tokens.get("radii")),
     )
     token_sections = [
-        {
-            "title": title,
-            "items": sorted(section.items()) if isinstance(section, dict) else [],
-        }
-        for title, section in sections
+        {"title": title, "items": _flatten_token_section(section)} for title, section in sections
     ]
     return {
         "name": name,
