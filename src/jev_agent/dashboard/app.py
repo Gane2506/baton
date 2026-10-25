@@ -26,6 +26,9 @@ from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
 from jev_agent.core.ship import check_gh, prepare_ship, sync_pr
+from jev_agent.dashboard.code_grade_runner import (
+    CodeGradeExecutor,
+)
 from jev_agent.dashboard.connection_status import (
     ssh_runner,
 )
@@ -98,15 +101,22 @@ def create_app(
     *,
     executor: Executor = execute_run,
     reverse_executor: ReverseExecutor | None = None,
+    code_grade_executor: CodeGradeExecutor | None = None,
 ) -> Starlette:
     """Build the app. Raises `DashboardConfigError` for a non-loopback host without a token.
     `executor` runs approve/resume jobs (tests pass a fake one); `reverse_executor`
-    runs design-studio reverse jobs (tests pass a fake one)."""
+    runs design-studio reverse jobs (tests pass a fake one); `code_grade_executor`
+    runs code-grade/route jobs (tests pass a fake one)."""
     settings.check()
     from jev_agent.core.secrets import load_secrets
 
     load_secrets()  # ~/.jev/secrets.env: real environment always wins
-    dash = Dashboard(settings, RunLauncher(settings.root, executor), reverse_executor)
+    dash = Dashboard(
+        settings,
+        RunLauncher(settings.root, executor),
+        reverse_executor,
+        code_grade_executor,
+    )
     routes = [
         Route("/", dash.board_page),
         Route("/fragments/board", dash.board_fragment),
@@ -177,6 +187,9 @@ def create_app(
         Route("/code-grade", dash.code_grade_page),
         Route("/code-grade/grade", dash.code_grade_grade, methods=["POST"]),
         Route("/code-grade/route", dash.code_grade_route, methods=["POST"]),
+        Route("/code-grade/status", dash.code_grade_status),
+        Route("/code-grade/live", dash.code_grade_live),
+        Route("/code-grade/cancel", dash.code_grade_cancel, methods=["POST"]),
         Route("/connections", dash.connections_page),
         Route("/connections/live", dash.connections_live),
         Route("/connections/refresh", dash.connections_refresh, methods=["POST"]),

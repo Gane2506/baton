@@ -856,6 +856,54 @@ def test_render_run_review_uses_the_latest_gate_per_task() -> None:
     assert "No quality gate has run yet" in render_run_review("r1", "basic", [])
 
 
+def test_render_run_review_shows_code_grade_routing() -> None:
+    """The run review surfaces the grade, its confidence, and the
+    human_review routing (issue #267): the dashboard's Quality review
+    section and `jev quality show` used to show a blocked gate with no
+    trace of the grade behind it."""
+    graded = _gate(
+        level="production",
+        blocked=True,
+        code_grade={
+            "status": "graded",
+            "model": "S4MPL3BI4S/Coding_Decision_Agent",
+            "code_quality": 2,
+            "instruction_followed": False,
+            "likely_correct": False,
+            "merge_action": "request_changes",
+            "answer_confidence": {"merge_action": 0.44},
+            "gate": {
+                "decision": "human_review",
+                "reason": (
+                    "coding decision agent is not confident enough to merge "
+                    "(merge_action=request_changes at 0.44 < 0.70); "
+                    "a human must decide"
+                ),
+                "merge_action": "request_changes",
+                "confidence": 0.44,
+            },
+        },
+    )
+    unavailable = _gate(
+        level="production",
+        scope="integration",
+        task_id=None,
+        number=1,
+        blocked=False,
+        code_grade={
+            "status": "unavailable",
+            "detail": "the Coding Decision Agent is not installed",
+        },
+    )
+    text = render_run_review("r1", "production", [graded, unavailable])
+    assert "## Code orchestrator" in text
+    assert "human_review" in text and "0.44" in text and "request_changes" in text
+    assert "code_quality 2/4" in text
+    assert "not graded (unavailable:" in text
+    # No grade at all: the section stays out of the review.
+    assert "## Code orchestrator" not in render_run_review("r1", "production", [_gate()])
+
+
 # ---- store -----------------------------------------------------------------------------------
 
 
