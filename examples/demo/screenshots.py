@@ -77,6 +77,7 @@ SHOTS = [
     Shot("design-studio-reverse.png", "/design-studio/reverse"),
 ]
 QUALITY = "dashboard-quality.png"  # the run page's "Quality review" section only
+EVENTS = "dashboard-events.png"  # the run page's "Event timeline" section only
 NO_BACKEND_CHAT = "dashboard-chats-no-backend.png"  # the New chat form's guiding empty state
 
 
@@ -224,6 +225,21 @@ def open_page(browser: Browser, url: str, height: int, dark: bool) -> Page:
     return page
 
 
+def shoot_events(browser: Browser, url: str, out: Path) -> None:
+    """The run page's event timeline, from its heading to the quality review
+    heading: the timeline table plus the "Find where it went bad" form."""
+    page = open_page(browser, url, 900, dark=False)
+    heading = page.locator("#event-timeline").bounding_box()
+    quality = page.locator("#quality-review").bounding_box()
+    if heading is None or quality is None:
+        raise SystemExit(f"{url} has no event timeline to capture")
+    top = heading["y"] - 16
+    bottom = quality["y"] - 16
+    clip = FloatRect(x=0, y=top, width=WIDTH, height=bottom - top)
+    page.screenshot(path=out, clip=clip, full_page=True)
+    page.context.close()
+
+
 def shoot_quality(browser: Browser, url: str, out: Path) -> None:
     """The heading and card of the run page's quality review, with the page's own margin."""
     page = open_page(browser, url, 900, dark=False)
@@ -318,6 +334,8 @@ def shoot_dashboard(base: str, run_id: str, out_dir: Path, chrome: Path | None) 
             shoot_submenu(browser, base, out_dir)
             shoot_quality(browser, f"{base}/runs/{run_id}", out_dir / QUALITY)
             print(f"{QUALITY}: /runs/{run_id} (quality review)")
+            shoot_events(browser, f"{base}/runs/{run_id}", out_dir / EVENTS)
+            print(f"{EVENTS}: /runs/{run_id} (event timeline)")
         finally:
             browser.close()
 
