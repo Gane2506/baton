@@ -1690,7 +1690,7 @@ def test_chats_api_model_picker_shows_when_no_default_model(
 
 
 def test_no_handler_is_defined_in_two_route_mixins() -> None:
-    """R4-C (issue #244): the 9-mixin diamond in `dashboard/app.py` — a handler defined
+    """R4-C (issue #244): the 10-mixin diamond in `dashboard/app.py` — a handler defined
     in two mixins would silently shadow (MRO picks the first). This fails loudly
     instead, so a future duplicate is caught here rather than as a wrong page at
     runtime. `DashboardCore` is included: it owns the shared helpers the mixins
@@ -1699,6 +1699,7 @@ def test_no_handler_is_defined_in_two_route_mixins() -> None:
     from jev_agent.dashboard.core import DashboardCore
     from jev_agent.dashboard.routes_board import BoardRoutes
     from jev_agent.dashboard.routes_chat import ChatRoutes
+    from jev_agent.dashboard.routes_code import CodeRoutes
     from jev_agent.dashboard.routes_connections import ConnectionsRoutes
     from jev_agent.dashboard.routes_design import DesignRoutes
     from jev_agent.dashboard.routes_learning import LearningRoutes
@@ -1717,6 +1718,7 @@ def test_no_handler_is_defined_in_two_route_mixins() -> None:
         ConnectionsRoutes,
         SettingsRoutes,
         PreviewRoutes,
+        CodeRoutes,
     ]
     assert list(Dashboard.__mro__[1:]) == [
         *mixins,
