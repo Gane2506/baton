@@ -206,3 +206,25 @@ def test_refresh_post_checks_servers_and_audits(
 def test_refresh_needs_post_and_csrf(client: TestClient) -> None:
     assert client.get("/connections/refresh").status_code == 405
     assert client.post("/connections/refresh", data={}).status_code == 403
+
+
+def test_provider_key_cards_fit_their_cards(client: TestClient) -> None:
+    """Audit cycle 5 WS-3: the provider key forms must not overflow their cards.
+
+    Each provider card (~340px in the two-column grid) carries an inline Add
+    form with only two children (key input + Add key button), but `.field-row`
+    is a three-column grid built for Settings rows (label + control +
+    actions, min 200px + 200px + auto) — wider than the card, so the button
+    was pushed out past the card's border. The stylesheet must scope a
+    two-column grid to the provider-card form, and the page must still render
+    one such form per provider.
+    """
+    html = client.get("/connections").text
+    forms = re.findall(
+        r'<form method="post" action="/connections/keys/add" class="field-row">', html
+    )
+    assert len(forms) == 4, f"expected 4 provider key forms, got {len(forms)}"
+    css = client.get("/static/style.css").text
+    match = re.search(r"\.provider-card \.field-row \{[^}]*grid-template-columns: ([^;]+);", css)
+    assert match, "no .provider-card .field-row grid override in style.css"
+    assert match.group(1).strip() == "minmax(0, 1fr) auto", match.group(1)

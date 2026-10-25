@@ -547,6 +547,12 @@ pre code { background: none; padding: 0; }
   margin-bottom: var(--s1);
 }
 .provider-card .small.muted { margin: 0 0 var(--s2); }
+/* The provider-card key form reuses .field-row but has only two children
+   (input + Add key) inside a ~340px card: the default three-column grid
+   (min 200px + 200px + auto) is wider than the card, so the button was
+   pushed out past the card's border (audit cycle 5 WS-3). Two columns,
+   with the input free to shrink below its intrinsic width. */
+.provider-card .field-row { grid-template-columns: minmax(0, 1fr) auto; }
 .subsection { font-size: var(--text-sm); font-weight: 600; margin: var(--s4) 0 var(--s2); color: var(--muted); }
 
 h2.section { font-size: var(--text-lg); margin: var(--s6) 0 var(--s3); }
@@ -1279,6 +1285,7 @@ details.add-entity > summary:focus-visible {
 
 @media (max-width: 720px) {
   .field-row { grid-template-columns: 1fr; }
+  .provider-card .field-row { grid-template-columns: 1fr; }
   .field-actions { justify-content: flex-start; }
 }
 
