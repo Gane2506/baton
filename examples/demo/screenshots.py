@@ -67,7 +67,7 @@ SHOTS = [
     Shot("dashboard-fleet.png", "/fleet"),
     Shot("dashboard-agents.png", "/agents", height=1400),
     Shot("dashboard-chats.png", "/chats"),
-    Shot("dashboard-tools.png", "/tools", height=1400),
+    Shot("dashboard-tools.png", "/tools", height=2500),  # tall enough to cover the Cache section
     Shot("dashboard-connections.png", "/connections", height=1600),
     Shot("dashboard-design-systems.png", "/design-systems"),
     Shot("dashboard-design-system.png", "/design-systems/acme-brand", height=1400),
