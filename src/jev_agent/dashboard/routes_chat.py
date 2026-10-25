@@ -108,6 +108,8 @@ class ChatRoutes(DashboardCore):
             if meta is None and not entries:
                 raise NotFoundError(f"no chat {chat_id}")
             approval_cards = _approval_cards(repo, meta) if meta is not None else []
+            backends = chat.backend_readiness(repo.config)
+            api_ok, _ = backends["api"]
             return {
                 "chat_id": chat_id,
                 "meta": meta,
@@ -118,6 +120,11 @@ class ChatRoutes(DashboardCore):
                 "design_system_label": describe_design_system(
                     meta.design_system if meta is not None else None
                 ),
+                # The switch-backend form (issue #277): shown when the chat's
+                # backend is not ready. Switching to api with no default model
+                # needs a model, picked from the same options as /chats.
+                "api_model_needed": api_ok and not repo.config.workers.api.default_model,
+                "api_model_options": API_MODEL_OPTIONS,
                 # the redesigned chat page: the conversation rail, pending approvals, the
                 # empty-state suggestions, the run step timeline, and the composer picker.
                 "rail_chats": views.chats(repo, "")[:30],
@@ -132,7 +139,7 @@ class ChatRoutes(DashboardCore):
                 # Persistent compact context: repo, branch, backend, model (issue #156).
                 "context_bar": _chat_context_bar(repo, meta),
                 "step_blocks": _step_blocks(repo, meta) if meta is not None else [],
-                "backends": chat.backend_readiness(repo.config),
+                "backends": backends,
             }
 
         return build
@@ -261,6 +268,32 @@ class ChatRoutes(DashboardCore):
             self.flash(request, "error", _friendly_error(exc, hint="check the Settings page"))
         else:
             self.flash(request, "ok", message)
+        return self.back(to)
+
+    async def chat_backend(self, request: Request) -> Response:
+        """Switch a chat to another backend (issue #277): a chat whose backend is
+        unavailable is a dead end without this — every send fails and the UI
+        offers no way out."""
+        chat_id: str = request.path_params["chat_id"]
+        form = await checked_form(request)
+        to = f"/chats/{chat_id}"
+        if self.chat_runner.busy(chat_id):
+            self.flash(request, "error", f"chat {chat_id} is replying right now; wait for it")
+            return self.back(to)
+
+        def switch() -> str:
+            worker = _chat_backend_name(_text(form, "worker"))
+            return chat.switch_backend(
+                self.settings.root, chat_id, worker, _text(form, "model") or None
+            )
+
+        try:
+            worker = await run_in_threadpool(switch)
+        except (ChatError, ConfigError, LearningError) as exc:
+            self.flash(request, "error", _friendly_error(exc))
+            return self.back(to)
+        label = {"api": "API", "claude_code": "Claude Code"}.get(worker, worker)
+        self.flash(request, "ok", f"chat {chat_id} now uses the {label} backend")
         return self.back(to)
 
     async def chat_send(self, request: Request) -> Response:

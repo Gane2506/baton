@@ -140,6 +140,31 @@ def create_chat(
     return session.meta.chat_id
 
 
+def switch_backend(root: Path, chat_id: str, worker: BackendName, model: str | None) -> BackendName:
+    """Move a saved chat to another backend (issue #277): a chat whose backend is
+    unavailable — e.g. `claude_code` on a machine without the `claude` CLI — is
+    otherwise a dead end, since every send fails and the UI offers no way out.
+
+    The new backend is validated first via `build_backend` (missing CLI, missing
+    API key, or no API model all raise `ChatError` and leave the chat untouched).
+    The switch goes through `ChatSession.resume`, so a different backend starts a
+    new model session (`meta.session_id` cleared) while the transcript is kept.
+    Returns the backend the chat now uses. Refuses a switch to the backend the
+    chat already uses."""
+    with hold_chat(root, chat_id), open_repo(root) as repo:
+        meta = ChatSession.load_meta(root, chat_id)
+        if worker == meta.backend:
+            raise ChatError(f"chat {chat_id} already uses the {worker} backend")
+        backend = build_backend(repo.config, root, worker, model)
+        profile = effective_profile(meta.learning, repo.store, repo.learning, repo.config)
+        prompt = render_system_prompt(
+            root, chat_lessons(profile, repo.learning, repo.config), profile
+        )
+        prompt = with_design_system(root, prompt, meta.design_system)
+        ChatSession.resume(root, meta, backend, prompt)
+    return backend.name
+
+
 def delete_chat(root: Path, chat_id: str) -> None:
     """Delete a saved chat's files; refused while another process has it open (`ChatInUse`,
     a `ChatError` — a terminal `jev chat` or a reply in flight). Runs it started are kept."""

@@ -18,6 +18,7 @@ import typer
 from rich.console import Console
 from rich.markup import escape
 
+from jev_agent.app.errors import JevError
 from jev_agent.cli.repo import RepoOption
 from jev_agent.cli.wiring import cli_errors, fail, repo_config, repo_root
 from jev_agent.dashboard import INSTALL_HINT, missing_dependencies
@@ -25,6 +26,23 @@ from jev_agent.dashboard import INSTALL_HINT, missing_dependencies
 console = Console()
 
 TOKEN_ENV = "JEV_DASHBOARD_TOKEN"
+
+
+def _refuse_home_root(root: Path) -> None:
+    """Refuse to serve the user's home directory as a repo (issue #277).
+
+    A home directory is often itself a git repo (dotfiles), so `repo_root`
+    happily resolves it — and the dashboard then serves the home directory's
+    empty state while the user's real chats, runs and queue sit in the repo
+    they meant. That is never what was asked for: fail with a clear `error:`
+    line pointing at `--repo`.
+    """
+    if root.resolve() == Path.home().resolve():
+        raise JevError(
+            f"refusing to serve your home directory ({root}) as a repo: it is not "
+            "a project checkout. Pass --repo with the repo to serve, e.g. "
+            "`jev dashboard --repo /path/to/repo`."
+        )
 
 
 def _check_port_free(host: str, port: int) -> None:
@@ -92,6 +110,7 @@ def dashboard(
 
     with cli_errors():
         root = repo_root(repo)
+        _refuse_home_root(root)
         repo_config(root)
     # An empty env var (`JEV_DASHBOARD_TOKEN=`) counts as unset: generate as usual.
     token = token or None
