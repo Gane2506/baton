@@ -128,8 +128,10 @@ jev learning graph stats
 ```
 
 The dashboard's learning page has a Graph tab: a faceted browser (module and relation
-facets, full-text search) over the same table, and a radial SVG neighborhood when a lesson
-is focused. Editing stays in the CLI; the dashboard is read-only here.
+facets, full-text search) over the same table, a radial SVG neighborhood when a lesson
+is focused, and the same link/unlink the CLI offers — a form records an edge between
+two lessons (or a lesson and a module for `applies-to`), and every stored edge in a
+focused neighborhood has a Remove button.
 
 ## When jev learns
 

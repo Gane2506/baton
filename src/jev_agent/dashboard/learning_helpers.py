@@ -8,7 +8,10 @@ from jev_agent.app.learning import create_profile as learning_create
 from jev_agent.app.learning import disable as learning_disable
 from jev_agent.app.learning import enable as learning_enable
 from jev_agent.app.learning import forget as learning_forget
+from jev_agent.app.learning import graph_link as learning_graph_link
+from jev_agent.app.learning import graph_unlink as learning_graph_unlink
 from jev_agent.app.learning import use_learning_profile
+from jev_agent.core.learning import GRAPH_EDGE_TYPES, LearningError
 from jev_agent.dashboard import views
 from jev_agent.dashboard.helpers import _text
 
@@ -73,6 +76,40 @@ def _learning_delete_lesson(repo: views.Repo, form: FormData) -> str:
         return f"error: {exc}"
     db.delete_lesson(lesson.profile, lesson.number)
     return f"deleted {lesson.id} from {lesson.profile}"
+
+
+def _learning_graph_link(repo: views.Repo, form: FormData) -> str:
+    """Record a graph edge from the Graph tab (issue #254): `link L31 supersedes L12`,
+    `link L4 contradicts L9`, `link L12 applies-to src/auth/`. `LearningError` for an
+    unknown lesson, a duplicate edge, or a bad edge type — the route flashes it."""
+    src = _text(form, "src") or ""
+    edge = _text(form, "edge") or ""
+    dst = _text(form, "dst") or ""
+    if edge not in GRAPH_EDGE_TYPES:
+        raise LearningError(f"unknown edge {edge!r} (use: {', '.join(GRAPH_EDGE_TYPES)})")
+    recorded = learning_graph_link(repo.learning, src, edge, dst)
+    note = (
+        " (advisory: the old lesson stays active until a human retires it)"
+        if edge == "supersedes"
+        else " (advisory: both lessons stay active)"
+        if edge == "contradicts"
+        else ""
+    )
+    return f"Recorded: {recorded.src} {recorded.edge} {recorded.dst}.{note}"
+
+
+def _learning_graph_unlink(repo: views.Repo, form: FormData) -> str:
+    """Remove a recorded graph edge from the Graph tab (issue #254). `contradicts`
+    matches in either direction. `LearningError` when there is no such edge, so the
+    route flashes an error instead of claiming a removal that never happened."""
+    src = _text(form, "src") or ""
+    edge = _text(form, "edge") or ""
+    dst = _text(form, "dst") or ""
+    if edge not in GRAPH_EDGE_TYPES:
+        raise LearningError(f"unknown edge {edge!r} (use: {', '.join(GRAPH_EDGE_TYPES)})")
+    if learning_graph_unlink(repo.learning, src, edge, dst):
+        return f"Removed: {src} {edge} {dst}."
+    raise LearningError(f"No such edge: {src} {edge} {dst}.")
 
 
 def _learning_approve_skill(repo: views.Repo, form: FormData) -> str:

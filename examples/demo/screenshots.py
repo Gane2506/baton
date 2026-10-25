@@ -56,6 +56,11 @@ SHOTS = [
     Shot("dashboard-run.png", "/runs/{run}", height=1400),
     Shot("dashboard-queue.png", "/queue"),
     Shot("dashboard-learning.png", "/learning"),
+    Shot(
+        "dashboard-learning-graph.png",
+        "/learning?profile=graph-demo&tab=graph&lesson=S2",
+        height=2200,
+    ),
     Shot("dashboard-spend.png", "/spend", height=1580),
     Shot("dashboard-kpis.png", "/kpis", height=1700),
     Shot("dashboard-settings.png", "/settings", height=1400),
@@ -101,6 +106,32 @@ def seed(demo: Path, env: dict[str, str]) -> None:
     run([sys.executable, "-c", capture.JEV, "init"], demo, env)
     print(run([sys.executable, str(HERE / "seed_demo.py"), str(demo)], demo, env).strip())
     seed_library(demo, env)
+    seed_graph_demo(demo, env)
+
+
+def seed_graph_demo(demo: Path, env: dict[str, str]) -> None:
+    """A shared learning profile with two hand-linked edges, so the Graph tab shot
+    shows a real neighborhood. Screenshots-only (scratch HOME): `jev init --demo`
+    stays repo-local and never writes demo lessons into the user's shared database."""
+    snippet = (
+        "from pathlib import Path\n"
+        "from jev_agent.core.learning import Learning\n"
+        "from jev_agent.core.store import Store\n"
+        "with Store.open(Path('.jev/state.db')) as store:\n"
+        "    learning = Learning.for_store(store)\n"
+        "    learning.create('graph-demo', shared=True)\n"
+        "    db = learning.db_for('graph-demo')\n"
+        "    db.add_lesson('graph-demo', 'Always run the full test suite before shipping.',"
+        " ['coder'], ['tests'])\n"
+        "    db.add_lesson('graph-demo', 'Run pytest -q on the changed package only;"
+        " the full suite runs in CI.', ['coder'], ['tests'])\n"
+        "    db.add_lesson('graph-demo', 'Cache entries need an explicit TTL and a test"
+        " that advances a fake clock.', ['planner', 'coder'], ['cache', 'ttl'])\n"
+        "    db.add_edge('graph-demo', 'S2', 'supersedes', 'S1')\n"
+        "    db.add_edge('graph-demo', 'S3', 'applies-to', 'src/cache/')\n"
+        "    learning.close()\n"
+    )
+    run([sys.executable, "-c", snippet], demo, env)
 
 
 def seed_library(demo: Path, env: dict[str, str]) -> None:
