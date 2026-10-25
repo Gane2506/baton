@@ -76,6 +76,16 @@ order, deliberately:
   `jev code grade --task "..." --diff-file change.diff [--tests-file ...]`
   (the same gate the quality gate applies, printed as a table), and
   `jev code route "Refactor …"` (tier + skill + suggested effort).
+- **Dashboard.** The **Code Grade** page (`/code-grade`, issue #254) is the
+  browser-first equivalent of `jev code grade` / `jev code route`: paste a
+  diff (or upload a diff file), describe the task, and grade it with the
+  same gate the quality gate applies; or route a coding task to a model
+  tier and skill. The page shows the model's status (enabled? backend
+  installed?) and, when the backend is missing, the install guidance
+  instead of a grade -- a grade that did not run never looks like a grade.
+  Config stays on the Settings page's Code orchestrator section. Grading
+  runs the model on this machine and can take a few minutes the first time;
+  the page says so before you click.
 
 ## Install
 
@@ -297,12 +307,12 @@ decisions, not one bar with two values (issue #203, I7).
   the model reads as given. A caller with a structured trace or tool call
   should build the dict state instead of passing text.
 - The quality gate grades the diff against the task's title **plus
-  description** (`tests=""`): the test outcome is already a gate input
-  (a failed task test never reaches the gate), but the model does not
-  currently see the test log text. `jev code grade --tests-file` passes
-  test output through as the state's `notes` field when a human asks for
-  it. (Whether the gate should pass its test summary through is being
-  measured — see "The input must look like training" above.)
+  description**, and passes its test outcome as the state's `notes`
+  (issue #254): the tests check's status and detail, capped at 2000
+  characters. Measured live on a known-good diff, the notes move the
+  likely_correct confidence 0.84 → 0.60 without flipping the verdict.
+  `jev code grade --tests-file` passes test output through as `notes`
+  when a human asks for it.
 - Live-model evaluation (issue #259): the model now runs, and
   `tests/live/test_code_orchestrator_live.py` is the smoke test for a run
   that has it installed (`JEV_LIVE_TESTS=1`). The 0.7 threshold was

@@ -57,6 +57,33 @@ def _code_grade_task_text(task: TaskCard | None) -> str:
     return text
 
 
+_TEST_SUMMARY_MAX_CHARS = 2000
+
+
+def _test_summary(checks: Iterable[CheckResult]) -> str:
+    """The gate's test outcome as the grader's `notes` (issue #254).
+
+    The model was trained with a free-text `notes` field; the CLI's
+    `--tests-file` already passes test output there, and the gate's own
+    tests check carries the same outcome. Passing it moves the
+    likely_correct confidence (measured live on a known-good diff:
+    0.84 -> 0.60) without flipping the verdict -- the model sees the test
+    outcome instead of guessing whether tests ran. Capped so a long
+    failure tail does not eat the model's state budget; "" when no tests
+    check ran, which keeps `notes` out of the state entirely.
+    """
+    for check in checks:
+        if check.name != "tests":
+            continue
+        summary = f"tests: {check.status}"
+        if check.detail:
+            summary += f" — {check.detail}"
+        if len(summary) > _TEST_SUMMARY_MAX_CHARS:
+            summary = summary[: _TEST_SUMMARY_MAX_CHARS - 3] + "..."
+        return summary
+    return ""
+
+
 def apply_code_grade(
     result: GateResult,
     *,
@@ -86,7 +113,11 @@ def apply_code_grade(
         model_id=settings.model_id, max_diff_chars=settings.max_diff_chars
     )
     try:
-        grade = orch.grade_code(task=task_text, diff=diff, tests="")
+        # The gate's test outcome goes in as the state's `notes` (issue
+        # #254): the model was trained with a free-text notes field, and
+        # the tests check's status + detail is the outcome it would
+        # otherwise have to guess at.
+        grade = orch.grade_code(task=task_text, diff=diff, tests=_test_summary(result.checks))
     except CodeOrchestratorUnavailable as exc:
         return result.model_copy(
             update={"code_grade": {"status": "unavailable", "detail": str(exc)}}

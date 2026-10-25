@@ -83,6 +83,7 @@ NAV: tuple[NavItem, ...] = (
     NavItem("/design-systems", "Design Systems"),
     NavItem("/design-studio", "Design Studio"),
     NavItem("/tools", "Tools"),
+    NavItem("/code-grade", "Code Grade"),
     NavItem("/connections", "Connections"),
     NavItem("/spend", "Spend"),
     NavItem("/kpis", "KPIs"),
