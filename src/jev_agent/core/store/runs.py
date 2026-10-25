@@ -33,6 +33,26 @@ from .records import LearningCounts, RunRecord
 from .rows import _learning_counts, _run_record
 
 
+def _coerce_state(value: RunState | str, field: str) -> RunState:
+    """Coerce a RunState or its exact string value; refuse anything else.
+
+    A raw string reaches this method only through the Python API (the CLI and
+    dashboard always pass RunState members), but persisting it unchecked
+    poisons the board: `_run_record` builds `RunState(row["state"])` and a
+    bad value raises on every page that lists runs (issue #274). Reject here,
+    before any write, instead of writing poison into the DB.
+    """
+    if isinstance(value, RunState):
+        return value
+    if isinstance(value, str):
+        try:
+            return RunState(value)
+        except ValueError:
+            pass
+    valid = ", ".join(sorted(s.value for s in RunState))
+    raise ValueError(f"invalid run state for {field}: {value!r} (valid: {valid})")
+
+
 class RunsMixin(StoreBase):
     """Runs and their snapshot columns."""
 
@@ -162,11 +182,11 @@ class RunsMixin(StoreBase):
     def set_run_state(
         self,
         run_id: str,
-        state: RunState,
+        state: RunState | str,
         reason: str | None = None,
-        resume_state: RunState | None = None,
+        resume_state: RunState | str | None = None,
         *,
-        unless: Collection[RunState] = (),
+        unless: Collection[RunState | str] = (),
         actor: str = ACTOR_PIPELINE,
     ) -> bool:
         """Set the run's state. `reason` (why it stopped) replaces any previous reason.
@@ -174,12 +194,18 @@ class RunsMixin(StoreBase):
         `resume_state` is where `resume` may continue a stopped run from; every state change
         replaces it, so it is only set while the run stays stopped.
 
+        `state`, `resume_state` and `unless` accept a RunState or its exact string value;
+        anything else raises ValueError before any write (issue #274).
+
         With `unless`, the change happens only if the run is not in one of those states, in the
         same statement, so a concurrent write (`jev cancel` from another shell, the dashboard)
         cannot be overwritten between a check and the update. Returns whether it changed.
 
         `actor` records who made the change in the event log (`jev cancel` passes "human").
         """
+        state = _coerce_state(state, "state")
+        resume_state = None if resume_state is None else _coerce_state(resume_state, "resume_state")
+        unless = [_coerce_state(s, "unless") for s in unless]
         guard = ""
         if unless:
             guard = f" AND state NOT IN ({', '.join('?' for _ in unless)})"
