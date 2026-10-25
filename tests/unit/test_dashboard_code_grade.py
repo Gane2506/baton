@@ -130,7 +130,7 @@ def _patch_orchestrator(
         lambda settings: CodeOrchestrator(
             model_id=settings.model_id,
             max_diff_chars=settings.max_diff_chars,
-            backend=backend,  # type: ignore[arg-type]
+            backend=backend,
         ),
     )
     return backend
