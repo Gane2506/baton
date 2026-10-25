@@ -57,14 +57,14 @@ def test_cache_calibrate_candidate(fixture_repo: Path) -> None:
                 run_id,
                 None,
                 DecisionRequest(
-                    point="D1",  # type: ignore[arg-type]
+                    point="D1",
                     state={},
                     questions={"action": ["plan", "ask"]},
                 ),
                 Decision(
-                    point="D1",  # type: ignore[arg-type]
+                    point="D1",
                     answers={"action": "plan"},
-                    dispatcher="consensus",  # type: ignore[arg-type]
+                    dispatcher="consensus",
                 ),
             )
     code, out, _ = _jev(fixture_repo, "cache", "calibrate")

@@ -761,7 +761,7 @@ def _record(
         Decision(
             point=point,  # type: ignore[arg-type]
             answers={"action": answer},
-            dispatcher=dispatcher,  # type: ignore[arg-type]
+            dispatcher=dispatcher,
         ),
     )
 

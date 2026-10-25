@@ -205,14 +205,14 @@ def _seed_decisions(repo: Path, answers: list[str]) -> None:
                 run_id,
                 None,
                 DecisionRequest(
-                    point="D1",  # type: ignore[arg-type]
+                    point="D1",
                     state={},
                     questions={"action": ["plan", "ask"]},
                 ),
                 Decision(
-                    point="D1",  # type: ignore[arg-type]
+                    point="D1",
                     answers={"action": answer},
-                    dispatcher="consensus",  # type: ignore[arg-type]
+                    dispatcher="consensus",
                 ),
             )
 
@@ -242,9 +242,7 @@ def test_cache_clear_two_step(client: TestClient, fixture_repo: Path) -> None:
     assert "Clear the cache?" in confirm.text
     assert "2 entries" in confirm.text
     assert "decisions only" in confirm.text
-    cleared = _post(
-        client, "/tools/cache/clear", {"kind": "decisions", "confirm": "yes"}
-    )
+    cleared = _post(client, "/tools/cache/clear", {"kind": "decisions", "confirm": "yes"})
     assert cleared.status_code == 303
     html = client.get("/tools").text
     assert "cleared 2 cache entries" in html
@@ -259,21 +257,17 @@ def test_cache_clear_older_than_filter(client: TestClient, fixture_repo: Path) -
     confirm = _post(client, "/tools/cache/clear", {"older_than": "0"})
     assert confirm.status_code == 200
     assert "3 entries" in confirm.text
-    cleared = _post(
-        client, "/tools/cache/clear", {"older_than": "0", "confirm": "yes"}
-    )
+    cleared = _post(client, "/tools/cache/clear", {"older_than": "0", "confirm": "yes"})
     assert cleared.status_code == 303
     assert "cleared 3 cache entries" in client.get("/tools").text
 
 
-def test_cache_clear_bogus_kind_is_an_error(
-    client: TestClient, fixture_repo: Path
-) -> None:
+def test_cache_clear_bogus_kind_is_an_error(client: TestClient, fixture_repo: Path) -> None:
     _seed_cache(fixture_repo)
     response = _post(client, "/tools/cache/clear", {"kind": "bogus"})
     assert response.status_code == 303
     # Quotes are HTML-escaped in the flash.
-    assert 'must be &#34;decisions&#34; or &#34;roles&#34;' in client.get("/tools").text
+    assert "must be &#34;decisions&#34; or &#34;roles&#34;" in client.get("/tools").text
     assert "3 (2 decisions, 1 roles)" in client.get("/tools").text
 
 
@@ -291,9 +285,7 @@ def test_cache_calibrate_empty_history(client: TestClient) -> None:
     assert "Not enough decision history" in response.text
 
 
-def test_cache_calibrate_candidate_and_apply(
-    client: TestClient, fixture_repo: Path
-) -> None:
+def test_cache_calibrate_candidate_and_apply(client: TestClient, fixture_repo: Path) -> None:
     _seed_decisions(fixture_repo, ["plan", "plan"])
     response = _post(client, "/tools/cache/calibrate", {})
     assert response.status_code == 200
@@ -320,9 +312,7 @@ def test_cache_calibrate_no_candidate(client: TestClient, fixture_repo: Path) ->
 
 
 def test_cache_apply_threshold_invalid(client: TestClient, fixture_repo: Path) -> None:
-    response = _post(
-        client, "/tools/cache/apply-threshold", {"threshold": "abc", "target": "repo"}
-    )
+    response = _post(client, "/tools/cache/apply-threshold", {"threshold": "abc", "target": "repo"})
     assert response.status_code == 303
     assert "threshold must be a number between 0 and 1" in client.get("/tools").text
     for bad in ("1.5", "-0.1"):
