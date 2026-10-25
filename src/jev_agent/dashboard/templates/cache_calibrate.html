@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% from "macros.html" import csrf_input with context %}
+{% block title %}Cache calibration{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div class="titles">
+    <h1>Cache calibration</h1>
+    <p class="lede">Semantic threshold calibration (decisions): how often pairs at least this
+    similar gave the same answer.</p>
+  </div>
+</div>
+<section class="panel" aria-label="Calibration results">
+  <div class="table-wrap"><table>
+    <thead><tr><th>τ</th><th class="num">Pairs ≥ τ</th><th class="num">P(same answer | sim ≥ τ)</th></tr></thead>
+    <tbody>
+    {% for row in calibration.rows %}
+      <tr>
+        <td class="num">{{ "%.2f" % row.tau }}</td>
+        <td class="num">{{ row.pairs }}</td>
+        <td class="num">{% if row.probability is not none %}{{ "%.3f" % row.probability }}{% else %}n/a{% endif %}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table></div>
+  <p class="hint">{{ calibration.pairs }} comparable decision pairs across {{ calibration.points }} decision points.</p>
+  {% if calibration.pairs == 0 %}
+  <p>Not enough decision history to calibrate — run some runs first.</p>
+  {% elif calibration.best is none %}
+  <p>No threshold reaches ≥ 0.99 agreement: keep semantic serving off and rely on exact match.</p>
+  {% else %}
+  <p>Candidate: <strong>{{ "%.2f" % calibration.best }}</strong> — set
+  <code>[cache.semantic] decision_threshold</code>, then run in shadow mode to validate it live
+  before serving.</p>
+  <p class="hint">Current decision threshold is {{ "%.2f" % semantic.decision_threshold }};
+  semantic mode is <code>{{ semantic.mode }}</code>. Applying the candidate only moves the floor —
+  serving still needs <code>mode = "serve"</code> under Settings.</p>
+  <form method="post" action="/tools/cache/apply-threshold" class="inline">
+    {{ csrf_input() }}
+    <input type="hidden" name="threshold" value="{{ "%.2f" % calibration.best }}">
+    <select name="target" aria-label="Save to">
+      <option value="repo">repo</option>
+      <option value="user">user</option>
+    </select>
+    <button class="btn btn-primary" type="submit">Apply {{ "%.2f" % calibration.best }} as the decision threshold</button>
+  </form>
+  {% endif %}
+  <p><a class="btn btn-secondary" href="/tools#cache">Back to Tools</a></p>
+</section>
+{% endblock %}

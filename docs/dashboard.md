@@ -112,10 +112,14 @@ to paste. It is the fastest way to check whether a `jev` command has a dashboard
   [ship.md](ship.md). **Sync from GitHub** runs `jev ship sync --all` (refreshing every PR's
   state, reviews and CI) and the page shows how long ago the last sync ran, so you can tell
   how fresh the numbers are.
-- **Tools** (`/tools`): the MCP servers, skills and plugins editor (as before), plus three
+- **Tools** (`/tools`): the MCP servers, skills and plugins editor (as before), plus four
   reference sections: the **Models** browser (`jev models list` — a filterable table with
   context length, prices and json_schema/reasoning support, and a copy button per model id;
-  read from the on-disk cache, never fetched by the page), the **Quality checks** matrix
+  read from the on-disk cache, never fetched by the page), the **Cache** section
+  (`jev cache stats` — entries, hits, dollars saved, size and shadow agreement, with the
+  semantic mode and thresholds; **Clear cache** asks for confirmation naming what goes, and
+  **Run calibration** runs `jev cache calibrate` and offers one-click apply of the candidate
+  threshold), the **Quality checks** matrix
   (`jev quality checks` — every check by level, whether its tool is installed and whether it
   applies to this repo), and the **MCP servers (CLI only)** note documenting `jev mcp servers`
   and `jev mcp runs`.

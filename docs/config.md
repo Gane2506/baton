@@ -283,7 +283,8 @@ Exact-match cache for dispatcher decisions (phase 1) and read-only role calls (p
 issue [#10](https://github.com/Gane2506/baton/issues/10)). A cache hit serves the settled
 answer without calling the model again: the decision/attempt is still recorded (with a
 `cached` badge in `jev log` and on the dashboard), it costs $0, and the saved amount shows
-on the Spend page (`jev cache stats` for the totals).
+on the Spend page (`jev cache stats` for the totals, or the Cache section of the dashboard
+Tools page, which also clears entries and runs calibration).
 
 | Key | Default | Meaning |
 | --- | --- | --- |

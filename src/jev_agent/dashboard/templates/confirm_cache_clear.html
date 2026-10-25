@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% from "macros.html" import csrf_input, icon with context %}
+{% block title %}Clear the cache?{% endblock %}
+{% block content %}
+<div class="focus-page">
+  <section class="panel">
+    <h1>Clear the cache?</h1>
+    <p>This removes <strong>{{ matching }} {{ "entry" if matching == 1 else "entries" }}</strong>
+    {%- if kind == "decisions" %} (decisions only){% elif kind == "roles" %} (roles only){% endif %}
+    {%- if older_than is not none %} created more than {{ older_than }} hours ago{% endif %}.
+    Cleared entries are served live again on the next run. This cannot be undone.</p>
+    <div class="actions">
+      <form class="inline" method="post" action="/tools/cache/clear">
+        {{ csrf_input() }}
+        <input type="hidden" name="confirm" value="yes">
+        <input type="hidden" name="kind" value="{{ kind }}">
+        {% if older_than is not none %}<input type="hidden" name="older_than" value="{{ older_than }}">{% endif %}
+        <button class="btn btn-danger" type="submit">{{ icon("i-remove", "sm") }}Clear {{ matching }} {{ "entry" if matching == 1 else "entries" }}</button>
+      </form>
+      <a class="btn btn-secondary" href="/tools#cache">Keep them</a>
+    </div>
+  </section>
+</div>
+{% endblock %}

@@ -10,6 +10,24 @@ from .base import StoreBase
 from .rows import _cache_entry, _iso
 
 
+def _cache_filter(
+    now: str, *, kind: str | None, older_than_hours: float | None
+) -> tuple[str, list[object]]:
+    """The `WHERE` clause + params `cache_clear`/`cache_count` share (issue #254:
+    the dashboard's clear confirmation counts with the exact filter it clears)."""
+    clauses: list[str] = []
+    params: list[object] = []
+    if kind is not None:
+        clauses.append("kind = ?")
+        params.append(kind)
+    if older_than_hours is not None:
+        cutoff = _iso(datetime.fromisoformat(now) - timedelta(hours=older_than_hours))
+        clauses.append("created_at <= ?")
+        params.append(cutoff)
+    where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
+    return where, params
+
+
 class CacheMixin(StoreBase):
     """Cache entries and shadow measurements."""
 
@@ -122,19 +140,16 @@ class CacheMixin(StoreBase):
 
     def cache_clear(self, *, kind: str | None = None, older_than_hours: float | None = None) -> int:
         """Delete entries, optionally filtered by kind and/or age. Returns the count."""
-        clauses: list[str] = []
-        params: list[object] = []
-        if kind is not None:
-            clauses.append("kind = ?")
-            params.append(kind)
-        if older_than_hours is not None:
-            cutoff = _iso(datetime.fromisoformat(self._clock()) - timedelta(hours=older_than_hours))
-            clauses.append("created_at <= ?")
-            params.append(cutoff)
-        where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
+        where, params = _cache_filter(self._clock(), kind=kind, older_than_hours=older_than_hours)
         with self._tx() as db:
             cur = db.execute(f"DELETE FROM cache_entries{where}", params)
             return cur.rowcount
+
+    def cache_count(self, *, kind: str | None = None, older_than_hours: float | None = None) -> int:
+        """How many entries `cache_clear` would delete with the same filters."""
+        where, params = _cache_filter(self._clock(), kind=kind, older_than_hours=older_than_hours)
+        row = self._conn.execute(f"SELECT COUNT(*) FROM cache_entries{where}", params).fetchone()
+        return int(row[0])
 
     def cache_shadow_log(self, key_hash: str, kind: str, agreed: bool, agreement: float) -> None:
         """Record one shadow-mode measurement (phase-3 gate, issue #10 §6)."""

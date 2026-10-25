@@ -200,6 +200,57 @@
   {% endif %}
 </section>
 
+<h2 class="section" id="cache">Cache</h2>
+<section class="panel" aria-label="Decision and role cache">
+  <p class="hint">The exact-match cache for dispatcher decisions and read-only role calls
+  (<code>jev cache stats</code>) — a hit serves the settled answer without calling the
+  model again, so it costs $0. The saved amount also shows on the
+  <a href="/spend">Spend page</a>.</p>
+  <dl class="facts">
+    <dt>Enabled</dt><dd>{{ "yes" if cache_view.enabled else "no" }}</dd>
+    <dt>Entries</dt><dd>{{ cache_view.stats.entries }} ({{ cache_view.stats.decisions }} decisions, {{ cache_view.stats.roles }} roles)</dd>
+    <dt>Hits served</dt><dd>{{ cache_view.stats.hits }}</dd>
+    <dt>Saved</dt><dd>${{ "%.2f" % cache_view.stats.saved_usd }}</dd>
+    <dt>Size</dt><dd>{{ "%.1f" % (cache_view.stats.size_bytes / 1024) }} KiB</dd>
+    <dt>Shadow agreement</dt><dd>{% if cache_view.stats.shadow_agreement is not none %}{{ "%.3f" % cache_view.stats.shadow_agreement }}{% else %}no measurements yet{% endif %}</dd>
+    <dt>Semantic mode</dt><dd>{{ cache_view.semantic_mode }}{% if cache_view.semantic_mode == "shadow" %} (measuring only, never serving){% elif cache_view.semantic_mode == "serve" %}{% if cache_view.semantic_enabled %} (serving near-duplicates){% else %} (disabled — semantic serving is off){% endif %}{% endif %}</dd>
+    <dt>Embedder</dt><dd>{{ cache_view.embedder }}</dd>
+    <dt>Decision threshold</dt><dd>{{ "%.2f" % cache_view.decision_threshold }}</dd>
+    <dt>Role threshold</dt><dd>{{ "%.2f" % cache_view.role_threshold }}</dd>
+  </dl>
+  <p class="hint">Misses aren't recorded — a miss is just an absent entry — so there is no
+  hit rate to show; hits and dollars saved are the totals.</p>
+  {% if cache_view.stats.entries == 0 %}
+  <p class="hint">No entries yet — the cache fills as runs serve repeat decisions and role calls.</p>
+  {% endif %}
+  <form method="post" action="/tools/cache/clear">
+    {{ csrf_input() }}
+    <div class="form-grid">
+      <div>
+        {{ field_label("kind", "cache-clear-kind") }}
+        <select id="cache-clear-kind" name="kind">
+          <option value="">All entries</option>
+          <option value="decisions">Decisions only</option>
+          <option value="roles">Roles only</option>
+        </select>
+      </div>
+      <div>
+        {{ field_label("older_than", "cache-clear-older") }}
+        <input id="cache-clear-older" type="number" name="older_than" min="0" step="any" placeholder="any age">
+        <p class="hint small">Hours — only clear entries created more than this long ago.</p>
+      </div>
+    </div>
+    <button class="btn btn-danger" type="submit">Clear cache</button>
+  </form>
+  <form method="post" action="/tools/cache/calibrate" class="inline">
+    {{ csrf_input() }}
+    <button class="btn btn-secondary" type="submit">Run calibration</button>
+    <span class="hint small"><code>jev cache calibrate</code>: reads settled decision history and
+    reports how often same-similarity pairs gave the same answer, per threshold. Read-only —
+    nothing is served or configured until you apply a threshold.</span>
+  </form>
+</section>
+
 <h2 class="section" id="quality-checks">Quality checks</h2>
 <section class="panel" aria-label="Quality checks matrix">
   <p class="hint"><code>jev quality checks</code>: every check, the level it starts at, whether its

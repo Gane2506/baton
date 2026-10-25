@@ -17,8 +17,7 @@ from rich.table import Table
 
 from jev_agent.cli.repo import RepoOption
 from jev_agent.cli.wiring import cli_context, fail
-from jev_agent.core.cache import Cache, SimHashEmbedder, decision_normalized_text
-from jev_agent.core.store import DecisionRecord
+from jev_agent.core.cache import Cache, calibrate_thresholds
 
 console = Console()
 
@@ -44,10 +43,6 @@ OlderThanOption = Annotated[
         help="Only clear entries created more than this many hours ago.",
     ),
 ]
-
-_CALIBRATE_THRESHOLDS = (0.90, 0.95, 0.98, 0.99)
-# Pairwise comparison is O(n²); cap the history we calibrate over.
-_CALIBRATE_MAX_DECISIONS = 1500
 
 
 @cache_app.command("stats")
@@ -101,66 +96,30 @@ def cache_calibrate(repo: RepoOption = Path(".")) -> None:
     margin — then validate it again in shadow mode before serving anything.
     """
     with cli_context(repo) as ctx:
-        decisions = []
-        for run in ctx.store.list_runs():
-            decisions.extend(ctx.store.list_decisions(run.id))
-    # Only real dispatcher answers at the same decision point are comparable.
-    by_point: dict[str, list[DecisionRecord]] = {}
-    for record in decisions:
-        if record.decision.dispatcher == "rules":
-            continue
-        by_point.setdefault(record.decision.point, []).append(record)
-    embedder = SimHashEmbedder()
-    pairs = 0
-    agree_at: dict[float, int] = {tau: 0 for tau in _CALIBRATE_THRESHOLDS}
-    total_at: dict[float, int] = {tau: 0 for tau in _CALIBRATE_THRESHOLDS}
-    for records in by_point.values():
-        records = records[-_CALIBRATE_MAX_DECISIONS:]
-        fingerprints = [
-            (embedder.fingerprint(decision_normalized_text(r.request)), r.decision.answers)
-            for r in records
-        ]
-        for i in range(len(fingerprints)):
-            for j in range(i + 1, len(fingerprints)):
-                sim = embedder.similarity(fingerprints[i][0], fingerprints[j][0])
-                agree = fingerprints[i][1] == fingerprints[j][1]
-                pairs += 1
-                for tau in _CALIBRATE_THRESHOLDS:
-                    if sim >= tau:
-                        total_at[tau] += 1
-                        if agree:
-                            agree_at[tau] += 1
+        result = calibrate_thresholds(ctx.store)
     table = Table(title="Semantic threshold calibration (decisions)")
     table.add_column("τ", justify="right")
     table.add_column("pairs ≥ τ", justify="right")
     table.add_column("P(same answer | sim ≥ τ)", justify="right")
-    for tau in _CALIBRATE_THRESHOLDS:
-        total = total_at[tau]
-        prob = agree_at[tau] / total if total else float("nan")
-        prob_text = f"{prob:.3f}" if total else "n/a"
-        table.add_row(f"{tau:.2f}", str(total), prob_text)
+    for row in result.rows:
+        prob_text = f"{row.probability:.3f}" if row.probability is not None else "n/a"
+        table.add_row(f"{row.tau:.2f}", str(row.pairs), prob_text)
     console.print(table)
     console.print(
-        f"[dim]{pairs} comparable decision pairs across {len(by_point)} decision points.[/dim]"
+        f"[dim]{result.pairs} comparable decision pairs across "
+        f"{result.points} decision points.[/dim]"
     )
-    if pairs == 0:
+    if result.pairs == 0:
         console.print("Not enough decision history to calibrate — run some runs first.")
         return
-    best = max(
-        (
-            tau
-            for tau in _CALIBRATE_THRESHOLDS
-            if total_at[tau] and agree_at[tau] / total_at[tau] >= 0.99
-        ),
-        default=None,
-    )
-    if best is None:
+    if result.best is None:
         console.print(
             "No threshold reaches ≥ 0.99 agreement: keep semantic serving off "
             "and rely on exact match."
         )
     else:
         console.print(
-            f"Candidate: [green]{best:.2f}[/green] — set `[cache.semantic] decision_threshold`, "
+            f"Candidate: [green]{result.best:.2f}[/green] — set "
+            "`[cache.semantic] decision_threshold`, "
             "then run in shadow mode to validate it live before serving."
         )

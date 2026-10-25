@@ -7,6 +7,17 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+
+- **Cache dashboard UI (issue #254).** The Tools page (`/tools`) gains a **Cache** section:
+  `jev cache stats` as a live table (entries, hits, dollars saved, size, shadow agreement,
+  semantic mode and thresholds), a **Clear cache** form (all/decisions/roles, optional
+  older-than filter) behind a confirmation page naming what goes, and **Run calibration**
+  (`jev cache calibrate` with one-click apply of the candidate threshold). Misses aren't
+  recorded by the store, so there is no hit rate to show — the section says so instead of
+  inventing one. Calibration is shared with the CLI (`core.calibrate_thresholds`), so the
+  two surfaces can never disagree about the curve.
+
 ### Removed
 
 - **Laya second vote (issue #193).** The Laya second vote, `jev laya tune` / `jev laya reset`,

@@ -44,17 +44,23 @@ from jev_agent import __version__
 if TYPE_CHECKING:  # avoid a runtime import cycle: store.py imports CacheEntry
     from jev_agent.config.schema import CacheSettings, JevConfig
     from jev_agent.core.models import DecisionRequest
-    from jev_agent.core.store import Store
+    from jev_agent.core.store import DecisionRecord, Store
 
 __all__ = [
     "CACHE_MARKER",
+    "CALIBRATE_MAX_DECISIONS",
+    "CALIBRATE_MIN_AGREEMENT",
+    "CALIBRATE_THRESHOLDS",
     "Cache",
     "CacheEntry",
     "CacheKey",
     "CacheStats",
+    "CalibrationResult",
+    "CalibrationThresholdRow",
     "Embedder",
     "OpenRouterEmbedder",
     "SimHashEmbedder",
+    "calibrate_thresholds",
     "canonical_json",
     "decision_cache_key",
     "decision_normalized_text",
@@ -629,3 +635,94 @@ class Cache:
 
     def log_shadow(self, key_hash: str, kind: str, agreed: bool, agreement: float) -> None:
         self.store.cache_shadow_log(key_hash, kind, agreed, agreement)
+
+
+# ---- calibration (phase-3 gate, issue #10 §2.2) ---------------------------------------
+
+
+#: Similarity floors `calibrate_thresholds` evaluates.
+CALIBRATE_THRESHOLDS: tuple[float, ...] = (0.90, 0.95, 0.98, 0.99)
+#: Pairwise comparison is O(n²); cap the history calibrated over per decision point.
+CALIBRATE_MAX_DECISIONS = 1500
+#: A threshold ships only where the curve shows at least this agreement.
+CALIBRATE_MIN_AGREEMENT = 0.99
+
+
+@dataclass(frozen=True)
+class CalibrationThresholdRow:
+    """One row of the calibration curve: P(same answer | similarity >= tau)."""
+
+    tau: float
+    pairs: int
+    agree: int
+
+    @property
+    def probability(self) -> float | None:
+        """P(same answer | sim >= tau), or None when no pair cleared tau."""
+        return self.agree / self.pairs if self.pairs else None
+
+
+@dataclass(frozen=True)
+class CalibrationResult:
+    """`calibrate_thresholds` output: the curve, the history it ran over, and the
+    candidate threshold (if any) that clears the >= 0.99 agreement bar."""
+
+    rows: tuple[CalibrationThresholdRow, ...]
+    pairs: int  # comparable decision pairs across all decision points
+    points: int  # decision points with comparable (non-rules) history
+    best: float | None  # the candidate threshold, or None when none clears 0.99
+
+
+def calibrate_thresholds(store: Store) -> CalibrationResult:
+    """Pick semantic thresholds from stored decision history (phase-3 gate).
+
+    Reads settled decisions from the state DB, computes pairwise SimHash similarity
+    over the normalized requests, and reports P(same answers | similarity >= tau).
+    Ship a threshold only where the curve shows >= 0.99 agreement with a comfortable
+    margin — then validate it again in shadow mode before serving anything.
+
+    Shared by `jev cache calibrate` and the dashboard's Tools page, so the two
+    surfaces can never disagree about the curve.
+    """
+    decisions: list[DecisionRecord] = []
+    for run in store.list_runs():
+        decisions.extend(store.list_decisions(run.id))
+    # Only real dispatcher answers at the same decision point are comparable.
+    by_point: dict[str, list[DecisionRecord]] = {}
+    for record in decisions:
+        if record.decision.dispatcher == "rules":
+            continue
+        by_point.setdefault(record.decision.point, []).append(record)
+    embedder = SimHashEmbedder()
+    pairs = 0
+    agree_at: dict[float, int] = {tau: 0 for tau in CALIBRATE_THRESHOLDS}
+    total_at: dict[float, int] = {tau: 0 for tau in CALIBRATE_THRESHOLDS}
+    for records in by_point.values():
+        records = records[-CALIBRATE_MAX_DECISIONS:]
+        fingerprints = [
+            (embedder.fingerprint(decision_normalized_text(r.request)), r.decision.answers)
+            for r in records
+        ]
+        for i in range(len(fingerprints)):
+            for j in range(i + 1, len(fingerprints)):
+                sim = embedder.similarity(fingerprints[i][0], fingerprints[j][0])
+                agree = fingerprints[i][1] == fingerprints[j][1]
+                pairs += 1
+                for tau in CALIBRATE_THRESHOLDS:
+                    if sim >= tau:
+                        total_at[tau] += 1
+                        if agree:
+                            agree_at[tau] += 1
+    rows = tuple(
+        CalibrationThresholdRow(tau=tau, pairs=total_at[tau], agree=agree_at[tau])
+        for tau in CALIBRATE_THRESHOLDS
+    )
+    best = max(
+        (
+            tau
+            for tau in CALIBRATE_THRESHOLDS
+            if total_at[tau] and agree_at[tau] / total_at[tau] >= CALIBRATE_MIN_AGREEMENT
+        ),
+        default=None,
+    )
+    return CalibrationResult(rows=rows, pairs=pairs, points=len(by_point), best=best)
