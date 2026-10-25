@@ -71,7 +71,11 @@ select = ["E", "F", "W", "I", "B", "UP", "SIM", "RUF"]
 python_version = "3.11"
 strict = true
 files = ["src", "tests", "examples/demo"]
-mypy_path = "src"
+# `examples/demo` must be on the search path, not just in `files`: with explicit
+# args (`mypy src tests`) the `files` list is overridden, and without it the
+# `import seed_demo` in tests/integration/test_demo_seed.py cannot resolve
+# (issue #250). The test satisfies the import at runtime with sys.path.insert.
+mypy_path = ["src", "examples/demo"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
