@@ -1,0 +1,128 @@
+{% extends "base.html" %}
+{% from "macros.html" import badge, csrf_input, field_label with context %}
+{% block title %}Code Grade{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div class="titles">
+    <h1>Code Grade</h1>
+    <p class="lede">Grade a diff and route a coding task with the Coding Decision Agent —
+    the same grading the quality gate uses, from the browser instead of the terminal.</p>
+  </div>
+</div>
+
+<h2 class="section">Status</h2>
+<section class="panel" aria-label="Coding Decision Agent status">
+  <dl class="facts">
+    <dt>Enabled</dt><dd>{{ "yes" if settings.enabled else "no" }}</dd>
+    <dt>Model</dt><dd class="mono">{{ settings.model_id }}</dd>
+    <dt>Confidence threshold</dt><dd>{{ "%.2f" | format(settings.confidence_threshold) }}</dd>
+    <dt>Backend</dt><dd>{{ badge("available", "ok") if available else badge("not installed", "warn") }}</dd>
+  </dl>
+  {% if not settings.enabled %}
+  <p class="hint">Grading is off: the quality gate will not grade diffs. Grading from this
+  page still works on demand. To have the gate grade every diff, turn it on under
+  <a href="/settings">Settings → Code orchestrator</a>.</p>
+  {% endif %}
+  {% if not available %}
+  <p class="flash warn" role="note">The Coding Decision Agent model is not installed on this
+  machine, so grading is unavailable. Install it with
+  <code>pip install "jev-agent[code-orchestrator]"</code> — the first grade downloads the
+  ~842 MB model checkpoint into the Hugging Face cache. See
+  <code>docs/code-orchestrator.md</code>. Nothing here guesses a grade while the model is missing.</p>
+  {% endif %}
+</section>
+
+<h2 class="section" id="grade">Grade a diff</h2>
+<section class="panel" aria-label="Grade a diff">
+  <p class="hint">Paste a unified diff, or upload a diff file — the file wins when both are
+  given. Describe what the diff is supposed to do: the model was trained on full task text,
+  and a bare title grades worse. Test output is optional; it reaches the model as the
+  grading state's notes. Grading runs the model on this machine and can take a few minutes
+  the first time (the model loads, then grades).</p>
+  <form method="post" action="/code-grade/grade" enctype="multipart/form-data">
+    {{ csrf_input() }}
+    <div class="form-grid">
+      <div>
+        {{ field_label("task", "grade-task") }}
+        <input type="text" id="grade-task" name="task" required value="{{ form.task }}"
+               placeholder="What the diff is supposed to do">
+      </div>
+      <div>
+        {{ field_label("diff_file", "grade-diff-file") }}
+        <input type="file" id="grade-diff-file" name="diff_file" accept=".diff,.patch,.txt">
+      </div>
+    </div>
+    <div>
+      {{ field_label("diff", "grade-diff") }}
+      <textarea id="grade-diff" name="diff" rows="12" placeholder="diff --git a/...">{{ form.diff }}</textarea>
+    </div>
+    <div>
+      {{ field_label("tests", "grade-tests") }}
+      <textarea id="grade-tests" name="tests" rows="4" placeholder="Optional: test output for the diff">{{ form.tests }}</textarea>
+    </div>
+    <button class="btn btn-primary" type="submit">Grade diff</button>
+  </form>
+  {% if grade_error %}
+  <p class="flash error" role="alert">{{ grade_error }}</p>
+  {% endif %}
+  {% if grade %}
+  <h3>Grade</h3>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Field</th><th>Value</th></tr></thead>
+    <tbody>
+      <tr><td>code_quality</td><td>{{ grade.code_quality }}/4</td></tr>
+      <tr><td>instruction_followed</td><td>{{ "yes" if grade.instruction_followed else "no" }}</td></tr>
+      <tr><td>likely_correct</td><td>{{ "yes" if grade.likely_correct else "no" }}</td></tr>
+      <tr><td>merge_action</td><td>{{ grade.merge_action }}</td></tr>
+      {% for question, confidence in grade.answer_confidence.items() %}
+      <tr><td>confidence[{{ question }}]</td><td>{{ "%.2f" | format(confidence) }}</td></tr>
+      {% endfor %}
+      <tr><td>gate</td><td>{{ badge(grade.gate.decision, "ok" if grade.gate.decision == "accept" else ("warn" if grade.gate.decision == "human_review" else "fail")) }}</td></tr>
+      <tr><td>reason</td><td class="wrap">{{ grade.gate.reason }}</td></tr>
+    </tbody>
+  </table></div>
+  <p class="hint">The gate trusts a merge action only when its confidence reaches
+  {{ "%.2f" | format(settings.confidence_threshold) }} — below it, a human decides, whatever
+  the label says.</p>
+  {% endif %}
+</section>
+
+<h2 class="section" id="route">Route a coding task</h2>
+<section class="panel" aria-label="Route a coding task">
+  <p class="hint">Which model tier and skill a coding task needs — the routing hint Jev's D4
+  decision uses. A hint only shows when the model is confident enough; below the threshold
+  there is no hint at all, rather than a low-confidence tier.</p>
+  <form method="post" action="/code-grade/route">
+    {{ csrf_input() }}
+    <div>
+      {{ field_label("route_request", "route-request") }}
+      <textarea id="route-request" name="route_request" rows="4" required
+                placeholder="e.g. Fix the flaky setup-token test so it polls instead of sleeping a fixed delay">{{ form.route_request }}</textarea>
+    </div>
+    <button class="btn btn-primary" type="submit">Route task</button>
+  </form>
+  {% if route_error %}
+  <p class="flash error" role="alert">{{ route_error }}</p>
+  {% endif %}
+  {% if route %}
+  {% if route.hint %}
+  <h3>Routing hint</h3>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Field</th><th>Value</th></tr></thead>
+    <tbody>
+      <tr><td>model_tier</td><td>{{ route.hint.model_tier }}</td></tr>
+      <tr><td>skill</td><td>{{ route.hint.skill }}</td></tr>
+      <tr><td>task_difficulty</td><td>{{ route.hint.task_difficulty }}</td></tr>
+      <tr><td>suggested_effort</td><td>{{ route.hint.suggested_effort }}</td></tr>
+      <tr><td>confidence</td><td>{{ route.hint.confidence }}</td></tr>
+    </tbody>
+  </table></div>
+  <p class="hint">A hint, not an assignment: Jev still picks the worker, model and effort.</p>
+  {% else %}
+  <p class="flash warn" role="note">The Coding Decision Agent is not confident enough to route
+  (model_tier {{ route.model_tier }} at {{ "%.2f" | format(route.confidence) }} &lt;
+  {{ "%.2f" | format(route.threshold) }}); no routing hint is shown.</p>
+  {% endif %}
+  {% endif %}
+</section>
+{% endblock %}

@@ -30,8 +30,8 @@ from jev_agent.code_orchestrator import (
 from jev_agent.code_orchestrator.grades import AgentTraceGrade
 from jev_agent.config.schema import CodeOrchestratorSettings, JevConfig
 from jev_agent.core.models import TaskCard
-from jev_agent.quality.gate import _code_grade_task_text, apply_code_grade
-from jev_agent.quality.models import GateResult
+from jev_agent.quality.gate import _code_grade_task_text, _test_summary, apply_code_grade
+from jev_agent.quality.models import CheckResult, GateResult
 
 
 def _grade(**overrides: object) -> CodeReviewGrade:
@@ -643,3 +643,103 @@ def test_apply_code_grade_unavailable_never_blocks() -> None:
     assert result.blocked is False
     assert result.code_grade is not None
     assert result.code_grade["status"] == "unavailable"
+
+
+# ---------------------------------------------------------------------------
+# Issue #254: the gate passes its test summary as the grader's `notes`
+# ---------------------------------------------------------------------------
+
+
+class _RecordingBackend(_FakeBackend):
+    """A fake that records the `tests` string the gate passed through."""
+
+    def __init__(self, *args: object, **kwargs: object) -> None:
+        super().__init__(*args, **kwargs)  # type: ignore[arg-type]
+        self.seen_tests = "<not called>"
+
+    def grade_code(self, *, task: str, diff: str, tests: str) -> object:
+        self.seen_tests = tests
+        return super().grade_code(task=task, diff=diff, tests=tests)
+
+
+def _result_with_checks(*checks: CheckResult) -> GateResult:
+    return GateResult(level="basic", scope="task", task_id="T1", number=1, checks=list(checks))
+
+
+def test_apply_code_grade_passes_test_summary_as_notes() -> None:
+    """The tests check's outcome reaches the grader as `tests` (-> `notes`).
+
+    The gate's own tests check is the outcome the model would otherwise
+    have to guess at; the summary is `tests: <status> — <detail>`.
+    """
+    backend = _RecordingBackend("accept", 0.95)
+    apply_code_grade(
+        _result_with_checks(
+            CheckResult(status="pass", detail="`pytest` passed", name="tests"),
+            CheckResult(status="pass", detail="clean", name="ruff"),
+        ),
+        settings=CodeOrchestratorSettings(enabled=True),
+        task_text="Fix x",
+        diff="+x\n",
+        orchestrator=CodeOrchestrator(backend=backend),
+    )
+    assert backend.seen_tests == "tests: pass — `pytest` passed"
+
+
+def test_apply_code_grade_passes_failing_test_summary_as_notes() -> None:
+    """A failing suite's detail (including the failure tail) is passed too."""
+    backend = _RecordingBackend("accept", 0.95)
+    apply_code_grade(
+        _result_with_checks(
+            CheckResult(
+                status="fail",
+                detail="`pytest` failed with exit code 1: ...FAILED test_x",
+                name="tests",
+            )
+        ),
+        settings=CodeOrchestratorSettings(enabled=True),
+        task_text="Fix x",
+        diff="+x\n",
+        orchestrator=CodeOrchestrator(backend=backend),
+    )
+    assert backend.seen_tests == (
+        "tests: fail — `pytest` failed with exit code 1: ...FAILED test_x"
+    )
+
+
+def test_apply_code_grade_passes_no_notes_without_a_tests_check() -> None:
+    """No tests check ran (no suite, or a level without one): `notes` stays out."""
+    backend = _RecordingBackend("accept", 0.95)
+    apply_code_grade(
+        _result_with_checks(CheckResult(status="pass", detail="clean", name="ruff")),
+        settings=CodeOrchestratorSettings(enabled=True),
+        task_text="Fix x",
+        diff="+x\n",
+        orchestrator=CodeOrchestrator(backend=backend),
+    )
+    assert backend.seen_tests == ""
+
+
+def test_test_summary_caps_a_long_failure_tail() -> None:
+    """A long failure tail is capped at 2000 chars, not passed whole.
+
+    The notes share the model's state budget with the task and the diff;
+    a verbatim multi-kilobyte pytest tail would eat it.
+    """
+    summary = _test_summary([CheckResult(status="fail", detail="x" * 5000, name="tests")])
+    assert len(summary) == 2000
+    assert summary.startswith("tests: fail — ")
+    assert summary.endswith("...")
+
+
+def test_test_summary_skips_checks_before_the_tests_check() -> None:
+    """Only the check named `tests` is the summary; earlier checks are ignored."""
+    assert (
+        _test_summary(
+            [
+                CheckResult(status="fail", detail="lint errors", name="ruff"),
+                CheckResult(status="skipped", detail="no test suite detected", name="tests"),
+            ]
+        )
+        == "tests: skipped — no test suite detected"
+    )

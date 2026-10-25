@@ -123,6 +123,12 @@ to paste. It is the fastest way to check whether a `jev` command has a dashboard
   (`jev quality checks` — every check by level, whether its tool is installed and whether it
   applies to this repo), and the **MCP servers (CLI only)** note documenting `jev mcp servers`
   and `jev mcp runs`.
+- **Code Grade** (`/code-grade`): the browser-first `jev code grade` / `jev code route` —
+  paste a diff (or upload a diff file), describe the task, and grade it with the Coding
+  Decision Agent (code_quality / merge_action / confidence, plus the gate decision), or route
+  a coding task to a model tier and skill. Shows the model's status and, when the backend is
+  not installed, the install guidance instead of a grade. Config lives under Settings →
+  Code orchestrator. See [code-orchestrator.md](code-orchestrator.md).
 - **Connections** (`/connections`): servers, the decision route and key health (as before),
   plus the **Browser** panel: the doctor's browser check and the **Install browser** button,
   which asks for confirmation naming the exact command, then runs the install in the

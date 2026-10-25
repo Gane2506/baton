@@ -38,6 +38,7 @@ from jev_agent.dashboard.preview import (
 )
 from jev_agent.dashboard.routes_board import BoardRoutes
 from jev_agent.dashboard.routes_chat import ChatRoutes
+from jev_agent.dashboard.routes_code import CodeRoutes
 from jev_agent.dashboard.routes_connections import ConnectionsRoutes
 from jev_agent.dashboard.routes_design import DesignRoutes
 from jev_agent.dashboard.routes_learning import LearningRoutes
@@ -83,6 +84,7 @@ class Dashboard(
     ConnectionsRoutes,
     SettingsRoutes,
     PreviewRoutes,
+    CodeRoutes,
 ):
     """The dashboard app: route handlers grouped by area (routes_*.py mixins),
     over DashboardCore (state, render/page/back/act)."""
@@ -171,6 +173,9 @@ def create_app(
         Route("/tools/cache/clear", dash.cache_clear, methods=["POST"]),
         Route("/tools/cache/calibrate", dash.cache_calibrate, methods=["POST"]),
         Route("/tools/cache/apply-threshold", dash.cache_apply_threshold, methods=["POST"]),
+        Route("/code-grade", dash.code_grade_page),
+        Route("/code-grade/grade", dash.code_grade_grade, methods=["POST"]),
+        Route("/code-grade/route", dash.code_grade_route, methods=["POST"]),
         Route("/connections", dash.connections_page),
         Route("/connections/live", dash.connections_live),
         Route("/connections/refresh", dash.connections_refresh, methods=["POST"]),
