@@ -1396,6 +1396,10 @@ button.studio-card {
   display: block;
   text-align: left; font: inherit; cursor: pointer;
   flex: 1; min-width: 0; height: 100%; padding: 0;
+  /* Chrome's button UA style is white-space: nowrap, inherited by the
+     description, so the text ran as one line and clipped at the card edge;
+     the card's copy must wrap like the link card's. */
+  white-space: normal;
   /* Chrome sizes a button's scrollable overflow from its unwrapped text, so
      the multi-line description widened the whole page even though it wraps
      visually; clipping the button's overflow keeps the page at viewport

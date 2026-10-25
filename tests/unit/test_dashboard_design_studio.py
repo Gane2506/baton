@@ -188,6 +188,9 @@ def test_studio_landing_has_two_entry_cards(client: TestClient, home: Path) -> N
     css = client.get("/static/style.css").text
     assert ".studio-card-inner" in css
     assert "button.studio-card" in css
+    # Chrome's button UA style is white-space: nowrap, inherited by the card
+    # copy: the description must wrap like the link card's.
+    assert "white-space: normal" in css
 
 
 # ---- the wizard steps --------------------------------------------------------------------
