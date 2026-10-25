@@ -1269,6 +1269,24 @@ def test_cli_generates_token_off_loopback(
     assert result.exit_code == 1 and "at least 16" in result.output
 
 
+def test_cli_refuses_home_directory_as_repo(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Issue #277: a home directory is often itself a git repo (dotfiles), so a
+    `jev dashboard` started from home silently serves the home directory's
+    empty state instead of the project. Refuse with an `error:` line pointing
+    at `--repo`, before anything is served."""
+    home = tmp_path / "home"
+    (home / ".git").mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home))
+    result = cli.invoke(cli_app, ["dashboard", "--no-open", "--repo", str(home)])
+    assert result.exit_code == 1, result.output
+    assert "Traceback" not in result.output
+    assert "error:" in result.stderr
+    output = " ".join(result.stderr.split())
+    assert "home directory" in output and "--repo" in output
+
+
 # ---- jev ship and the KPIs page ----------------------------------------------------------
 
 

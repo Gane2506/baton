@@ -64,9 +64,18 @@
         <option value="api"{% if not api_ok %} disabled{% endif %}{% if api_ok %} selected{% endif %}>OpenRouter</option>
         <option value="claude_code"{% if not cc_ok %} disabled{% endif %}{% if not api_ok and cc_ok %} selected{% endif %}>Claude Code</option>
       </select>
+      {% if api_model_needed %}
+      {# No default model is set (issue #277): the model is required, with a
+         visible label, so the browser blocks an empty submit inline instead of
+         the create bouncing with "pick an API model first". #}
+      <label for="nc-model">Model</label>
+      <input type="text" id="nc-model" name="model" class="env-model" list="nc-models"
+             autocomplete="off" placeholder="Model" aria-label="Model" required>
+      {% else %}
       <label class="sr-only" for="nc-model">Model (optional)</label>
       <input type="text" id="nc-model" name="model" class="env-model" list="nc-models"
              autocomplete="off" placeholder="Model" aria-label="Model (optional)">
+      {% endif %}
       <datalist id="nc-models">
         {% for m in api_model_options %}<option value="{{ m }}">{% endfor %}
       </datalist>

@@ -59,6 +59,35 @@
     {% if design_system_label is defined %}
     <p class="chat-facts muted small">Design system: {{ design_system_label }}</p>
     {% endif %}
+    {# Dead-end backend (issue #277): the chat's backend is not ready (no CLI on
+       PATH, no API key), so every send fails. Offer the way out: switch to the
+       API backend. Not shown for api chats — switching an api chat to api is
+       meaningless — and not while the chat is replying. #}
+    {% if meta and backends is defined and backends is mapping and meta.backend != "api" and backends.get(meta.backend) and not backends[meta.backend][0] %}
+    <div class="notice" role="note">
+      {{ icon("i-info", "sm") }}
+      <div>
+        <p class="notice-title">This chat's backend isn't available</p>
+        <p>{{ backends[meta.backend][1] }}, so this chat can't reply. Switch it to
+        the API backend to keep talking — the transcript stays.</p>
+        <form method="post" action="/chats/{{ chat_id }}/backend" class="field-row">
+          {{ csrf_input() }}
+          <input type="hidden" name="worker" value="api">
+          {% if api_model_needed %}
+          <div class="field-control">
+            <label for="switch-model">API model</label>
+            <input type="text" id="switch-model" name="model" list="switch-models" required
+                   autocomplete="off" placeholder="e.g. anthropic/claude-sonnet-4" aria-label="API model">
+            <datalist id="switch-models">
+              {% for m in api_model_options %}<option value="{{ m }}">{% endfor %}
+            </datalist>
+          </div>
+          {% endif %}
+          <div class="field-actions"><button type="submit" class="btn btn-primary btn-sm"{% if busy %} disabled{% endif %}>Switch to API backend</button></div>
+        </form>
+      </div>
+    </div>
+    {% endif %}
 
     {% if entries %}
     <div id="chat-transcript" data-live="/chats/{{ chat_id }}/live" data-live-every="{{ refresh_ms }}" aria-label="Chat transcript" role="log" aria-live="polite">

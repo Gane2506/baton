@@ -7,7 +7,9 @@ touches a model, a CLI or GitHub.
 
 from __future__ import annotations
 
+import json
 import re
+import shutil
 import time
 from collections.abc import Iterator
 from pathlib import Path
@@ -351,6 +353,125 @@ def test_chat_delete_unknown_chat_errors(client: TestClient) -> None:
     response = _post(client, "/chats/no-such-chat/delete")
     assert response.status_code == 303
     assert "no-such-chat" in _follow(client, response).text
+
+
+# ---- backend switch (issue #277) ---------------------------------------------------------
+
+
+def _new_claude_chat(client: TestClient) -> str:
+    response = _post(
+        client, "/chats/new", {"worker": "claude_code", "learning": "", "budget_usd": "1.00"}
+    )
+    assert response.status_code == 303
+    return response.headers["location"].rsplit("/", 1)[1]
+
+
+def _chat_meta(repo: Path, chat_id: str) -> dict[str, Any]:
+    return cast(
+        dict[str, Any], json.loads((repo / ".jev" / "chats" / chat_id / "meta.json").read_text())
+    )
+
+
+def _set_chat_session(repo: Path, chat_id: str, session_id: str | None) -> None:
+    path = repo / ".jev" / "chats" / chat_id / "meta.json"
+    meta = json.loads(path.read_text())
+    meta["session_id"] = session_id
+    path.write_text(json.dumps(meta, indent=2))
+
+
+def test_chat_backend_switch_moves_claude_chat_to_api(
+    client: TestClient, fixture_repo: Path
+) -> None:
+    chat_id = _new_claude_chat(client)
+    assert _chat_meta(fixture_repo, chat_id)["backend"] == "claude_code"
+    _set_chat_session(fixture_repo, chat_id, "sess-old")
+    response = _post(
+        client,
+        f"/chats/{chat_id}/backend",
+        {"worker": "api", "model": "openai/gpt-4o-mini"},
+    )
+    assert response.status_code == 303
+    assert "now uses the API backend" in _follow(client, response).text
+    meta = _chat_meta(fixture_repo, chat_id)
+    assert meta["backend"] == "api"
+    assert meta["model"] == "openai/gpt-4o-mini"
+    # A different backend starts a new model session: the old session id is gone.
+    assert meta["session_id"] is None
+    assert "OpenRouter API" in client.get(f"/chats/{chat_id}").text
+
+
+def test_chat_backend_switch_needs_csrf(client: TestClient) -> None:
+    chat_id = _new_claude_chat(client)
+    response = client.post(
+        f"/chats/{chat_id}/backend",
+        data={"worker": "api", "model": "openai/gpt-4o-mini"},
+        follow_redirects=False,
+    )
+    assert response.status_code == 403
+
+
+def test_chat_backend_switch_unknown_chat_errors(client: TestClient) -> None:
+    response = _post(
+        client, "/chats/no-such-chat/backend", {"worker": "api", "model": "openai/gpt-4o-mini"}
+    )
+    assert response.status_code == 303
+    assert "no-such-chat" in _follow(client, response).text
+
+
+def test_chat_backend_switch_same_backend_errors(client: TestClient) -> None:
+    chat_id = _new_chat(client)
+    response = _post(client, f"/chats/{chat_id}/backend", {"worker": "api"})
+    assert response.status_code == 303
+    assert "already uses" in _follow(client, response).text
+
+
+def test_chat_backend_switch_invalid_worker_errors(client: TestClient) -> None:
+    chat_id = _new_claude_chat(client)
+    response = _post(client, f"/chats/{chat_id}/backend", {"worker": "bogus"})
+    assert response.status_code == 303
+    assert "pick a chat backend" in _follow(client, response).text
+
+
+def test_chat_page_offers_switch_when_backend_not_ready(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The claude_code chat's CLI is not on PATH, so the page offers the way out."""
+    monkeypatch.setattr(shutil, "which", lambda cmd: None)
+    chat_id = _new_claude_chat(client)
+    text = client.get(f"/chats/{chat_id}").text
+    assert "Switch to API backend" in text
+    assert f'action="/chats/{chat_id}/backend"' in text
+    # The API backend is not ready either (no key), so no model picker is shown.
+    assert 'id="switch-model"' not in text
+
+
+def test_chat_page_switch_form_needs_model_when_no_default(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """API key set, no default model: the switch form carries a required model input."""
+    monkeypatch.setattr(shutil, "which", lambda cmd: None)
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+    chat_id = _new_claude_chat(client)
+    text = client.get(f"/chats/{chat_id}").text
+    match = re.search(r'<input[^>]*id="switch-model"[^>]*>', text)
+    assert match and "required" in match.group(0)
+    assert "anthropic/claude-sonnet-4" in text
+
+
+def test_new_chat_model_required_when_no_default_model(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Issue #277: with no default model the New chat model input is required with a
+    visible label, so the browser blocks an empty submit inline."""
+    text = client.get("/chats").text
+    match = re.search(r'<input[^>]*id="nc-model"[^>]*>', text)
+    assert match and "required" not in match.group(0)
+    assert '<label class="sr-only" for="nc-model">Model (optional)</label>' in text
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+    text = client.get("/chats").text
+    match = re.search(r'<input[^>]*id="nc-model"[^>]*>', text)
+    assert match and "required" in match.group(0)
+    assert '<label for="nc-model">Model</label>' in text
 
 
 def test_scheduler_routes_need_csrf(client: TestClient) -> None:

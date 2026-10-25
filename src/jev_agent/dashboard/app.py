@@ -146,6 +146,7 @@ def create_app(
         Route("/chats/{chat_id}", dash.chat_page),
         Route("/chats/{chat_id}/live", dash.chat_fragment),
         Route("/chats/{chat_id}/send", dash.chat_send, methods=["POST"]),
+        Route("/chats/{chat_id}/backend", dash.chat_backend, methods=["POST"]),
         Route("/chats/{chat_id}/brief", dash.chat_brief, methods=["POST"]),
         Route("/chats/{chat_id}/start", dash.chat_start, methods=["POST"]),
         Route("/chats/{chat_id}/queue", dash.chat_queue, methods=["POST"]),
