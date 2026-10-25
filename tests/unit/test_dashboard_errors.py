@@ -66,9 +66,7 @@ def _raise_workers(*args: object, **kwargs: object) -> None:
     raise JevError(_RAW)
 
 
-def test_chat_work_error_is_friendly(
-    client: TestClient, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_chat_work_error_is_friendly(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(views, "open_repo", _raise_workers)
     response = client.get("/chats/nope/work")
     assert response.status_code == 500
@@ -86,9 +84,7 @@ def test_connections_live_error_is_friendly(
     assert "jev.toml" not in response.json()["error"]
 
 
-def test_run_file_error_is_friendly(
-    client: TestClient, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_run_file_error_is_friendly(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(views, "safe_run_file", _raise_workers)
     page = client.get("/runs/r1/files/log.txt")
     assert page.status_code == 500
