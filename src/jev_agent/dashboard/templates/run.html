@@ -102,18 +102,10 @@
 <div class="empty"><div class="title">Event log disabled</div><p>The event log is off for this repo (<code>[events] enabled = false</code>); <code>jev events</code>, <code>jev replay</code> and <code>jev bisect</code> report the same.</p></div>
 {% elif v.events %}
 <p class="muted small">{{ v.events|length }} events, oldest first — the run's story in order. An event marked synthetic was rebuilt from snapshots for a run that predates the event log.</p>
-<div class="table-wrap table-scroll"><table>
-  <thead><tr><th>#</th><th>Time</th><th>Event</th><th>Actor</th></tr></thead>
-  <tbody>
-  {% for e in v.events %}
-    {{ event_row(e) }}
-  {% endfor %}
-  </tbody>
-</table></div>
 
 <h3 class="section">Find where it went bad</h3>
 <p class="muted small">The dashboard form of <code>jev bisect</code>: the first event matching one criterion, and the chain of events that led to it.</p>
-<form class="inline" method="get" action="/runs/{{ run.id }}#event-timeline">
+<form class="inline bisect" method="get" action="/runs/{{ run.id }}#event-timeline">
   <label for="bisect">Bad means</label>
   <select id="bisect" name="bisect">
     <option value="gate"{{ " selected" if bisect_form.criterion == "gate" }}>a blocked quality gate</option>
@@ -143,6 +135,15 @@
   <p class="flash ok">No bad event found: the run looks fine by {{ bisect.criterion }}.</p>
   {% endif %}
 {% endif %}
+
+<div class="table-wrap table-scroll"><table>
+  <thead><tr><th>#</th><th>Time</th><th>Event</th><th>Actor</th></tr></thead>
+  <tbody>
+  {% for e in v.events %}
+    {{ event_row(e) }}
+  {% endfor %}
+  </tbody>
+</table></div>
 {% else %}
 <div class="empty"><div class="title">No events recorded for this run yet</div><p>This run predates the event log, or its events were never recorded. Backfill rebuilds the history from the run's snapshots — every rebuilt event is marked synthetic, and the rebuilt log supports timeline viewing but not full verification.</p>
 <form method="post" action="/runs/{{ run.id }}/events/backfill">{{ csrf_input() }}<button class="btn btn-secondary" type="submit">Backfill events</button></form></div>

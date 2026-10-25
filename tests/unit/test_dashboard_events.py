@@ -244,3 +244,24 @@ def test_events_disabled_repo_says_so(client: TestClient, fixture_repo: Path) ->
     assert "Event log disabled" in text
     assert "events/backfill" not in text
     assert "run.created" not in text
+
+
+def test_bisect_form_sits_above_the_event_table(client: TestClient, fixture_repo: Path) -> None:
+    """Audit 5 WS-1: the bisect form used to sit below the whole event table, so
+    on a run with a long log the answer to "find where it went bad" was below
+    the fold after submitting — the browser lands at #event-timeline and the
+    user saw only the top of the log. The form (and its result) now come
+    first, right under the section lede."""
+    run_id = _seed_run(fixture_repo)
+    text = _timeline(client, run_id)
+    assert text.find('id="event-timeline"') < text.find("Find where it went bad")
+    assert text.find("Find where it went bad") < text.find("run.created")
+    assert 'class="inline bisect"' in text
+
+
+def test_bisect_result_sits_above_the_event_table(client: TestClient, fixture_repo: Path) -> None:
+    run_id = _seed_run(fixture_repo)
+    page = client.get(f"/runs/{run_id}?bisect=gate")
+    assert page.status_code == 200
+    assert "looks fine" in page.text
+    assert page.text.find("looks fine") < page.text.find("run.created")

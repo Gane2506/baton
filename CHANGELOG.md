@@ -7,6 +7,16 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Fixed
+
+- **Bisect form above the event table (audit cycle 5, issue #266).** On the run
+  page, "Find where it went bad" (`jev bisect`) sat below the whole event
+  table, so on a run with a long log the answer was below the fold after
+  submitting — the browser lands at `#event-timeline` and the user saw only
+  the top of the log. The form and its result now sit right under the section
+  lede, above the table, and the form's labels no longer wrap mid-phrase
+  (`form.bisect` keeps each label whole and sizes its controls to content).
+
 ### Added
 
 - **Cache dashboard UI (issue #254).** The Tools page (`/tools`) gains a **Cache** section:
