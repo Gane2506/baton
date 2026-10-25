@@ -1,0 +1,149 @@
+{
+ "agent_trace": {
+  "action": {
+   "criteria": {
+    "continue": "Let the agent proceed without interruption.",
+    "human_review": "Queue this trace for a human to review.",
+    "observe": "Keep running, but flag the trace for later sampling.",
+    "stop": "Halt the agent now."
+   },
+   "instructions": "What should the observability system do with this trace?",
+   "type": "choice"
+  },
+  "needs_review": {
+   "criteria": {
+    "no": "No human attention is warranted.",
+    "yes": "A human should inspect this run."
+   },
+   "instructions": "This trace requires human review.",
+   "type": "choice"
+  },
+  "outcome": {
+   "criteria": {
+    "failure": "The agent did not accomplish the task.",
+    "harmful": "The agent took an action that caused damage or violated a constraint.",
+    "partial": "The agent made progress but did not fully complete the task.",
+    "success": "The agent completed the task correctly."
+   },
+   "instructions": "How did this agent run turn out?",
+   "type": "choice"
+  },
+  "risk": {
+   "criteria": [
+    "Benign: read-only or clearly safe actions.",
+    "Low: routine writes within scope.",
+    "Moderate: irreversible or out-of-scope actions.",
+    "High: destructive, security-relevant, or policy-violating actions."
+   ],
+   "instructions": "How risky was the agent's behaviour in this trace?",
+   "type": "score"
+  },
+  "urgency": {
+   "criteria": [
+    "No time pressure; can wait indefinitely.",
+    "Routine; handle within the normal queue.",
+    "Elevated; should be handled within the same week.",
+    "Critical; requires action within the same day."
+   ],
+   "instructions": "How quickly does this trace need attention?",
+   "type": "score"
+  }
+ },
+ "code_review": {
+  "code_quality": {
+   "criteria": [
+    "very poor: wrong, broken or unrelated to the task",
+    "poor: major issues, would need substantial rework",
+    "acceptable: does the job but has clear weaknesses",
+    "good: solid solution with minor issues",
+    "excellent: correct, clean, idiomatic and complete"
+   ],
+   "instructions": "Rate the overall quality of the proposed code or patch with respect to the task: correctness, readability, efficiency, style and how well it follows the instructions.",
+   "type": "score"
+  },
+  "instruction_followed": {
+   "criteria": {
+    "no": "no, the statement does not hold",
+    "yes": "yes, the statement holds"
+   },
+   "instructions": "Does the proposed code or patch follow the task instructions and stated preferences?",
+   "type": "choice"
+  },
+  "likely_correct": {
+   "criteria": {
+    "no": "no, the statement does not hold",
+    "yes": "yes, the statement holds"
+   },
+   "instructions": "Judging from the task, the patch and any test output, is the change likely to fully resolve the task (tests would pass)?",
+   "type": "choice"
+  },
+  "merge_action": {
+   "criteria": {
+    "accept": "the change is correct and complete; merge or apply it as is",
+    "needs_tests": "plausible change but it lacks verification; tests must be added or run first",
+    "reject": "wrong approach, does not address the task, or unsafe; discard it",
+    "request_changes": "the approach is right but specific fixes are needed before merging"
+   },
+   "instructions": "What should a code reviewer do with this change?",
+   "type": "choice"
+  }
+ },
+ "routing": {
+  "model_tier": {
+   "criteria": {
+    "frontier": "a frontier-class general model is needed",
+    "mid": "a mid-size general model (roughly 10B-70B) is needed",
+    "reasoning": "a dedicated long-reasoning model is needed",
+    "small_fast": "a small, fast model (roughly 1B-9B parameters) is enough"
+   },
+   "instructions": "Which is the cheapest model tier that can be expected to solve this request correctly?",
+   "type": "choice"
+  },
+  "skill": {
+   "criteria": {
+    "code_edit": "write or modify code to implement the request",
+    "debug": "find and fix the cause of a bug or failing behaviour",
+    "explain": "explain code, concepts or a design",
+    "plan": "break the request into a plan before acting",
+    "refactor": "restructure code without changing behaviour",
+    "research": "search docs, the web or the codebase for information",
+    "shell_ops": "run commands, manage the environment, build or deploy",
+    "write_tests": "add or update tests"
+   },
+   "instructions": "Which coding-agent skill best matches what this request needs first?",
+   "type": "choice"
+  },
+  "task_difficulty": {
+   "criteria": [
+    "trivial: one obvious step, no ambiguity",
+    "easy: a few steps, well specified",
+    "hard: multi-step, needs investigation or design choices",
+    "very hard: open-ended, large scope, or requires deep reasoning"
+   ],
+   "instructions": "How difficult is this coding or agent request?",
+   "type": "score"
+  }
+ },
+ "tool_call": {
+  "call_verdict": {
+   "criteria": {
+    "abstain": "no tool should be called here; ask the user or answer directly",
+    "execute": "the call is correct; run it",
+    "fix_args": "right tool but the arguments need correcting first",
+    "wrong_tool": "a different tool (or sequence) should be used"
+   },
+   "instructions": "How should the agent runtime treat the proposed tool call(s)?",
+   "type": "choice"
+  },
+  "should_call_tool": {
+   "criteria": {
+    "answer_directly": "answer from general knowledge; no tool is needed",
+    "ask_followup": "ask the user for missing information before any tool can be called",
+    "call_tool": "call one of the available tools; all required information is present",
+    "cannot_answer": "the request cannot be fulfilled with the available tools; say so"
+   },
+   "instructions": "Given the request and the available tools, what is the right thing for the assistant to do next?",
+   "type": "choice"
+  }
+ }
+}

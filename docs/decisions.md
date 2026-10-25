@@ -2,6 +2,36 @@
 
 Deviations from [PLAN.md](../PLAN.md) and choices it left open. Newest first.
 
+## 2026-10-24: Live Coding Decision Agent backend via `laya` (#259)
+
+- **The model now runs.** `LayaBackend` (`code_orchestrator/laya_backend.py`)
+  loads the `S4MPL3BI4S/Coding_Decision_Agent` checkpoint through the `laya`
+  runtime and asks it the questions it was trained on. `jev code grade` /
+  `route` / `trace` and the quality gate grade real diffs; the
+  `coding_decision_agent` package is no longer required.
+- **The question wording is data from the training dataset, not a guess.**
+  `coding_decision_agent` is not on PyPI and the training repo is
+  unpublished, so the fixed wording was recovered verbatim from the public
+  case dataset `S4MPL3BI4S/coding-decision-cases` (its rows carry the exact
+  `questions` dicts) and is pinned by a fixture test
+  (`tests/unit/fixtures/coding_decision_questions.json`). If the wording
+  drifts, re-extract from the dataset; never edit the constants by hand.
+  State shapes mirror the training rows (`code_review` carries
+  family/task/language/diff_stats/diff/notes; test output goes in `notes`,
+  since no training row has a separate `tests` key).
+- **Still optional, still lazy.** `laya` + torch are not a hard dependency:
+  `import laya` pulls torch, so even the availability check uses
+  `find_spec` and the import happens on first grade only. A missing backend
+  is `CodeOrchestratorUnavailable` (gate records `unavailable`, no block);
+  a failed inference is `CodeOrchestratorError` (gate blocks fail-closed).
+- **`tool_call` / `agent_trace` are wired through the live backend**, with
+  the trained wording. The caveat is the state shape, not the wording:
+  training states are structured dicts and Baton passes free text, which
+  the model reads as given.
+- **Threshold measured on real diffs** during #259 (see its report); the
+  0.7 default stands/falls on those numbers, not on the model card's
+  starting point alone.
+
 ## 2026-10-24: Laya second vote removed (#193, docs track)
 
 - **Jev is the main orchestrator; the Coding Decision Agent is the code orchestrator.**

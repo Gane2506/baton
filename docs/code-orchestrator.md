@@ -81,33 +81,61 @@ order, deliberately:
 
 ```bash
 pip install laya
-# plus the coding_decision_agent package from the model repo, then:
 ```
 
-```python
-from coding_decision_agent import CodingDecisionAgent
+That is the whole install: no `coding_decision_agent` package is needed.
+Baton ships the model's fixed question wording itself (recovered verbatim
+from the public training dataset `S4MPL3BI4S/coding-decision-cases`; see
+`src/jev_agent/code_orchestrator/laya_backend.py`) and runs the
+`S4MPL3BI4S/Coding_Decision_Agent` checkpoint through the `laya` runtime.
+If the `coding_decision_agent` package ever becomes installable, Baton
+prefers it; until then the built-in backend is the real one.
 
-grader = CodingDecisionAgent("S4MPL3BI4S/Coding_Decision_Agent")
-verdict = grader.grade_code(task="...", diff=open("change.diff").read(), tests="...")
-print(verdict.merge_action, verdict.answer_confidence["merge_action"])
+```bash
+# Verify it works (grade a diff the way the quality gate does):
+jev code status    # backend_available: yes
+jev code grade --task "Fix the off-by-one in paginate()" --diff-file change.diff
 ```
 
-Baton deliberately does **not** add the model as a hard dependency: it is a
-421M model behind `laya` + torch, and CI must not download weights. The
-backend loads lazily, only when grading is enabled and a grade is actually
-requested. If the package is absent, `jev code grade`/`route` fail with a
-clear message, and the quality gate records the grade as `unavailable`
-instead of blocking the run. A grade that did not run must never look like
-a grade.
+### What the first grade downloads, and what it needs
 
-> **Verified gap (2026-10-24):** `coding_decision_agent` is not on PyPI
-> (its PyPI JSON endpoint 404s; the model card's install block only lists
-> `pip install laya`). Do not `pip install coding_decision_agent` and
-> expect it to work — get the package from the model/training repo. For the
-> same reason Baton does not call `laya.load(...)` with invented question
-> wording: the card says the fixed wording ships in the
-> `coding_decision_agent` package, and scoring against guessed wording would
-> make the calibrated confidence meaningless.
+- **Weights:** the first grade downloads the ~842 MB checkpoint
+  (`model.safetensors`, bf16) into the Hugging Face cache
+  (`~/.cache/huggingface/hub`, or `$HF_HOME`). Later grades reuse it;
+  set `HF_HUB_OFFLINE=1` to run fully offline after the first download.
+- **Torch:** `pip install laya` pulls the default torch wheel, which
+  includes CUDA libraries (~2.5 GB). On a CPU-only machine install the CPU
+  wheel first, then `laya` without its torch dependency resolution
+  fighting you:
+  ```bash
+  pip install torch --index-url https://download.pytorch.org/whl/cpu
+  pip install laya
+  ```
+- **Hardware:** a GPU is used automatically when CUDA is available, but
+  none is required — the model runs on CPU. On a 2-core CPU VM a grade
+  takes on the order of a minute (measured 2026-10-24: load ~Xs, one
+  `code_review` predict ~Ys; see the issue #259 notes for the numbers).
+  Memory: roughly 2–3 GB RSS for torch + the bf16 weights. If that does
+  not fit, keep the feature off — the gate records `unavailable` and the
+  run proceeds exactly as before.
+- **Never a hard dependency:** Baton deliberately does **not** add the
+  model as a dependency: it is a 421M model behind `laya` + torch, and CI
+  must not download weights. The backend loads lazily, only when grading
+  is enabled and a grade is actually requested, and importing Baton never
+  imports torch. If the package is absent, `jev code grade`/`route` fail
+  with a clear message, and the quality gate records the grade as
+  `unavailable` instead of blocking the run. A grade that did not run
+  must never look like a grade.
+
+> **History (2026-10-24):** `coding_decision_agent` is not on PyPI (its
+> PyPI JSON endpoint 404s; the model card's install block only lists
+> `pip install laya`), and the training repo is unpublished, so the model
+> card's `CodingDecisionAgent` class ships nowhere importable. Baton
+> therefore does not call `laya.load(...)` with invented question wording:
+> the fixed wording ships in the `coding_decision_agent` package the card
+> names, and scoring against guessed wording would make the calibrated
+> confidence meaningless. The wording Baton uses is the dataset's own
+> (`S4MPL3BI4S/coding-decision-cases`), pinned by a fixture test.
 
 ## Configuration
 
@@ -179,21 +207,20 @@ decisions, not one bar with two values (issue #203, I7).
 
 ## Not yet wired (honest gaps)
 
-- `tool_call` and `agent_trace` grading: the model card documents their
-  families, and `grades.py` has pure types plus `gate_trace` for traces.
-  Since issue #203 (I11) they are wired through `CodeOrchestrator`
-  (`grade_trace`, `grade_tool_call`, `jev code trace`) — but only when the
-  installed backend actually exposes those methods. Baton still does not
-  invent a call shape or question wording for them: a backend without the
-  method raises `CodeOrchestratorUnavailable` instead of scoring against
-  an untrained wording.
+- `tool_call` and `agent_trace` grading are wired through the live
+  `laya` backend (`LayaBackend.grade_trace` / `grade_tool_call`,
+  `jev code trace`) with the trained question wording from the case
+  dataset. The caveat is the state shape, not the wording: the training
+  states are structured dicts, and Baton's callers pass free text, which
+  the model reads as given. A caller with a structured trace or tool call
+  should build the dict state instead of passing text.
 - The quality gate grades the diff and task title only (`tests=""`): the
   test outcome is already a gate input (a failed task test never reaches
   the gate), but the model does not currently see the test log text.
-- No live-model evaluation was run for this change: the model was not
-  installed in CI (see Install above), so the gates are proven by unit
-  tests against fake backends, not by a real grading run — but
-  `tests/live/test_code_orchestrator_live.py` now exists for the run that
-  does have the model installed (`JEV_LIVE_TESTS=1`). Measure the 0.7
-  threshold on your own traces before gating production merges on it, as
-  the model card itself advises.
+  `jev code grade --tests-file` passes test output through as the state's
+  `notes` field when a human asks for it.
+- Live-model evaluation (issue #259): the model now runs, and
+  `tests/live/test_code_orchestrator_live.py` is the smoke test for a run
+  that has it installed (`JEV_LIVE_TESTS=1`). The 0.7 threshold was
+  measured on real Baton diffs during that issue; see its report for the
+  numbers before trusting the default in production.
