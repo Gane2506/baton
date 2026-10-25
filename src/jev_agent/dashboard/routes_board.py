@@ -112,7 +112,7 @@ class BoardRoutes(DashboardCore):
             with views.open_repo(self.settings.root) as repo:
                 path = views.safe_run_file(repo, run_id, relative)
         except JevError as exc:
-            raise HTTPException(500, str(exc)) from exc
+            raise HTTPException(500, _friendly_error(exc)) from exc
         if path is None:
             raise HTTPException(404, "no such file")
         # Served as plain text whatever the extension, so nothing in a log can run as a page.

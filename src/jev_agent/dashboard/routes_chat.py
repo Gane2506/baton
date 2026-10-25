@@ -418,9 +418,9 @@ class ChatRoutes(DashboardCore):
             with views.open_repo(self.settings.root) as repo:
                 payload = self._work_payload(repo, chat_id, _preview_bridge(request))
         except (NotFoundError, ChatError) as exc:
-            return JSONResponse({"run_id": None, "error": str(exc)}, status_code=404)
+            return JSONResponse({"run_id": None, "error": _friendly_error(exc)}, status_code=404)
         except (ConfigError, JevError) as exc:
-            return JSONResponse({"run_id": None, "error": str(exc)}, status_code=500)
+            return JSONResponse({"run_id": None, "error": _friendly_error(exc)}, status_code=500)
         return JSONResponse(payload)
 
     def _work_payload(

@@ -226,7 +226,7 @@ class ConnectionsRoutes(DashboardCore):
             with views.open_repo(self.settings.root) as repo:
                 servers = _connection_servers(repo.config, repo.state_dir)
         except (ConfigError, JevError) as exc:
-            return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
+            return JSONResponse({"ok": False, "error": _friendly_error(exc)}, status_code=500)
         state, label = _conn_aggregate(servers)
         flow = self.codex_flow.status()
         return JSONResponse(
