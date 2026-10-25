@@ -189,8 +189,14 @@
   <p class="hint" id="models-empty" hidden>No models match the filter.</p>
   <p class="hint">List fetched {{ "%.1f" % models_listing.fetched_hours_ago }}h ago.
   Free models are rate-limited and run on the api worker only.</p>
+  <form method="post" action="/tools/models/refresh" class="inline">
+    {{ csrf_input() }}<button class="btn btn-sm btn-secondary" type="submit">Refresh list</button>
+  </form>
   {% else %}
-  <div class="empty"><div class="title">No model list yet</div><p>The model catalog hasn't been fetched yet.</p></div>
+  <div class="empty"><div class="title">No model list yet</div><p>The model catalog hasn't been fetched yet.</p>
+  <form method="post" action="/tools/models/refresh">
+    {{ csrf_input() }}<button class="btn btn-secondary" type="submit">Fetch the model list</button>
+  </form></div>
   {% endif %}
 </section>
 

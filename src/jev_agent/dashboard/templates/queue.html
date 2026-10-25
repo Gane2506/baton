@@ -90,6 +90,28 @@
 <section class="panel">
   <h2>Recurring</h2>
   <p class="lede">Tasks the scheduler runs on a schedule.</p>
+  <form method="post" action="/queue/recurring/add">
+    {{ csrf_input() }}
+    <div class="form-grid">
+      <div>
+        <label for="recurring-brief">Brief</label>
+        <input type="text" id="recurring-brief" name="brief" required maxlength="200" placeholder="What to build, in plain words">
+      </div>
+      <div>
+        <label for="recurring-schedule">Schedule</label>
+        <input type="text" id="recurring-schedule" name="schedule" required maxlength="80" placeholder="daily@09:00">
+      </div>
+      <div>
+        <label for="recurring-priority">Priority</label>
+        <select id="recurring-priority" name="priority">{% for p in priorities %}<option value="{{ p }}"{% if p == "normal" %} selected{% endif %}>{{ p }}</option>{% endfor %}</select>
+      </div>
+      <div>
+        <label class="check"><input type="checkbox" name="plan_only"> Plan only</label>
+      </div>
+    </div>
+    <p class="hint">Schedule: <code>hourly</code>, <code>daily</code>, <code>weekly</code>, <code>monthly</code>, <code>daily@HH:MM</code>, <code>weekly@day-HH:MM</code>, or a cron expression like <code>0 9 * * *</code>.</p>
+    <button class="btn btn-primary" type="submit">{{ icon("i-plus", "sm") }}Add recurring task</button>
+  </form>
   {% if q.recurring %}
   <div class="table-wrap"><table>
     <thead><tr><th>Brief</th><th>Schedule</th><th>Next run</th><th>Status</th><th>Actions</th></tr></thead>
