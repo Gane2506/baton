@@ -40,11 +40,28 @@ def quality_dir(state_dir: Path, run_id: str) -> Path:
     return state_dir / "runs" / run_id / QUALITY_DIRNAME
 
 
+def _code_grade_task_text(task: TaskCard | None) -> str:
+    """The task text the code orchestrator grades against.
+
+    The model was trained on full issue bodies, not one-line titles:
+    measured live (issue #259), a bare title makes instruction_followed say
+    "no" and merge_action say "request_changes" on a known-good diff, while
+    the title plus description flips both to the correct verdict. Capped
+    so a long description does not eat the model's state budget.
+    """
+    if task is None:
+        return "integration"
+    text = task.title if not task.description else f"{task.title}\n\n{task.description}"
+    if len(text) > 2000:
+        return text[:2000] + "\n[task truncated]"
+    return text
+
+
 def apply_code_grade(
     result: GateResult,
     *,
     settings: CodeOrchestratorSettings,
-    task_title: str,
+    task_text: str,
     diff: str,
     orchestrator: CodeOrchestrator | None = None,
 ) -> GateResult:
@@ -69,7 +86,7 @@ def apply_code_grade(
         model_id=settings.model_id, max_diff_chars=settings.max_diff_chars
     )
     try:
-        grade = orch.grade_code(task=task_title, diff=diff, tests="")
+        grade = orch.grade_code(task=task_text, diff=diff, tests="")
     except CodeOrchestratorUnavailable as exc:
         return result.model_copy(
             update={"code_grade": {"status": "unavailable", "detail": str(exc)}}
@@ -194,7 +211,7 @@ async def run_gate(
         result = apply_code_grade(
             result,
             settings=h.config.code_orchestrator,
-            task_title=task.title if task is not None else "integration",
+            task_text=_code_grade_task_text(task),
             diff=diff,
             orchestrator=code_orchestrator,
         )

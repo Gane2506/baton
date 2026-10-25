@@ -43,6 +43,7 @@ from jev_agent.code_orchestrator.laya_backend import (
     build_routing_state,
     detect_language,
     diff_stats,
+    format_training_diff,
 )
 
 __all__ = [
@@ -68,6 +69,7 @@ __all__ = [
     "compact_diff",
     "detect_language",
     "diff_stats",
+    "format_training_diff",
     "gate_code_review",
     "gate_trace",
     "load_backend",

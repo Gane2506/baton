@@ -40,6 +40,12 @@ dashboard = [
     "tomlkit>=0.13",
     "uvicorn>=0.30",
 ]
+# The Coding Decision Agent backend (`code_orchestrator.laya_backend`):
+# `laya` pulls torch + transformers. Kept optional -- the orchestrator is
+# off by default and grades as "unavailable" without it.
+code-orchestrator = [
+    "laya>=0.4.15",
+]
 
 [dependency-groups]
 dev = [

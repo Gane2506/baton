@@ -35,6 +35,7 @@ from jev_agent.code_orchestrator.laya_backend import (
     build_routing_state,
     detect_language,
     diff_stats,
+    format_training_diff,
 )
 
 _FIXTURE = Path(__file__).parent / "fixtures" / "coding_decision_questions.json"
@@ -153,6 +154,54 @@ def test_diff_stats() -> None:
     )
     assert diff_stats(diff) == {"files": 2, "added": 2, "removed": 2}
     assert diff_stats("") == {"files": 0, "added": 0, "removed": 0}
+    # The reformatted `### path` headers count as files too.
+    assert diff_stats("### a.py\n-old\n+new\n") == {"files": 1, "added": 1, "removed": 1}
+
+
+def test_format_training_diff() -> None:
+    diff = (
+        "diff --git a/a.py b/a.py\nindex 123..456 100644\n--- a/a.py\n+++ b/a.py\n"
+        "@@ -1,5 +1,5 @@\n ctx1\n ctx2\n ctx3\n-old\n+new\n ctx4\n ctx5\n ctx6\n"
+        "diff --git a/b.py b/b.py\n--- a/b.py\n+++ b/b.py\n@@ -1 +1 @@\n-x\n+y\n"
+    )
+    assert format_training_diff(diff) == (
+        "### a.py\n"
+        "@@ -1,5 +1,5 @@\n"
+        "  ... (3 unchanged lines)\n"
+        "-old\n"
+        "+new\n"
+        "  ... (3 unchanged lines)\n"
+        "### b.py\n"
+        "@@ -1 +1 @@\n"
+        "-x\n"
+        "+y"
+    )
+    # A single context line is kept, not collapsed.
+    assert format_training_diff("+++ b/a.py\n@@ -1 +1 @@\n only\n-old\n+new\n") == (
+        "### a.py\n@@ -1 +1 @@\n only\n-old\n+new"
+    )
+    # An omission marker survives a context collapse around it.
+    marked = (
+        "+++ b/a.py\n@@ -1,9 +1,9 @@\n c1\n c2\n"
+        "... [10 character(s) omitted to fit max_chars=100] ...\n c3\n c4\n-old\n+new\n"
+    )
+    assert "... [10 character(s) omitted to fit max_chars=100] ..." in format_training_diff(marked)
+    # Reformatting an already reformatted diff is a no-op.
+    assert format_training_diff(format_training_diff(diff)) == format_training_diff(diff)
+    assert format_training_diff("") == ""
+
+
+def test_live_backend_grades_with_reformatted_diff() -> None:
+    """`grade_code` sends the training-format diff to the model (issue #259)."""
+    agent = _FakeLayaAgent()
+    backend = LayaBackend(agent=agent)
+    diff = "diff --git a/a.py b/a.py\n+++ b/a.py\n@@ -1,3 +1,3 @@\n c1\n-old\n+new\n"
+    backend.grade_code(task="fix it", diff=diff)
+    state = agent.seen_states[0]
+    assert isinstance(state, dict)
+    assert state["diff"] == "### a.py\n@@ -1,3 +1,3 @@\n c1\n-old\n+new"
+    assert state["diff_stats"] == {"files": 1, "added": 1, "removed": 1}
+    assert state["language"] == "python"
 
 
 def test_build_code_review_state_shape() -> None:

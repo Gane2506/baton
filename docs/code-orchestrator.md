@@ -81,6 +81,8 @@ order, deliberately:
 
 ```bash
 pip install laya
+# or, with Baton's own extra (same thing, declared in pyproject.toml):
+pip install "jev-agent[code-orchestrator]"
 ```
 
 That is the whole install: no `coding_decision_agent` package is needed.
@@ -113,19 +115,22 @@ jev code grade --task "Fix the off-by-one in paginate()" --diff-file change.diff
   ```
 - **Hardware:** a GPU is used automatically when CUDA is available, but
   none is required — the model runs on CPU. On a 2-core CPU VM a grade
-  takes on the order of a minute (measured 2026-10-24: load ~Xs, one
-  `code_review` predict ~Ys; see the issue #259 notes for the numbers).
-  Memory: roughly 2–3 GB RSS for torch + the bf16 weights. If that does
-  not fit, keep the feature off — the gate records `unavailable` and the
-  run proceeds exactly as before.
-- **Never a hard dependency:** Baton deliberately does **not** add the
-  model as a dependency: it is a 421M model behind `laya` + torch, and CI
-  must not download weights. The backend loads lazily, only when grading
-  is enabled and a grade is actually requested, and importing Baton never
-  imports torch. If the package is absent, `jev code grade`/`route` fail
-  with a clear message, and the quality gate records the grade as
-  `unavailable` instead of blocking the run. A grade that did not run
-  must never look like a grade.
+  takes on the order of a minute: measured 2026-10-24, model load ~50 s
+  (warm cache; the first load also downloads the weights), one
+  `code_review` predict 76–209 s depending on state size — the training
+  compact format is about half the tokens of a raw unified diff and
+  roughly twice as fast. Memory: roughly 2–3 GB RSS for torch + the bf16
+  weights. If that does not fit, keep the feature off — the gate records
+  `unavailable` and the run proceeds exactly as before.
+- **Never a hard dependency:** `laya` is a declared *optional*
+  dependency (`[project.optional-dependencies] code-orchestrator` in
+  `pyproject.toml`), not a core one: it is a 421M model behind `laya` +
+  torch, and CI must not download weights. The backend loads lazily,
+  only when grading is enabled and a grade is actually requested, and
+  importing Baton never imports torch. If the package is absent, `jev
+  code grade`/`route` fail with a clear message, and the quality gate
+  records the grade as `unavailable` instead of blocking the run. A grade
+  that did not run must never look like a grade.
 
 > **History (2026-10-24):** `coding_decision_agent` is not on PyPI (its
 > PyPI JSON endpoint 404s; the model card's install block only lists
@@ -167,6 +172,39 @@ caller that forgot used to send an over-context diff to the model, and a
 2-line diff of very long lines used to be sliced with no marker at all
 (issue #203, C2/I10). The marker's count is computed from the head/tail
 actually returned, and the result is never sliced after the marker is built.
+
+## The input must look like training (measured, issue #259)
+
+The model was trained on compacted diffs and full issue bodies, and a raw
+unified diff plus a one-line task is out-of-distribution for it. Measured
+live on commit 84eb7a7 (a known-good merged diff), 2×2:
+
+| Input | code_quality | instruction_followed | likely_correct | merge_action |
+| --- | --- | --- | --- | --- |
+| raw diff + subject | 2 (0.42) | no (0.75) | no (0.90) | request_changes (0.43) |
+| raw diff + full task | 2 (0.40) | no (0.52) | no (0.89) | request_changes (0.37) |
+| training format + subject | 4 (0.38) | no (0.77) | no (0.89) | request_changes (0.39) |
+| training format + full task | 4 (0.77) | yes (0.59) | no (0.86) | accept (0.45) |
+
+The **diff format drives code_quality** (raw → 2, training → 4, whatever
+the task), and **instruction_followed and merge_action need both** the
+training format and the full task text. So the backend reformats every
+diff into the training rows' compact shape before sending it
+(`laya_backend.format_training_diff`: `### <path>` file headers, `@@`
+hunk headers kept, runs of unchanged lines collapsed to
+`  ... (N unchanged lines)`), and the quality gate grades against the
+task's title **plus description** (`quality.gate._code_grade_task_text`,
+capped at 2000 characters), not the title alone. The reformat also
+roughly halves the state, so it grades about twice as fast on CPU.
+
+Two honest caveats from the same measurement: **likely_correct stayed
+"no" (0.86–0.90) in all four variants** — the state carries no evidence
+the tests pass, and the model will not assume they do. Whether passing
+the test outcome in `notes` flips it is being measured (issue #259). And
+**merge_action confidence stayed low (0.37–0.45) even in-distribution** —
+below the 0.7 threshold, so this diff gates to human_review, the safe
+direction. The threshold measurement on ten known-good diffs decides
+whether 0.7 is right or needs adjusting; see below.
 
 ## Error taxonomy (decided, not accidental)
 
@@ -214,11 +252,13 @@ decisions, not one bar with two values (issue #203, I7).
   states are structured dicts, and Baton's callers pass free text, which
   the model reads as given. A caller with a structured trace or tool call
   should build the dict state instead of passing text.
-- The quality gate grades the diff and task title only (`tests=""`): the
-  test outcome is already a gate input (a failed task test never reaches
-  the gate), but the model does not currently see the test log text.
-  `jev code grade --tests-file` passes test output through as the state's
-  `notes` field when a human asks for it.
+- The quality gate grades the diff against the task's title **plus
+  description** (`tests=""`): the test outcome is already a gate input
+  (a failed task test never reaches the gate), but the model does not
+  currently see the test log text. `jev code grade --tests-file` passes
+  test output through as the state's `notes` field when a human asks for
+  it. (Whether the gate should pass its test summary through is being
+  measured — see "The input must look like training" above.)
 - Live-model evaluation (issue #259): the model now runs, and
   `tests/live/test_code_orchestrator_live.py` is the smoke test for a run
   that has it installed (`JEV_LIVE_TESTS=1`). The 0.7 threshold was

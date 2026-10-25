@@ -261,7 +261,11 @@ _LANGUAGE_BY_EXTENSION = {
     ".sql": "sql",
 }
 
-_DIFF_FILE_RE = re.compile(r"^(?:\+\+\+ b/|diff --git a/\S+ b/)(\S+)")
+_DIFF_FILE_RE = re.compile(r"^(?:\+\+\+ b/|diff --git a/\S+ b/|### )(\S+)")
+_HUNK_RE = re.compile(r"^@@ -\d+(?:,\d+)? \+\d+(?:,\d+)? @@(.*)$")
+# The omission marker `compact_diff` leaves in a truncated diff; it is kept
+# verbatim, never collapsed away with the unchanged lines around it.
+_OMISSION_RE = re.compile(r"omitted to fit")
 
 
 def detect_language(diff: str) -> str | None:
@@ -301,6 +305,61 @@ def diff_stats(diff: str) -> dict[str, int]:
         elif line.startswith("-") and not line.startswith("---"):
             removed += 1
     return {"files": len(files), "added": added, "removed": removed}
+
+
+def format_training_diff(diff: str) -> str:
+    """A unified diff into the training rows' compact format.
+
+    The training `diff` field is not a raw unified diff: files are headed
+    `### <path>`, hunks keep their `@@` headers, and runs of unchanged
+    (context) lines collapse to `  ... (N unchanged lines)` -- a single
+    context line is kept as-is. The omission marker a truncated diff
+    carries is kept verbatim so the truncation stays visible to the model.
+
+    Why: measured live on commit 84eb7a7 (a known-good merged diff), the
+    format alone moves code_quality 2 -> 4 and halves the state (1978 ->
+    882 chars, ~2x faster on CPU); with the full task text it also flips
+    instruction_followed to yes and merge_action to accept (issue #259).
+    A raw unified diff is out-of-distribution for the model.
+    """
+    out: list[str] = []
+    context_run: list[str] = []
+    last_file: str | None = None
+
+    def flush_context() -> None:
+        if not context_run:
+            return
+        if len(context_run) == 1:
+            out.append(context_run[0])
+        else:
+            out.append(f"  ... ({len(context_run)} unchanged lines)")
+        context_run.clear()
+
+    for line in diff.splitlines():
+        match = _DIFF_FILE_RE.match(line)
+        if match and line.startswith(("diff --git", "+++ b/", "### ")):
+            path = match.group(1)
+            # A raw diff names the file twice (`diff --git` and `+++ b/`);
+            # one `###` header per file.
+            if path == last_file:
+                continue
+            flush_context()
+            out.append(f"### {path}")
+            last_file = path
+            continue
+        if line.startswith(("index ", "--- ", "+++ ")):
+            continue
+        if _HUNK_RE.match(line) or _OMISSION_RE.search(line):
+            flush_context()
+            out.append(line)
+            continue
+        if line.startswith(("+", "-")):
+            flush_context()
+            out.append(line)
+            continue
+        context_run.append(line)
+    flush_context()
+    return "\n".join(out)
 
 
 def build_code_review_state(
@@ -458,9 +517,15 @@ class LayaBackend:
         diff is expected compacted already (`CodeOrchestrator.grade_code`
         compacts before calling); a raw over-context diff still grades, with
         a truncation warning, because `laya` truncates rather than failing.
+        The diff is reformatted into the training rows' compact format
+        before it is sent (`format_training_diff`): the model was trained
+        on that shape, and a raw unified diff scores measurably worse.
         """
         state = build_code_review_state(
-            task=task, diff=diff, tests=tests, language=detect_language(diff)
+            task=task,
+            diff=format_training_diff(diff),
+            tests=tests,
+            language=detect_language(diff),
         )
         answers = self._predict(state, CODE_REVIEW_QUESTIONS)
         quality, quality_conf = _score_answer(answers, "code_quality", limit=4)
