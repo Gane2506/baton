@@ -105,6 +105,43 @@ def test_shared_migration_is_v4_and_backfills(tmp_path: Path) -> None:
         db.conn.close()
 
 
+def test_repo_migration_21_adds_graph_tables_and_backfills(tmp_path: Path) -> None:
+    """Repo databases gain the lesson graph in migration 21 (issue #319): a repo
+    profile's Graph tab no longer degrades to List."""
+    from jev_agent.core.migrations import MIGRATIONS, apply_migrations
+
+    path = tmp_path / "state.db"
+    conn = sqlite3.connect(path, isolation_level=None)
+    conn.row_factory = sqlite3.Row
+    try:
+        apply_migrations(conn, migrations=MIGRATIONS[:20])
+        conn.execute(
+            "INSERT INTO learning_profiles (name, enabled, created_at)"
+            " VALUES ('p', 1, '2026-10-01T00:00:00+00:00')"
+        )
+        conn.execute(
+            "INSERT INTO lessons (id, profile, text, roles_json, tags_json, source_run,"
+            " created_at, updated_at, uses, score) VALUES"
+            " (1, 'p', 'Batch API calls to stay fast', '[\"coder\"]',"
+            " '[\"src/api/batch.py\", \"perf\"]', 'r1', '2026-10-01T00:00:00+00:00',"
+            " '2026-10-01T00:00:00+00:00', 2, 1.5)"
+        )
+        conn.commit()
+        db = LessonDB(conn, "repo")
+        assert not db.graph_ready()
+        apply_migrations(conn)
+        assert db.conn.execute("PRAGMA user_version").fetchone()[0] == 21
+        assert db.graph_ready()
+        # Backfilled: the old lesson is searchable and carries its `applies-to` edge.
+        assert [lesson.id for lesson in db.graph_query("p", "batch api")] == ["L1"]
+        edges = [(e.src, e.edge, e.dst, e.origin) for e in db.lesson_edges("p")]
+        assert ("L1", "applies-to", "src/api/batch.py", "backfill") in edges
+        # And graph writes work for repo profiles now.
+        assert db.add_edge("p", "L1", "applies-to", "src/auth/")
+    finally:
+        conn.close()
+
+
 def test_fts_stays_in_sync(shared_db: LessonDB) -> None:
     lesson = shared_db.add_lesson("work", "Retry flaky tests with tenacity", ["coder"], ["t"])
     assert [
@@ -589,10 +626,42 @@ def test_dashboard_graph_tab(repo: Path) -> None:
         assert missing.status_code == 200 and "One-hop neighborhood" not in missing.text
 
 
-def test_dashboard_graph_tab_without_graph_tables(repo: Path) -> None:
-    """A repo-scope profile (no graph migration in the repo DB) falls back to the list."""
+def test_dashboard_graph_tab_repo_profile(repo: Path) -> None:
+    """A repo-scope profile renders the Graph tab (issue #319): no silent fallback
+    to List — the Graph button is the highlighted one and the pages differ."""
     code, out = _jev(repo, "learning", "create", "local")
     assert code == 0, out
     with _dashboard_client(repo) as client:
         page = client.get("/learning", params={"profile": "local", "tab": "graph"})
-        assert page.status_code == 200 and "Lessons in local" in page.text
+        assert page.status_code == 200, page.text[:500]
+        assert "0 lessons" in page.text and "Search lessons" in page.text
+        assert "Link lessons" in page.text and "No lessons match" in page.text
+        assert (
+            '<a class="btn btn-sm btn-primary"'
+            ' href="/learning?profile=local&amp;tab=graph">Graph</a>' in page.text
+        )
+        listed = client.get("/learning", params={"profile": "local"})
+        assert listed.status_code == 200 and page.text != listed.text
+
+
+def test_graph_cli_round_trip_repo_profile(repo: Path) -> None:
+    """The `graph` CLI works for repo-scope profiles too (issue #319)."""
+    code, out = _jev(repo, "learning", "create", "local")
+    assert code == 0, out
+    with Store.open(repo / ".jev" / "state.db") as store:
+        learning = Learning.for_store(store)
+        try:
+            a = learning.repo.add_lesson(
+                "local", "Batch API calls to stay fast", ["coder"], ["src/api"]
+            )
+            b = learning.repo.add_lesson("local", "Never batch API calls", ["coder"], [])
+        finally:
+            learning.close()
+    assert (a.id, b.id) == ("L1", "L2")
+
+    code, out = _jev(repo, "learning", "graph", "link", b.id, "contradicts", a.id)
+    assert code == 0 and f"Recorded: {b.id} contradicts {a.id}" in out, out
+    code, out = _jev(repo, "learning", "graph", "query", "batch", "--profile", "local")
+    assert code == 0 and a.id in out and "contradicts" in out, out
+    code, out = _jev(repo, "learning", "graph", "stats", "--profile", "local")
+    assert code == 0 and "lessons 2" in out and "contradicts 1" in out, out
