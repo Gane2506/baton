@@ -1256,7 +1256,7 @@ details.panel[open] > summary { margin-bottom: var(--s3); }
 }
 .field-row > label .hint { margin: 0; font-weight: 400; }
 .field-control textarea { min-height: 56px; }
-.field-actions { display: flex; gap: var(--s1); align-items: center; justify-content: flex-end; }
+.field-actions { display: flex; gap: var(--s2); align-items: center; justify-content: flex-end; }
 .field-actions select { width: auto; }
 .weights { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: var(--s2); }
 .weights .check { flex-direction: row-reverse; justify-content: flex-end; }
@@ -1673,7 +1673,8 @@ button.studio-card {
    of swatches (data-swatch-color, like the landing previews), the seven
    axes as sliders (the settings .slider-row pattern), the named choices as
    selects in the wizard's .field-row shape, and the editable avoid-list.
-   Form grids use the 0.875rem gap the rest of the product's forms use. */
+   Form grids use the shared form-grid gap, var(--s3) (12px) — the same
+   gap .form-grid uses everywhere else in the product. */
 .direction-section { margin: var(--s4) 0 0; }
 .direction-section > h3 { margin: 0 0 var(--s2); font-size: var(--text-md); }
 .direction-ramp {
@@ -1684,9 +1685,9 @@ button.studio-card {
   border: 1px solid var(--border);
 }
 .direction-ramp span { flex: 1; }
-.direction-axes { display: grid; gap: 0.875rem; }
+.direction-axes { display: grid; gap: var(--s3); }
 .direction-axes .slider-row label { min-width: 140px; font-weight: 600; }
-.direction-choices { display: grid; gap: 0.875rem; }
+.direction-choices { display: grid; gap: var(--s3); }
 @media (max-width: 640px) {
   .direction-axes .slider-row label { min-width: 104px; }
 }

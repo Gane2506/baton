@@ -136,6 +136,32 @@ def test_render_showcase_theme_toggle_only_when_both() -> None:
     assert 'id="themeToggle"' not in light
 
 
+def test_render_showcase_fits_390px_viewport() -> None:
+    """Issue #317: the generated showcase laid out ~640px wide at 390px.
+
+    The topbar (brand + 5 nav links + theme toggle) never collapsed and the
+    type specimens used fixed sizes, so the page overflowed horizontally.
+    The nav must collapse at <=720px and every specimen size must be a
+    clamp() whose ceiling is the design token, so desktop keeps the token
+    size while mobile caps it.
+    """
+    profile = vibe_for_keywords("playful")
+    html = render_showcase("audit-shots", profile, _rich(), "both")
+    assert "@media(max-width:720px)" in html
+    assert ".topbar nav{display:none}" in html
+    for size, clamp in (
+        ("display-xl", "clamp(40px,11vw,var(--tw-display-xl-size,76px))"),
+        ("display-lg", "clamp(34px,9vw,var(--tw-display-lg-size,60px))"),
+        ("display-md", "clamp(30px,8vw,var(--tw-display-md-size,48px))"),
+        ("display-sm", "clamp(26px,7vw,var(--tw-display-sm-size,36px))"),
+        ("headline-lg", "clamp(22px,6vw,var(--tw-headline-lg-size,28px))"),
+        ("headline-md", "clamp(20px,5.5vw,var(--tw-headline-md-size,22px))"),
+        ("headline-sm", "clamp(16px,5vw,var(--tw-headline-sm-size,18px))"),
+    ):
+        assert clamp in html, size
+        assert f"font-size:var(--tw-{size}-size," not in html, size
+
+
 # ---------------------------------------------------------------------------
 # Codegen
 # ---------------------------------------------------------------------------
