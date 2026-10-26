@@ -172,7 +172,9 @@ class DesignRoutes(DashboardCore):
                 if context is not None and not context.is_empty()
                 else []
             )
-            return bundle_zip(target, system_name, tokens, business_elements=business_elements)
+            return bundle_zip(
+                target, system_name, tokens, business_elements=business_elements, context=context
+            )
 
         try:
             data = await run_in_threadpool(build)

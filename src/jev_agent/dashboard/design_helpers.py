@@ -741,7 +741,9 @@ def _design_system_code_view(repo: views.Repo, name: str, target: str) -> dict[s
     if system is None:
         raise NotFoundError(f'no design system named "{name}" in the library')
     tokens = system.tokens if isinstance(system.tokens, dict) else {}
-    files = generate_files(target, name, tokens)
+    meta = _library_meta(name)
+    context = BusinessContext.from_meta(meta)
+    files = generate_files(target, name, tokens, context=context)
     catalog = component_catalog(target)
     entries = [
         {
@@ -755,8 +757,6 @@ def _design_system_code_view(repo: views.Repo, name: str, target: str) -> dict[s
     ]
     # Business elements (issue #283): the enabled ones generate extra files,
     # merged into the same entry list after the base components.
-    meta = _library_meta(name)
-    context = BusinessContext.from_meta(meta)
     business: dict[str, object] = {"context": None, "proposed": [], "catalog": []}
     if context is not None and not context.is_empty():
         proposed = propose_elements(context)

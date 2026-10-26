@@ -453,7 +453,14 @@ def _react_tailwind_files(name: str, tokens: dict[str, object]) -> dict[str, str
         "   block into yours), and `components.jsx` into your project.\n"
         "2. Import `./tokens.css` once in your app entry.\n"
         "3. `import { Button, Card } from './components';`\n\n"
-        'Dark mode: set `data-theme="dark"` on the `<html>` element.\n'
+        'Dark mode: set `data-theme="dark"` on the `<html>` element.\n\n'
+        "Motion & 3D: `motion.js` (GSAP timeline — hero entrance, scroll\n"
+        "reveals, page transitions) and `scene.js` (Three.js scene) ship\n"
+        "alongside. Install `gsap` and `three` (`npm i gsap three`) and\n"
+        "import them in your app entry (see the comments at the top of each\n"
+        "file for the hooks: `[data-hero]`, `[data-reveal]`,\n"
+        "`a[data-transition]`, `#scene-3d`). Without them the page still\n"
+        "works — motion no-ops and the scene shows its static fallback.\n"
     )
     return files
 

@@ -218,7 +218,7 @@ def test_codegen_summary_counts() -> None:
     summary = codegen_summary(_TOKENS)
     assert summary["variables"] > 20
     assert summary["components"] == 11
-    assert summary["files"] == 4
+    assert summary["files"] == 6  # 4 base files + motion.js + scene.js (issue #302)
 
 
 def test_codegen_targets_documented() -> None:

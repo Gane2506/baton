@@ -13,6 +13,14 @@ import html
 import re
 from typing import TYPE_CHECKING
 
+from jev_agent.core.design_motion3d import (
+    build_motion_spec,
+    build_scene_spec,
+    motion_tokens_from_tokens,
+    reduced_motion_css,
+    scene_type_for_context,
+    showcase_motion3d_script,
+)
 from jev_agent.core.design_showcase import VibeProfile, _relative_luminance
 
 if TYPE_CHECKING:
@@ -165,13 +173,16 @@ def _hero(
     business_line = ""
     industry = (getattr(business, "industry", "") or "").strip() if business is not None else ""
     if industry:
-        business_line = f'\n      <p class="hero-business">Built for {html.escape(industry)}</p>'
+        business_line = (
+            f'\n      <p class="hero-business" data-motion-hero>'
+            f"Built for {html.escape(industry)}</p>"
+        )
     inner = f"""
-      <p class="hero-overline">Design system</p>
-      <h1 class="hero-title">{display_name}</h1>
-      <p class="hero-tagline">{html.escape(vibe.tagline)}</p>{business_line}
-      <p class="hero-desc">{html.escape(vibe.description)}</p>
-      <div class="hero-actions">
+      <p class="hero-overline" data-motion-hero>Design system</p>
+      <h1 class="hero-title" data-motion-hero>{display_name}</h1>
+      <p class="hero-tagline" data-motion-hero>{html.escape(vibe.tagline)}</p>{business_line}
+      <p class="hero-desc" data-motion-hero>{html.escape(vibe.description)}</p>
+      <div class="hero-actions" data-motion-hero>
         <a class="btn btn-primary" href="#components">Explore components</a>
         <a class="btn btn-secondary" href="#palette">View palette</a>
       </div>"""
@@ -257,7 +268,7 @@ def _palette_section(colors: dict[str, str]) -> str:
         if name in colors
     )
     return f"""
-    <section id="palette" class="section">
+    <section id="palette" class="section" data-reveal>
       <p class="overline">01 — Color</p>
       <h2 class="section-title">Palette</h2>
       <p class="section-desc">Click any swatch to copy its hex value.</p>
@@ -316,7 +327,7 @@ def _type_section(typo: dict[str, object]) -> str:
         <p class="type-sample type-{key.replace("_", "-")}">{sample}</p>
       </div>""")
     return f"""
-    <section id="typography" class="section">
+    <section id="typography" class="section" data-reveal>
       <p class="overline">02 — Typography</p>
       <h2 class="section-title">Type scale</h2>
       <p class="section-desc">A real hierarchy: display for emotion, headlines for
@@ -327,7 +338,7 @@ def _type_section(typo: dict[str, object]) -> str:
 
 def _components_section() -> str:
     return """
-    <section id="components" class="section">
+    <section id="components" class="section" data-reveal>
       <p class="overline">03 — Components</p>
       <h2 class="section-title">In action</h2>
       <p class="section-desc">Tokens applied — this is what the system feels like
@@ -462,7 +473,7 @@ def _foundations_section(t: dict[str, object]) -> str:
         for k, v in shadows.items()
     )
     return f"""
-    <section id="foundations" class="section">
+    <section id="foundations" class="section" data-reveal>
       <p class="overline">04 — Foundations</p>
       <h2 class="section-title">Space, shape & depth</h2>
       <h3 class="group-title">Spacing</h3>
@@ -827,6 +838,22 @@ body{
   border:2px solid var(--c-primary);
 }
 .shadow-box{width:72px;height:52px;background:var(--c-surface);border-radius:var(--r-md)}
+/* motion & 3D (issue #302) */
+.motion-controls{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:8px}
+.motion-ladder{display:grid;gap:10px;max-width:640px}
+.motion-row{display:grid;grid-template-columns:110px 1fr 64px;gap:12px;align-items:center;
+  font-size:13px;font-weight:600}
+.motion-bar{height:10px;border-radius:99px;background:var(--c-primary)}
+.motion-row span:last-child{font-family:var(--font-mono);font-weight:400;
+  color:var(--c-text-muted);text-align:right}
+.scene-wrap{position:relative;height:360px;border:1px solid var(--c-border);
+  border-radius:var(--r-lg);overflow:hidden;background:var(--c-surface)}
+.scene-wrap canvas{position:absolute;inset:0;width:100%;height:100%;display:block;
+  touch-action:none;cursor:grab}
+.scene-wrap canvas:active{cursor:grabbing}
+.scene-fallback{position:absolute;inset:0}
+.scene-hidden{display:none}
+.scene-caption{color:var(--c-text-muted);font-size:13px;margin:10px 2px 0}
 /* footer */
 .footer {
   padding:56px 0 72px;
@@ -852,12 +879,78 @@ body{
 """
 
 
+def _motion_section(spec: dict[str, object], scene_spec: dict[str, object]) -> str:
+    """The live motion & 3D section (issue #302).
+
+    A duration ladder from the motion spec, the reduced-motion toggle, a
+    replay control for the hero entrance, and the interactive 3D scene
+    (canvas over the static fallback — the fallback is the default content,
+    so no-WebGL, reduced-motion, and no-JS all show a real composition
+    instead of a blank box). The inline runtime in the page footer drives
+    it all from the same spec the downloadable files use.
+    """
+    durations = spec.get("durations")
+    durations = durations if isinstance(durations, dict) else {}
+    rows = []
+    for key, label in (
+        ("instant", "Instant"),
+        ("fast", "Fast"),
+        ("normal", "Normal"),
+        ("slow", "Slow"),
+        ("slower", "Slower"),
+        ("stagger", "Stagger"),
+    ):
+        value = durations.get(key)
+        ms = value if isinstance(value, (int, float)) and not isinstance(value, bool) else 0
+        width = max(4.0, min(100.0, float(ms) / 10.0))
+        rows.append(
+            f'<div class="motion-row"><span>{label}</span>'
+            f'<span class="motion-bar" style="width:{width:.0f}%"></span>'
+            f"<span>{ms}ms</span></div>"
+        )
+    fallback = scene_spec.get("fallback")
+    fallback = fallback if isinstance(fallback, dict) else {}
+    fallback_css = _css_value(str(fallback.get("css", "")))
+    label = html.escape(str(scene_spec.get("label", "3D scene")))
+    description = html.escape(str(scene_spec.get("description", "")))
+    caption = html.escape(str(fallback.get("caption", "")))
+    return f"""
+    <section id="motion-3d" class="section" data-reveal>
+      <p class="overline">05 — Motion &amp; 3D</p>
+      <h2 class="section-title">Motion &amp; 3D</h2>
+      <p class="section-desc">Motion is feedback, not decoration: every duration
+      below comes from the system's motion tokens, and the scene is built
+      from its palette. Drag the scene to orbit it.</p>
+      <div class="motion-controls">
+        <button class="theme-toggle" id="motionToggle" type="button"
+          aria-pressed="false">Reduce motion</button>
+        <button class="theme-toggle" id="replayMotion" type="button">
+          Replay hero entrance</button>
+      </div>
+      <h3 class="group-title">Duration ladder</h3>
+      <div class="motion-ladder">{"".join(rows)}</div>
+      <h3 class="group-title">3D scene — {label}</h3>
+      <p class="section-desc">{description}</p>
+      <div class="scene-wrap" id="sceneWrap">
+        <canvas id="scene3d" width="640" height="360" role="img"
+          aria-label="Interactive 3D scene: {label}"></canvas>
+        <div class="scene-fallback" id="sceneFallback"
+          style="background:{fallback_css}"></div>
+      </div>
+      <p class="scene-caption">{caption} Drag to orbit; the scene pauses when
+      the tab is hidden.</p>
+    </section>"""
+
+
 def render_showcase(
     name: str,
     vibe: VibeProfile,
     tokens: dict[str, object],
     theme: str = "both",
     business: BusinessContext | None = None,
+    *,
+    scene_type: str | None = None,
+    motion_tokens: dict[str, object] | None = None,
 ) -> str:
     """A complete, self-contained HTML gallery for one design system.
 
@@ -868,7 +961,12 @@ def render_showcase(
     falls back to "light" so the toggle and the dark overrides can never
     disagree. `name` is HTML-escaped: the page is served as text/html.
     When `business` carries an industry, the hero notes what the system was
-    built for (issue #283).
+    built for (issue #283) and the 3D scene matches that industry
+    (issue #302); `scene_type` overrides the match. The live motion & 3D
+    section runs on a dependency-free inline runtime (the showcase CSP
+    forbids third-party origins, so no CDN scripts — see
+    ``design_motion3d``), driven by the same motion spec and scene spec
+    the downloadable ``motion.js``/``scene.js`` use.
     """
     if theme not in ("light", "dark", "both"):
         theme = "light"
@@ -904,6 +1002,18 @@ def render_showcase(
     vibe_name = html.escape(vibe.name)
     vibe_tagline = html.escape(vibe.tagline)
 
+    # Motion & 3D (issue #302): the spec from the token set's motion
+    # section (or the explicit override), the scene matched to the
+    # business context unless a type was passed.
+    motion = motion_tokens if motion_tokens is not None else motion_tokens_from_tokens(tokens)
+    motion_spec = build_motion_spec(motion)
+    resolved_scene = scene_type
+    if resolved_scene is None and business is not None:
+        resolved_scene = scene_type_for_context(business)
+    scene_spec = build_scene_spec(resolved_scene, tokens=tokens)
+    motion_section = _motion_section(motion_spec, scene_spec)
+    motion_script = showcase_motion3d_script(motion_spec, scene_spec)
+
     return f"""<!DOCTYPE html>
 <html lang="en" data-theme="{default_theme}">
 <head>
@@ -915,13 +1025,15 @@ def render_showcase(
 {dark_css}
 :root{{--tw-display:{weight};--hero-weight:{weight};--hero-tracking:{vibe.tight_tracking}em}}
 {_STYLES}
+{reduced_motion_css()}
 </style>
 </head>
 <body>
 <div class="topbar"><div class="topbar-inner">
   <span class="topbar-brand">{safe_name}</span>
   <nav><a href="#palette">Palette</a><a href="#typography">Type</a><a
-    href="#components">Components</a><a href="#foundations">Foundations</a></nav>
+    href="#components">Components</a><a href="#foundations">Foundations</a><a
+    href="#motion-3d">Motion &amp; 3D</a></nav>
   {toggle}
 </div></div>
 {hero}
@@ -930,6 +1042,7 @@ def render_showcase(
 {_type_section(typo)}
 {_components_section()}
 {_foundations_section(tokens)}
+{motion_section}
 </main>
 <footer class="footer wrap">
   <span>{safe_name} — generated by Baton Design Studio · {vibe_name} · {vibe_tagline}</span>
@@ -968,6 +1081,9 @@ def render_showcase(
     }});
   }});
 }})();
+</script>
+<script>
+{motion_script}
 </script>
 </body>
 </html>
