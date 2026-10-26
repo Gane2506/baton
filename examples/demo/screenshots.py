@@ -260,11 +260,14 @@ def shoot_studio_wizard(browser: Browser, base: str, out: Path) -> None:
     """Drive the studio wizard to its Stack step, then capture that step.
 
     The wizard keeps its answers server-side per session, so the shots script
-    walks the real flow like a visitor would: Purpose -> App type -> Stack.
+    walks the real flow like a visitor would: Purpose -> Business -> App type
+    -> Stack. The Business step is all-optional, so it submits untouched.
     """
     page = open_page(browser, base + "/design-studio/new", 900, dark=False)
     page.fill("#ws-product", "Acme Analytics")
     page.click('form[action="/design-studio/new/purpose"] button[type="submit"]')
+    page.wait_for_selector('input[name="industry"]')
+    page.click('form[action="/design-studio/new/business"] button[type="submit"]')
     page.wait_for_selector('input[name="app_type"]')
     page.check('input[name="app_type"][value="dashboard"]')
     page.click('form[action="/design-studio/new/app_type"] button[type="submit"]')
