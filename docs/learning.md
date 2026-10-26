@@ -93,7 +93,7 @@ coder's and reviewer's add their task card.
 
 Beyond the flat list, lessons form a queryable graph: full-text search over text and tags
 (FTS5, no embeddings), edges between lessons, and module nodes. The storage lives in the
-learning database (shared migration 4; repo databases gain it with their own migration):
+learning database (shared migration 4; repo migration 21):
 `lesson_modules`, `lesson_edges`, the `lessons_fts` index (kept in sync by triggers), and a
 `lesson_run_edges` view. Edge types:
 

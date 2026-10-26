@@ -88,9 +88,9 @@ PROFILE_LAYA_WEIGHTS = """
 
 # The queryable lesson graph (docs/learning.md, "Lesson graph"): module nodes, edges between
 # lessons (and lessons to modules), an FTS5 index over lesson text + tags kept in sync by
-# triggers, and a backfill of both from the existing lessons. Used by shared migration 4;
-# the same SQL is intended for the repo database's migration when it adopts the graph, so
-# keep it self-contained (no reference to a version number). Never edit this text.
+# triggers, and a backfill of both from the existing lessons. Used by shared migration 4 and
+# repo migration 21 (issue #319); keep it self-contained (no reference to a version number).
+# Never edit this text.
 #
 # Safe defaults, decided at implementation time:
 # - `supersedes` edges are advisory only: creating one never retires the old lesson. The
@@ -547,6 +547,12 @@ MIGRATIONS: list[str] = [
     """,
     # 20: skills distilled from lessons (issue #161).
     LEARNED_SKILLS_V1,
+    # 21: the queryable lesson graph for repo-scope profiles (issue #319): the same
+    # LESSON_GRAPH_V1 the shared database gained in its migration 4. Until now a repo
+    # profile's Graph tab silently rendered the List tab because `graph_ready()` was
+    # False; the backfill derives FTS rows and `applies-to` edges from existing
+    # lessons' path-looking tags, and no user data is touched.
+    LESSON_GRAPH_V1,
 ]
 
 SCHEMA_VERSION = len(MIGRATIONS)

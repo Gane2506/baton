@@ -63,10 +63,10 @@ def test_migration_18_adds_run_events_and_lease_event_seq(tmp_path: Path) -> Non
     released migrations are immutable."""
     from jev_agent.core.migrations import MIGRATIONS
 
-    assert len(MIGRATIONS) == 20, "MIGRATIONS grew: this test pins migration 18's script"
+    assert len(MIGRATIONS) == 21, "MIGRATIONS grew: this test pins migration 18's script"
     conn = _connect(tmp_path / "state.db")
     apply_migrations(conn)
-    assert schema_version(conn) == 20
+    assert schema_version(conn) == 21
     assert "run_events" in _tables(conn)
     event_cols = {row[1] for row in conn.execute("PRAGMA table_info(run_events)")}
     assert event_cols == {
@@ -115,10 +115,10 @@ def test_migration_19_adds_runs_design_system(tmp_path: Path) -> None:
     """
     from jev_agent.core.migrations import MIGRATIONS
 
-    assert len(MIGRATIONS) == 20, "MIGRATIONS grew: this test pins migration 19's script"
+    assert len(MIGRATIONS) == 21, "MIGRATIONS grew: this test pins migration 19's script"
     conn = _connect(tmp_path / "state.db")
     apply_migrations(conn)
-    assert schema_version(conn) == 20
+    assert schema_version(conn) == 21
     run_cols = {row[1] for row in conn.execute("PRAGMA table_info(runs)")}
     assert "design_system" in run_cols
     # An old database (v18) upgrades to v19 without losing rows; pre-existing runs
@@ -142,10 +142,58 @@ def test_migration_20_adds_learned_skills(tmp_path: Path) -> None:
     """
     from jev_agent.core.migrations import MIGRATIONS
 
-    assert len(MIGRATIONS) == 20, "MIGRATIONS grew: this test pins migration 20's script"
+    assert len(MIGRATIONS) == 21, "MIGRATIONS grew: this test pins migration 20's script"
     conn = _connect(tmp_path / "state.db")
     apply_migrations(conn)
-    assert schema_version(conn) == 20
+    assert schema_version(conn) == 21
     cols = {row[1] for row in conn.execute("PRAGMA table_info(learned_skills)")}
     assert {"id", "profile", "name", "description", "source", "lesson_ids", "created_at"} <= cols
+    conn.close()
+
+
+def test_migration_21_adds_lesson_graph_to_repo_db(tmp_path: Path) -> None:
+    """Migration 21: the lesson graph for repo-scope profiles (issue #319) — the same
+    LESSON_GRAPH_V1 the shared database gained in its migration 4.
+
+    Never edit this test to match a changed script: released migrations are immutable.
+    """
+    from jev_agent.core.migrations import MIGRATIONS
+
+    assert len(MIGRATIONS) == 21, "MIGRATIONS grew: this test pins migration 21's script"
+    conn = _connect(tmp_path / "state.db")
+    apply_migrations(conn)
+    assert schema_version(conn) == 21
+    assert {"lesson_modules", "lesson_edges", "lessons_fts"} <= _tables(conn)
+    assert (
+        conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'view' AND name = 'lesson_run_edges'"
+        ).fetchone()
+        is not None
+    )
+    conn.close()
+
+    # An old database (v20) upgrades to v21 without losing rows, and the backfill
+    # derives the FTS row and the `applies-to` edge from the old lesson's path tag.
+    conn = _connect(tmp_path / "old.db")
+    apply_migrations(conn, migrations=MIGRATIONS[:20])
+    assert schema_version(conn) == 20
+    conn.execute(
+        "INSERT INTO learning_profiles (name, enabled, created_at)"
+        " VALUES ('p', 1, '2026-10-01T00:00:00+00:00')"
+    )
+    conn.execute(
+        "INSERT INTO lessons (id, profile, text, roles_json, tags_json, source_run,"
+        " created_at, updated_at, uses, score) VALUES"
+        " (1, 'p', 'Batch API calls to stay fast', '[\"coder\"]',"
+        " '[\"src/api/batch.py\", \"perf\"]', 'r1', 't', 't', 2, 1.5)"
+    )
+    conn.commit()
+    apply_migrations(conn)
+    assert schema_version(conn) == 21
+    assert conn.execute("SELECT COUNT(*) FROM lessons").fetchone()[0] == 1
+    assert conn.execute("SELECT COUNT(*) FROM lessons_fts").fetchone()[0] == 1
+    assert (
+        conn.execute("SELECT COUNT(*) FROM lesson_edges WHERE edge = 'applies-to'").fetchone()[0]
+        == 1
+    )
     conn.close()

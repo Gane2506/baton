@@ -98,9 +98,10 @@ class LessonDBBase(ABC):
     def graph_ready(self) -> bool:
         """Whether this database has the lesson-graph tables.
 
-        The graph migration ships in `SHARED_MIGRATIONS` first; repo databases get it with
-        their own migration later. Graph writes degrade gracefully until then (no edges are
-        recorded), while explicit graph reads raise `LearningError`.
+        Repo databases gain them in migration 21 (issue #319), shared databases in
+        migration 4. A database opened without migrations — or one written before
+        either migration — has no graph tables yet: graph writes degrade gracefully
+        (no edges are recorded), while explicit graph reads raise `LearningError`.
         """
         row = self.conn.execute(
             "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'lesson_edges'"

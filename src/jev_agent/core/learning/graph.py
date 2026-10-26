@@ -53,8 +53,8 @@ class LessonGraphMixin(LessonDBBase):
     def _require_graph(self) -> None:
         if not self.graph_ready():
             raise LearningError(
-                "the lesson graph is not available in this database yet: repo-scope profiles "
-                "need the repo database's graph migration, which has not been applied"
+                "the lesson graph is not available in this database yet: its schema "
+                "predates the graph migration (repo migration 21, shared migration 4)"
             )
 
     def _lesson_number(self, profile: str, ref: str) -> int:
