@@ -325,6 +325,10 @@ def _safe_logo_svg(path: Path) -> str | None:
             if attr not in allowed or not _LOGO_ATTR_VALUE_RE.match(value):
                 return None
     root.set("xmlns", "http://www.w3.org/2000/svg")
+    # Serialize without a namespace prefix: ElementTree defaults to
+    # `<ns0:svg>`/`<ns0:rect>`, which HTML parsers do not recognise as SVG
+    # — the mark would silently render as nothing.
+    ET.register_namespace("", "http://www.w3.org/2000/svg")
     return ET.tostring(root, encoding="unicode")
 
 
@@ -373,18 +377,22 @@ def _hex_case(value: object) -> str | None:
 
 def _color_rows(
     rich: dict[str, object], tokens: dict[str, object]
-) -> dict[str, list[dict[str, str]]]:
-    """Color rows for the Colors section: light + dark ramps.
+) -> tuple[dict[str, list[dict[str, str]]], dict[str, str]]:
+    """(Color rows, flat light dict) for the Colors section.
 
     Systems with stored rich tokens show the full ramps. Legacy systems
     (flat `colors` only, e.g. the screenshots seed) show exactly what they
     stored — flattened `light.*` / `dark.*` rows — and nothing invented.
+    The flat dict keeps UNPREFIXED names: the view derives the page's
+    primary/background/text from it, and the prefixed row names
+    (`light.primary`) would never match a plain lookup.
     """
     stored = tokens.get("design_tokens")
     if isinstance(stored, dict):
         colors = rich.get("colors")
         if isinstance(colors, dict):
             out: dict[str, list[dict[str, str]]] = {"light": [], "dark": []}
+            flat_light: dict[str, str] = {}
             for mode in ("light", "dark"):
                 section = colors.get(mode)
                 if not isinstance(section, dict):
@@ -393,9 +401,12 @@ def _color_rows(
                     hex_value = _hex_case(section[name])
                     if hex_value is not None:
                         out[mode].append({"name": name, "hex": hex_value})
-            return out
+                        if mode == "light":
+                            flat_light[name] = hex_value
+            return out, flat_light
     flat = tokens.get("colors")
     rows: dict[str, list[dict[str, str]]] = {"light": [], "dark": []}
+    flat_light = {}
     if isinstance(flat, dict) and ("light" in flat or "dark" in flat):
         for mode in ("light", "dark"):
             section = flat.get(mode)
@@ -405,12 +416,15 @@ def _color_rows(
                 hex_value = _hex_case(section[name])
                 if hex_value is not None:
                     rows[mode].append({"name": f"{mode}.{name}", "hex": hex_value})
+                    if mode == "light":
+                        flat_light[name] = hex_value
     elif isinstance(flat, dict):
         for name in sorted(flat):
             hex_value = _hex_case(flat[name])
             if hex_value is not None:
                 rows["light"].append({"name": name, "hex": hex_value})
-    return rows
+                flat_light[name] = hex_value
+    return rows, flat_light
 
 
 def _typography_rows(rich: dict[str, object]) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
@@ -511,8 +525,7 @@ def _design_system_view(repo: views.Repo, name: str) -> dict[str, Any]:
         {"title": title, "items": _flatten_token_section(section)} for title, section in sections
     ]
     rich = _rich_for(meta, tokens)
-    colors = _color_rows(rich, tokens)
-    light_colors = {row["name"]: row["hex"] for row in colors["light"]}
+    colors, light_colors = _color_rows(rich, tokens)
     fonts, type_styles = _typography_rows(rich)
     spacing = _scale_rows(rich, "spacing")
     radii = _scale_rows(rich, "radii")

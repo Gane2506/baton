@@ -461,6 +461,17 @@ def test_detail_color_swatches_present(client: TestClient, home: Path) -> None:
     assert "64px" in css.text
 
 
+def test_detail_primary_comes_from_stored_colors(client: TestClient, home: Path) -> None:
+    """Issue #285: components use the system's stored primary, not the
+    fallback blue — the flat `light.primary` row name must not leak into
+    the lookup."""
+    _seed("acme-brand")
+    page = client.get("/design-systems/acme-brand")
+    assert page.status_code == 200
+    assert 'data-bg-color="#E8590C"' in page.text  # stored #e8590c, normalized
+    assert 'data-bg-color="#2563EB"' not in page.text
+
+
 def test_detail_assets_placeholder_without_logo(client: TestClient, home: Path) -> None:
     """Issue #285: no stored mark/favicons render as an honest placeholder,
     never a faked asset."""
@@ -482,7 +493,10 @@ def test_detail_assets_render_stored_logo(client: TestClient, home: Path) -> Non
     page = client.get("/design-systems/acme-brand")
     assert page.status_code == 200
     assert "No logo yet" not in page.text
-    assert "<circle" in page.text or "<rect" in page.text or "<path" in page.text
+    # The sanitized SVG serializes without a namespace prefix: `<ns0:svg>`
+    # is not recognised as SVG by HTML parsers and renders as nothing.
+    assert "ns0:" not in page.text
+    assert '<svg xmlns="http://www.w3.org/2000/svg"' in page.text
     assert "data:image/png;base64," in page.text
     assert "Patterns" in page.text and "Social covers" in page.text
 
