@@ -653,6 +653,18 @@ form.bisect input[type="text"]#bisect-mark { width: 5em; }
 form.key-add { align-items: center; gap: var(--s1); margin-left: var(--s2); vertical-align: middle; }
 form.key-add .key-input { width: 220px; height: var(--control-h-sm); font-size: var(--text-xs); }
 .actions { display: flex; flex-wrap: wrap; gap: var(--s2); align-items: center; }
+/* Issue #297: the APIs table's actions cell held the Test form and the Remove
+   form (scope select + button) in one flex row, and the global
+   `select { width: 100% }` let the select shrink to "re ▾" in the narrow
+   column. Stack the two forms, and let the Remove form wrap so the scope
+   select takes its own line at full width: "repo"/"user" always renders
+   whole, and the cell stays narrow enough that the table still fits the
+   panel without a horizontal scroll (measured at 1440px with Mac-like data:
+   table 738px in a 738px wrapper, select 88px, Remove fully visible; the
+   side-by-side select+button variant measured 764px and clipped Remove). */
+.api-table td.actions { flex-direction: column; align-items: stretch; }
+.api-table td.actions form.inline { flex-wrap: wrap; gap: var(--s2); }
+.api-table td.actions form.inline select { flex: 1 1 100%; width: auto; }
 /* A paragraph sitting directly in a toolbar row (Queue "Show all" toggle, KPIs
    sync note, Learning status line) is a flex item, not prose: the base p
    bottom margin would lift it off the row's vertical center. */
