@@ -10,6 +10,10 @@ from __future__ import annotations
 
 import colorsys
 import hashlib
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from jev_agent.core.design_business import BusinessContext
 
 APP_TYPES: dict[str, str] = {
     "mobile": "Mobile app — touch-first UI, platform conventions, safe areas",
@@ -399,13 +403,20 @@ _WORDMARK_STACKS: dict[str, str] = {
 
 
 def design_system_markdown(
-    name: str, app_type: str, stack: str, palette: dict[str, str], theme: str
+    name: str,
+    app_type: str,
+    stack: str,
+    palette: dict[str, str],
+    theme: str,
+    business: BusinessContext | None = None,
 ) -> str:
     """The starter design system as markdown: token summary, the app type's
     component set, and logo/wordmark guidance.
 
     The wordmark is styled text (font stacks below) — it is never rendered into
-    the geometric mark.
+    the geometric mark. When `business` is given and non-empty, a business
+    context section records the industry/audience/tone/offering/description
+    and the elements proposed for it (issue #283).
     """
     if app_type not in APP_TYPES:
         raise ValueError(f"unknown app type: {app_type!r}")
@@ -438,6 +449,27 @@ def design_system_markdown(
     lines += ["", "## Components", ""]
     for component, guidance in _COMPONENTS[app_type]:
         lines.append(f"- **{component}**: {guidance}")
+    if business is not None and not business.is_empty():
+        from jev_agent.core.design_business import propose_elements
+
+        lines += ["", "## Business context", ""]
+        for field, label in (
+            ("industry", "Industry"),
+            ("audience", "Audience"),
+            ("tone", "Tone"),
+            ("offering", "Offering"),
+            ("description", "Description"),
+        ):
+            value = getattr(business, field, "").strip()
+            if value:
+                lines.append(f"- **{label}**: {value}")
+        proposed = propose_elements(business)
+        if proposed:
+            lines.append("")
+            lines.append("Proposed business elements:")
+            lines.append("")
+            for element in proposed:
+                lines.append(f"- **{element.title}** ({element.key}): {element.why}")
     lines += [
         "",
         "## Logo",

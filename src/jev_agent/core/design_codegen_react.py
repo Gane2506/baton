@@ -4,6 +4,19 @@ Templates use ``__NAME__`` as the placeholder (plain ``str.replace``) so JSX
 curly braces never collide with ``str.format``.
 """
 
+from __future__ import annotations
+
+import html
+import json
+
+from jev_agent.core.design_business import (
+    BusinessElement,
+    _coerce_int,
+    _coerce_str,
+    _data_dicts,
+    _data_strs,
+)
+
 _REACT_TAILWIND_CONFIG = """\
 // tailwind.config.js — theme extension for __NAME__.
 // Requires tokens.css (CSS variables) to be loaded in your app.
@@ -443,3 +456,257 @@ def _react_tailwind_files(name: str, tokens: dict[str, object]) -> dict[str, str
         'Dark mode: set `data-theme="dark"` on the `<html>` element.\n'
     )
     return files
+
+
+# ---------------------------------------------------------------------------
+# Business elements (issue #283)
+# ---------------------------------------------------------------------------
+
+
+def _jsx_text(value: object) -> str:
+    """Fixed catalog copy safe as JSX text: `&`/`<`/`>` escaped and `{`/`}` as
+    entities, so no value can open a JSX expression."""
+    return html.escape(str(value), quote=False).replace("{", "&#123;").replace("}", "&#125;")
+
+
+def _jsx_attr(value: object) -> str:
+    """Fixed catalog copy safe inside a double-quoted JSX attribute."""
+    return html.escape(str(value), quote=True).replace("{", "&#123;").replace("}", "&#125;")
+
+
+def _component_name(key: str) -> str:
+    """`pricing-card` -> `PricingCard` (catalog keys are kebab-case)."""
+    return "".join(part[:1].upper() + part[1:] for part in key.split("-") if part)
+
+
+def _jsx_card(element: BusinessElement) -> str:
+    name = _component_name(element.key)
+    data = element.data
+    points = "".join(
+        f"          <li>✓ {_jsx_text(point)}</li>\n" for point in _data_strs(data, "points")
+    )
+    return f"""/**
+ * {_jsx_text(element.title)} — {_jsx_text(element.description)}
+ * {_jsx_text(element.why)}
+ */
+export function {name}() {{
+  return (
+    <Card>
+      <CardBody>
+        <CardTitle>{_jsx_text(element.title)}</CardTitle>
+        <p className="text-[var(--color-text-muted)] text-sm mb-4">
+          {_jsx_text(element.description)}
+        </p>
+        <p className="mb-4">
+          <span className="font-display text-3xl font-bold">
+            {_jsx_text(_coerce_str(data.get("price")))}
+          </span>
+          {{' '}}<span className="text-sm text-[var(--color-text-muted)]">
+            {_jsx_text(_coerce_str(data.get("price_label")))}
+          </span>
+        </p>
+        <ul className="grid gap-2 mb-5 text-sm">
+{points}        </ul>
+        <Button>{_jsx_text(_coerce_str(data.get("cta")))}</Button>
+      </CardBody>
+    </Card>
+  );
+}}
+"""
+
+
+def _jsx_form(element: BusinessElement) -> str:
+    name = _component_name(element.key)
+    data = element.data
+    fields = ""
+    for field in _data_dicts(data, "fields"):
+        ftype = _jsx_attr(_coerce_str(field.get("type"), "text"))
+        fname = _jsx_attr(_coerce_str(field.get("name")))
+        placeholder = _jsx_attr(_coerce_str(field.get("placeholder")))
+        fields += (
+            f'        <Field label="{_jsx_attr(_coerce_str(field.get("label")))}">\n'
+            f'          <Input type="{ftype}" name="{fname}" placeholder="{placeholder}" />\n'
+            "        </Field>\n"
+        )
+    return f"""/**
+ * {_jsx_text(element.title)} — {_jsx_text(element.description)}
+ * {_jsx_text(element.why)}
+ */
+export function {name}() {{
+  return (
+    <form className="grid gap-4">
+{fields}      <Button type="submit">{_jsx_text(_coerce_str(data.get("submit")))}</Button>
+    </form>
+  );
+}}
+"""
+
+
+def _jsx_table(element: BusinessElement) -> str:
+    name = _component_name(element.key)
+    data = element.data
+    columns = _data_strs(data, "columns")
+    rows = data.get("rows")
+    row_dicts: list[dict[str, str]] = []
+    if isinstance(rows, list):
+        for row in rows:
+            if isinstance(row, list):
+                row_dicts.append({f"col{i}": str(cell) for i, cell in enumerate(row)})
+    columns_js = json.dumps([{"key": f"col{i}", "label": label} for i, label in enumerate(columns)])
+    rows_js = json.dumps(row_dicts)
+    return f"""/**
+ * {_jsx_text(element.title)} — {_jsx_text(element.description)}
+ * {_jsx_text(element.why)}
+ */
+export function {name}() {{
+  return (
+    <Table columns={{{columns_js}}} rows={{{rows_js}}} />
+  );
+}}
+"""
+
+
+def _jsx_stat(element: BusinessElement) -> str:
+    name = _component_name(element.key)
+    data = element.data
+    progress = max(0, min(100, _coerce_int(data.get("progress"), 0)))
+    return f"""/**
+ * {_jsx_text(element.title)} — {_jsx_text(element.description)}
+ * {_jsx_text(element.why)}
+ */
+export function {name}() {{
+  return (
+    <Card>
+      <CardBody>
+        <p className="font-display text-3xl font-bold">
+          {_jsx_text(_coerce_str(data.get("value")))}
+        </p>
+        <p className="text-sm text-[var(--color-text-muted)] mb-2">
+          {_jsx_text(_coerce_str(data.get("label")))}
+        </p>
+        <p className="mb-3">
+          <Badge variant="success">{_jsx_text(_coerce_str(data.get("change")))}</Badge>
+        </p>
+        <Progress value={{{progress}}} />
+      </CardBody>
+    </Card>
+  );
+}}
+"""
+
+
+def _jsx_grid(element: BusinessElement) -> str:
+    name = _component_name(element.key)
+    items = "".join(
+        "        <Card>\n"
+        "          <CardBody>\n"
+        f"            <CardTitle>{_jsx_text(_coerce_str(item.get('title')))}</CardTitle>\n"
+        f'            <p className="text-[var(--color-text-muted)] text-sm m-0">'
+        f"{_jsx_text(_coerce_str(item.get('text')))}</p>\n"
+        "          </CardBody>\n"
+        "        </Card>\n"
+        for item in _data_dicts(element.data, "items")
+    )
+    return f"""/**
+ * {_jsx_text(element.title)} — {_jsx_text(element.description)}
+ * {_jsx_text(element.why)}
+ */
+export function {name}() {{
+  return (
+    <div className="grid gap-4 sm:grid-cols-2">
+{items}    </div>
+  );
+}}
+"""
+
+
+def _jsx_quote(element: BusinessElement) -> str:
+    name = _component_name(element.key)
+    data = element.data
+    return f"""/**
+ * {_jsx_text(element.title)} — {_jsx_text(element.description)}
+ * {_jsx_text(element.why)}
+ */
+export function {name}() {{
+  return (
+    <Card>
+      <CardBody>
+        <blockquote className="m-0">
+          <p className="font-display text-lg leading-relaxed mb-4">
+            &ldquo;{_jsx_text(_coerce_str(data.get("text")))}&rdquo;
+          </p>
+          <footer className="text-sm">
+            <strong>{_jsx_text(_coerce_str(data.get("author")))}</strong>
+            {{' — '}}<span className="text-[var(--color-text-muted)]">
+              {_jsx_text(_coerce_str(data.get("role")))}
+            </span>
+          </footer>
+        </blockquote>
+      </CardBody>
+    </Card>
+  );
+}}
+"""
+
+
+def _jsx_checklist(element: BusinessElement) -> str:
+    name = _component_name(element.key)
+    items = "".join(
+        f"          <li>✓ {_jsx_text(item)}</li>\n" for item in _data_strs(element.data, "items")
+    )
+    return f"""/**
+ * {_jsx_text(element.title)} — {_jsx_text(element.description)}
+ * {_jsx_text(element.why)}
+ */
+export function {name}() {{
+  return (
+    <Card>
+      <CardBody>
+        <CardTitle>{_jsx_text(element.title)}</CardTitle>
+        <p className="text-[var(--color-text-muted)] text-sm mb-4">
+          {_jsx_text(element.description)}
+        </p>
+        <ul className="grid gap-2 text-sm">
+{items}        </ul>
+      </CardBody>
+    </Card>
+  );
+}}
+"""
+
+
+_LAYOUT_RENDERERS = {
+    "card": _jsx_card,
+    "form": _jsx_form,
+    "table": _jsx_table,
+    "stat": _jsx_stat,
+    "grid": _jsx_grid,
+    "quote": _jsx_quote,
+    "checklist": _jsx_checklist,
+}
+
+
+def _business_components_jsx(name: str, elements: list[BusinessElement]) -> str:
+    """One exported React component per business element, built on the base
+    components in `./components` (Card, Button, Field, Input, Table,
+    Progress, Badge). Returns "" when `elements` is empty."""
+    from jev_agent.core.design_codegen import _comment_name
+
+    if not elements:
+        return ""
+    safe_comment = _comment_name(name)
+    lines = [
+        f"/**\n * Business elements for {safe_comment} — generated by Baton Design Studio.\n"
+        " *\n"
+        " * Built on the base components in './components'.\n"
+        " * Import what you need:  import { PricingCard } from './business-components';\n"
+        " */\n"
+        "import React from 'react';\n"
+        "import { Badge, Button, Card, CardBody, CardTitle, Field, Input, Progress, Table }"
+        " from './components';\n",
+    ]
+    for element in elements:
+        renderer = _LAYOUT_RENDERERS.get(element.layout)
+        if renderer is not None:
+            lines.append(renderer(element))
+    return "\n".join(lines)

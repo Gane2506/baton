@@ -179,6 +179,41 @@ def save_library_system(
     return version
 
 
+def update_library_meta(name: str, patch: dict[str, object]) -> dict[str, object] | None:
+    """Atomically patch a library system's `meta.json` (issue #283).
+
+    Patch values overwrite; a patch value of None deletes the key. This is
+    metadata, not a new system version: no version bump, no `updated_at`
+    change, no snapshots. Returns the new meta dict, or None when the system
+    does not exist (or its meta is unreadable). Raises ValueError on an
+    invalid name. The write is staged to a temp file and renamed into place
+    with `os.replace`, reusing `_stage_temp`.
+    """
+    d = library_system_path(name)
+    meta_path = d / META_JSON
+    if not meta_path.is_file():
+        return None
+    try:
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(meta, dict):
+        return None
+    new_meta: dict[str, object] = {str(key): value for key, value in meta.items()}
+    for key, value in patch.items():
+        if value is None:
+            new_meta.pop(str(key), None)
+        else:
+            new_meta[str(key)] = value
+    tmp = _stage_temp(meta_path, json.dumps(new_meta, indent=2) + "\n")
+    try:
+        os.replace(tmp, meta_path)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
+    return new_meta
+
+
 def delete_library_system(name: str) -> bool:
     """Delete a library design system. False when it does not exist; warns and
     returns False when the deletion itself fails."""

@@ -24,6 +24,14 @@ import io
 import re
 import zipfile
 
+from jev_agent.core.design_business import (
+    BusinessElement,
+    _coerce_int,
+    _coerce_str,
+    _data_dicts,
+    _data_strs,
+)
+
 CODEGEN_TARGETS: dict[str, dict[str, str]] = {
     "html-css": {
         "label": "HTML + CSS",
@@ -833,13 +841,21 @@ def generate_files(target: str, name: str, tokens: dict[str, object]) -> dict[st
     return _html_css_files(name, tokens)
 
 
-def bundle_zip(target: str, name: str, tokens: dict[str, object]) -> bytes:
+def bundle_zip(
+    target: str,
+    name: str,
+    tokens: dict[str, object],
+    business_elements: list[BusinessElement] | None = None,
+) -> bytes:
     """A zip of every generated file, for the "download all" button.
 
     The zip prefix is sanitized (`_zip_safe_name`): a traversal-style name
-    can never produce `../` entries on extraction.
+    can never produce `../` entries on extraction. When `business_elements`
+    is given, the business files for the target are included too.
     """
     files = generate_files(target, name, tokens)
+    if business_elements:
+        files.update(business_files(target, name, tokens, business_elements))
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
         for filename, content in files.items():
@@ -924,3 +940,288 @@ def codegen_summary(tokens: dict[str, object]) -> dict[str, int]:
         "components": 11,
         "files": 4,
     }
+
+
+# ---------------------------------------------------------------------------
+# Business elements (issue #283)
+# ---------------------------------------------------------------------------
+
+# Extra classes the business snippets need beyond the base components
+# (`.card`, `.btn`, `.badge`, `.field`, `.table`, `.progress`).
+_BUSINESS_CSS = """\
+/* Business elements — extra classes beyond components.css. */
+.business-element { margin-bottom: 36px; }
+.business-why {
+  color: var(--color-text-muted);
+  font-size: 13px;
+  margin: 10px 2px 0;
+}
+.price { margin: 0 0 16px; }
+.price-value {
+  font-family: var(--font-display, inherit);
+  font-size: 30px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+.price-label { color: var(--color-text-muted); font-size: 14px; }
+.checklist { list-style: none; margin: 0 0 16px; padding: 0; display: grid; gap: 8px; }
+.checklist li { font-size: 14.5px; padding-left: 24px; position: relative; }
+.checklist li::before {
+  content: "\\2713";
+  position: absolute;
+  left: 0;
+  color: var(--color-success);
+  font-weight: 700;
+}
+.business-grid {
+  display: grid; gap: 16px;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+}
+.business-grid .card-title { font-size: 17px; }
+.stat-number {
+  font-family: var(--font-display, inherit);
+  font-size: 30px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  margin: 0;
+}
+.stat-change { margin: 8px 0 14px; }
+.business-quote { margin: 0; }
+.business-quote p {
+  font-family: var(--font-display, inherit);
+  font-size: 18px;
+  line-height: 1.5;
+  margin: 0 0 14px;
+}
+.business-quote footer { font-size: 14px; }
+.business-quote footer span { color: var(--color-text-muted); }
+.business-form { display: grid; gap: 16px; max-width: 480px; }
+"""
+
+
+def _esc(value: object) -> str:
+    """Fixed catalog copy safe as HTML text."""
+    return html.escape(str(value), quote=False)
+
+
+def _esc_attr(value: object) -> str:
+    """Fixed catalog copy safe inside a double-quoted HTML attribute."""
+    return html.escape(str(value), quote=True)
+
+
+def _business_section(element: BusinessElement) -> str:
+    """One demo `<section>` for an element, composed of the base primitives."""
+    data = element.data
+    title = _esc(element.title)
+    desc = _esc(element.description)
+    why = _esc(element.why)
+    head = f'  <section class="business-element">\n    <h2>{title}</h2>\n'
+    foot = f'    <p class="business-why">{why}</p>\n  </section>\n'
+    if element.layout == "card":
+        points = "".join(
+            f"        <li>{_esc(point)}</li>\n" for point in _data_strs(data, "points")
+        )
+        body = (
+            '    <article class="card"><div class="card-body">\n'
+            f'      <h3 class="card-title">{title}</h3>\n'
+            f'      <p class="card-text">{desc}</p>\n'
+            '      <p class="price">'
+            f'<span class="price-value">{_esc(_coerce_str(data.get("price")))}</span> '
+            f'<span class="price-label">{_esc(_coerce_str(data.get("price_label")))}</span></p>\n'
+            f'      <ul class="checklist">\n{points}      </ul>\n'
+            '      <div class="card-actions">\n'
+            f'        <button class="btn btn-primary">{_esc(_coerce_str(data.get("cta")))}'
+            "</button>\n"
+            "      </div>\n"
+            "    </div></article>\n"
+        )
+    elif element.layout == "form":
+        fields = ""
+        for field in _data_dicts(data, "fields"):
+            ftype = _esc_attr(_coerce_str(field.get("type"), "text"))
+            fname = _esc_attr(_coerce_str(field.get("name")))
+            flabel = _esc(_coerce_str(field.get("label")))
+            placeholder = _esc_attr(_coerce_str(field.get("placeholder")))
+            fields += (
+                f'      <label class="field">{flabel}\n'
+                f'        <input type="{ftype}" name="{fname}" placeholder="{placeholder}">\n'
+                "      </label>\n"
+            )
+        body = (
+            '    <form class="business-form">\n'
+            f"{fields}"
+            '      <button class="btn btn-primary" type="submit">'
+            f"{_esc(_coerce_str(data.get('submit')))}</button>\n"
+            "    </form>\n"
+        )
+    elif element.layout == "table":
+        columns = _data_strs(data, "columns")
+        header = "".join(f"<th>{_esc(col)}</th>" for col in columns)
+        rows_html = ""
+        raw_rows = data.get("rows")
+        if isinstance(raw_rows, list):
+            for row in raw_rows:
+                if isinstance(row, list):
+                    cells = "".join(f"<td>{_esc(cell)}</td>" for cell in row)
+                    rows_html += f"        <tr>{cells}</tr>\n"
+        body = (
+            '    <div class="table-wrap"><table class="data">\n'
+            f"      <thead><tr>{header}</tr></thead>\n"
+            "      <tbody>\n"
+            f"{rows_html}"
+            "      </tbody>\n"
+            "    </table></div>\n"
+        )
+    elif element.layout == "stat":
+        progress = max(0, min(100, _coerce_int(data.get("progress"), 0)))
+        body = (
+            '    <article class="card"><div class="card-body">\n'
+            f'      <h3 class="card-title">{title}</h3>\n'
+            f'      <p class="stat-number">{_esc(_coerce_str(data.get("value")))}</p>\n'
+            f'      <p class="card-text">{_esc(_coerce_str(data.get("label")))}</p>\n'
+            '      <p class="stat-change">\n'
+            f'        <span class="badge badge-success">{_esc(_coerce_str(data.get("change")))}'
+            "</span>\n"
+            "      </p>\n"
+            '      <div class="progress">\n'
+            f'        <span style="width: {progress}%"></span>\n'
+            "      </div>\n"
+            "    </div></article>\n"
+        )
+    elif element.layout == "grid":
+        items = "".join(
+            '      <article class="card"><div class="card-body">\n'
+            f'        <h3 class="card-title">{_esc(_coerce_str(item.get("title")))}</h3>\n'
+            f'        <p class="card-text">{_esc(_coerce_str(item.get("text")))}</p>\n'
+            "      </div></article>\n"
+            for item in _data_dicts(data, "items")
+        )
+        body = f'    <div class="business-grid">\n{items}    </div>\n'
+    elif element.layout == "quote":
+        body = (
+            '    <article class="card"><div class="card-body">\n'
+            '      <blockquote class="business-quote">\n'
+            f"        <p>&ldquo;{_esc(_coerce_str(data.get('text')))}&rdquo;</p>\n"
+            "        <footer><strong>"
+            f"{_esc(_coerce_str(data.get('author')))}</strong> — "
+            f"<span>{_esc(_coerce_str(data.get('role')))}</span></footer>\n"
+            "      </blockquote>\n"
+            "    </div></article>\n"
+        )
+    elif element.layout == "checklist":
+        items = "".join(f"        <li>{_esc(item)}</li>\n" for item in _data_strs(data, "items"))
+        body = (
+            '    <article class="card"><div class="card-body">\n'
+            f'      <h3 class="card-title">{title}</h3>\n'
+            f'      <p class="card-text">{desc}</p>\n'
+            f'      <ul class="checklist">\n{items}      </ul>\n'
+            "    </div></article>\n"
+        )
+    else:  # unknown layout: title + description only, never a crash
+        body = f"    <p>{desc}</p>\n"
+    return head + body + foot
+
+
+def _business_html_page(name: str, elements: list[BusinessElement]) -> str:
+    safe = _html_name(name)
+    sections = "".join(_business_section(element) for element in elements)
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{safe} — business elements demo</title>
+<link rel="stylesheet" href="tokens.css">
+<link rel="stylesheet" href="components.css">
+<link rel="stylesheet" href="business-elements.css">
+<style>
+  body {{
+    font-family: var(--font-body);
+    background: var(--color-background);
+    color: var(--color-text);
+    margin: 0;
+    padding: 40px 24px;
+  }}
+  .demo {{ max-width: 880px; margin: 0 auto; }}
+  .demo h2 {{
+    font-family: var(--font-display);
+    font-size: 22px;
+    margin: 0 0 14px;
+  }}
+</style>
+</head>
+<body>
+<main class="demo">
+  <h1 style="font-family: var(--font-display)">{safe} business elements</h1>
+  <p style="color: var(--color-text-muted)">Demo sections for the elements
+  proposed from the business context. Copy the markup into your pages.</p>
+
+{sections}</main>
+</body>
+</html>
+"""
+
+
+def business_files(
+    target: str,
+    name: str,
+    tokens: dict[str, object],
+    elements: list[BusinessElement],
+) -> dict[str, str]:
+    """Generated files for the enabled business elements: filename -> content.
+
+    `html-css` gets `business-elements.html` (one demo section per element)
+    plus `business-elements.css` (the few extra classes the snippets need
+    beyond the base components). `react-tailwind` gets a single
+    `business-components.jsx` (one exported component per element, built on
+    the base components). Empty `elements` yields {}. Business context text
+    itself is never rendered — only the catalog's fixed element content.
+    """
+    if not elements:
+        return {}
+    target = validate_target(target)
+    if target == "react-tailwind":
+        from jev_agent.core.design_codegen_react import _business_components_jsx
+
+        return {"business-components.jsx": _business_components_jsx(name, elements)}
+    return {
+        "business-elements.html": _business_html_page(name, elements),
+        "business-elements.css": (
+            f"/* Business elements for {_comment_name(name)} — generated by "
+            "Baton Design Studio.\n"
+            "   Load after components.css. */\n" + _BUSINESS_CSS
+        ),
+    }
+
+
+_BUSINESS_CATALOG: dict[str, list[dict[str, str]]] = {
+    "html-css": [
+        {
+            "filename": "business-elements.html",
+            "title": "Business elements demo",
+            "description": "Demo sections for the business elements, one per element.",
+        },
+        {
+            "filename": "business-elements.css",
+            "title": "Business element styles",
+            "description": "The extra classes the business snippets need beyond the base.",
+        },
+    ],
+    "react-tailwind": [
+        {
+            "filename": "business-components.jsx",
+            "title": "Business components",
+            "description": "One exported React component per business element.",
+        },
+    ],
+}
+
+
+def business_catalog(target: str, elements: list[BusinessElement]) -> list[dict[str, str]]:
+    """The business file list for the code page: filename, title, description.
+
+    Entries match `business_files` keys; [] when `elements` is empty.
+    """
+    if not elements:
+        return []
+    return list(_BUSINESS_CATALOG[validate_target(target)])
