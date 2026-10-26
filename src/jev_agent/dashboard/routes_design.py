@@ -66,6 +66,33 @@ from jev_agent.dashboard.security import (
 )
 
 
+def _render_showcase_html(system_name: str) -> str:
+    """Render a system's showcase on demand from its stored tokens + meta.
+
+    The same render the showcase route serves when no saved file exists —
+    and the same render the refresh action writes back over a stale saved
+    file (issue #323), so a refreshed showcase is byte-identical to what
+    the route would render on demand. Raises NotFoundError when the system
+    does not exist.
+    """
+    system = load_library_system(system_name)
+    if system is None:
+        raise NotFoundError(f'no design system named "{system_name}"')
+    meta = _library_meta(system_name)
+    tokens = system.tokens if isinstance(system.tokens, dict) else {}
+    rich = tokens.get("design_tokens")
+    profile_key = _meta_text(meta, "vibe_profile")
+    profile = VIBE_PROFILES.get(profile_key) or vibe_for_keywords(
+        _meta_text(meta, "vibe") or _meta_text(meta, "product_name")
+    )
+    theme = _meta_text(meta, "theme") or "both"
+    if not isinstance(rich, dict):
+        rich = rich_tokens(profile, theme)
+    return render_showcase(
+        system_name, profile, rich, theme, business=BusinessContext.from_meta(meta)
+    )
+
+
 class DesignRoutes(DashboardCore):
     def design_systems_page(self, request: Request) -> Response:
         """The design library: the saved systems, their sources and versions (Tier 0)."""
@@ -103,6 +130,8 @@ class DesignRoutes(DashboardCore):
 
         Serves the saved ``showcase.html``; older systems (saved before the
         showcase existed) get it rendered on demand from their stored tokens.
+        A saved showcase that predates a generator fix stays stale until the
+        system page's "Regenerate showcase" action re-renders it (issue #323).
         """
         name = request.path_params["name"]
         try:
@@ -111,25 +140,10 @@ class DesignRoutes(DashboardCore):
             raise HTTPException(404, "no such design system") from None
 
         def build() -> str:
-            system = load_library_system(system_name)
-            if system is None:
-                raise NotFoundError(f'no design system named "{system_name}"')
             saved = library_system_path(system_name) / "showcase.html"
             if saved.is_file():
                 return saved.read_text(encoding="utf-8")
-            meta = _library_meta(system_name)
-            tokens = system.tokens if isinstance(system.tokens, dict) else {}
-            rich = tokens.get("design_tokens")
-            profile_key = _meta_text(meta, "vibe_profile")
-            profile = VIBE_PROFILES.get(profile_key) or vibe_for_keywords(
-                _meta_text(meta, "vibe") or _meta_text(meta, "product_name")
-            )
-            theme = _meta_text(meta, "theme") or "both"
-            if not isinstance(rich, dict):
-                rich = rich_tokens(profile, theme)
-            return render_showcase(
-                system_name, profile, rich, theme, business=BusinessContext.from_meta(meta)
-            )
+            return _render_showcase_html(system_name)
 
         try:
             html = await run_in_threadpool(build)
@@ -147,6 +161,46 @@ class DesignRoutes(DashboardCore):
                 "Content-Security-Policy": SHOWCASE_CONTENT_SECURITY_POLICY,
             },
         )
+
+    async def design_system_showcase_refresh(self, request: Request) -> Response:
+        """Re-render a system's saved ``showcase.html`` (issue #323).
+
+        The saved file embeds the generator's CSS at generation time, so a
+        system saved before a showcase fix (e.g. #322's mobile overflow)
+        keeps serving the stale file even though the on-demand render is
+        fixed. This action re-renders from the stored tokens with the
+        current generator and overwrites only ``showcase.html`` — tokens,
+        markdown, meta and every other file are untouched, and the version
+        is not bumped (the system itself did not change).
+        """
+        form = await checked_form(request)
+        name = (_text(form, "name") or "").strip()
+        to = f"/design-systems/{name}" if name else "/design-systems"
+        try:
+            system_name = validate_library_name(name)
+        except ValueError as exc:
+            self.flash(request, "error", str(exc))
+            return self.back("/design-systems")
+
+        def refresh() -> None:
+            if load_library_system(system_name) is None:
+                raise JevError(f'no design system named "{system_name}" in the library')
+            html = _render_showcase_html(system_name)
+            (library_system_path(system_name) / "showcase.html").write_bytes(html.encode("utf-8"))
+
+        try:
+            await run_in_threadpool(refresh)
+        except (JevError, NotFoundError, ValueError) as exc:
+            self.flash(request, "error", str(exc))
+            # The system page itself 404s for an unknown name, so the error
+            # is shown on the library — the delete action does the same.
+            return self.back("/design-systems")
+        self.flash(
+            request,
+            "ok",
+            f'regenerated the showcase for "{system_name}" from its stored tokens',
+        )
+        return self.back(to)
 
     def design_code_page(self, request: Request) -> Response:
         """Get reusable elements: per-component code with copy buttons (Tier 0)."""
@@ -431,6 +485,8 @@ class DesignRoutes(DashboardCore):
             return await self.act(request, to, _design_system_business_elements)
         if action == "export":
             return await self.design_system_export(request)
+        if action == "showcase-refresh":
+            return await self.design_system_showcase_refresh(request)
         if action == "delete":
             return await self.design_system_delete(request)
         raise HTTPException(404, "no such action")

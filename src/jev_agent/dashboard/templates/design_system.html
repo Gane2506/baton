@@ -24,6 +24,15 @@
         <button class="ds-preview-btn" type="button" data-preview-theme="dark" aria-pressed="{{ 'true' if preview_theme == 'dark' else 'false' }}">Dark</button>
       </div>
       <a class="btn btn-sm btn-primary" href="/design-systems/{{ name }}/showcase" target="_blank" rel="noopener">Preview showcase</a>
+      {# Issue #323: the saved showcase embeds the generator's CSS at
+         generation time, so a system saved before a showcase fix keeps
+         serving the stale file. Re-render it from the stored tokens with
+         the current generator — tokens, notes and every other file are
+         untouched. #}
+      <form class="inline" method="post" action="/design-systems/showcase-refresh" title="Re-render the saved showcase from this system's stored tokens, with the current generator">
+        {{ csrf_input() }}<input type="hidden" name="name" value="{{ name }}">
+        <button class="btn btn-sm btn-secondary" type="submit">Regenerate showcase</button>
+      </form>
       <a class="btn btn-sm btn-secondary" href="/design-systems/{{ name }}/code">Get reusable elements</a>
       <a class="btn btn-sm btn-secondary" href="/design-systems/{{ name }}/figma">Figma</a>
       {# Issue #289: Clone and Export live in the header now — the page is
