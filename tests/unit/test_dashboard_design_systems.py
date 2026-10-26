@@ -678,3 +678,7 @@ def test_detail_preview_toggle(client: TestClient, home: Path) -> None:
     assert css.status_code == 200
     assert ".ds-content.ds-preview-light" in css.text
     assert ".ds-preview-btn" in css.text
+    # The inherited text color must flip too: elements with no explicit
+    # color rule (specimens, card titles, token names) inherit the content
+    # area's color, and the dark page color would be invisible on light.
+    assert "color: var(--ds-text)" in css.text

@@ -94,7 +94,7 @@ body:has(.ds-page) .shell.app-shell { grid-template-columns: var(--sidebar-w, 23
 .ds-nav-sep { border-top: 1px solid var(--ds-border); margin: 10px 4px; }
 .ds-nav-hidden { display: none !important; }
 
-.ds-content { min-width: 0; padding: 8px 24px 0; background: var(--ds-bg); }
+.ds-content { min-width: 0; padding: 8px 24px 0; background: var(--ds-bg); color: var(--ds-text); }
 
 /* Light/dark preview (issue #287): the toggle re-skins the content area in
    the system's own light or dark theme — the page chrome (head, sidebar)
