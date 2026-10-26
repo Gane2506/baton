@@ -384,6 +384,58 @@ def test_ensure_unique_brief_skips_multiple_collisions() -> None:
     assert brief_fingerprint(unique) not in first_two
 
 
+# ---- compatibility with the merged skills module (issue #299) -----------------
+# generation_inputs() must pass straight into the real
+# design_skills.generate_unique_system: same seed, keywords and app type.
+
+
+def test_generation_inputs_work_with_real_generate_unique_system() -> None:
+    from jev_agent.core.design_skills import fingerprint_of, generate_unique_system
+
+    brief = compile_brief(FINTECH, "serious", "dashboard")
+    inputs = brief.generation_inputs()
+    system, attempts = generate_unique_system(
+        inputs["seed"],  # type: ignore[arg-type]
+        keywords=inputs["keywords"],  # type: ignore[arg-type]
+        app_type=inputs["app_type"],  # type: ignore[arg-type]
+        existing_fingerprints=frozenset(),
+    )
+    assert system.seed == brief.seed
+    assert attempts == 1
+    assert system.fingerprint == fingerprint_of(system.choices)
+    # A collision in the skills fingerprint space re-rolls the seed.
+    rerolled, attempts = generate_unique_system(
+        inputs["seed"],  # type: ignore[arg-type]
+        keywords=inputs["keywords"],  # type: ignore[arg-type]
+        app_type=inputs["app_type"],  # type: ignore[arg-type]
+        existing_fingerprints={system.fingerprint},
+    )
+    assert rerolled.seed == brief.seed + 1
+    assert attempts == 2
+    assert rerolled.fingerprint != system.fingerprint
+
+
+def test_brief_key_sets_match_merged_skills_catalogs() -> None:
+    """The literal key sets in design_brief mirror the merged skills
+    catalogs; if the skills module gains a key, this test fails first."""
+    from jev_agent.core.design_skills import (
+        COLOR_STRATEGIES,
+        LAYOUT_PROFILES,
+        MOTION_PROFILES,
+        TYPE_PAIRINGS,
+    )
+
+    assert {strategy.key for strategy in COLOR_STRATEGIES} == set(HARMONY_KEYS)
+    assert {pairing.key for pairing in TYPE_PAIRINGS} == set(TYPE_PAIRING_KEYS)
+    assert {profile.key for profile in LAYOUT_PROFILES} == set(LAYOUT_KEYS)
+    assert {profile.key for profile in MOTION_PROFILES} == set(MOTION_KEYS)
+    for language in INDUSTRY_LANGUAGES.values():
+        assert set(language.harmonies) <= set(HARMONY_KEYS)
+        assert set(language.type_pairings) <= set(TYPE_PAIRING_KEYS)
+        assert set(language.layouts) <= set(LAYOUT_KEYS)
+        assert set(language.motions) <= set(MOTION_KEYS)
+
+
 # ---- industry languages ----------------------------------------------------------
 
 
