@@ -352,6 +352,7 @@ def test_actions_require_csrf(client: TestClient, home: Path) -> None:
         ("/design-systems/use", {"name": "acme-brand"}),
         ("/design-systems/clone", {"name": "acme-brand", "new_name": "x"}),
         ("/design-systems/export", {"name": "acme-brand", "format": "w3c"}),
+        ("/design-systems/showcase-refresh", {"name": "acme-brand"}),
         ("/design-systems/delete", {"name": "acme-brand"}),
     ):
         assert client.post(url, data=data).status_code == 403
@@ -361,6 +362,68 @@ def test_actions_require_csrf(client: TestClient, home: Path) -> None:
 def test_unknown_action_404(client: TestClient, home: Path) -> None:
     response = client.post("/design-systems/bogus", data={"csrf_token": _csrf(client), "name": "x"})
     assert response.status_code == 404
+
+
+# ---- showcase refresh (issue #323) ---------------------------------------------------------
+
+_STALE_SHOWCASE = "<html><head><title>acme-brand</title></head><body>stale showcase</body></html>"
+
+
+def test_showcase_refresh_rewrites_stale_saved_showcase(client: TestClient, home: Path) -> None:
+    """Issue #323: a system saved before the #322 showcase CSS fix keeps
+    serving its stale saved file — the refresh re-renders it with the
+    current generator, touches nothing else, and matches the on-demand
+    render byte for byte."""
+    _seed("acme-brand")
+    system_path = library_system_path("acme-brand")
+    (system_path / "showcase.html").write_text(_STALE_SHOWCASE, encoding="utf-8")
+    tokens_before = (system_path / "tokens.json").read_bytes()
+    meta_before = (system_path / "meta.json").read_bytes()
+    # The stale file is what the showcase route serves, as-is.
+    assert client.get("/design-systems/acme-brand/showcase").text == _STALE_SHOWCASE
+
+    response = _post(client, "/design-systems/showcase-refresh", {"name": "acme-brand"})
+    assert response.status_code == 200
+    assert 'regenerated the showcase for "acme-brand"' in _visible(response)
+
+    refreshed = (system_path / "showcase.html").read_text(encoding="utf-8")
+    assert refreshed != _STALE_SHOWCASE
+    assert "@media(max-width:720px)" in refreshed  # the #322 mobile fix
+    assert "clamp(" in refreshed  # the #322 type-specimen fix
+    # Tokens, meta and the version are untouched — only showcase.html moves.
+    assert (system_path / "tokens.json").read_bytes() == tokens_before
+    assert (system_path / "meta.json").read_bytes() == meta_before
+    # The refreshed file is exactly what the route renders on demand.
+    (system_path / "showcase.html").unlink()
+    assert client.get("/design-systems/acme-brand/showcase").text == refreshed
+
+
+def test_showcase_refresh_creates_showcase_when_missing(client: TestClient, home: Path) -> None:
+    """Issue #323: a system with no saved showcase at all gets one written."""
+    _seed("acme-brand")
+    system_path = library_system_path("acme-brand")
+    assert not (system_path / "showcase.html").exists()
+    response = _post(client, "/design-systems/showcase-refresh", {"name": "acme-brand"})
+    assert response.status_code == 200
+    assert 'regenerated the showcase for "acme-brand"' in _visible(response)
+    saved = (system_path / "showcase.html").read_text(encoding="utf-8")
+    assert "@media(max-width:720px)" in saved
+
+
+def test_showcase_refresh_unknown_system_flashes_error(client: TestClient, home: Path) -> None:
+    response = _post(client, "/design-systems/showcase-refresh", {"name": "nope"})
+    assert response.status_code == 200
+    assert 'no design system named "nope"' in _visible(response)
+
+
+def test_detail_header_offers_showcase_refresh(client: TestClient, home: Path) -> None:
+    """Issue #323: the refresh is a visible action in the system page
+    header, next to Preview showcase — browser-first, no terminal."""
+    _seed("acme-brand")
+    page = client.get("/design-systems/acme-brand")
+    assert page.status_code == 200
+    assert 'action="/design-systems/showcase-refresh"' in page.text
+    assert "Regenerate showcase" in page.text
 
 
 # ---- redesign (issue #285) ---------------------------------------------------------------
