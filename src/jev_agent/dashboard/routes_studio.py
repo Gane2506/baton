@@ -27,6 +27,7 @@ from jev_agent.dashboard.chat_helpers import (
 from jev_agent.dashboard.core import DashboardCore
 from jev_agent.dashboard.design_helpers import (
     _reverse_evidence_summary,
+    _studio_landing_view,
 )
 from jev_agent.dashboard.design_reverse import (
     ReverseBusy,
@@ -51,8 +52,8 @@ from jev_agent.dashboard.security import (
 
 class StudioRoutes(DashboardCore):
     def design_studio_page(self, request: Request) -> Response:
-        """The studio landing: two entry cards — a new system, or reverse a site."""
-        return self.render(request, "design_studio.html")
+        """The studio landing: two entry cards, plus a visual preview per library system."""
+        return self.render(request, "design_studio.html", **_studio_landing_view())
 
     async def design_studio_start(self, request: Request) -> Response:
         """Begin (or restart) the new-system wizard at its first step.
