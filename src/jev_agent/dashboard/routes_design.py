@@ -13,6 +13,11 @@ from starlette.responses import (
 )
 
 from jev_agent.app.errors import JevError
+from jev_agent.core.design_business import (
+    BusinessContext,
+    elements_for_keys,
+    enabled_element_keys,
+)
 from jev_agent.core.design_codegen import (
     bundle_zip,
     target_for_stack,
@@ -35,6 +40,8 @@ from jev_agent.core.store import (
 from jev_agent.dashboard import views
 from jev_agent.dashboard.core import DashboardCore
 from jev_agent.dashboard.design_helpers import (
+    _design_system_business_context,
+    _design_system_business_elements,
     _design_system_clone,
     _design_system_code_view,
     _design_system_use,
@@ -105,7 +112,9 @@ class DesignRoutes(DashboardCore):
             theme = _meta_text(meta, "theme") or "both"
             if not isinstance(rich, dict):
                 rich = rich_tokens(profile, theme)
-            return render_showcase(system_name, profile, rich, theme)
+            return render_showcase(
+                system_name, profile, rich, theme, business=BusinessContext.from_meta(meta)
+            )
 
         try:
             html = await run_in_threadpool(build)
@@ -156,7 +165,14 @@ class DesignRoutes(DashboardCore):
             if system is None:
                 raise JevError(f'no design system named "{system_name}" in the library')
             tokens = system.tokens if isinstance(system.tokens, dict) else {}
-            return bundle_zip(target, system_name, tokens)
+            meta = _library_meta(system_name)
+            context = BusinessContext.from_meta(meta)
+            business_elements = (
+                elements_for_keys(enabled_element_keys(meta, context))
+                if context is not None and not context.is_empty()
+                else []
+            )
+            return bundle_zip(target, system_name, tokens, business_elements=business_elements)
 
         try:
             data = await run_in_threadpool(build)
@@ -173,12 +189,42 @@ class DesignRoutes(DashboardCore):
         )
 
     async def design_systems_action(self, request: Request) -> Response:
-        """Dispatch the library's POST actions: use, clone, export, delete."""
+        """Dispatch the library's POST actions: use, clone, export, delete, business."""
         action: str = request.path_params["action"]
         if action == "use":
             return await self.act(request, "/design-systems", _design_system_use)
         if action == "clone":
             return await self.act(request, "/design-systems", _design_system_clone)
+        if action == "business":
+            # The edit form posts from the detail page, so the redirect returns
+            # there — `act` takes a fixed `to`, and the name only exists in the
+            # form. `checked_form` is safe to call twice: Starlette caches the
+            # parsed form on the request, so `act` re-reads the same data.
+            form = await checked_form(request)
+            name = (_text(form, "name") or "").strip()
+            try:
+                system_name = validate_library_name(name)
+            except ValueError as exc:
+                self.flash(request, "error", str(exc))
+                return self.back("/design-systems")
+            return await self.act(
+                request, f"/design-systems/{system_name}", _design_system_business_context
+            )
+        if action == "business-elements":
+            # Same fixed-`to` constraint as above: read the form once for the
+            # name and the target to return to, then let `act` re-read it.
+            form = await checked_form(request)
+            name = (_text(form, "name") or "").strip()
+            raw_target = (_text(form, "target") or "").strip()
+            try:
+                system_name = validate_library_name(name)
+            except ValueError as exc:
+                self.flash(request, "error", str(exc))
+                return self.back("/design-systems")
+            to = f"/design-systems/{system_name}/code"
+            if raw_target:
+                to += f"?target={validate_target(raw_target)}"
+            return await self.act(request, to, _design_system_business_elements)
         if action == "export":
             return await self.design_system_export(request)
         if action == "delete":

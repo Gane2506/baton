@@ -74,9 +74,11 @@ def _post(client: TestClient, url: str, data: dict[str, str] | None = None) -> h
 
 
 def _wizard(client: TestClient, **overrides: str) -> None:
-    """Drive the wizard through Purpose -> App type -> Stack -> Brand."""
+    """Drive the wizard through Purpose -> Business -> App type -> Stack -> Brand."""
     defaults = {
         "product": "Acme Analytics",
+        "industry": "SaaS",
+        "offering": "Analytics",
         "app_type": "dashboard",
         "stack": "Web + Tailwind",
         "name": "acme-brand",
@@ -86,6 +88,12 @@ def _wizard(client: TestClient, **overrides: str) -> None:
     defaults.update(overrides)
     _post(client, "/design-studio/new")  # starts the wizard at Purpose (POST: it clears state)
     response = _post(client, "/design-studio/new/purpose", {"product": defaults["product"]})
+    assert response.request.url.path == "/design-studio/new/business"
+    response = _post(
+        client,
+        "/design-studio/new/business",
+        {"industry": defaults["industry"], "offering": defaults["offering"]},
+    )
     assert response.request.url.path == "/design-studio/new/app_type"
     response = _post(client, "/design-studio/new/app_type", {"app_type": defaults["app_type"]})
     assert response.request.url.path == "/design-studio/new/stack"
@@ -124,9 +132,10 @@ def test_stack_options_unknown_app_type() -> None:
 def test_first_incomplete_step() -> None:
     assert first_incomplete_step({}) == "purpose"
     state = {"purpose": {"product": "x"}, "app_type": {"app_type": "mobile"}}
-    assert first_incomplete_step(state) == "stack"
+    assert first_incomplete_step(state) == "business"
     full = {
         "purpose": {"product": "x"},
+        "business": {"industry": "", "audience": "", "tone": "", "offering": "", "description": ""},
         "app_type": {"app_type": "mobile"},
         "stack": {"stack": "Flutter"},
         "brand": {"name": "acme", "vibe": "", "theme": "both"},
@@ -317,13 +326,14 @@ def test_stepper_labels_in_order(client: TestClient, home: Path) -> None:
         label
         for _, label in [
             ("purpose", "Purpose"),
+            ("business", "Business"),
             ("app_type", "App type"),
             ("stack", "Stack"),
             ("brand", "Brand"),
             ("generate", "Generate"),
         ]
     ]
-    assert STUDIO_STEPS == ("purpose", "app_type", "stack", "brand", "generate")
+    assert STUDIO_STEPS == ("purpose", "business", "app_type", "stack", "brand", "generate")
 
 
 def test_cannot_skip_ahead(client: TestClient, home: Path) -> None:
@@ -352,6 +362,7 @@ def test_app_type_rejects_unknown(client: TestClient, home: Path) -> None:
 
 def test_stack_shows_recommendation_first(client: TestClient, home: Path) -> None:
     _post(client, "/design-studio/new/purpose", {"product": "Acme"})
+    _post(client, "/design-studio/new/business", {})
     _post(client, "/design-studio/new/app_type", {"app_type": "dashboard"})
     page = client.get("/design-studio/new/stack")
     assert page.status_code == 200
@@ -449,6 +460,7 @@ def test_stack_step_shows_default_recommendation_card(client: TestClient, home: 
     # No API keys in the suite (the conftest strips them), so the wizard falls back
     # to the static default — and says so on the card.
     _post(client, "/design-studio/new/purpose", {"product": "Acme"})
+    _post(client, "/design-studio/new/business", {})
     _post(client, "/design-studio/new/app_type", {"app_type": "dashboard"})
     page = client.get("/design-studio/new/stack")
     assert page.status_code == 200
@@ -482,6 +494,7 @@ def test_jev_recommendation_reorders_options_and_badges(
 
     monkeypatch.setattr(studio_decisions, "recommend_stack", fake)
     _post(client, "/design-studio/new/purpose", {"product": "Acme"})
+    _post(client, "/design-studio/new/business", {})
     _post(client, "/design-studio/new/app_type", {"app_type": "mobile"})
     page = client.get("/design-studio/new/stack")
     assert page.status_code == 200

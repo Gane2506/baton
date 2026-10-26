@@ -1,8 +1,8 @@
 """The Design Studio's server-side wizard state and creation pipeline (issue #124).
 
 The studio is a standalone creation interface at `/design-studio`, independent
-from the main chat: a guided stepper (Purpose -> App type -> Stack -> Brand ->
-Generate) that mirrors the `jev design new` CLI wizard's six questions. The
+from the main chat: a guided stepper (Purpose -> Business -> App type -> Stack ->
+Brand -> Generate) that mirrors the `jev design new` CLI wizard's six questions. The
 dashboard keeps each visitor's answers in a session-keyed store (the same shape
 as the flash store in `dashboard/app.py`), and the final step runs the
 `core/design_kit.py` pipeline and saves with `save_library_system()`.
@@ -16,8 +16,9 @@ from __future__ import annotations
 import threading
 import time
 from collections.abc import Mapping
-from typing import Any
+from typing import Any, cast
 
+from jev_agent.core.design_business import BusinessContext, propose_elements
 from jev_agent.core.design_kit import (
     APP_TYPES,
     STACKS,
@@ -41,11 +42,12 @@ from jev_agent.dashboard.studio_decisions import (
     default_recommendation,
 )
 
-STUDIO_STEPS: tuple[str, ...] = ("purpose", "app_type", "stack", "brand", "generate")
+STUDIO_STEPS: tuple[str, ...] = ("purpose", "business", "app_type", "stack", "brand", "generate")
 """The wizard's steps in order (mirrors the stepper labels on the page)."""
 
 STEP_LABELS: dict[str, str] = {
     "purpose": "Purpose",
+    "business": "Business",
     "app_type": "App type",
     "stack": "Stack",
     "brand": "Brand",
@@ -148,6 +150,8 @@ def validate_step(
     """
     if step == "purpose":
         return _validate_purpose(form)
+    if step == "business":
+        return _validate_business(form, state)
     if step == "app_type":
         return _validate_app_type(form)
     if step == "stack":
@@ -173,8 +177,31 @@ def _validate_purpose(form: Mapping[str, object]) -> dict[str, str]:
     return {"product": product}
 
 
+def _validate_business(
+    form: Mapping[str, object], state: Mapping[str, Mapping[str, str]]
+) -> dict[str, str]:
+    """Step 2 (issue #283): the business context — all five fields optional.
+
+    The returned dict always carries all five keys, even when every field is
+    empty: an all-empty dict is falsy, and `first_incomplete_step` would treat
+    a skipped business step as unanswered and loop the wizard forever.
+    """
+    _require_earlier(state, "purpose")
+    try:
+        context = BusinessContext.from_form(form)
+    except ValueError as exc:
+        raise WizardError(str(exc)) from exc
+    return {
+        "industry": context.industry,
+        "audience": context.audience,
+        "tone": context.tone,
+        "offering": context.offering,
+        "description": context.description,
+    }
+
+
 def _validate_app_type(form: Mapping[str, object]) -> dict[str, str]:
-    """Step 2: the app type — one choice from the design kit's four."""
+    """Step 3: the app type — one choice from the design kit's four."""
     app_type = _str(form, "app_type")
     if app_type not in APP_TYPES:
         raise WizardError("Pick one of the four app types to continue.")
@@ -184,7 +211,7 @@ def _validate_app_type(form: Mapping[str, object]) -> dict[str, str]:
 def _validate_stack(
     form: Mapping[str, object], state: Mapping[str, Mapping[str, str]]
 ) -> dict[str, str]:
-    """Step 3: the stack — the recommended option is listed first."""
+    """Step 4: the stack — the recommended option is listed first."""
     _require_earlier(state, "app_type")
     app_type = state["app_type"]["app_type"]
     stack = _str(form, "stack")
@@ -195,7 +222,7 @@ def _validate_stack(
 
 
 def _validate_brand(form: Mapping[str, object]) -> dict[str, str]:
-    """Step 4: the brand — system name (validated), vibe profile + keywords, theme."""
+    """Step 5: the brand — system name (validated), vibe profile + keywords, theme."""
     name = _str(form, "name")
     try:
         validate_library_name(name)
@@ -229,6 +256,14 @@ def generate_from_state(state: Mapping[str, Mapping[str, str]]) -> str:
     if first_incomplete_step(state) is not None:
         raise WizardError("Finish every wizard step before generating.")
     purpose = state["purpose"]
+    business = state.get("business") or {}
+    context = BusinessContext(
+        industry=business.get("industry", ""),
+        audience=business.get("audience", ""),
+        tone=business.get("tone", ""),
+        offering=business.get("offering", ""),
+        description=business.get("description", ""),
+    )
     app_type = state["app_type"]["app_type"]
     stack = state["stack"]["stack"]
     brand = state["brand"]
@@ -254,7 +289,7 @@ def generate_from_state(state: Mapping[str, Mapping[str, str]]) -> str:
     # consumers (exports, prompts) keep reading the flat keys untouched.
     vibe_profile = VIBE_PROFILES.get(brand.get("vibe_profile", "")) or vibe_for_keywords(vibe)
     tokens["design_tokens"] = rich_tokens(vibe_profile, theme)
-    markdown = design_system_markdown(name, app_type, stack, palette, theme)
+    markdown = design_system_markdown(name, app_type, stack, palette, theme, business=context)
     seed = f"{name}:{product}"
     template = mark_template(seed)
     meta_extra: dict[str, object] = {
@@ -268,11 +303,22 @@ def generate_from_state(state: Mapping[str, Mapping[str, str]]) -> str:
         "vibe_profile": vibe_profile.key,
         "logo_template": template,
     }
+    if not context.is_empty():
+        meta_extra["business_context"] = context.to_meta()
+        proposed = propose_elements(context)
+        if proposed:
+            meta_extra["business_elements"] = [element.key for element in proposed]
     save_library_system(name, markdown, tokens, meta_extra=meta_extra)
 
     # Showcase gallery (issue #155): a stunning standalone preview saved
     # alongside the system.
-    showcase_html = render_showcase(name, vibe_profile, tokens["design_tokens"], theme)  # type: ignore[arg-type]
+    showcase_html = render_showcase(
+        name,
+        vibe_profile,
+        cast("dict[str, object]", tokens["design_tokens"]),
+        theme,
+        business=context,
+    )
     system_path = library_system_path(name)
     (system_path / "showcase.html").write_bytes(showcase_html.encode("utf-8"))
 
