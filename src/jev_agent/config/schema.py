@@ -617,13 +617,6 @@ PAID_PLANNER_MODEL = "openai/gpt-5-mini"
 # data; paid and free; paid and free without training; paid only.
 PlannerPolicy = Literal["free_training_ok", "mixed", "mixed_no_training", "paid_only"]
 
-PLANNER_POLICIES: tuple[str, ...] = (
-    "free_training_ok",
-    "mixed",
-    "mixed_no_training",
-    "paid_only",
-)
-
 # The planner model pool each policy maps to. The "without training" mode shares the
 # mixed pool: what makes it different is the request, not the pool — free-model calls
 # send `provider: {data_collection: "deny"}` (workers/api.py) and fall back to the
