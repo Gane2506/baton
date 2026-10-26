@@ -413,13 +413,22 @@ def _spacing(style: str) -> dict[str, int]:
     }
 
 
-def _typography(vibe: VibeProfile) -> dict[str, object]:
-    w = vibe.display_weight
-    tight = vibe.tight_tracking
+def _typography(vibe: VibeProfile, overrides: dict[str, object] | None = None) -> dict[str, object]:
+    """The type system: stacks, weights, tracking, and the display/headline/
+    body/caption sizes. `overrides` (from a seeded type pairing) replaces the
+    stacks, display weight, and tracking; the sizes stay the profile's."""
+    overrides = overrides or {}
+    display_stack = overrides.get("font_display")
+    body_stack = overrides.get("font_body")
+    mono_stack = overrides.get("font_mono")
+    weight = overrides.get("display_weight")
+    tracking = overrides.get("tracking")
+    w = int(weight) if isinstance(weight, (int, float)) else vibe.display_weight
+    tight = float(tracking) if isinstance(tracking, (int, float)) else vibe.tight_tracking
     return {
-        "font_display": vibe.display_stack,
-        "font_body": vibe.body_stack,
-        "font_mono": vibe.mono_stack,
+        "font_display": display_stack if isinstance(display_stack, str) else vibe.display_stack,
+        "font_body": body_stack if isinstance(body_stack, str) else vibe.body_stack,
+        "font_mono": mono_stack if isinstance(mono_stack, str) else vibe.mono_stack,
         "display_xl": {"size": 76, "weight": w, "tracking": tight, "leading": 1.02},
         "display_lg": {"size": 60, "weight": w, "tracking": tight, "leading": 1.05},
         "display_md": {"size": 48, "weight": w, "tracking": tight, "leading": 1.08},
@@ -454,10 +463,23 @@ def _motion(vibe: VibeProfile) -> dict[str, str]:
     }
 
 
-def rich_tokens(vibe: VibeProfile, theme: str = "both") -> dict[str, object]:
+def rich_tokens(
+    vibe: VibeProfile,
+    theme: str = "both",
+    *,
+    spacing: dict[str, int] | None = None,
+    radii: dict[str, int | str] | None = None,
+    shadow_style: str | None = None,
+    motion: dict[str, str] | None = None,
+    typography: dict[str, object] | None = None,
+) -> dict[str, object]:
     """The complete token set for a vibe: color ramps, dark pairs, typography,
     spacing, radii, shadows, and motion. Backwards-compatible with the basic
     token shape (colors/type_scale/spacing/radii keys still present).
+
+    The keyword overrides (issue #299) let a seeded generation replace the
+    vibe's spacing, radii, shadow style, motion, and typography with the
+    choices the seed made, instead of the profile's fixed values.
     """
     hue, sat = vibe.hue, vibe.saturation
     neutrals = _neutral_ramp(hue, vibe.neutral_warmth)
@@ -527,7 +549,7 @@ def rich_tokens(vibe: VibeProfile, theme: str = "both") -> dict[str, object]:
     else:
         colors = {"light": light_colors, "dark": dark_colors}
 
-    spacing = _spacing(vibe.spacing_style)
+    spacing = _spacing(vibe.spacing_style) if spacing is None else dict(spacing)
     # Backwards-compatible aliases
     type_scale = {
         "xs": 12,
@@ -543,11 +565,11 @@ def rich_tokens(vibe: VibeProfile, theme: str = "both") -> dict[str, object]:
         "vibe_tagline": vibe.tagline,
         "theme": theme,
         "colors": colors,
-        "typography": _typography(vibe),
+        "typography": _typography(vibe, typography),
         "spacing": spacing,
-        "radii": _radii(vibe.radius_base, vibe.radius_full),
-        "shadows": _shadows(vibe.shadow_style),
-        "motion": _motion(vibe),
+        "radii": _radii(vibe.radius_base, vibe.radius_full) if radii is None else dict(radii),
+        "shadows": _shadows(shadow_style if shadow_style is not None else vibe.shadow_style),
+        "motion": _motion(vibe) if motion is None else dict(motion),
         # Backwards-compatible keys for older consumers
         "type_scale": type_scale,
     }

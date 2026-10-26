@@ -86,6 +86,27 @@ def list_library() -> list[str]:
     )
 
 
+def library_fingerprints() -> dict[str, str]:
+    """`{name: design_fingerprint}` for the library systems that carry one.
+
+    The fingerprint (issue #299) is stored in `meta.json` as
+    `design_fingerprint` at generation time. Never raises: an unreadable
+    library or meta reads as no fingerprint for that system.
+    """
+    out: dict[str, str] = {}
+    for name in list_library():
+        try:
+            meta = json.loads((library_system_path(name) / META_JSON).read_text(encoding="utf-8"))
+        except (OSError, ValueError, TypeError, AttributeError):
+            continue
+        if not isinstance(meta, dict):
+            continue
+        fingerprint = meta.get("design_fingerprint")
+        if isinstance(fingerprint, str) and fingerprint:
+            out[name] = fingerprint
+    return out
+
+
 def load_library_system(name: str) -> DesignSystem | None:
     """The library's current design system for `name`, or None when there is none
     (or it is corrupt). Never raises on corrupt files: warns and returns None,
