@@ -163,6 +163,7 @@ def palette_registry(csrf_token: str) -> dict[str, Any]:
         ("Learning: profiles, lessons", "/learning"),
         ("Profiles: workspace profiles", "/profiles"),
         ("Design systems: the design library", "/design-systems"),
+        ("Tools: APIs", "/tools#apis"),
         ("Tools: MCP, skills and plugins", "/tools"),
         ("Tools: model browser", "/tools#models"),
         ("Tools: quality checks", "/tools#quality-checks"),

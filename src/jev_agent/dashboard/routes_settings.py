@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any
 
+import httpx
 from starlette.concurrency import run_in_threadpool
 from starlette.datastructures import FormData
 from starlette.requests import Request
@@ -16,7 +17,7 @@ from jev_agent.app import settings
 from jev_agent.app.errors import JevError
 from jev_agent.app.models import fetch_catalog
 from jev_agent.config import ConfigError
-from jev_agent.config.schema import BEGINNER_FIELDS, CacheSemanticSettings
+from jev_agent.config.schema import BEGINNER_FIELDS, CacheSemanticSettings, McpServerConfig
 from jev_agent.core.benchmarks import DEFAULT_LAST
 from jev_agent.core.cache import CalibrationResult, calibrate_thresholds
 from jev_agent.core.ship import (
@@ -58,6 +59,40 @@ def _cache_clear_filters(form: FormData) -> tuple[str | None, float | None, str]
             raise ValueError("older-than hours must be 0 or more")
     store_kind = {"decisions": "decision", "roles": "role"}.get(kind) if kind else None
     return store_kind, older_than, kind
+
+
+def _probe_api_server(server: McpServerConfig) -> tuple[str, str]:
+    """Test one MCP server: does it answer? Returns (status, plain-language detail).
+
+    Local: the command must resolve on PATH (same check as the render-time
+    status). Remote: a GET to the URL with `stream=True` — an SSE endpoint
+    holds the connection open, so the body is never read; the status line
+    alone proves the server is there. Any HTTP response counts, even a 4xx:
+    an MCP endpoint answers a bare GET with 405/400 because it carries no
+    MCP request. Only transport failures (refused, DNS, timeout) are errors.
+    """
+    if server.command is not None:
+        return views.local_server_status(server)
+    url = server.url or ""
+    try:
+        with (
+            httpx.Client(timeout=5.0, follow_redirects=True) as client,
+            client.stream("GET", url) as response,
+        ):
+            code = response.status_code
+    except httpx.TimeoutException:
+        return "error", "timed out after 5s — the server did not answer"
+    except httpx.HTTPError as exc:
+        return "error", _friendly_error(exc)
+    if 200 <= code < 300:
+        return "ready", f"answered HTTP {code} — the server is reachable"
+    if 400 <= code < 500:
+        return (
+            "ready",
+            f"answered HTTP {code} — the server is reachable "
+            "(an MCP endpoint answers a bare GET with 4xx; that still proves it is there)",
+        )
+    return "error", f"answered HTTP {code} — the server is up but returned an error"
 
 
 class SettingsRoutes(DashboardCore):
@@ -130,6 +165,8 @@ class SettingsRoutes(DashboardCore):
                 "cache_view": views.cache_view(repo),
                 "quality_rows": views.quality_checks(repo),
                 "level_summaries": LEVEL_SUMMARY,
+                "api_servers": views.api_servers(repo, self.api_tests),
+                "provider_keys": views.provider_api_keys(repo.config),
             }
 
         return self._settings_page(request, "tools", "tools.html", extra)
@@ -254,6 +291,27 @@ class SettingsRoutes(DashboardCore):
             return note if not warning else f"{note} — {warning}"
 
         return await self.act(request, "/tools", refresh)
+
+    async def apis_test(self, request: Request) -> Response:
+        """Test one MCP server from the browser (Tools → APIs → Test, issue #290).
+
+        The result is flashed and remembered for this dashboard process, so the
+        row's status shows it until a restart. A failed test flashes the plain
+        reason instead of 500ing (the `act` contract).
+        """
+
+        def test(repo: views.Repo, form: FormData) -> str:
+            name = _text(form, "name") or ""
+            server = repo.config.tools.mcp.get(name)
+            if server is None:
+                raise JevError(f"no MCP server named {name!r}")
+            status, detail = _probe_api_server(server)
+            self.api_tests[name] = (status, detail)
+            if status != "ready":
+                raise JevError(f"{name}: {detail}")
+            return f"{name}: {detail}"
+
+        return await self.act(request, "/tools#apis", test)
 
     def _settings_page(
         self,

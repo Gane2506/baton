@@ -75,10 +75,11 @@ def test_tools_sections_have_headers_and_blurbs(client: TestClient) -> None:
 
 def test_tools_add_expandable_is_disclosure_button(client: TestClient) -> None:
     html = _tools_html(client)
-    assert html.count('<details class="disclosure">') == 3
+    assert html.count('<details class="disclosure">') == 4
     assert "Add to Tools: MCP servers" in html
     assert "Add to Tools: skills" in html
     assert "Add to Tools: plugins (Claude Code only)" in html
+    assert "Connect an API" in html
     # The legacy text-link expander is gone from this page.
     assert 'class="entity add-entity"' not in html
 
@@ -322,3 +323,251 @@ def test_cache_apply_threshold_invalid(client: TestClient, fixture_repo: Path) -
         assert response.status_code == 303
         assert "threshold must be between 0 and 1" in client.get("/tools").text
     assert not (fixture_repo / "jev.toml").exists()
+
+
+# ---- issue #290: the APIs section --------------------------------------------
+
+
+def _add_mcp_server(
+    client: TestClient, name: str, target: str = "user", **fields: str
+) -> httpx.Response:
+    """Add an MCP server through the Connect-an-API form's fields."""
+    return _post(
+        client,
+        "/settings/entity",
+        {
+            "section": "tools.mcp",
+            "action": "add",
+            "name": name,
+            "target": target,
+            "keys": "command,args,env_from,url,transport,bearer_token_env",
+            "kinds": "str,list,list,str,enum,env",
+            "return_to": "/tools#apis",
+            **{f"f_{key}": value for key, value in fields.items()},
+        },
+    )
+
+
+def test_apis_section_renders_empty_state(client: TestClient) -> None:
+    html = _tools_html(client)
+    assert 'id="apis"' in html
+    assert ">APIs</h2>" in html
+    assert "No APIs connected yet" in html
+    assert "Connect an API" in html
+    assert "/settings/entity" in html
+    # The provider keys are visible with status, and unset ones offer Add.
+    assert "Provider APIs" in html
+    assert "OPENROUTER_API_KEY: not set" in html
+    assert "/connections/keys/add" in html
+    assert "manage or remove keys on" in html
+    # The section nav links to it.
+    assert 'href="#apis"' in html
+
+
+def test_apis_section_lists_local_server_with_status(client: TestClient) -> None:
+    import sys
+
+    added = _add_mcp_server(client, "local-py", command=sys.executable)
+    assert added.status_code == 303
+    html = _tools_html(client)
+    assert "local-py" in html
+    assert "Local command" in html
+    assert sys.executable in html
+    assert ">ready<" in html or "ready" in html
+    assert "command found" in html
+
+
+def test_apis_section_local_server_missing_command_is_error(client: TestClient) -> None:
+    added = _add_mcp_server(client, "ghost", command="definitely-not-a-real-command-xyz")
+    assert added.status_code == 303
+    html = _tools_html(client)
+    assert "ghost" in html
+    assert "command not found on PATH" in html
+
+
+def test_apis_connect_remote_server(client: TestClient) -> None:
+    added = _add_mcp_server(
+        client,
+        "remote-docs",
+        url="https://example.test/mcp",
+        transport="http",
+        bearer_token_env="DOCS_TOKEN",
+    )
+    assert added.status_code == 303
+    html = _tools_html(client)
+    assert "remote-docs" in html
+    assert "Remote URL" in html
+    assert "https://example.test/mcp" in html
+    assert "bearer: DOCS_TOKEN" in html
+    assert "not tested" in html
+
+
+def test_apis_connect_rejects_both_command_and_url(client: TestClient) -> None:
+    added = _add_mcp_server(client, "both", command="npx", url="https://example.test/mcp")
+    assert added.status_code == 303
+    html = client.get("/tools").text
+    assert "set exactly one of" in html
+    assert "both" not in html.split('id="apis"')[1].split("</section>")[0]
+
+
+def test_apis_test_local_command_found(client: TestClient) -> None:
+    import sys
+
+    _add_mcp_server(client, "local-py", command=sys.executable)
+    response = _post(client, "/tools/apis/test", {"name": "local-py"})
+    assert response.status_code == 303
+    html = client.get("/tools").text
+    assert "local-py: command found" in html
+
+
+def test_apis_test_local_command_missing(client: TestClient) -> None:
+    _add_mcp_server(client, "ghost", command="definitely-not-a-real-command-xyz")
+    response = _post(client, "/tools/apis/test", {"name": "ghost"})
+    assert response.status_code == 303
+    html = client.get("/tools").text
+    assert "ghost: command not found on PATH" in html
+
+
+def test_apis_test_remote_reachable(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    _add_mcp_server(client, "remote-docs", url="https://example.test/mcp")
+
+    class _FakeStream:
+        status_code = 405
+
+        def __enter__(self) -> _FakeStream:
+            return self
+
+        def __exit__(self, *exc: object) -> None:
+            return None
+
+    class _FakeClient:
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            pass
+
+        def __enter__(self) -> _FakeClient:
+            return self
+
+        def __exit__(self, *exc: object) -> None:
+            return None
+
+        def stream(self, method: str, url: str) -> _FakeStream:
+            assert method == "GET"
+            assert url == "https://example.test/mcp"
+            return _FakeStream()
+
+    monkeypatch.setattr(httpx, "Client", _FakeClient)
+    response = _post(client, "/tools/apis/test", {"name": "remote-docs"})
+    assert response.status_code == 303
+    html = client.get("/tools").text
+    assert "remote-docs: answered HTTP 405" in html
+    assert "the server is reachable" in html
+    # The row now shows the tested status instead of "not tested".
+    assert html.count("not tested") == 0
+
+
+def test_apis_test_remote_unreachable(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    _add_mcp_server(client, "remote-docs", url="https://example.test/mcp")
+
+    class _FakeClient:
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            pass
+
+        def __enter__(self) -> _FakeClient:
+            return self
+
+        def __exit__(self, *exc: object) -> None:
+            return None
+
+        def stream(self, method: str, url: str) -> object:
+            raise httpx.ConnectError("connection refused", request=None)
+
+    monkeypatch.setattr(httpx, "Client", _FakeClient)
+    response = _post(client, "/tools/apis/test", {"name": "remote-docs"})
+    assert response.status_code == 303
+    html = client.get("/tools").text
+    assert "remote-docs:" in html
+    assert "connection refused" in html.lower() or "could not" in html.lower()
+
+
+def test_apis_test_unknown_server_is_an_error(client: TestClient) -> None:
+    response = _post(client, "/tools/apis/test", {"name": "nope"})
+    assert response.status_code == 303
+    assert "no MCP server named" in client.get("/tools").text
+
+
+def test_apis_remove_returns_to_apis(client: TestClient) -> None:
+    import sys
+
+    _add_mcp_server(client, "local-py", command=sys.executable)
+    removed = _post(
+        client,
+        "/settings/entity",
+        {
+            "section": "tools.mcp",
+            "action": "remove",
+            "name": "local-py",
+            "target": "user",
+            "return_to": "/tools#apis",
+        },
+    )
+    assert removed.status_code == 303
+    html = _tools_html(client)
+    assert "No APIs connected yet" in html
+
+
+def test_provider_key_add_from_tools_returns_to_tools(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    import os
+
+    from jev_agent.core import secrets
+
+    file = tmp_path / ".jev" / "secrets.env"
+    monkeypatch.setenv(secrets.FILE_ENV, str(file))
+    secrets._loaded.clear()
+    try:
+        response = _post(
+            client,
+            "/connections/keys/add",
+            {
+                "name": "CYCLE3_TOOLS_KEY",
+                "value": "fake-key",
+                "return_to": "/tools#apis",
+            },
+        )
+        assert response.status_code == 303
+        assert response.headers["location"] == "/tools#apis"
+        assert "CYCLE3_TOOLS_KEY" in file.read_text()
+        html = client.get("/tools").text
+        assert "CYCLE3_TOOLS_KEY saved to the secrets file" in html
+        assert "OPENROUTER_API_KEY: not set" in html  # other keys untouched
+    finally:
+        secrets._loaded.discard("CYCLE3_TOOLS_KEY")
+        os.environ.pop("CYCLE3_TOOLS_KEY", None)
+
+
+def test_provider_key_add_ignores_foreign_return_to(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    import os
+
+    from jev_agent.core import secrets
+
+    file = tmp_path / ".jev" / "secrets.env"
+    monkeypatch.setenv(secrets.FILE_ENV, str(file))
+    secrets._loaded.clear()
+    try:
+        response = _post(
+            client,
+            "/connections/keys/add",
+            {
+                "name": "CYCLE3_TOOLS_KEY",
+                "value": "fake-key",
+                "return_to": "https://evil.example/tools",
+            },
+        )
+        assert response.status_code == 303
+        assert response.headers["location"] == "/connections"
+    finally:
+        secrets._loaded.discard("CYCLE3_TOOLS_KEY")
+        os.environ.pop("CYCLE3_TOOLS_KEY", None)
