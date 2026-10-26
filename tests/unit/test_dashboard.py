@@ -230,6 +230,17 @@ def test_security_headers_and_static(client: TestClient) -> None:
     assert favicon.status_code == 200 and favicon.headers["content-type"].startswith("image/svg")
 
 
+def test_favicon_ico_redirects_to_svg_favicon(client: TestClient) -> None:
+    # Issue #325: showcase pages carry no icon link, so browsers request
+    # /favicon.ico; it must redirect to the SVG favicon, not 404.
+    response = client.get("/favicon.ico", follow_redirects=False)
+    assert response.status_code == 307
+    assert response.headers["location"] == "/static/favicon.svg"
+    followed = client.get("/favicon.ico")
+    assert followed.status_code == 200
+    assert followed.headers["content-type"].startswith("image/svg")
+
+
 def test_run_page_shows_plan_decisions_attempts_and_files(
     client: TestClient, planned: tuple[Path, str]
 ) -> None:
