@@ -44,6 +44,72 @@
 </section>
 
 <section class="panel">
+  <div class="panel-head"><h2>Business context</h2></div>
+  {% if business %}
+  <dl class="studio-summary">
+    <div><dt>Industry</dt><dd>{{ business.industry or "—" }}</dd></div>
+    <div><dt>Audience</dt><dd>{{ business.audience or "—" }}</dd></div>
+    <div><dt>Tone</dt><dd>{{ business.tone or "—" }}</dd></div>
+    <div><dt>Offering</dt><dd>{{ business.offering or "—" }}</dd></div>
+    <div><dt>Description</dt><dd>{{ business.description or "—" }}</dd></div>
+  </dl>
+  {% else %}
+  <p class="small muted">No business context yet — add one so the studio can suggest the reusable elements your business actually needs.</p>
+  {% endif %}
+  <form method="post" action="/design-systems/business">
+    {{ csrf_input() }}
+    <input type="hidden" name="name" value="{{ name }}">
+    <div class="field-row">
+      <label for="biz-industry">Industry</label>
+      <div class="field-control">
+        <input type="text" id="biz-industry" name="industry"
+               value="{{ business.industry if business else '' }}"
+               placeholder="e.g. Restaurant, SaaS, Clinic" autocomplete="off">
+      </div>
+      <div class="field-actions"></div>
+    </div>
+    <div class="field-row">
+      <label for="biz-audience">Audience</label>
+      <div class="field-control">
+        <input type="text" id="biz-audience" name="audience"
+               value="{{ business.audience if business else '' }}"
+               placeholder="e.g. Busy parents, small teams" autocomplete="off">
+      </div>
+      <div class="field-actions"></div>
+    </div>
+    <div class="field-row">
+      <label for="biz-tone">Tone</label>
+      <div class="field-control">
+        <input type="text" id="biz-tone" name="tone"
+               value="{{ business.tone if business else '' }}"
+               placeholder="e.g. Warm and welcoming" autocomplete="off">
+      </div>
+      <div class="field-actions"></div>
+    </div>
+    <div class="field-row">
+      <label for="biz-offering">Offering</label>
+      <div class="field-control">
+        <input type="text" id="biz-offering" name="offering"
+               value="{{ business.offering if business else '' }}"
+               placeholder="e.g. Online ordering, bookings" autocomplete="off">
+      </div>
+      <div class="field-actions"></div>
+    </div>
+    <div class="field-row">
+      <label for="biz-description">Description</label>
+      <div class="field-control">
+        <textarea id="biz-description" name="description" rows="3"
+                  placeholder="e.g. A neighbourhood bistro that takes weeknight reservations online">{{ business.description if business else '' }}</textarea>
+      </div>
+      <div class="field-actions"></div>
+    </div>
+    <div class="actions">
+      <button class="btn btn-sm btn-secondary" type="submit">Save business context</button>
+    </div>
+  </form>
+</section>
+
+<section class="panel">
   <div class="panel-head"><h2>Library actions</h2></div>
   <form method="post" action="/design-systems/clone">
     {{ csrf_input() }}

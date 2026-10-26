@@ -11,8 +11,12 @@ from __future__ import annotations
 
 import html
 import re
+from typing import TYPE_CHECKING
 
 from jev_agent.core.design_showcase import VibeProfile, _relative_luminance
+
+if TYPE_CHECKING:
+    from jev_agent.core.design_business import BusinessContext
 
 
 def _css_value(value: object) -> str:
@@ -141,20 +145,31 @@ def _dark_overrides(dark: dict[str, str]) -> str:
     return "\n".join(lines)
 
 
-def _hero(vibe: VibeProfile, name: str, colors: dict[str, str]) -> str:
+def _hero(
+    vibe: VibeProfile,
+    name: str,
+    colors: dict[str, str],
+    business: BusinessContext | None = None,
+) -> str:
     """The hero section, treated per the vibe's hero_style.
 
     `name` and vibe copy are HTML-escaped here (the page is served as
     text/html). The split hero never indexes colors directly: flat/legacy
     token sets lack the accent/neutral ramps, so each swatch falls back
     through related roles to a constant, instead of raising KeyError.
+    When `business` carries an industry, the hero gains a short
+    "Built for {industry}" line (issue #283).
     """
     style = vibe.hero_style
     display_name = html.escape(name)
+    business_line = ""
+    industry = (getattr(business, "industry", "") or "").strip() if business is not None else ""
+    if industry:
+        business_line = f'\n      <p class="hero-business">Built for {html.escape(industry)}</p>'
     inner = f"""
       <p class="hero-overline">Design system</p>
       <h1 class="hero-title">{display_name}</h1>
-      <p class="hero-tagline">{html.escape(vibe.tagline)}</p>
+      <p class="hero-tagline">{html.escape(vibe.tagline)}</p>{business_line}
       <p class="hero-desc">{html.escape(vibe.description)}</p>
       <div class="hero-actions">
         <a class="btn btn-primary" href="#components">Explore components</a>
@@ -503,6 +518,7 @@ body{
   font-size:clamp(48px,7vw,88px);margin-bottom:18px}
 .hero-tagline{font-family:var(--font-display);font-size:22px;font-weight:500;
   color:var(--c-primary);margin-bottom:14px}
+.hero-business{font-size:15px;font-weight:600;color:var(--c-text-muted);margin-bottom:14px}
 .hero-desc{max-width:620px;margin:0 auto 34px;color:var(--c-text-muted);font-size:17px}
 .hero-actions{display:flex;gap:12px;justify-content:center;flex-wrap:wrap}
 .hero-gradient{background:
@@ -841,6 +857,7 @@ def render_showcase(
     vibe: VibeProfile,
     tokens: dict[str, object],
     theme: str = "both",
+    business: BusinessContext | None = None,
 ) -> str:
     """A complete, self-contained HTML gallery for one design system.
 
@@ -850,6 +867,8 @@ def render_showcase(
     — both enables the toggle, defaulting to light); an unrecognized theme
     falls back to "light" so the toggle and the dark overrides can never
     disagree. `name` is HTML-escaped: the page is served as text/html.
+    When `business` carries an industry, the hero notes what the system was
+    built for (issue #283).
     """
     if theme not in ("light", "dark", "both"):
         theme = "light"
@@ -871,7 +890,7 @@ def render_showcase(
 
     css_vars = _css_vars(light, tokens, vibe)
     dark_css = _dark_overrides(dark) if theme != "light" else ""
-    hero = _hero(vibe, name, light)
+    hero = _hero(vibe, name, light, business)
     # Display weight/tracking feed the hero + type scale.
     weight = vibe.display_weight
 

@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "macros.html" import badge with context %}
+{% from "macros.html" import badge, csrf_input with context %}
 {% block title %}{{ name }} — reusable elements{% endblock %}
 {% block extra_head %}<script src="/static/copy.js" defer></script>{% endblock %}
 {% block content %}
@@ -31,6 +31,50 @@
     {% if stack %} Suggested from your stack: <span class="mono">{{ stack }}</span>.{% endif %}
   </p>
 </section>
+
+{% if business and business.context %}
+{% set proposed_keys = business.proposed | map(attribute='key') | list %}
+<section class="panel">
+  <div class="panel-head"><h2>Suggested for your business</h2></div>
+  <p class="small muted">Based on your business context — add the elements you need, remove the ones you don't.</p>
+  {% if business.proposed %}
+  {% for item in business.proposed %}
+  <div class="business-element">
+    <strong>{{ item.title }}</strong> <span class="mono small">{{ item.key }}</span>
+    <p class="small muted">{{ item.description }}</p>
+    <p class="small">{{ item.why }}</p>
+    <form class="inline" method="post" action="/design-systems/business-elements">
+      {{ csrf_input() }}
+      <input type="hidden" name="name" value="{{ name }}">
+      <input type="hidden" name="element" value="{{ item.key }}">
+      <input type="hidden" name="target" value="{{ target }}">
+      <input type="hidden" name="action" value="{{ 'remove' if item.enabled else 'add' }}">
+      <button class="btn btn-sm btn-secondary" type="submit">{{ 'Remove' if item.enabled else 'Add' }}</button>
+    </form>
+  </div>
+  {% endfor %}
+  {% else %}
+  <p class="small muted">Nothing suggested for this business context yet.</p>
+  {% endif %}
+  <h3>More elements</h3>
+  {% for item in business.catalog %}
+  {% if item.key not in proposed_keys %}
+  <div class="business-element">
+    <strong>{{ item.title }}</strong> <span class="mono small">{{ item.key }}</span>
+    <p class="small muted">{{ item.description }}</p>
+    <form class="inline" method="post" action="/design-systems/business-elements">
+      {{ csrf_input() }}
+      <input type="hidden" name="name" value="{{ name }}">
+      <input type="hidden" name="element" value="{{ item.key }}">
+      <input type="hidden" name="target" value="{{ target }}">
+      <input type="hidden" name="action" value="{{ 'remove' if item.enabled else 'add' }}">
+      <button class="btn btn-sm btn-secondary" type="submit">{{ 'Remove' if item.enabled else 'Add' }}</button>
+    </form>
+  </div>
+  {% endif %}
+  {% endfor %}
+</section>
+{% endif %}
 
 {% for entry in entries %}
 <section class="panel code-panel">

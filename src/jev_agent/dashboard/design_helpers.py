@@ -10,13 +10,28 @@ from typing import Any
 from starlette.datastructures import FormData
 
 from jev_agent.app.errors import JevError
-from jev_agent.core.design_codegen import CODEGEN_TARGETS, component_catalog, generate_files
+from jev_agent.core.design_business import (
+    ELEMENT_CATALOG,
+    BusinessContext,
+    BusinessElement,
+    elements_for_keys,
+    enabled_element_keys,
+    propose_elements,
+)
+from jev_agent.core.design_codegen import (
+    CODEGEN_TARGETS,
+    business_catalog,
+    business_files,
+    component_catalog,
+    generate_files,
+)
 from jev_agent.core.design_library import (
     _flat_colors,
     library_system_path,
     list_library,
     load_library_system,
     save_library_system,
+    update_library_meta,
     validate_library_name,
 )
 from jev_agent.core.design_showcase import VIBE_PROFILES
@@ -189,6 +204,44 @@ def _flatten_token_section(section: object) -> list[tuple[str, object]]:
     return rows
 
 
+def _business_dict(context: BusinessContext | None) -> dict[str, str] | None:
+    """A business context as plain template data (None when there is none)."""
+    if context is None:
+        return None
+    return {
+        "industry": context.industry,
+        "audience": context.audience,
+        "tone": context.tone,
+        "offering": context.offering,
+        "description": context.description,
+    }
+
+
+def _catalog_elements() -> list[BusinessElement]:
+    """Every catalogued business element (`ELEMENT_CATALOG`, dict or sequence)."""
+    if isinstance(ELEMENT_CATALOG, dict):
+        return list(ELEMENT_CATALOG.values())
+    return list(ELEMENT_CATALOG)
+
+
+def _catalog_keys() -> set[str]:
+    """The keys of every catalogued business element."""
+    if isinstance(ELEMENT_CATALOG, dict):
+        return {str(key) for key in ELEMENT_CATALOG}
+    return {element.key for element in ELEMENT_CATALOG}
+
+
+def _business_entry(element: BusinessElement, enabled: bool) -> dict[str, object]:
+    """One business element as plain template data, with its enabled state."""
+    return {
+        "key": element.key,
+        "title": element.title,
+        "description": element.description,
+        "why": element.why,
+        "enabled": enabled,
+    }
+
+
 def _design_system_view(repo: views.Repo, name: str) -> dict[str, Any]:
     """One library system for the detail page: tokens and the system markdown."""
     system = load_library_system(name)
@@ -215,6 +268,7 @@ def _design_system_view(repo: views.Repo, name: str) -> dict[str, Any]:
         "token_sections": token_sections,
         "markdown_html": render_markdown(system.markdown),
         "active": _repo_design_source(repo.root) == f"library:{name}",
+        "business": _business_dict(BusinessContext.from_meta(meta)),
     }
 
 
@@ -236,6 +290,37 @@ def _design_system_code_view(repo: views.Repo, name: str, target: str) -> dict[s
         }
         for item in catalog
     ]
+    # Business elements (issue #283): the enabled ones generate extra files,
+    # merged into the same entry list after the base components.
+    meta = _library_meta(name)
+    context = BusinessContext.from_meta(meta)
+    business: dict[str, object] = {"context": None, "proposed": [], "catalog": []}
+    if context is not None and not context.is_empty():
+        proposed = propose_elements(context)
+        enabled = enabled_element_keys(meta, context)
+        enabled_set = set(enabled)
+        business_elements = elements_for_keys(enabled)
+        business_files_map = business_files(target, name, tokens, business_elements)
+        entries.extend(
+            {
+                "filename": item["filename"],
+                "title": item["title"],
+                "description": item["description"],
+                "code": business_files_map.get(item["filename"], ""),
+                "lines": business_files_map.get(item["filename"], "").count("\n") + 1,
+            }
+            for item in business_catalog(target, business_elements)
+        )
+        business = {
+            "context": context.to_meta(),
+            "proposed": [
+                _business_entry(element, element.key in enabled_set) for element in proposed
+            ],
+            "catalog": [
+                _business_entry(element, element.key in enabled_set)
+                for element in _catalog_elements()
+            ],
+        }
     return {
         "name": name,
         "target": target,
@@ -244,7 +329,8 @@ def _design_system_code_view(repo: views.Repo, name: str, target: str) -> dict[s
             for key, info in CODEGEN_TARGETS.items()
         ],
         "entries": entries,
-        "stack": _meta_text(_library_meta(name), "stack"),
+        "stack": _meta_text(meta, "stack"),
+        "business": business,
     }
 
 
@@ -343,3 +429,64 @@ def _design_system_clone(repo: views.Repo, form: FormData) -> str:
         },
     )
     return f'cloned "{name}" to "{new_name}" (library v{version})'
+
+
+def _design_system_business_context(repo: views.Repo, form: FormData) -> str:
+    """Update a library system's business context (issue #283, meta-only).
+
+    The edit never bumps the system version: `update_library_meta` rewrites
+    `meta.json` extras without touching the versioned markdown/tokens. An
+    emptied context clears both stored keys. A changed, non-empty context
+    resets `business_elements` to the newly proposed keys only when no stored
+    list exists — a user who customized the enabled list keeps their list,
+    and the code page proposes the new elements as addable instead.
+    """
+    name = validate_library_name((_text(form, "name") or "").strip())
+    context = BusinessContext.from_form(form)
+    meta = _library_meta(name)
+    if context.is_empty():
+        patch: dict[str, object | None] = {"business_context": None, "business_elements": None}
+    else:
+        patch = {"business_context": context.to_meta()}
+        if "business_elements" not in meta:
+            patch["business_elements"] = [element.key for element in propose_elements(context)]
+    if update_library_meta(name, patch) is None:
+        raise JevError(f'no design system named "{name}" in the library')
+    return f'business context updated for "{name}"'
+
+
+def _design_system_business_elements(repo: views.Repo, form: FormData) -> str:
+    """Toggle one business element on/off for a library system (issue #283).
+
+    The form carries `name`, `element` (a catalog key) and `action`
+    (`add`/`remove`). Adds keep the stored order and append the key; removes
+    drop it. Meta-only, like the context edit — no version bump.
+    """
+    name = validate_library_name((_text(form, "name") or "").strip())
+    key = (_text(form, "element") or "").strip()
+    action = (_text(form, "action") or "").strip()
+    if key not in _catalog_keys():
+        raise JevError(f'unknown business element "{key}"')
+    if action not in ("add", "remove"):
+        raise JevError(f'unknown business element action "{action}": choose add or remove')
+    meta = _library_meta(name)
+    stored = meta.get("business_elements")
+    if isinstance(stored, list):
+        enabled = [str(item) for item in stored if isinstance(item, str)]
+    else:
+        context = BusinessContext.from_meta(meta)
+        enabled = (
+            enabled_element_keys(meta, context)
+            if context is not None and not context.is_empty()
+            else []
+        )
+    if action == "add":
+        if key not in enabled:
+            enabled.append(key)
+        verb = "added"
+    else:
+        enabled = [item for item in enabled if item != key]
+        verb = "removed"
+    if update_library_meta(name, {"business_elements": enabled}) is None:
+        raise JevError(f'no design system named "{name}" in the library')
+    return f'{verb} business element "{key}" for "{name}"'

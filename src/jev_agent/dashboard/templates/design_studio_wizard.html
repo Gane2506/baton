@@ -7,7 +7,7 @@
 <div class="page-head">
   <div class="titles">
     <h1>Design Studio</h1>
-    <p class="lede">A new design system, five guided questions.</p>
+    <p class="lede">A new design system, six guided questions.</p>
   </div>
   <div class="actions">
     <a class="btn btn-ghost" href="/design-studio">Exit wizard</a>
@@ -45,6 +45,61 @@
       <div class="field-actions"></div>
     </div>
     <div class="studio-nav">
+      <button type="submit" class="btn btn-primary">Continue</button>
+    </div>
+  </form>
+
+  {% elif wizard_step == "business" %}
+  <h2>What business is this for?</h2>
+  <p class="lede">Optional — skip what doesn't apply. The studio uses this to propose the reusable elements your business actually needs.</p>
+  <form method="post" action="/design-studio/new/business">
+    {{ csrf_input() }}
+    <div class="field-row">
+      <label for="ws-industry">Industry</label>
+      <div class="field-control">
+        <input type="text" id="ws-industry" name="industry"
+               value="{{ v.get('industry', '') }}" placeholder="e.g. Restaurant, SaaS, Clinic"
+               autocomplete="off">
+      </div>
+      <div class="field-actions"></div>
+    </div>
+    <div class="field-row">
+      <label for="ws-audience">Audience</label>
+      <div class="field-control">
+        <input type="text" id="ws-audience" name="audience"
+               value="{{ v.get('audience', '') }}" placeholder="e.g. Busy parents, small teams"
+               autocomplete="off">
+      </div>
+      <div class="field-actions"></div>
+    </div>
+    <div class="field-row">
+      <label for="ws-tone">Tone</label>
+      <div class="field-control">
+        <input type="text" id="ws-tone" name="tone"
+               value="{{ v.get('tone', '') }}" placeholder="e.g. Warm and welcoming"
+               autocomplete="off">
+      </div>
+      <div class="field-actions"></div>
+    </div>
+    <div class="field-row">
+      <label for="ws-offering">Offering</label>
+      <div class="field-control">
+        <input type="text" id="ws-offering" name="offering"
+               value="{{ v.get('offering', '') }}" placeholder="e.g. Online ordering, bookings"
+               autocomplete="off">
+      </div>
+      <div class="field-actions"></div>
+    </div>
+    <div class="field-row">
+      <label for="ws-description">Description</label>
+      <div class="field-control">
+        <textarea id="ws-description" name="description" rows="3"
+                  placeholder="e.g. A neighbourhood bistro that takes weeknight reservations online">{{ v.get('description', '') }}</textarea>
+      </div>
+      <div class="field-actions"></div>
+    </div>
+    <div class="studio-nav">
+      <a class="btn btn-secondary" href="/design-studio/new/purpose">Back</a>
       <button type="submit" class="btn btn-primary">Continue</button>
     </div>
   </form>
@@ -176,6 +231,9 @@
   <p class="lede">The studio will build the full kit and save it to your library.</p>
   <dl class="studio-summary">
     <div><dt>Product</dt><dd>{{ answers.purpose.get('product', '') }}</dd></div>
+    {% set _biz_industry = answers.business.get('industry', '') %}
+    {% set _biz_offering = answers.business.get('offering', '') %}
+    <div><dt>Business</dt><dd>{{ (_biz_industry + " · " + _biz_offering) if _biz_industry or _biz_offering else "—" }}</dd></div>
     <div><dt>App type</dt><dd>{{ answers.app_type.get('app_type', '') | capitalize }}</dd></div>
     <div><dt>Stack</dt><dd>{{ answers.stack.get('stack', '') }}</dd></div>
     <div><dt>System name</dt><dd class="mono">{{ answers.brand.get('name', '') }}</dd></div>
