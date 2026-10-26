@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import shutil
 from pathlib import Path
 from typing import Any
@@ -16,7 +17,10 @@ from starlette.responses import (
 )
 
 from jev_agent.app import chat
+from jev_agent.app.errors import JevError
+from jev_agent.core import figma as figma_mod
 from jev_agent.core.design_library import (
+    save_library_system,
     validate_library_name,
 )
 from jev_agent.core.design_reverse import is_url_target
@@ -143,9 +147,68 @@ class StudioRoutes(DashboardCore):
                 # API model picker (issue #149): same as the chats page.
                 "api_model_needed": api_ok and not repo.config.workers.api.default_model,
                 "api_model_options": API_MODEL_OPTIONS,
+                "figma_token_set": bool(os.environ.get(figma_mod.TOKEN_ENV, "").strip()),
             }
 
         return self.page(request, "design_studio_reverse.html", build)
+
+    async def design_reverse_figma(self, request: Request) -> Response:
+        """Import a design system straight from a Figma file (no designer run).
+
+        The file's styles map directly onto Baton tokens (`file_to_tokens`),
+        so — unlike the URL/screenshot reverse — this is synchronous: fetch,
+        map, save as a named library system linked to the file, land on the
+        system page. A missing token or a bad link flashes the plain reason.
+        """
+        form = await checked_form(request)
+        to = "/design-studio/reverse"
+
+        def fail(message: str) -> Response:
+            self.flash(request, "error", message)
+            return self.back(to)
+
+        url = (_text(form, "figma_url") or "").strip()
+        name = (_text(form, "name") or "").strip()
+        if not url:
+            return fail("paste a Figma file link first.")
+        try:
+            ref = figma_mod.parse_figma_url(url)
+            if name:
+                validate_library_name(name)
+        except (figma_mod.FigmaError, ValueError) as exc:
+            return fail(str(exc))
+
+        def job() -> tuple[str, int, str, int]:
+            token = os.environ.get(figma_mod.TOKEN_ENV, "").strip()
+            if not token:
+                raise JevError("no Figma token saved yet — add it on Tools → APIs first")
+            with figma_mod.FigmaClient(token) as client:
+                file_json = client.get_file(ref.file_key)
+            imported = figma_mod.file_to_tokens(file_json)
+            system_name = name or figma_mod.suggest_library_name(imported.file_name)
+            version = save_library_system(
+                system_name,
+                imported.markdown,
+                imported.tokens,
+                meta_extra={
+                    "source": f"figma:{ref.file_key}",
+                    "figma_file_url": ref.url,
+                    "figma_file_key": ref.file_key,
+                },
+            )
+            return system_name, version, imported.file_name, len(imported.component_names)
+
+        try:
+            system_name, version, file_name, component_count = await run_in_threadpool(job)
+        except (figma_mod.FigmaError, JevError, ValueError) as exc:
+            return fail(str(exc))
+        self.flash(
+            request,
+            "ok",
+            f"imported {file_name} from Figma as {system_name} (v{version}) — "
+            f"{component_count} component(s) found, linked for sync",
+        )
+        return self.back(f"/design-systems/{system_name}")
 
     async def design_reverse_start(self, request: Request) -> Response:
         """Validate the reverse submission, then run the job in the background.

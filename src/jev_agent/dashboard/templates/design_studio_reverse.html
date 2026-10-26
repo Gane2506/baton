@@ -79,4 +79,28 @@
     </div>
   </section>
 </form>
+
+<form method="post" action="/design-studio/reverse/figma">
+  {{ csrf_input() }}
+  <section class="panel">
+    <div class="panel-head"><h2>From a Figma file</h2></div>
+    <p class="hint">Reads the file's paint styles, text styles, auto-layout spacing and
+    corner radii over the Figma REST API and saves them as a library system,
+    linked to the file so it can sync later. No designer run — the file's own
+    styles are the tokens.</p>
+    {% if not figma_token_set %}
+    <p class="hint">No Figma token saved yet — add your Personal Access Token on
+    <a href="/tools#apis">Tools → APIs</a> first.</p>
+    {% endif %}
+    <label for="reverse-figma-url">Figma file link</label>
+    <input id="reverse-figma-url" name="figma_url" type="url" placeholder="https://www.figma.com/design/…/…"
+           autocomplete="off" inputmode="url"{% if busy %} disabled{% endif %}>
+    <label for="reverse-figma-name">Name <span class="muted">(optional)</span></label>
+    <input id="reverse-figma-name" name="name" type="text" placeholder="defaults to the Figma file's name"
+           pattern="[A-Za-z0-9][A-Za-z0-9_-]{0,63}" autocomplete="off"{% if busy %} disabled{% endif %}>
+    <div class="actions mt-s3">
+      <button class="btn btn-primary" type="submit"{% if busy %} disabled{% endif %}>Import from Figma</button>
+    </div>
+  </section>
+</form>
 {% endblock %}

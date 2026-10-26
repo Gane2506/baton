@@ -15,7 +15,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import sys
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated
 
@@ -29,6 +31,7 @@ from jev_agent.app.design_reverse import extract_with_designer
 from jev_agent.app.errors import JevError
 from jev_agent.cli.repo import RepoOption
 from jev_agent.cli.wiring import NO_WORKERS_MESSAGE, cli_context, fail, repo_context
+from jev_agent.core import figma as figma_mod
 from jev_agent.core.design_kit import (
     APP_TYPES,
     STACKS,
@@ -655,3 +658,205 @@ def reverse(
     console.print(
         f'Reversed "{escape(system_name)}" into the library (v{version}, source: {escape(source)}).'
     )
+
+
+# ---- Figma: import files, export systems, sync, granular edits ---------------------------
+# The REST API only reads (`FigmaClient`); every write is Plugin API code for the
+# official Figma MCP server's `use_figma` tool (`core/figma.py`, `docs/figma.md`).
+# The CLI prints or writes that code — it never claims the REST API can write.
+
+figma_app = typer.Typer(
+    name="figma",
+    help="Figma: import a file, export a system, sync it back, or make one granular edit.",
+    no_args_is_help=True,
+)
+
+
+def _figma_token() -> str:
+    """The Figma token from the environment (secrets file values land there at startup)."""
+    token = os.environ.get(figma_mod.TOKEN_ENV, "").strip()
+    if not token:
+        raise fail(
+            "no Figma token — save one on Tools → APIs, or set "
+            f"{figma_mod.TOKEN_ENV} in the environment"
+        )
+    return token
+
+
+def _figma_file_key(name: str) -> str:
+    """The linked Figma file key for a library system, or a failure naming the fix."""
+    meta = _library_meta(name)
+    file_key = meta.get("figma_file_key")
+    if not isinstance(file_key, str) or not file_key:
+        raise fail(
+            f"{name} is not linked to a Figma file yet — link one on its Figma page "
+            f"(/design-systems/{name}/figma) or import one with `jev design figma import`."
+        )
+    return file_key
+
+
+@figma_app.command("export")
+def figma_export(
+    name: str,
+    out: Annotated[
+        Path | None,
+        typer.Option("--out", help="Output file. Defaults to printing the script."),
+    ] = None,
+) -> None:
+    """Generate the `use_figma` Plugin API script that builds a system in Figma."""
+    _checked_name(name)
+    system = _require_system(name)
+    meta = _library_meta(name)
+    file_key = meta.get("figma_file_key")
+    script = figma_mod.render_use_figma_script(
+        name,
+        system.tokens if isinstance(system.tokens, dict) else {},
+        file_key=file_key if isinstance(file_key, str) else None,
+    )
+    if out is not None:
+        try:
+            _write_atomic(out, script)
+        except OSError as exc:
+            raise fail(f"could not write {out}: {exc}") from exc
+        console.print(f"Wrote the Figma export script for {name} to {out}.")
+    else:
+        console.print(script, markup=False)
+    console.print("Run it with the Figma MCP server's use_figma, then verify with get_screenshot.")
+
+
+@figma_app.command("import")
+def figma_import(
+    url: str,
+    name: Annotated[
+        str | None,
+        typer.Option("--name", help="Library system name. Defaults to the Figma file's name."),
+    ] = None,
+) -> None:
+    """Import a Figma file as a library system, linked to the file for sync."""
+    try:
+        ref = figma_mod.parse_figma_url(url)
+    except figma_mod.FigmaError as exc:
+        raise fail(str(exc)) from exc
+    token = _figma_token()
+    try:
+        with figma_mod.FigmaClient(token) as client:
+            file_json = client.get_file(ref.file_key)
+        imported = figma_mod.file_to_tokens(file_json)
+    except figma_mod.FigmaError as exc:
+        raise fail(str(exc)) from exc
+    system_name = (
+        _checked_name(name)
+        if name is not None
+        else _checked_name(figma_mod.suggest_library_name(imported.file_name))
+    )
+    version = save_library_system(
+        system_name,
+        imported.markdown,
+        imported.tokens,
+        meta_extra={
+            "source": f"figma:{ref.file_key}",
+            "figma_file_url": ref.url,
+            "figma_file_key": ref.file_key,
+        },
+    )
+    console.print(
+        f'Imported "{escape(imported.file_name)}" from Figma as {escape(system_name)} '
+        f"(v{version}) — {len(imported.component_names)} component(s) found, linked for sync."
+    )
+
+
+@figma_app.command("sync")
+def figma_sync(name: str) -> None:
+    """Pull a linked Figma file's current tokens back into a library system."""
+    _checked_name(name)
+    system = _require_system(name)
+    file_key = _figma_file_key(name)
+    token = _figma_token()
+    try:
+        with figma_mod.FigmaClient(token) as client:
+            file_json = client.get_file(file_key)
+        imported = figma_mod.file_to_tokens(file_json)
+    except figma_mod.FigmaError as exc:
+        raise fail(str(exc)) from exc
+    tokens = system.tokens if isinstance(system.tokens, dict) else {}
+    diff = figma_mod.reconcile_tokens(tokens, imported.tokens)
+    if diff.empty():
+        console.print(f"{name} is already in sync with Figma — nothing changed.")
+        return
+    merged = figma_mod.apply_sync(tokens, diff)
+    meta = _library_meta(name)
+    extras = {key: value for key, value in meta.items() if key not in ("version", "updated_at")}
+    extras["figma_last_sync"] = datetime.now(UTC).isoformat(timespec="seconds")
+    version = save_library_system(name, system.markdown, merged, meta_extra=extras)
+    console.print(f"Synced {name} from Figma: {diff.summary()} — saved as v{version}.")
+
+
+@figma_app.command("edit")
+def figma_edit(
+    kind: Annotated[
+        str,
+        typer.Argument(
+            help="variable, node-fill, node-text, node-size, corner-radius or reaction."
+        ),
+    ],
+    collection: Annotated[
+        str, typer.Option("--collection", help="Variable edits: the collection name.")
+    ] = "",
+    var_name: Annotated[
+        str, typer.Option("--name", help="Variable edits: the variable name, e.g. color/primary.")
+    ] = "",
+    mode: Annotated[str, typer.Option("--mode", help="Variable edits: Light or Dark.")] = "Light",
+    value: Annotated[
+        str, typer.Option("--value", help="The new color (#rrggbb), number, or text.")
+    ] = "",
+    node_id: Annotated[
+        str, typer.Option("--node-id", help="Node edits: the node id, e.g. 12:34.")
+    ] = "",
+    destination_id: Annotated[
+        str, typer.Option("--destination-id", help="Reactions: the destination node id.")
+    ] = "",
+    trigger: Annotated[
+        str, typer.Option("--trigger", help="Reactions: ON_CLICK, ON_HOVER, …")
+    ] = "ON_CLICK",
+    transition: Annotated[
+        str, typer.Option("--transition", help="Reactions: SMART_ANIMATE, DISSOLVE, …")
+    ] = "SMART_ANIMATE",
+    width: Annotated[float, typer.Option("--width", help="Size edits: the new width.")] = 0,
+    height: Annotated[float, typer.Option("--height", help="Size edits: the new height.")] = 0,
+    out: Annotated[
+        Path | None,
+        typer.Option("--out", help="Output file. Defaults to printing the snippet."),
+    ] = None,
+) -> None:
+    """Generate the `use_figma` snippet for one granular Figma change."""
+    try:
+        edit = figma_mod.edit_from_form(
+            kind,
+            {
+                "collection": collection,
+                "name": var_name,
+                "mode": mode,
+                "value": value,
+                "node_id": node_id,
+                "destination_id": destination_id,
+                "trigger": trigger,
+                "transition": transition,
+                "width": str(width),
+                "height": str(height),
+            },
+        )
+        snippet = figma_mod.render_use_figma_edit(edit)
+    except figma_mod.FigmaError as exc:
+        raise fail(str(exc)) from exc
+    if out is not None:
+        try:
+            _write_atomic(out, snippet)
+        except OSError as exc:
+            raise fail(f"could not write {out}: {exc}") from exc
+        console.print(f"Wrote the Figma edit snippet to {out}.")
+    else:
+        console.print(snippet, markup=False)
+    console.print("Run it with the Figma MCP server's use_figma, then verify with get_screenshot.")
+
+
+design_app.add_typer(figma_app, name="figma")

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import os
+from datetime import UTC, datetime
 from typing import Any
 
 from starlette.concurrency import run_in_threadpool
@@ -13,6 +15,7 @@ from starlette.responses import (
 )
 
 from jev_agent.app.errors import JevError
+from jev_agent.core import figma as figma_mod
 from jev_agent.core.design_business import (
     BusinessContext,
     elements_for_keys,
@@ -30,6 +33,8 @@ from jev_agent.core.design_library import (
     export_tokens_w3c,
     library_system_path,
     load_library_system,
+    save_library_system,
+    update_library_meta,
     validate_library_name,
 )
 from jev_agent.core.design_showcase import VIBE_PROFILES, rich_tokens, vibe_for_keywords
@@ -44,6 +49,7 @@ from jev_agent.dashboard.design_helpers import (
     _design_system_business_elements,
     _design_system_clone,
     _design_system_code_view,
+    _design_system_figma_view,
     _design_system_use,
     _design_system_view,
     _design_systems_view,
@@ -189,6 +195,188 @@ class DesignRoutes(DashboardCore):
                 "X-Content-Type-Options": "nosniff",
             },
         )
+
+    def design_system_figma_page(self, request: Request) -> Response:
+        """One library system's Figma page: link, export, granular edits, sync.
+
+        The two-way binding lives here, not on the system page itself: the
+        link state, the generated `use_figma` export script, the one-change
+        edit form, and the sync-back from the file (Tier 0 reads; the POST
+        actions below do the writes).
+        """
+        name = request.path_params["name"]
+        try:
+            validate_library_name(name)
+        except ValueError:
+            raise HTTPException(404, "no such design system") from None
+        return self.page(
+            request,
+            "design_system_figma.html",
+            lambda repo: _design_system_figma_view(repo, name),
+        )
+
+    async def design_system_figma_action(self, request: Request) -> Response:
+        """The Figma page's POST actions: link, unlink, export, edit, sync.
+
+        Every action re-renders the Figma page (with its script, snippet or
+        sync diff) instead of redirecting, so the result is visible where it
+        was asked for. Sync is the only network call; it runs in a thread,
+        saves a new library version on change, and never deletes tokens.
+        """
+        name = request.path_params["name"]
+        try:
+            system_name = validate_library_name(name)
+        except ValueError:
+            raise HTTPException(404, "no such design system") from None
+        form = await checked_form(request)
+        action = (_text(form, "action") or "").strip()
+
+        def view(**extra: Any) -> dict[str, Any]:
+            with views.open_repo(self.settings.root) as repo:
+                return _design_system_figma_view(repo, system_name, **extra)
+
+        async def show(**extra: Any) -> Response:
+            context = await run_in_threadpool(lambda: view(**extra))
+            return self.render(request, "design_system_figma.html", **context)
+
+        if action == "link":
+            url = (_text(form, "figma_url") or "").strip()
+            try:
+                ref = figma_mod.parse_figma_url(url)
+                updated = await run_in_threadpool(
+                    lambda: update_library_meta(
+                        system_name,
+                        {"figma_file_url": ref.url, "figma_file_key": ref.file_key},
+                    )
+                )
+            except figma_mod.FigmaError as exc:
+                self.flash(request, "error", str(exc))
+                return await show()
+            if updated is None:
+                self.flash(request, "error", f'no design system named "{system_name}"')
+                return await show()
+            self.flash(request, "ok", f"linked {system_name} to Figma file {ref.file_key}")
+            return await show()
+
+        if action == "unlink":
+            await run_in_threadpool(
+                lambda: update_library_meta(
+                    system_name, {"figma_file_url": None, "figma_file_key": None}
+                )
+            )
+            self.flash(request, "ok", f"unlinked {system_name} from Figma")
+            return await show()
+
+        if action == "export":
+
+            def export_job() -> str:
+                system = load_library_system(system_name)
+                if system is None:
+                    raise JevError(f'no design system named "{system_name}" in the library')
+                meta = _library_meta(system_name)
+                file_key = meta.get("figma_file_key")
+                tokens = system.tokens if isinstance(system.tokens, dict) else {}
+                return figma_mod.render_use_figma_script(
+                    system_name,
+                    tokens,
+                    file_key=file_key if isinstance(file_key, str) else None,
+                )
+
+            try:
+                script = await run_in_threadpool(export_job)
+            except JevError as exc:
+                self.flash(request, "error", str(exc))
+                return await show()
+            return await show(script=script)
+
+        if action == "edit":
+            kind = (_text(form, "kind") or "").strip()
+            values = {key: value for key, value in form.items() if isinstance(value, str)}
+
+            def edit_job() -> tuple[str, str]:
+                edit = figma_mod.edit_from_form(kind, values)
+                return figma_mod.render_use_figma_edit(edit), kind
+
+            try:
+                snippet, edit_kind = await run_in_threadpool(edit_job)
+            except (figma_mod.FigmaError, ValueError) as exc:
+                self.flash(request, "error", str(exc))
+                return await show()
+            self.flash(
+                request,
+                "ok",
+                "edit script ready — run it with the Figma MCP server's use_figma, "
+                "then verify with get_screenshot",
+            )
+            return await show(snippet=snippet, edit_kind=edit_kind)
+
+        if action == "sync":
+
+            def sync_job() -> dict[str, object]:
+                system = load_library_system(system_name)
+                if system is None:
+                    raise JevError(f'no design system named "{system_name}" in the library')
+                meta = _library_meta(system_name)
+                file_key = meta.get("figma_file_key")
+                if not isinstance(file_key, str) or not file_key:
+                    raise JevError("link a Figma file first — paste its URL above")
+                token = os.environ.get(figma_mod.TOKEN_ENV, "").strip()
+                if not token:
+                    raise JevError("no Figma token saved yet — add it on Tools → APIs first")
+                with figma_mod.FigmaClient(token) as client:
+                    file_json = client.get_file(file_key)
+                imported = figma_mod.file_to_tokens(file_json)
+                tokens = system.tokens if isinstance(system.tokens, dict) else {}
+                diff = figma_mod.reconcile_tokens(tokens, imported.tokens)
+                changed_view = {
+                    section: {name: [old, new] for name, (old, new) in names.items()}
+                    for section, names in diff.changed.items()
+                }
+                if diff.empty():
+                    return {
+                        "summary": "already in sync",
+                        "added": {},
+                        "changed": {},
+                        "removed": {},
+                        "version": system.version,
+                        "applied": False,
+                    }
+                merged = figma_mod.apply_sync(tokens, diff)
+                extras = {
+                    key: value
+                    for key, value in meta.items()
+                    if key not in ("version", "updated_at")
+                }
+                extras["figma_last_sync"] = datetime.now(UTC).isoformat(timespec="seconds")
+                version = save_library_system(
+                    system_name, system.markdown, merged, meta_extra=extras
+                )
+                return {
+                    "summary": diff.summary(),
+                    "added": diff.added,
+                    "changed": changed_view,
+                    "removed": diff.removed,
+                    "version": version,
+                    "applied": True,
+                }
+
+            try:
+                sync = await run_in_threadpool(sync_job)
+            except (figma_mod.FigmaError, JevError, ValueError) as exc:
+                self.flash(request, "error", str(exc))
+                return await show()
+            if sync.get("applied"):
+                self.flash(
+                    request,
+                    "ok",
+                    f"synced from Figma: {sync.get('summary')} — saved as v{sync.get('version')}",
+                )
+            else:
+                self.flash(request, "ok", "already in sync with Figma — nothing changed")
+            return await show(sync=sync)
+
+        self.flash(request, "error", f"unknown Figma action {action!r}")
+        return await show()
 
     async def design_systems_action(self, request: Request) -> Response:
         """Dispatch the library's POST actions: use, clone, export, delete, business."""

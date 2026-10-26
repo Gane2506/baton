@@ -277,6 +277,60 @@
     </form>
   </details>
 
+  <h3 class="subsection">Figma</h3>
+  <p class="hint">Design, tweak and prototype in Figma — every token, layer, variant
+  and prototype flow. The REST API only <em>reads</em> Figma files; writes go
+  through the official Figma MCP server's <code>use_figma</code> tool, which
+  runs Plugin API code inside the file. Connect the token, add the MCP server,
+  and agents can design in Figma from chat.</p>
+  <dl class="facts">
+    <dt>Personal Access Token</dt><dd>{{ badge(figma.token_source ~ ": set", "ok") if figma.token_set else badge("not set", "warn") }}{% if figma.token_validated %} — {{ figma.token_validated }}{% endif %}</dd>
+    <dt>Figma MCP server</dt><dd>{{ badge("connected", "ok") if figma.mcp_connected else badge("not connected", "warn") }} <span class="mono small">{{ figma.mcp_url }}</span></dd>
+  </dl>
+  {% if not figma.token_set %}
+  <form method="post" action="/connections/keys/add" class="field-row">
+    {{ csrf_input() }}
+    <input type="hidden" name="name" value="FIGMA_API_TOKEN">
+    <input type="hidden" name="return_to" value="/tools#apis">
+    <div class="field-control">
+      <input type="password" name="value" required autocomplete="new-password"
+             placeholder="Paste your Figma Personal Access Token (figd_…)" aria-label="Figma Personal Access Token">
+    </div>
+    <div class="field-actions"><button type="submit" class="btn btn-primary btn-sm">Add Figma token</button></div>
+  </form>
+  <p class="hint small">From Figma: Settings → Security → Generate a Personal Access Token
+  (it starts with <code>figd_</code>). It is saved to the secrets file, in effect
+  immediately, and never shown again.</p>
+  {% else %}
+  <form method="post" action="/tools/figma/validate" class="inline">
+    {{ csrf_input() }}
+    <button class="btn btn-sm btn-secondary" type="submit">Validate token</button>
+    <span class="hint small">Checks the token against Figma (<code>GET /v1/me</code>).</span>
+  </form>
+  {% endif %}
+  {% if not figma.mcp_connected %}
+  <form method="post" action="/tools/figma/mcp" class="field-row">
+    {{ csrf_input() }}
+    <div class="field-control">
+      <select name="target" aria-label="Save to">
+        <option value="user">user config</option>
+        <option value="repo">repo jev.toml</option>
+      </select>
+    </div>
+    <div class="field-actions"><button type="submit" class="btn btn-primary btn-sm">Add Figma MCP server</button></div>
+  </form>
+  <p class="hint small">Adds <code>[tools.mcp.figma]</code> at
+  <code>https://mcp.figma.com/mcp</code> — the official remote server, with
+  <code>get_design_context</code>, <code>get_screenshot</code>,
+  <code>use_figma</code> and <code>generate_figma_design</code>.</p>
+  {% endif %}
+  <p class="hint small">Writing needs a Full seat (a Dev seat is read-only) and edit access
+  to the file; the write tools are beta, free now, planned usage-based paid
+  later. Starter plans get about 20 MCP tool calls a month; a Full seat on
+  Professional or above gets about 200 a day. <a href="/design-studio/reverse">Import a Figma file</a>
+  into the Design Studio, or open a system and use its Figma page to export,
+  edit and sync.</p>
+
   <h3 class="subsection">Provider APIs</h3>
   <p class="hint">The API keys that power the models themselves. Add one here and it is saved
   to the secrets file, in effect immediately; manage or remove keys on

@@ -28,6 +28,16 @@ def test_find_reverse_skill() -> None:
     assert any(m.skill.name == "design-reverse" for m in matches)
 
 
+def test_find_figma_design_skill() -> None:
+    matches = find_skills("design a prototype in Figma and tweak the button color")
+    assert any(m.skill.name == "figma-design" for m in matches)
+
+
+def test_find_figma_import_skill() -> None:
+    matches = find_skills("import this Figma file as a design system")
+    assert any(m.skill.name == "figma-import" for m in matches)
+
+
 def test_find_api_keys_skill() -> None:
     matches = find_skills("where do I add my OpenRouter API key?")
     assert any(m.skill.name == "api-keys" for m in matches)
