@@ -7,6 +7,88 @@
 (function () {
   "use strict";
 
+  /* Scroll-spy (issue #287): highlight the sidebar link for the section
+     currently in view. IntersectionObserver with a band near the top of the
+     viewport; a click sets the active link immediately, and the hash on
+     load is honoured too. The search filter keeps working: a hidden link
+     simply stays hidden. */
+  var navLinks = Array.prototype.slice.call(
+    document.querySelectorAll(".ds-nav-list a[href^=\"#\"]")
+  );
+  function setActiveNav(id) {
+    navLinks.forEach(function (link) {
+      link.classList.toggle("active", link.getAttribute("href") === "#" + id);
+    });
+  }
+  var sections = Array.prototype.slice.call(
+    document.querySelectorAll(".ds-section[id]")
+  );
+  if ("IntersectionObserver" in window && sections.length > 0) {
+    var spy = new IntersectionObserver(
+      function (entries) {
+        entries.forEach(function (entry) {
+          if (entry.isIntersecting) { setActiveNav(entry.target.id); }
+        });
+      },
+      { rootMargin: "-15% 0px -75% 0px" }
+    );
+    sections.forEach(function (section) { spy.observe(section); });
+  }
+  navLinks.forEach(function (link) {
+    link.addEventListener("click", function () {
+      setActiveNav(link.getAttribute("href").slice(1));
+    });
+  });
+  if (window.location.hash) {
+    setActiveNav(window.location.hash.slice(1));
+  }
+
+  /* Light/dark preview toggle (issue #287): re-skin the content area in
+     the system's own light or dark theme. The exact palette travels in
+     data-preview-*-* attributes on #ds-content (validated hex only); the
+     ds-preview-light/dark classes carry generic fallbacks for no-JS. */
+  var content = document.getElementById("ds-content");
+  var previewBtns = Array.prototype.slice.call(
+    document.querySelectorAll("[data-preview-theme]")
+  );
+  var hexRe = /^#[0-9a-fA-F]{3}([0-9a-fA-F]{3})?$/;
+  function applyPreview(theme) {
+    if (!content) { return; }
+    content.classList.toggle("ds-preview-light", theme === "light");
+    content.classList.toggle("ds-preview-dark", theme === "dark");
+    var prefix = theme === "light" ? "previewLight" : "previewDark";
+    var vars = {
+      "--ds-bg": content.dataset[prefix + "Bg"],
+      "--ds-surface": content.dataset[prefix + "Surface"],
+      "--ds-text": content.dataset[prefix + "Text"],
+      "--ds-muted": content.dataset[prefix + "Muted"],
+      "--ds-border": content.dataset[prefix + "Border"],
+    };
+    Object.keys(vars).forEach(function (name) {
+      var value = vars[name] || "";
+      if (hexRe.test(value)) { content.style.setProperty(name, value); }
+    });
+    previewBtns.forEach(function (btn) {
+      btn.setAttribute(
+        "aria-pressed",
+        btn.getAttribute("data-preview-theme") === theme ? "true" : "false"
+      );
+    });
+  }
+  previewBtns.forEach(function (btn) {
+    btn.addEventListener("click", function () {
+      applyPreview(btn.getAttribute("data-preview-theme"));
+    });
+  });
+  if (content && previewBtns.length > 0) {
+    var pressed = previewBtns.filter(function (btn) {
+      return btn.getAttribute("aria-pressed") === "true";
+    })[0];
+    applyPreview(
+      pressed ? pressed.getAttribute("data-preview-theme") : "dark"
+    );
+  }
+
   /* Sidebar search: filter the nav items by label; the Files row stays. */
   var search = document.getElementById("ds-nav-search");
   if (search) {

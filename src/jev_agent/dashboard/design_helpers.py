@@ -516,6 +516,79 @@ def _motion_rows(rich: dict[str, object]) -> tuple[list[dict[str, str]], list[di
     return durations, easings
 
 
+def _type_specimens(
+    styles: list[dict[str, str]],
+) -> list[dict[str, str]]:
+    """Three type specimens — largest display, headline, body (issue #287).
+
+    The full scale rendered ~12 "Aa — The quick brown fox" rows and the
+    display sizes wrapped to 2-3 lines in the narrow content column. The
+    full scale stays in the copied JSON; the page shows three, big. The
+    display size is capped at 52px so the pangram fits on one line at
+    desktop widths.
+    """
+    picked: list[dict[str, str]] = []
+    for prefix in ("display_", "headline_", "body_"):
+        group = [style for style in styles if style["name"].startswith(prefix)]
+        if not group:
+            continue
+        best = max(group, key=lambda style: float(style["size"]))
+        row = dict(best)
+        row["size"] = str(min(float(best["size"]), 52))
+        picked.append(row)
+    return picked
+
+
+def _overview_palette(flat_light: dict[str, str]) -> list[dict[str, str]]:
+    """Up to 8 signature colors for the Overview palette strip (issue #287).
+
+    Brand + surface roles first, in a fixed order; anything else fills the
+    strip alphabetically. Names are the flat (unprefixed) token names.
+    """
+    picked: list[dict[str, str]] = []
+    for name in (
+        "primary",
+        "primary_hover",
+        "accent_500",
+        "background",
+        "surface",
+        "text",
+        "success",
+        "warning",
+        "danger",
+        "info",
+    ):
+        hex_value = _hex_case(flat_light.get(name))
+        if hex_value is not None:
+            picked.append({"name": name, "hex": hex_value})
+        if len(picked) == 8:
+            return picked
+    for name in sorted(flat_light):
+        if len(picked) == 8:
+            break
+        if name in {row["name"] for row in picked}:
+            continue
+        hex_value = _hex_case(flat_light.get(name))
+        if hex_value is not None:
+            picked.append({"name": name, "hex": hex_value})
+    return picked
+
+
+def _preview_palette(flat: dict[str, str], fallback: dict[str, str]) -> dict[str, str]:
+    """(background, surface, text, muted, border) for a preview theme.
+
+    `flat` is one mode's flat color dict (unprefixed names); a missing role
+    falls back to that theme's defaults, never to the other mode's colors.
+    """
+    return {
+        "background": _hex_color(flat.get("background")) or fallback["background"],
+        "surface": _hex_color(flat.get("surface")) or fallback["surface"],
+        "text": _hex_color(flat.get("text")) or fallback["text"],
+        "muted": _hex_color(flat.get("text_muted")) or fallback["muted"],
+        "border": _hex_color(flat.get("border")) or fallback["border"],
+    }
+
+
 def _design_system_view(repo: views.Repo, name: str) -> dict[str, Any]:
     """One library system for the detail page: the single-page reference view.
 
@@ -548,6 +621,34 @@ def _design_system_view(repo: views.Repo, name: str) -> dict[str, Any]:
     primary = _hex_color(light_colors.get("primary")) or "#2563EB"
     background = _hex_color(light_colors.get("background")) or "#FFFFFF"
     text = _hex_color(light_colors.get("text")) or "#101418"
+    theme = str(meta.get("theme") or rich.get("theme") or "both")
+    # Issue #287: the light/dark preview toggle needs both modes' surfaces.
+    # Dark rows carry prefixed names for legacy flat tokens ("dark.primary"),
+    # so strip the prefix; rich rows are already unprefixed.
+    dark_flat = {row["name"].removeprefix("dark."): row["hex"] for row in colors["dark"]}
+    preview_light = _preview_palette(
+        light_colors,
+        {
+            "background": "#FFFFFF",
+            "surface": "#F7F7F8",
+            "text": "#101418",
+            "muted": "#5F5F58",
+            "border": "#E2E2DF",
+        },
+    )
+    preview_dark = _preview_palette(
+        dark_flat,
+        {
+            "background": "#10100F",
+            "surface": "#1B1A18",
+            "text": "#EEEEEC",
+            "muted": "#9D9D95",
+            "border": "#282825",
+        },
+    )
+    # The preview defaults to the system as it actually looks: a light or
+    # both-theme system opens light, a dark-only system opens dark.
+    preview_theme = "light" if theme in ("light", "both") else "dark"
     system_path = library_system_path(name)
     files = (
         sorted(entry.name for entry in system_path.iterdir() if entry.is_file())
@@ -582,7 +683,12 @@ def _design_system_view(repo: views.Repo, name: str) -> dict[str, Any]:
         "business": _business_dict(context),
         "vibe_name": vibe.name if vibe is not None else str(rich.get("vibe_name") or "-"),
         "vibe_tagline": str(rich.get("vibe_tagline") or ""),
-        "theme": str(meta.get("theme") or rich.get("theme") or "both"),
+        "theme": theme,
+        "preview_theme": preview_theme,
+        "preview_light": preview_light,
+        "preview_dark": preview_dark,
+        "overview_palette": _overview_palette(light_colors),
+        "type_specimens": _type_specimens(type_styles),
         "colors_light": colors["light"],
         "colors_dark": colors["dark"],
         "colors_json": json.dumps(
