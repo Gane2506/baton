@@ -29,10 +29,18 @@ from jev_agent.app.design_reverse import extract_with_designer
 from jev_agent.app.errors import JevError
 from jev_agent.cli.repo import RepoOption
 from jev_agent.cli.wiring import NO_WORKERS_MESSAGE, cli_context, fail, repo_context
+from jev_agent.core.design_brief import (
+    brief_fingerprint,
+    compile_brief,
+)
+from jev_agent.core.design_business import BusinessContext
+from jev_agent.core.design_codegen import motion_files
+from jev_agent.core.design_gates import contrast_gate
 from jev_agent.core.design_kit import (
     APP_TYPES,
     STACKS,
     design_system_markdown,
+    palette_for_vibe,
     tokens_for_app_type,
 )
 from jev_agent.core.design_library import (
@@ -48,6 +56,7 @@ from jev_agent.core.design_library import (
     save_library_system,
     validate_library_name,
 )
+from jev_agent.core.design_pipeline import brief_meta, generate_briefed_system
 from jev_agent.core.design_reverse import (
     evidence_to_brief,
     fetch_url_evidence,
@@ -55,7 +64,8 @@ from jev_agent.core.design_reverse import (
     palette_from_png,
     suggest_library_name,
 )
-from jev_agent.core.design_skills import generate_unique_system, new_seed
+from jev_agent.core.design_showcase import rich_tokens, vibe_for_keywords
+from jev_agent.core.design_skills import rich_tokens_for_seeded
 from jev_agent.core.design_system import (
     META_JSON,
     STARTER_MARKDOWN,
@@ -321,36 +331,65 @@ def new() -> None:
     vibe = Prompt.ask("Vibe keywords (free text, optional)", default="", console=console).strip()
     theme = Prompt.ask("Theme", choices=["light", "dark", "both"], default="both", console=console)
 
-    # Seeded generation (issue #299): a fresh random seed per system, so the
-    # same vibe keywords produce a different palette, type pairing, layout,
-    # motion, and components every time — and the fingerprint check re-rolls
-    # when the draw collides with an existing library system. The seed and
-    # chosen skill keys are stored in meta.json for reproducibility.
-    seeded, _attempts = generate_unique_system(
-        new_seed(),
-        existing_fingerprints=set(library_fingerprints().values()),
-        keywords=vibe,
-        app_type=app_type,
-    )
-    palette = seeded.palette
-    tokens = tokens_for_app_type(
-        app_type,
-        palette,
-        theme,
-        layout=seeded.layout,
-        pairing=seeded.type_pairing,
-        motion=seeded.motion,
-    )
-    markdown = design_system_markdown(
-        name,
-        app_type,
-        stack,
-        palette,
-        theme,
-        components=list(seeded.components.components),
-        choices=seeded.choices,
-        pairing=seeded.type_pairing,
-    )
+    # The same brief -> generation -> gates pipeline as the dashboard
+    # (issue #301): the CLI wizard asks no business questions, so the brief
+    # compiles from an empty business context + the vibe keywords, and the
+    # seeded generator honours the brief's choices. The seed and chosen
+    # skill keys are stored in meta.json for reproducibility.
+    brief = compile_brief(BusinessContext(), vibe, app_type)
+    vibe_profile = vibe_for_keywords(vibe)
+    seeded = None
+    gates: dict[str, object]
+    legacy_palette: dict[str, str] | None = None
+    try:
+        seeded, gates = generate_briefed_system(
+            brief,
+            existing_fingerprints=set(library_fingerprints().values()),
+            system_name=name,
+        )
+    except Exception as exc:  # the seeded path is unavailable: legacy fallback
+        legacy_palette = palette_for_vibe(vibe)
+        violations = contrast_gate(legacy_palette, "both")
+        gates = {
+            "passed": not violations,
+            "attempts": 0,
+            "violations": violations,
+            "fallback": "legacy-palette",
+            "fallback_reason": str(exc),
+        }
+    if seeded is not None:
+        palette = seeded.palette
+        tokens = tokens_for_app_type(
+            app_type,
+            palette,
+            theme,
+            layout=seeded.layout,
+            pairing=seeded.type_pairing,
+            motion=seeded.motion,
+        )
+        tokens["design_tokens"] = rich_tokens_for_seeded(vibe_profile, seeded, theme)
+        markdown = design_system_markdown(
+            name,
+            app_type,
+            stack,
+            palette,
+            theme,
+            components=list(seeded.components.components),
+            choices=seeded.choices,
+            pairing=seeded.type_pairing,
+        )
+        design_seed = seeded.seed
+        design_fingerprint = seeded.fingerprint
+        design_choices: dict[str, str] = dict(seeded.choices)
+    else:
+        assert legacy_palette is not None  # set in the except branch above
+        palette = legacy_palette
+        tokens = tokens_for_app_type(app_type, palette, theme)
+        tokens["design_tokens"] = rich_tokens(vibe_profile, theme)
+        markdown = design_system_markdown(name, app_type, stack, palette, theme)
+        design_seed = brief.seed
+        design_fingerprint = brief_fingerprint(brief)
+        design_choices = {}
     seed = f"{name}:{product}"
     template = mark_template(seed)
     meta_extra: dict[str, object] = {
@@ -360,15 +399,25 @@ def new() -> None:
         "source": "wizard",
         "product_name": product,
         "theme": theme,
+        "vibe": vibe,
+        "vibe_profile": vibe_profile.key,
         "logo_template": template,
-        "design_seed": seeded.seed,
-        "design_fingerprint": seeded.fingerprint,
-        "design_choices": seeded.choices,
+        "design_seed": design_seed,
+        "design_fingerprint": design_fingerprint,
+        "design_choices": design_choices,
+        "design_brief": brief_meta(brief),
+        "quality_gates": gates,
+        "scene_type": brief.scene,
     }
     version = save_library_system(name, markdown, tokens, meta_extra=meta_extra)
 
     mark = generate_mark(seed, palette)
     system_path = library_system_path(name)
+    # Motion & 3D (issue #302): every new system ships the real GSAP
+    # timeline (`motion.js`) and the Three.js scene (`scene.js`).
+    motion = motion_files(name, tokens, scene_type=brief.scene)
+    for filename, content in motion.items():
+        (system_path / filename).write_text(content, encoding="utf-8")
     assets: dict[str, bytes] = {
         "logo.svg": mark_to_svg(mark, 512).encode("utf-8"),
         "favicon.svg": mark_to_svg(mark, 64).encode("utf-8"),
@@ -381,7 +430,7 @@ def new() -> None:
     for filename, data in assets.items():
         (system_path / filename).write_bytes(data)
 
-    created = ["design-system.md", "tokens.json", "meta.json", *assets]
+    created = ["design-system.md", "tokens.json", "meta.json", *motion, *assets]
     console.print()
     console.print(f'[bold]"{escape(name)}" saved to the design library[/bold] (v{version}):')
     console.print(f"  {system_path}", markup=False)
@@ -392,10 +441,20 @@ def new() -> None:
     )
     console.print(
         "Design choices: "
-        + " · ".join(f"{key}={value}" for key, value in seeded.choices.items() if key != "primary")
-        + f" · primary={seeded.palette['primary']}",
+        + " · ".join(f"{key}={value}" for key, value in design_choices.items() if key != "primary")
+        + f" · primary={palette['primary']}",
         markup=False,
     )
+    if gates.get("fallback"):
+        console.print(
+            "[yellow]Quality gates did not pass; the legacy palette was used "
+            "instead (see quality_gates in meta.json).[/yellow]"
+        )
+    else:
+        console.print(
+            f"Quality gates passed in {gates.get('attempts')} attempt(s) · scene: {brief.scene}",
+            markup=False,
+        )
 
 
 # ---- the user-level library (~/.jev/design-systems) ------------------------------------------

@@ -1153,25 +1153,17 @@ def _validate_force(force: Mapping[str, object] | None) -> dict[str, object]:
         "motion_profile": tuple(profile.key for profile in MOTION_PROFILES),
         "layout_pattern": tuple(
             dict.fromkeys(
-                variant.key
-                for variants in COMPONENT_VARIANTS.values()
-                for variant in variants
+                variant.key for variants in COMPONENT_VARIANTS.values() for variant in variants
             )
         ),
     }
     for key, allowed in _catalogs.items():
         value = force.get(key)
         if value is not None and (not isinstance(value, str) or value not in allowed):
-            raise ValueError(
-                f"forced {key} must be one of {', '.join(allowed)}, got {value!r}"
-            )
+            raise ValueError(f"forced {key} must be one of {', '.join(allowed)}, got {value!r}")
     motion = force.get("motion")
     motion_profile = force.get("motion_profile")
-    if (
-        motion is not None
-        and motion_profile is not None
-        and motion != motion_profile
-    ):
+    if motion is not None and motion_profile is not None and motion != motion_profile:
         raise ValueError(
             f"forced motion {motion!r} disagrees with motion_profile {motion_profile!r}"
         )
@@ -1229,11 +1221,7 @@ def generate_seeded_system(
     )
     by_motion = {profile.key: profile for profile in MOTION_PROFILES}
     motion_key = forced.get("motion_profile") or forced.get("motion")
-    motion = (
-        by_motion[str(motion_key)]
-        if motion_key is not None
-        else rng.choice(MOTION_PROFILES)
-    )
+    motion = by_motion[str(motion_key)] if motion_key is not None else rng.choice(MOTION_PROFILES)
     variants = COMPONENT_VARIANTS.get(app_type, COMPONENT_VARIANTS["website"])
     by_variant = {variant.key: variant for variant in variants}
     pattern = forced.get("layout_pattern")

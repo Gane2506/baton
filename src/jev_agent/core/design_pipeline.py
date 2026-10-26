@@ -31,6 +31,8 @@ Pure functions, stdlib-only, like `design_kit.py`.
 
 from __future__ import annotations
 
+from typing import cast
+
 from jev_agent.core.design_brief import DesignBrief, brief_fingerprint
 from jev_agent.core.design_gates import (
     MAX_GATE_ATTEMPTS,
@@ -125,7 +127,7 @@ def gate_violations_for(
     )
     if is_generic(score):
         violations.extend(f"generic design: {flag}" for flag in flags)
-    spec = build_motion_spec(seeded.motion.tokens)
+    spec = build_motion_spec(cast("dict[str, object]", seeded.motion.tokens))
     motion_js = build_motion_js(spec, system_name=system_name)
     scene_js = build_scene_js(brief.scene, palette=seeded.palette, system_name=system_name)
     violations.extend(

@@ -17,7 +17,8 @@
  * data-font-family (letters, digits, spaces, quotes, commas, hyphens only),
  * data-pattern (dots/grid/stripes, drawn from data-pattern-color on
  * data-pattern-bg) — the Design Studio system page's live token renderings
- * (issue #285).
+ * (issue #285) — and data-slider-output (the <output> id an axis slider
+ * updates live, Design Studio direction step, issue #301).
  */
 (function () {
   "use strict";
@@ -115,5 +116,20 @@
     } else {
       el.style.backgroundImage = "repeating-linear-gradient(45deg, " + fg + " 0 6px, transparent 6px 14px)";
     }
+  });
+
+  /* Design Studio direction step (issue #301): an axis slider's paired
+     <output> shows the 0..1 value live. The slider posts 0..100; the
+     output divides by 100, so the number on screen is the value the
+     brief stores. */
+  document.querySelectorAll("[data-slider-output]").forEach(function (el) {
+    var out = document.getElementById(el.getAttribute("data-slider-output"));
+    if (!out) { return; }
+    var update = function () {
+      var value = parseFloat(el.value) / 100;
+      out.textContent = isFinite(value) ? value.toFixed(2) : "0.00";
+    };
+    el.addEventListener("input", update);
+    update();
   });
 })();

@@ -33,6 +33,7 @@ import math
 import random
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from typing import cast
 
 from jev_agent.core.design_business import (
     AXIS_KEYS,
@@ -543,7 +544,9 @@ def compile_brief(
     # the caller replaced it outright (the direction step's edited list).
     avoid: tuple[str, ...] = BASE_AVOID + language.avoid
     if "avoid" in clean_overrides:
-        avoid = tuple(str(item) for item in clean_overrides["avoid"])  # type: ignore[arg-type]
+        avoid = tuple(
+            str(item) for item in cast("list[str] | tuple[str, ...]", clean_overrides["avoid"])
+        )
 
     return DesignBrief(
         business_context=business_context,

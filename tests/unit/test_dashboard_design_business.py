@@ -106,7 +106,7 @@ def _library_meta(home: Path, name: str = "acme-brand") -> dict[str, object]:
 
 
 def _wizard_to_generate(client: TestClient, **overrides: str) -> None:
-    """Drive the full wizard: Purpose -> Business -> App type -> Stack -> Brand."""
+    """Drive the full wizard: Purpose -> Business -> App type -> Stack -> Brand -> Direction."""
     defaults = {
         "product": "Acme Analytics",
         "industry": "Restaurant",
@@ -140,14 +140,24 @@ def _wizard_to_generate(client: TestClient, **overrides: str) -> None:
             "theme": defaults["theme"],
         },
     )
+    assert response.request.url.path == "/design-studio/new/direction"
+    response = _post(client, "/design-studio/new/direction", {})
     assert response.request.url.path == "/design-studio/new/generate"
 
 
 # ---- wizard business step ------------------------------------------------------------
 
 
-def test_step_order_is_purpose_business_app_type_stack_brand_generate() -> None:
-    assert STUDIO_STEPS == ("purpose", "business", "app_type", "stack", "brand", "generate")
+def test_step_order_is_purpose_business_app_type_stack_brand_direction_generate() -> None:
+    assert STUDIO_STEPS == (
+        "purpose",
+        "business",
+        "app_type",
+        "stack",
+        "brand",
+        "direction",
+        "generate",
+    )
     assert first_incomplete_step({}) == "purpose"
     assert first_incomplete_step({"purpose": {"product": "Acme"}}) == "business"
 
@@ -200,7 +210,7 @@ def test_wizard_business_page_renders_and_empty_post_advances(
     _post(client, "/design-studio/new/purpose", {"product": "Acme"})
     page = client.get("/design-studio/new/business")
     assert page.status_code == 200
-    assert "six guided questions" in page.text
+    assert "seven guided questions" in page.text
     assert "Optional — skip what doesn't apply" in page.text
     for field in ("industry", "audience", "tone", "offering", "description"):
         assert f'name="{field}"' in page.text
@@ -223,6 +233,7 @@ def test_wizard_generate_summary_shows_business(client: TestClient, home: Path) 
         "/design-studio/new/brand",
         {"name": "acme-brand", "vibe": "warm", "theme": "both"},
     )
+    _post(client, "/design-studio/new/direction", {})
     page = client.get("/design-studio/new/generate")
     assert page.status_code == 200
     assert "Restaurant" in page.text
