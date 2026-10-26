@@ -193,6 +193,82 @@ def test_studio_landing_has_two_entry_cards(client: TestClient, home: Path) -> N
     assert "white-space: normal" in css
 
 
+# ---- the landing library previews (issue #281) -------------------------------------------
+
+
+def _seed_preview_system(home: Path) -> None:
+    """One library system with known tokens, for the landing previews."""
+    save_library_system(
+        "acme",
+        "# Acme\n",
+        {
+            "colors": {
+                "primary": "#2563eb",
+                "primary_hover": "#1d4ed8",
+                "background": "#ffffff",
+                "text": "#101418",
+                "success": "#16a34a",
+            },
+            "type_scale": {"base": 16, "xl": 24},
+        },
+        meta_extra={
+            "app_type": "dashboard",
+            "stack": "Web + Tailwind",
+            "vibe_profile": "minimal",
+        },
+    )
+
+
+def test_studio_landing_shows_library_previews(client: TestClient, home: Path) -> None:
+    _seed_preview_system(home)
+    page = client.get("/design-studio")
+    assert page.status_code == 200
+    assert "From your library" in page.text
+    assert "studio-preview" in page.text
+    assert "acme" in page.text
+    # The preview wears the system's own tokens — carried in data attributes,
+    # never inline style: the dashboard CSP drops inline styles silently
+    # (issue #200), so data-attrs.js applies them instead.
+    assert 'data-bg-color="#2563EB"' in page.text
+    assert 'data-fg-color="#2563EB"' in page.text
+    assert 'data-bg-color="#FFFFFF"' in page.text
+    assert 'data-swatch-color="#16A34A"' in page.text
+    assert 'style="background:' not in page.text
+    assert 'style="color:' not in page.text
+    # The minimal vibe's tagline, from the showcase's own profiles.
+    assert "Less, but better." in page.text
+    assert "/design-systems/acme/showcase" in page.text
+    assert "/design-systems/acme/code" in page.text
+
+
+def test_studio_landing_empty_library(client: TestClient, home: Path) -> None:
+    page = client.get("/design-studio")
+    assert page.status_code == 200
+    assert "No systems in the library yet." in page.text
+    assert 'studio-preview"' not in page.text
+
+
+def test_studio_landing_skips_invalid_colors(client: TestClient, home: Path) -> None:
+    # A garbage color value (or a nested dict) must never reach an inline style:
+    # the preview falls back to the default palette instead (the #279 lesson).
+    save_library_system(
+        "broken",
+        "# Broken\n",
+        {
+            "colors": {
+                "primary": "not-a-color",
+                "background": {"light": "#FFFFFF"},
+            },
+        },
+        meta_extra={"app_type": "dashboard", "stack": "Web + Tailwind"},
+    )
+    page = client.get("/design-studio")
+    assert page.status_code == 200
+    assert "not-a-color" not in page.text
+    assert "{'light'" not in page.text
+    assert "#2563EB" in page.text  # the fallback primary
+
+
 # ---- the wizard steps --------------------------------------------------------------------
 
 
@@ -211,6 +287,20 @@ def test_start_redirects_to_purpose(client: TestClient, home: Path) -> None:
         client.post("/design-studio/new", data={}, follow_redirects=False),  # no CSRF token
     )
     assert response.status_code == 403
+
+
+def test_get_new_never_clears_wizard_state(client: TestClient, home: Path) -> None:
+    # The 303 on GET /design-studio/new is the by-design redirect to Purpose
+    # (issue #281): a stray prefetch must never wipe an in-progress wizard.
+    _post(client, "/design-studio/new")
+    _post(client, "/design-studio/new/purpose", {"product": "Acme Analytics"})
+    response = cast(httpx.Response, client.get("/design-studio/new", follow_redirects=False))
+    assert response.status_code in (302, 303)
+    assert response.headers["location"] == "/design-studio/new/purpose"
+    # The visitor is still on App type: the Purpose answer survived the GET.
+    page = client.get("/design-studio/new/app_type")
+    assert page.status_code == 200
+    assert "What kind of product is it?" in page.text
 
 
 def test_unknown_step_404s(client: TestClient, home: Path) -> None:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -11,12 +12,14 @@ from starlette.datastructures import FormData
 from jev_agent.app.errors import JevError
 from jev_agent.core.design_codegen import CODEGEN_TARGETS, component_catalog, generate_files
 from jev_agent.core.design_library import (
+    _flat_colors,
     library_system_path,
     list_library,
     load_library_system,
     save_library_system,
     validate_library_name,
 )
+from jev_agent.core.design_showcase import VIBE_PROFILES
 from jev_agent.core.design_system import META_JSON, design_dir, save_design_system
 from jev_agent.core.store import NotFoundError
 from jev_agent.dashboard import views
@@ -73,6 +76,93 @@ def _design_systems_view(repo: views.Repo, query: str = "") -> dict[str, Any]:
                 "version": meta.get("version", "-"),
                 "updated": meta.get("updated_at", "-"),
                 "active": active == f"library:{name}",
+            }
+        )
+    return {"systems": systems}
+
+
+_HEX_COLOR_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
+
+# Palette roles shown on a landing preview, in order: the brand colors first,
+# then the semantic roles. A system with only a couple of colors still shows a
+# strip; roles with no (valid) value are skipped, never rendered as text.
+_PREVIEW_SWATCH_ROLES = (
+    "primary",
+    "primary_hover",
+    "accent_500",
+    "accent_300",
+    "success",
+    "warning",
+    "danger",
+    "info",
+)
+
+
+def _hex_color(value: object) -> str | None:
+    """A token value that is safe to inline as a CSS color, or None.
+
+    Only 6-digit hex passes: anything else (a dict repr, a name, an `rgb()`
+    string, a length) would either render nothing or break the declaration,
+    so it is skipped instead of inlined (the #279 dict-repr lesson).
+    """
+    if isinstance(value, str):
+        text = value.strip()
+        if _HEX_COLOR_RE.match(text):
+            return text.upper()
+    return None
+
+
+def _on_hex(hex_color: str) -> str:
+    """Readable text on a hex background: white on dark, near-black on light."""
+    red = int(hex_color[1:3], 16)
+    green = int(hex_color[3:5], 16)
+    blue = int(hex_color[5:7], 16)
+    luminance = (0.2126 * red + 0.7152 * green + 0.0722 * blue) / 255
+    return "#FFFFFF" if luminance < 0.5 else "#101418"
+
+
+def _studio_landing_view() -> dict[str, Any]:
+    """The studio landing's library previews: one miniature per system.
+
+    Each preview carries the system's own palette (validated hex only), its
+    primary/background/text colors, and its vibe tagline, so the template can
+    render what a system looks like — palette strip, a big "Aa" in the
+    primary, a button in the primary — before the visitor clicks in. A
+    corrupt or unreadable system is skipped, never a 500; a system with no
+    usable colors still renders, on the fallback palette.
+    """
+    systems = []
+    for name in list_library():
+        system = load_library_system(name)
+        if system is None:
+            continue
+        meta = _library_meta(name)
+        tokens = system.tokens if isinstance(system.tokens, dict) else {}
+        light, _dark = _flat_colors(tokens)
+        swatches: list[str] = []
+        for role in _PREVIEW_SWATCH_ROLES:
+            hex_value = _hex_color(light.get(role))
+            if hex_value is not None and hex_value not in swatches:
+                swatches.append(hex_value)
+        primary = _hex_color(light.get("primary")) or (swatches[0] if swatches else "#2563EB")
+        background = _hex_color(light.get("background")) or "#FFFFFF"
+        text = _hex_color(light.get("text")) or "#101418"
+        vibe_key = meta.get("vibe_profile")
+        vibe = VIBE_PROFILES.get(vibe_key) if isinstance(vibe_key, str) else None
+        tagline = vibe.tagline if vibe is not None else ""
+        systems.append(
+            {
+                "name": name,
+                "app_type": _meta_text(meta, "app_type"),
+                "stack": _meta_text(meta, "stack"),
+                "version": system.version,
+                "updated": system.updated_at,
+                "swatches": swatches[:6],
+                "primary": primary,
+                "on_primary": _on_hex(primary),
+                "background": background,
+                "text": text,
+                "tagline": tagline,
             }
         )
     return {"systems": systems}

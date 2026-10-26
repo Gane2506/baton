@@ -42,4 +42,46 @@
 <p class="hint">Systems the studio creates land in the design library
 (<code>~/.jev/design-systems/</code>) — adopt one for this repo from the
 <a href="/design-systems">Design systems</a> page.</p>
+
+{% if systems %}
+<section class="studio-library" aria-label="Design systems in your library">
+  <div class="studio-library-head">
+    <h2>From your library</h2>
+    <p class="lede">What a system looks like — palette, type and a button, straight
+    from its own tokens. Open one to see the full showcase.</p>
+  </div>
+  <div class="studio-previews">
+    {% for s in systems %}
+    <article class="studio-preview">
+      <a class="studio-preview-visual" href="/design-systems/{{ s.name | urlencode }}/showcase"
+         data-bg-color="{{ s.background }}" data-fg-color="{{ s.text }}"
+         aria-label="{{ s.name }} showcase">
+        <span class="studio-preview-aa" data-fg-color="{{ s.primary }}" aria-hidden="true">Aa</span>
+        {% if s.tagline %}<span class="studio-preview-tagline">{{ s.tagline }}</span>{% endif %}
+        <span class="studio-preview-btn" data-bg-color="{{ s.primary }}" data-fg-color="{{ s.on_primary }}">Explore</span>
+        {% if s.swatches %}
+        <span class="studio-preview-swatches" aria-hidden="true">
+          {% for hex in s.swatches %}<span class="studio-preview-swatch" data-swatch-color="{{ hex }}" title="{{ hex }}"></span>{% endfor %}
+        </span>
+        {% endif %}
+      </a>
+      <div class="studio-preview-body">
+        <h3><a href="/design-systems/{{ s.name | urlencode }}">{{ s.name }}</a></h3>
+        <p class="studio-preview-meta">{{ s.app_type | capitalize }} · {{ s.stack }} · v{{ s.version }}</p>
+        <p class="studio-preview-links">
+          <a href="/design-systems/{{ s.name | urlencode }}/showcase">Showcase</a>
+          <a href="/design-systems/{{ s.name | urlencode }}/code">Code</a>
+        </p>
+      </div>
+    </article>
+    {% endfor %}
+  </div>
+</section>
+{% else %}
+<div class="studio-library-empty">
+  <p><strong>No systems in the library yet.</strong> Start the wizard above, or
+  reverse one from a website — your first system will show up here with its
+  palette and type.</p>
+</div>
+{% endif %}
 {% endblock %}
