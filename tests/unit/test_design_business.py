@@ -470,3 +470,30 @@ def test_render_showcase_business_line() -> None:
     )
     assert "<script>alert(1)</script>" not in evil
     assert "Built for &lt;script&gt;" in evil
+
+
+# ---- industry languages (issue #300) ---------------------------------------------
+
+# The keyword profiles above say *which* elements a business needs; the
+# languages say *how the system should look*. One language per profile,
+# keyed the same, so `match_profile` and the brief compiler agree.
+
+
+def test_industry_languages_cover_every_profile() -> None:
+    from jev_agent.core.design_business import AXIS_KEYS, INDUSTRY_LANGUAGES
+
+    assert set(INDUSTRY_LANGUAGES) == set(PROFILES)
+    for key, language in INDUSTRY_LANGUAGES.items():
+        assert language.key == key
+        assert set(language.axes) == set(AXIS_KEYS)
+        assert all(0.0 <= value <= 1.0 for value in language.axes.values())
+        low, high = language.hue_range
+        assert 0.0 <= low < high <= 360.0
+
+
+def test_industry_languages_have_distinct_scenes() -> None:
+    from jev_agent.core.design_business import INDUSTRY_LANGUAGES, SCENE_TYPES
+
+    scenes = [language.scene for language in INDUSTRY_LANGUAGES.values()]
+    assert len(set(scenes)) == len(scenes) == 7
+    assert set(scenes) == set(SCENE_TYPES)

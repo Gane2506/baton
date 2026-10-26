@@ -20,6 +20,7 @@ elements are proposed.
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
+from dataclasses import dataclass
 
 from pydantic import BaseModel
 
@@ -674,6 +675,304 @@ _PROFILES: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
 _PROFILE_ELEMENTS: dict[str, tuple[str, ...]] = {
     key: elements for key, _keywords, elements in _PROFILES
 }
+
+
+# ---------------------------------------------------------------------------
+# Industry design languages (issue #300)
+# ---------------------------------------------------------------------------
+# The 7 keyword profiles above say *which* elements a business needs. A
+# language says *how the system should look and feel*: continuous design
+# axes (report §10.4 — compile a brief into numbers, then tokens), the
+# anchor-hue range the palette is built from, and ordered pools of the
+# skills module's choices (`design_skills.COLOR_STRATEGIES` /
+# `TYPE_PAIRINGS` / `LAYOUT_PROFILES` / `MOTION_PROFILES` — the pools hold
+# the same keys, as plain strings, so this module never imports that
+# module). The first entry of each pool is the language's preferred pick;
+# the compiler weights earlier entries higher.
+#
+# The 7 axes (each 0.0-1.0): warmth (cool->warm), contrast (quiet->bold),
+# density (airy->dense), geometry (organic/rounded->sharp/geometric),
+# formality (casual->formal), motion (still->lively), type_personality
+# (neutral→expressive). The presets are spaced so every pair of languages
+# differs by >= 0.15 on at least 3 axes (pinned by test_design_brief.py).
+
+AXIS_KEYS: tuple[str, ...] = (
+    "warmth",
+    "contrast",
+    "density",
+    "geometry",
+    "formality",
+    "motion",
+    "type_personality",
+)
+
+# The 3D scene type per industry — exactly one of these per language.
+SCENE_TYPES: tuple[str, ...] = (
+    "warm-ambient",
+    "data-geometry",
+    "product-orbit",
+    "storefront",
+    "calm-growth",
+    "campus",
+    "journey",
+)
+
+
+@dataclass(frozen=True)
+class IndustryLanguage:
+    """A full design language for one industry.
+
+    `axes` maps every `AXIS_KEYS` entry to its preset. `hue_range` is the
+    anchor-hue window in degrees. `harmonies`, `type_pairings`, `layouts`
+    and `motions` are ordered preference pools of the skills module's keys.
+    `scene` is the 3D scene type, `focal_point` names the screen's dominant
+    element, and `avoid` adds to the compiler's base avoid-list.
+    """
+
+    key: str
+    name: str
+    axes: dict[str, float]
+    hue_range: tuple[float, float]
+    harmonies: tuple[str, ...]
+    type_pairings: tuple[str, ...]
+    layouts: tuple[str, ...]
+    motions: tuple[str, ...]
+    scene: str
+    focal_point: str
+    avoid: tuple[str, ...] = ()
+
+
+def _language(
+    key: str,
+    name: str,
+    axes: tuple[float, float, float, float, float, float, float],
+    hue_range: tuple[float, float],
+    harmonies: tuple[str, ...],
+    type_pairings: tuple[str, ...],
+    layouts: tuple[str, ...],
+    motions: tuple[str, ...],
+    scene: str,
+    focal_point: str,
+    avoid: tuple[str, ...] = (),
+) -> IndustryLanguage:
+    return IndustryLanguage(
+        key=key,
+        name=name,
+        axes=dict(zip(AXIS_KEYS, axes, strict=True)),
+        hue_range=hue_range,
+        harmonies=harmonies,
+        type_pairings=type_pairings,
+        layouts=layouts,
+        motions=motions,
+        scene=scene,
+        focal_point=focal_point,
+        avoid=avoid,
+    )
+
+
+INDUSTRY_LANGUAGES: dict[str, IndustryLanguage] = {
+    "fintech": _language(
+        "fintech",
+        "Fintech",
+        (0.25, 0.80, 0.85, 0.80, 0.90, 0.25, 0.20),
+        (205.0, 230.0),
+        (
+            "monochromatic",
+            "analogous",
+            "split-complementary",
+            "complementary",
+            "triadic",
+            "hue-shift",
+        ),
+        ("space-grotesk-plex", "archivo-inter", "merriweather-source", "sora-manrope"),
+        ("dense-square", "compact-sharp", "tight-crisp", "balanced-soft"),
+        ("snappy", "brisk", "smooth", "gentle"),
+        "data-geometry",
+        "portfolio total",
+        (
+            "no playful rounded cards for money data",
+            "no green/red alone for gain/loss — always pair with a label",
+        ),
+    ),
+    "restaurant": _language(
+        "restaurant",
+        "Restaurant",
+        (0.90, 0.55, 0.45, 0.25, 0.30, 0.55, 0.85),
+        (5.0, 35.0),
+        (
+            "analogous",
+            "split-complementary",
+            "complementary",
+            "monochromatic",
+            "triadic",
+            "hue-shift",
+        ),
+        ("fraunces-newsreader", "dm-serif-dm-sans", "playfair-lato", "libre-opensans"),
+        ("airy-rounded", "roomy-pill", "balanced-soft", "tight-crisp"),
+        ("gentle", "smooth", "springy", "stately"),
+        "warm-ambient",
+        "signature dish",
+        (
+            "no cold blue-grey palette for food",
+            "no dense data tables on the menu page",
+        ),
+    ),
+    "saas": _language(
+        "saas",
+        "SaaS",
+        (0.35, 0.65, 0.60, 0.65, 0.60, 0.45, 0.35),
+        (225.0, 255.0),
+        (
+            "analogous",
+            "monochromatic",
+            "split-complementary",
+            "hue-shift",
+            "complementary",
+            "triadic",
+        ),
+        ("archivo-inter", "sora-manrope", "space-grotesk-plex", "merriweather-source"),
+        ("balanced-soft", "compact-sharp", "tight-crisp", "airy-rounded"),
+        ("smooth", "snappy", "gentle", "brisk"),
+        "product-orbit",
+        "core value proposition",
+        (
+            "no marketing-hero gradient wash",
+            "no feature list without a screenshot or example",
+        ),
+    ),
+    "ecommerce": _language(
+        "ecommerce",
+        "Ecommerce",
+        (0.50, 0.70, 0.65, 0.45, 0.40, 0.60, 0.55),
+        (300.0, 340.0),
+        (
+            "complementary",
+            "split-complementary",
+            "analogous",
+            "triadic",
+            "monochromatic",
+            "hue-shift",
+        ),
+        ("sora-manrope", "archivo-inter", "dm-serif-dm-sans", "bebas-roboto"),
+        ("roomy-pill", "balanced-soft", "airy-rounded", "compact-sharp"),
+        ("springy", "snappy", "smooth", "brisk"),
+        "storefront",
+        "featured product",
+        (
+            "no tiny product images",
+            "no checkout step without the running total visible",
+        ),
+    ),
+    "health": _language(
+        "health",
+        "Health",
+        (0.60, 0.50, 0.40, 0.30, 0.55, 0.35, 0.40),
+        (140.0, 170.0),
+        (
+            "analogous",
+            "monochromatic",
+            "split-complementary",
+            "hue-shift",
+            "complementary",
+            "triadic",
+        ),
+        ("dm-serif-dm-sans", "sora-manrope", "libre-opensans", "merriweather-source"),
+        ("airy-rounded", "balanced-soft", "roomy-pill", "tight-crisp"),
+        ("gentle", "smooth", "stately", "snappy"),
+        "calm-growth",
+        "weekly goal progress",
+        (
+            "no alarming red for routine status",
+            "no dense clinical tables for patients",
+        ),
+    ),
+    "education": _language(
+        "education",
+        "Education",
+        (0.40, 0.50, 0.60, 0.50, 0.75, 0.30, 0.60),
+        (45.0, 65.0),
+        (
+            "analogous",
+            "split-complementary",
+            "monochromatic",
+            "triadic",
+            "complementary",
+            "hue-shift",
+        ),
+        ("libre-opensans", "merriweather-source", "fraunces-newsreader", "dm-serif-dm-sans"),
+        ("balanced-soft", "airy-rounded", "roomy-pill", "compact-sharp"),
+        ("smooth", "gentle", "stately", "snappy"),
+        "campus",
+        "featured course",
+        (
+            "no walls of text without a progress marker",
+            "no playful cartoon illustration for adult learners",
+        ),
+    ),
+    "travel": _language(
+        "travel",
+        "Travel",
+        (0.70, 0.60, 0.35, 0.35, 0.35, 0.75, 0.60),
+        (185.0, 210.0),
+        (
+            "split-complementary",
+            "analogous",
+            "complementary",
+            "triadic",
+            "monochromatic",
+            "hue-shift",
+        ),
+        ("fraunces-newsreader", "playfair-lato", "sora-manrope", "bebas-roboto"),
+        ("airy-rounded", "roomy-pill", "balanced-soft", "tight-crisp"),
+        ("springy", "smooth", "gentle", "stately"),
+        "journey",
+        "featured destination",
+        (
+            "no generic stock-photo hero without a destination name",
+            "no booking form without the price visible",
+        ),
+    ),
+}
+
+# The language used when no profile matches: neutral axes, a wide hue
+# window, and the full skills pools (the seed still decides the picks).
+DEFAULT_LANGUAGE: IndustryLanguage = _language(
+    "default",
+    "Default",
+    (0.50, 0.60, 0.50, 0.50, 0.50, 0.40, 0.40),
+    (200.0, 260.0),
+    (
+        "analogous",
+        "monochromatic",
+        "split-complementary",
+        "complementary",
+        "triadic",
+        "hue-shift",
+    ),
+    (
+        "archivo-inter",
+        "fraunces-newsreader",
+        "space-grotesk-plex",
+        "playfair-lato",
+        "sora-manrope",
+        "dm-serif-dm-sans",
+        "nunito-quicksand",
+        "libre-opensans",
+        "bebas-roboto",
+        "merriweather-source",
+    ),
+    (
+        "compact-sharp",
+        "balanced-soft",
+        "airy-rounded",
+        "dense-square",
+        "roomy-pill",
+        "tight-crisp",
+    ),
+    ("snappy", "smooth", "springy", "stately", "gentle", "brisk"),
+    "warm-ambient",
+    "hero message",
+)
 
 
 def match_profile(context: BusinessContext) -> str | None:
