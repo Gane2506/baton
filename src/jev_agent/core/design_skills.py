@@ -32,6 +32,7 @@ from __future__ import annotations
 import colorsys
 import hashlib
 import random
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
@@ -1107,6 +1108,79 @@ def fingerprint_of(choices: dict[str, str]) -> str:
     return hashlib.sha256(axes.encode("utf-8")).hexdigest()
 
 
+# ---------------------------------------------------------------------------
+# Brief enforcement (issue #301)
+# ---------------------------------------------------------------------------
+# `generate_seeded_system` used to sample every axis freely from its
+# catalog, so a brief that had *decided* monochromatic + space-grotesk-plex
+# could still generate triadic + libre-opensans — the brief's picks were
+# recorded but not honored, which breaks the "spec first, never inferred"
+# thesis (research report §10). `force` pins the brief's named choices:
+# the same keys `design_brief.compile_brief` decides (harmony, type
+# pairing, layout, motion profile, layout pattern, anchor hue). Forced axes
+# skip their RNG draw; everything else is still sampled, so the same seed +
+# the same force reproduces identically.
+
+_FORCE_KEYS: frozenset[str] = frozenset(
+    (
+        "harmony",
+        "type_pairing",
+        "layout",
+        "motion",
+        "motion_profile",
+        "layout_pattern",
+        "anchor_hue",
+    )
+)
+
+
+def _validate_force(force: Mapping[str, object] | None) -> dict[str, object]:
+    """The forced choices, validated: unknown keys and values outside the
+    catalogs raise ValueError (fail fast — a brief that names a choice the
+    generator cannot honour is a bug, not a steer)."""
+    if force is None:
+        return {}
+    if not isinstance(force, Mapping):
+        raise ValueError(f"force must be a mapping of brief choices, got {force!r}")
+    unknown = sorted(set(force) - _FORCE_KEYS)
+    if unknown:
+        raise ValueError(f"unknown forced choice(s): {', '.join(unknown)}")
+    _catalogs: dict[str, tuple[str, ...]] = {
+        "harmony": tuple(strategy.key for strategy in COLOR_STRATEGIES),
+        "type_pairing": tuple(pairing.key for pairing in TYPE_PAIRINGS),
+        "layout": tuple(profile.key for profile in LAYOUT_PROFILES),
+        "motion": tuple(profile.key for profile in MOTION_PROFILES),
+        "motion_profile": tuple(profile.key for profile in MOTION_PROFILES),
+        "layout_pattern": tuple(
+            dict.fromkeys(
+                variant.key
+                for variants in COMPONENT_VARIANTS.values()
+                for variant in variants
+            )
+        ),
+    }
+    for key, allowed in _catalogs.items():
+        value = force.get(key)
+        if value is not None and (not isinstance(value, str) or value not in allowed):
+            raise ValueError(
+                f"forced {key} must be one of {', '.join(allowed)}, got {value!r}"
+            )
+    motion = force.get("motion")
+    motion_profile = force.get("motion_profile")
+    if (
+        motion is not None
+        and motion_profile is not None
+        and motion != motion_profile
+    ):
+        raise ValueError(
+            f"forced motion {motion!r} disagrees with motion_profile {motion_profile!r}"
+        )
+    anchor = force.get("anchor_hue")
+    if anchor is not None and (isinstance(anchor, bool) or not isinstance(anchor, (int, float))):
+        raise ValueError(f"forced anchor_hue must be a number, got {anchor!r}")
+    return dict(force)
+
+
 def new_seed() -> int:
     """A fresh per-system seed from the OS RNG (creation time, not input)."""
     return random.SystemRandom().getrandbits(63)
@@ -1117,24 +1191,61 @@ def generate_seeded_system(
     *,
     keywords: str = "",
     app_type: str = "website",
+    force: Mapping[str, object] | None = None,
 ) -> SeededSystem:
     """Generate one system's seeded choices, deterministically per seed.
 
     Same seed + same inputs -> identical output (reproducible). Different
     seed -> different palette, pairing, layout, motion, and components, even
     for identical keywords. Unknown app types fall back to the website
-    component variants.
+    component variants. `force` pins the brief's named choices (see
+    `_validate_force`): a forced axis is honoured exactly, the rest are
+    still sampled — same seed + same force -> identical output.
     """
+    forced = _validate_force(force)
     rng = random.Random(seed)
     anchor = steer_hue(keywords)
-    strategy = rng.choice(COLOR_STRATEGIES)
+    if forced.get("anchor_hue") is not None:
+        anchor = float(forced["anchor_hue"]) % 360.0  # type: ignore[arg-type]
+    by_strategy = {strategy.key: strategy for strategy in COLOR_STRATEGIES}
+    strategy = (
+        by_strategy[str(forced["harmony"])]
+        if forced.get("harmony") is not None
+        else rng.choice(COLOR_STRATEGIES)
+    )
     palette, hue, saturation, lightness = build_palette(strategy, rng, anchor)
     palette = _ensure_contrast(palette, hue)
-    pairing = rng.choice(_pairing_pool(keywords))
-    layout = rng.choice(LAYOUT_PROFILES)
-    motion = rng.choice(MOTION_PROFILES)
+    by_pairing = {pairing.key: pairing for pairing in TYPE_PAIRINGS}
+    pairing = (
+        by_pairing[str(forced["type_pairing"])]
+        if forced.get("type_pairing") is not None
+        else rng.choice(_pairing_pool(keywords))
+    )
+    by_layout = {profile.key: profile for profile in LAYOUT_PROFILES}
+    layout = (
+        by_layout[str(forced["layout"])]
+        if forced.get("layout") is not None
+        else rng.choice(LAYOUT_PROFILES)
+    )
+    by_motion = {profile.key: profile for profile in MOTION_PROFILES}
+    motion_key = forced.get("motion_profile") or forced.get("motion")
+    motion = (
+        by_motion[str(motion_key)]
+        if motion_key is not None
+        else rng.choice(MOTION_PROFILES)
+    )
     variants = COMPONENT_VARIANTS.get(app_type, COMPONENT_VARIANTS["website"])
-    components = rng.choice(variants)
+    by_variant = {variant.key: variant for variant in variants}
+    pattern = forced.get("layout_pattern")
+    if pattern is not None:
+        if str(pattern) not in by_variant:
+            raise ValueError(
+                f"forced layout_pattern {pattern!r} is not a {app_type} component "
+                f"variant (expected one of {', '.join(by_variant)})"
+            )
+        components = by_variant[str(pattern)]
+    else:
+        components = rng.choice(variants)
     return SeededSystem(
         seed=seed,
         app_type=app_type,
@@ -1158,6 +1269,7 @@ def generate_unique_system(
     keywords: str = "",
     app_type: str = "website",
     max_attempts: int = MAX_REROLLS,
+    force: Mapping[str, object] | None = None,
 ) -> tuple[SeededSystem, int]:
     """Generate a system whose fingerprint collides with nothing in the
     library, re-rolling the seed (seed+1, seed+2, …) on collision.
@@ -1165,9 +1277,13 @@ def generate_unique_system(
     Returns (system, attempts used). Raises ValueError when every attempt
     collides — with a 256-bit fingerprint space that means the library
     already holds every reachable system, not a routine outcome.
+    `force` pins the brief's named choices on every re-roll (see
+    `generate_seeded_system`).
     """
     for attempt in range(max_attempts):
-        system = generate_seeded_system(seed + attempt, keywords=keywords, app_type=app_type)
+        system = generate_seeded_system(
+            seed + attempt, keywords=keywords, app_type=app_type, force=force
+        )
         if system.fingerprint not in existing_fingerprints:
             return system, attempt + 1
     raise ValueError(
