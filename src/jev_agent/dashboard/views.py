@@ -1595,6 +1595,44 @@ def provider_api_keys(config: JevConfig) -> list[ProviderApiKeyRow]:
     return rows
 
 
+@dataclass(frozen=True)
+class FigmaStatus:
+    """Figma on the Tools page's APIs section: token + MCP server, status only.
+
+    The token value is never read here — only whether it is set and where it
+    came from (secrets file vs real environment). `validation` is the last
+    `GET /v1/me` result this dashboard process saw (`(status, detail)`).
+    """
+
+    token_set: bool
+    token_source: str  # "secrets file" | "environment" | "not set"
+    token_validated: str | None
+    mcp_connected: bool
+    mcp_url: str
+
+
+def figma_status(config: JevConfig, validation: tuple[str, str] | None) -> FigmaStatus:
+    """Figma's connection state for the Tools page (names and status only)."""
+    from jev_agent.core.figma import MCP_SERVER_NAME, MCP_URL, TOKEN_ENV
+    from jev_agent.core.secrets import read_secrets
+
+    token_set = bool(os.environ.get(TOKEN_ENV, "").strip())
+    if TOKEN_ENV in read_secrets():
+        token_source = "secrets file"
+    elif token_set:
+        token_source = "environment"
+    else:
+        token_source = "not set"
+    server = config.tools.mcp.get(MCP_SERVER_NAME)
+    return FigmaStatus(
+        token_set=token_set,
+        token_source=token_source,
+        token_validated=validation[1] if validation and validation[0] == "ready" else None,
+        mcp_connected=server is not None,
+        mcp_url=server.url or MCP_URL if server is not None else MCP_URL,
+    )
+
+
 def local_server_status(server: McpServerConfig) -> tuple[str, str]:
     """(status, detail) for a local MCP server: its command must resolve on PATH."""
     command = (server.command or "").strip()

@@ -1,0 +1,220 @@
+{% extends "base.html" %}
+{% from "macros.html" import badge, csrf_input, field_label with context %}
+{% block title %}{{ name }} — Figma{% endblock %}
+{% block extra_head %}<link rel="stylesheet" href="/static/design_system.css"><script src="/static/copy.js" defer></script>{% endblock %}
+{% block content %}
+{# The system's Figma binding (two-way, not a one-shot export): link the file,
+   generate the `use_figma` export script, make one granular edit at a time,
+   and sync file changes back in. The REST API only reads — every write here
+   is Plugin API code run through the Figma MCP server's `use_figma` tool. #}
+<div class="page-head">
+  <div class="titles">
+    <h1>{{ name }} — Figma</h1>
+    <p class="lede">v{{ version }} · source <span class="mono">{{ source }}</span> ·
+    {{ color_count }} colors{% if dark_color_count %} ({{ dark_color_count }} dark){% endif %} ·
+    {{ token_counts.type_scale }} type sizes · {{ token_counts.spacing }} spacing ·
+    {{ token_counts.radii }} radii</p>
+    <p class="hint">Two-way, not a one-shot export: Baton reads the file over the Figma
+    REST API, and pushes changes out as Plugin API code for the Figma MCP
+    server's <code>use_figma</code> tool. Verify every write with
+    <code>get_screenshot</code> afterwards.</p>
+  </div>
+  <div class="actions">
+    <a class="btn btn-sm btn-secondary" href="/design-systems/{{ name }}">← Back to system</a>
+    <a class="btn btn-sm btn-secondary" href="/tools#apis">Figma connection</a>
+  </div>
+</div>
+
+<section class="panel" aria-label="Figma status">
+  <div class="panel-head"><h2>Binding</h2></div>
+  <dl class="facts">
+    <dt>Figma file</dt><dd>{% if figma_file_url %}<a href="{{ figma_file_url }}" target="_blank" rel="noopener">{{ figma_file_url }}</a>{% else %}not linked yet{% endif %}</dd>
+    <dt>Personal Access Token</dt><dd>{{ badge("set", "ok") if token_set else badge("not set", "warn") }}{% if not token_set %} — add it on <a href="/tools#apis">Tools → APIs</a>{% endif %}</dd>
+    <dt>Figma MCP server</dt><dd>{{ badge("connected", "ok") if mcp_connected else badge("not connected", "warn") }}{% if not mcp_connected %} — add it on <a href="/tools#apis">Tools → APIs</a> so agents can run the scripts below{% endif %}</dd>
+    <dt>Last sync from Figma</dt><dd>{{ figma_last_sync if figma_last_sync != "-" else "never" }}</dd>
+  </dl>
+  {% if figma_file_url %}
+  <form class="inline" method="post" action="/design-systems/{{ name }}/figma">
+    {{ csrf_input() }}
+    <input type="hidden" name="action" value="unlink">
+    <button class="btn btn-sm btn-ghost" type="submit">Unlink file</button>
+  </form>
+  {% else %}
+  <form method="post" action="/design-systems/{{ name }}/figma" class="field-row">
+    {{ csrf_input() }}
+    <input type="hidden" name="action" value="link">
+    <div class="field-control">
+      <input type="url" name="figma_url" required placeholder="https://www.figma.com/design/…/…" aria-label="Figma file URL">
+    </div>
+    <div class="field-actions"><button type="submit" class="btn btn-primary btn-sm">Link Figma file</button></div>
+  </form>
+  <p class="hint small">Paste the file's Figma link. Linking only records the file — it
+  reads nothing until you sync.</p>
+  {% endif %}
+</section>
+
+<section class="panel" aria-label="Export to Figma">
+  <div class="panel-head"><h2>Export to Figma</h2></div>
+  <p class="hint">Generates the Plugin API script that builds this system in Figma: a
+  <code>{{ collection_name }}</code> variable collection (Light + Dark modes),
+  paint + text styles, a Button and a Card component, and a Home → Detail
+  prototype whose button navigates with SMART_ANIMATE. Run it with the Figma
+  MCP server's <code>use_figma</code> tool — ask Baton in chat, or paste it
+  into a Figma plugin console. The REST API cannot do this; only the Plugin
+  API creates variables, styles and components.</p>
+  <form method="post" action="/design-systems/{{ name }}/figma" class="inline">
+    {{ csrf_input() }}
+    <input type="hidden" name="action" value="export">
+    <button class="btn btn-primary btn-sm" type="submit">Generate export script</button>
+  </form>
+  {% if script %}
+  <p class="hint small">Copy it, run it through <code>use_figma</code>, then verify with
+  <code>get_screenshot</code> on the new Home and Detail frames.</p>
+  <button class="ds-copy-btn" type="button" data-copy-target="copy-figma-script" data-copy-label="Copy export script" aria-label="Copy export script" title="Copy export script"><svg aria-hidden="true"><use href="#i-copy"></use></svg></button>
+  <pre class="ds-copy-source" id="copy-figma-script">{{ script }}</pre>
+  {% endif %}
+</section>
+
+<section class="panel" aria-label="Granular edit">
+  <div class="panel-head"><h2>Tweak one thing</h2></div>
+  <p class="hint">One small, inspect-first change at a time — Figma's own guidance for
+  agent writes is inspect, change in small steps, verify. Pick what to change
+  and fill in only that kind's fields; the generated snippet looks the
+  variable or node up first and fails loudly when it is not there.</p>
+  <form method="post" action="/design-systems/{{ name }}/figma">
+    {{ csrf_input() }}
+    <input type="hidden" name="action" value="edit">
+    <div class="form-grid">
+      <div>
+        {{ field_label("kind", "figma-edit-kind") }}
+        <select id="figma-edit-kind" name="kind" required>
+          <option value="variable">Variable value (color or number)</option>
+          <option value="node-fill">Node fill color</option>
+          <option value="node-text">Node text</option>
+          <option value="node-size">Node size</option>
+          <option value="corner-radius">Node corner radius</option>
+          <option value="reaction">Prototype reaction (link two nodes)</option>
+        </select>
+      </div>
+      <div>
+        {{ field_label("collection", "figma-edit-collection") }}
+        <input type="text" id="figma-edit-collection" name="collection" value="{{ collection_name }}">
+        <p class="hint small">Variable edits only.</p>
+      </div>
+      <div>
+        {{ field_label("name", "figma-edit-name") }}
+        <input type="text" id="figma-edit-name" name="name" placeholder="color/primary">
+        <p class="hint small">Variable edits only: e.g. <code>color/primary</code>.</p>
+      </div>
+      <div>
+        {{ field_label("mode", "figma-edit-mode") }}
+        <select id="figma-edit-mode" name="mode">
+          <option value="Light">Light</option>
+          <option value="Dark">Dark</option>
+        </select>
+        <p class="hint small">Variable edits only.</p>
+      </div>
+      <div>
+        {{ field_label("value", "figma-edit-value") }}
+        <input type="text" id="figma-edit-value" name="value" placeholder="#2563EB or 16">
+        <p class="hint small">Variable / fill / text / corner radius: a <code>#rrggbb</code>
+        color, a number, or the new text.</p>
+      </div>
+      <div>
+        {{ field_label("node_id", "figma-edit-node") }}
+        <input type="text" id="figma-edit-node" name="node_id" placeholder="12:34">
+        <p class="hint small">Node edits and reactions: the node id, like <code>12:34</code>
+        (from a Figma URL's <code>node-id=12-34</code>).</p>
+      </div>
+      <div>
+        {{ field_label("destination_id", "figma-edit-dest") }}
+        <input type="text" id="figma-edit-dest" name="destination_id" placeholder="56:78">
+        <p class="hint small">Reactions only: the frame the click navigates to.</p>
+      </div>
+      <div>
+        {{ field_label("trigger", "figma-edit-trigger") }}
+        <select id="figma-edit-trigger" name="trigger">
+          <option value="ON_CLICK">On click</option>
+          <option value="ON_HOVER">On hover</option>
+          <option value="ON_PRESS">On press</option>
+          <option value="ON_DRAG">On drag</option>
+        </select>
+        <p class="hint small">Reactions only.</p>
+      </div>
+      <div>
+        {{ field_label("transition", "figma-edit-transition") }}
+        <select id="figma-edit-transition" name="transition">
+          <option value="SMART_ANIMATE">Smart animate</option>
+          <option value="DISSOLVE">Dissolve</option>
+          <option value="MOVE_IN">Move in</option>
+          <option value="PUSH">Push</option>
+          <option value="INSTANT">Instant</option>
+        </select>
+        <p class="hint small">Reactions only.</p>
+      </div>
+      <div>
+        {{ field_label("width", "figma-edit-width") }}
+        <input type="number" id="figma-edit-width" name="width" min="1" step="any" placeholder="320">
+        <p class="hint small">Size edits only.</p>
+      </div>
+      <div>
+        {{ field_label("height", "figma-edit-height") }}
+        <input type="number" id="figma-edit-height" name="height" min="1" step="any" placeholder="180">
+        <p class="hint small">Size edits only.</p>
+      </div>
+    </div>
+    <button class="btn btn-primary btn-sm" type="submit">Generate edit script</button>
+  </form>
+  {% if snippet %}
+  <p class="hint small">One {{ edit_kind }} change — run it through
+  <code>use_figma</code>, then verify with <code>get_screenshot</code>.</p>
+  <button class="ds-copy-btn" type="button" data-copy-target="copy-figma-snippet" data-copy-label="Copy edit script" aria-label="Copy edit script" title="Copy edit script"><svg aria-hidden="true"><use href="#i-copy"></use></svg></button>
+  <pre class="ds-copy-source" id="copy-figma-snippet">{{ snippet }}</pre>
+  {% endif %}
+</section>
+
+<section class="panel" aria-label="Sync from Figma">
+  <div class="panel-head"><h2>Sync from Figma</h2></div>
+  <p class="hint">Pulls the linked file's current tokens back into Baton as a new system
+  version, so a file changed outside Baton never silently drifts apart from
+  it. Added and changed tokens are applied; tokens removed in Figma are
+  reported but kept in Baton — deleting a token is a deliberate edit, not a
+  side effect of syncing.</p>
+  {% if figma_file_url %}
+  <form method="post" action="/design-systems/{{ name }}/figma" class="inline">
+    {{ csrf_input() }}
+    <input type="hidden" name="action" value="sync">
+    <button class="btn btn-primary btn-sm" type="submit" {% if not token_set %}disabled{% endif %}>Sync from Figma</button>
+    {% if not token_set %}<span class="hint small">Add your Figma token on <a href="/tools#apis">Tools → APIs</a> first.</span>{% endif %}
+  </form>
+  {% else %}
+  <p class="hint small">Link a Figma file above to sync from it.</p>
+  {% endif %}
+  {% if sync %}
+  <p><strong>{{ sync.summary }}</strong>{% if sync.applied %} — saved as v{{ sync.version }}{% endif %}</p>
+  {% for section, names in sync.added.items() %}
+  <p class="small">Added {{ section }}: {% for n, v in names.items() %}<span class="mono">{{ n }} {{ v }}</span>{% if not loop.last %}, {% endif %}{% endfor %}</p>
+  {% endfor %}
+  {% for section, names in sync.changed.items() %}
+  <p class="small">Changed {{ section }}: {% for n, pair in names.items() %}<span class="mono">{{ n }} {{ pair[0] }} → {{ pair[1] }}</span>{% if not loop.last %}, {% endif %}{% endfor %}</p>
+  {% endfor %}
+  {% for section, names in sync.removed.items() %}
+  <p class="small">Removed in Figma (kept in Baton) {{ section }}: {% for n, v in names.items() %}<span class="mono">{{ n }} {{ v }}</span>{% if not loop.last %}, {% endif %}{% endfor %}</p>
+  {% endfor %}
+  {% endif %}
+</section>
+
+<section class="panel" aria-label="What Figma allows">
+  <div class="panel-head"><h2>What Figma allows — and what it doesn't</h2></div>
+  <p class="hint">Writing needs a Full seat (a Dev seat is read-only) and edit access to
+  the file. The write tools are beta — free now, planned usage-based paid
+  later — and rate-limited: about 20 MCP tool calls a month on Starter,
+  about 200 a day for a Full seat on Professional or above. Work on a
+  duplicate or draft before touching a production file, and keep a backup:
+  agent writes are beta. If the official MCP server's gates bite, the
+  community Figwright pattern (MCP server + local plugin over WebSocket,
+  works on the free tier) is the fallback — the same generated script runs
+  through it. A dedicated Baton Figma plugin is only needed if neither path
+  is available: it would run this same script in the open file.</p>
+</section>
+{% endblock %}

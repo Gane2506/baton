@@ -76,7 +76,7 @@ SHOTS = [
         "design-studio.png", "/design-studio", height=1400
     ),  # tall enough to cover the library previews
     Shot("design-studio-wizard.png", "/design-studio/new/purpose", height=1200),
-    Shot("design-studio-reverse.png", "/design-studio/reverse"),
+    Shot("design-studio-reverse.png", "/design-studio/reverse", height=1300),
 ]
 QUALITY = "dashboard-quality.png"  # the run page's "Quality review" section only
 EVENTS = "dashboard-events.png"  # the run page's "Event timeline" section only

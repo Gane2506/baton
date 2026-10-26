@@ -92,6 +92,69 @@ SKILLS: tuple[Skill, ...] = (
         action_hint="Open Design Studio → Reverse from URL/screenshots",
     ),
     Skill(
+        name="figma-design",
+        title="Design and prototype in Figma",
+        description=(
+            "Design, tweak and prototype in Figma through the official Figma MCP "
+            "server: granular edits to any token, layer property, variant or "
+            "prototype reaction, via the `use_figma` tool running Plugin API code "
+            "(variables, styles, components, auto-layout, SMART_ANIMATE flows). "
+            "Inspect first, change in small steps, verify with a screenshot."
+        ),
+        keywords=(
+            "figma",
+            "sigma",
+            "prototype",
+            "prototyping",
+            "use_figma",
+            "figma design",
+            "design in figma",
+            "tweak the design",
+            "change the color in figma",
+            "figma variable",
+            "figma component",
+            "figma variant",
+            "auto-layout",
+            "smart animate",
+        ),
+        when_to_use=(
+            "The user wants to design, tweak or prototype anything in Figma — a "
+            "token, a layer property, a component variant, a prototype flow — or "
+            "asks Baton to change something about a design that lives in Figma. "
+            "Load the `figma-use` skill first, then work through the Figma MCP "
+            "server's `use_figma` tool; never claim the REST API can write."
+        ),
+        dashboard="/tools#apis",
+        cli="jev design figma export",
+        action_hint="Connect Figma on Tools → APIs, then ask in chat to design in Figma",
+    ),
+    Skill(
+        name="figma-import",
+        title="Import a design system from Figma",
+        description=(
+            "Read a Figma file over the Figma REST API and save its colors, type "
+            "sizes, spacing and radii as a Baton design system, linked to the "
+            "file so later changes sync back in."
+        ),
+        keywords=(
+            "figma",
+            "sigma",
+            "import from figma",
+            "from figma",
+            "figma file",
+            "figma link",
+            "sync from figma",
+            "figma tokens",
+        ),
+        when_to_use=(
+            "The user pastes a Figma file link and wants its design as a Baton "
+            "system, or wants a linked system synced back from Figma."
+        ),
+        dashboard="/design-studio/reverse",
+        cli="jev design reverse",
+        action_hint="Open Design Studio → Reverse → Import from Figma, and paste the file link",
+    ),
+    Skill(
         name="queue-idea",
         title="Queue an idea for later",
         description=(
