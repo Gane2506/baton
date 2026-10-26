@@ -926,6 +926,27 @@ COMPONENT_VARIANTS: dict[str, tuple[ComponentVariant, ...]] = {
 # ---------------------------------------------------------------------------
 
 
+def _accent_spec(
+    hue: float, offset: float, saturation: float, lightness: float
+) -> tuple[float, float, float]:
+    """The (hue, saturation, lightness) of an accent at `offset` from `hue`.
+
+    A hue far from the primary (angular distance >= 90 degrees — triadic,
+    complementary, split-complementary) at the primary's saturation and
+    lightness reads as a second primary, not an accent: a loud green next
+    to a warm red primary looks like a mistake (issue #306). Quiet it —
+    keep the hue (the variety is the point), cut the saturation, step the
+    lightness down a touch — so the accent supports instead of competing.
+    Near hues (analogous +/-30 degrees) are already harmonious and keep
+    the primary's saturation and lightness.
+    """
+    distance = abs(offset) % 360.0
+    distance = min(distance, 360.0 - distance)
+    if distance < 90.0:
+        return (hue + offset) % 360.0, saturation, lightness
+    return (hue + offset) % 360.0, saturation * 0.55, max(0.30, lightness - 0.06)
+
+
 def build_palette(
     strategy: ColorStrategy,
     rng: random.Random,
@@ -946,9 +967,10 @@ def build_palette(
     lightness = rng.uniform(*strategy.lightness)
     primary = _hsl(hue, saturation, lightness)
     primary_hover = _hsl(hue, saturation, max(0.30, lightness - 0.08))
-    accents = [
-        _hsl((hue + offset) % 360.0, saturation, lightness) for offset in strategy.accent_offsets
+    accent_specs = [
+        _accent_spec(hue, offset, saturation, lightness) for offset in strategy.accent_offsets
     ]
+    accents = [_hsl(*spec) for spec in accent_specs]
     palette: dict[str, str] = {
         "primary": primary,
         "primary_hover": primary_hover,
@@ -964,9 +986,8 @@ def build_palette(
     }
     if accents:
         palette["accent"] = accents[0]
-        palette["accent_hover"] = _hsl(
-            (hue + strategy.accent_offsets[0]) % 360.0, saturation, max(0.30, lightness - 0.08)
-        )
+        accent_hue, accent_sat, accent_light = accent_specs[0]
+        palette["accent_hover"] = _hsl(accent_hue, accent_sat, max(0.30, accent_light - 0.08))
         if len(accents) > 1:
             palette["accent_secondary"] = accents[1]
     return palette, hue, saturation, lightness

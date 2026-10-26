@@ -8,6 +8,8 @@ itself exactly; a fingerprint collision is detected and re-rolled; every
 generated palette still passes the WCAG contrast gate.
 """
 
+import colorsys
+import random
 from pathlib import Path
 
 import pytest
@@ -25,6 +27,7 @@ from jev_agent.core.design_skills import (
     LAYOUT_PROFILES,
     MOTION_PROFILES,
     TYPE_PAIRINGS,
+    build_palette,
     check_palette_contrast,
     fingerprint_of,
     generate_seeded_system,
@@ -35,6 +38,13 @@ from jev_agent.core.design_skills import (
 
 KEYWORDS = "restaurant warm friendly"
 APP_TYPE = "website"
+
+
+def _hsl_of(hex_color: str) -> tuple[float, float, float]:
+    """(hue degrees, saturation, lightness) of a hex color."""
+    r, g, b = (int(hex_color[i : i + 2], 16) / 255 for i in (1, 3, 5))
+    hue, lightness, saturation = colorsys.rgb_to_hls(r, g, b)
+    return hue * 360.0, saturation, lightness
 
 
 # ---- the catalog itself ----------------------------------------------------------
@@ -137,6 +147,64 @@ def test_fingerprint_covers_the_key_axes() -> None:
     changed = dict(system.choices)
     changed["primary"] = "#000000"
     assert fingerprint_of(changed) != system.fingerprint
+
+
+# ---- muted far-hue accents (issue #306) ------------------------------------------
+# A triadic draw used to put a loud green accent at the primary's own
+# saturation next to a warm red primary, which read as a mistake. The fix
+# quiets far-hue accents at the source: same hue, lower saturation, so the
+# accent supports instead of competing. Near hues are already harmonious
+# and keep the primary's saturation.
+
+
+def test_far_hue_accents_are_muted_near_hues_are_not() -> None:
+    for strategy in COLOR_STRATEGIES:
+        palette, _hue, _sat, _light = build_palette(strategy, random.Random(1), anchor_hue=8.0)
+        if not strategy.accent_offsets:
+            assert "accent" not in palette
+            continue
+        _ph, primary_sat, _pl = _hsl_of(palette["primary"])
+        for role in ("accent", "accent_secondary"):
+            if role not in palette:
+                continue
+            offset = strategy.accent_offsets[0 if role == "accent" else 1]
+            distance = min(abs(offset) % 360.0, 360.0 - abs(offset) % 360.0)
+            _ah, accent_sat, _al = _hsl_of(palette[role])
+            if distance >= 90.0:
+                assert accent_sat < primary_sat
+            else:
+                assert accent_sat == pytest.approx(primary_sat, abs=0.02)
+
+
+def test_triadic_accents_keep_the_triadic_hue() -> None:
+    found = 0
+    for seed in range(200):
+        system = generate_seeded_system(seed, keywords=KEYWORDS, app_type=APP_TYPE)
+        if system.color_strategy.key != "triadic":
+            continue
+        found += 1
+        _ph, primary_sat, _pl = _hsl_of(system.palette["primary"])
+        accent_hue, accent_sat, _al = _hsl_of(system.palette["accent"])
+        assert accent_sat < primary_sat
+        # The hue is still 120° from the primary — the variety is the
+        # point, only the loudness is tempered.
+        assert abs((accent_hue - system.hue) % 360.0 - 120.0) < 2.0
+        _ah2, accent2_sat, _al2 = _hsl_of(system.palette["accent_secondary"])
+        assert accent2_sat < primary_sat
+    assert found > 0
+
+
+def test_triadic_system_reproduces_identically() -> None:
+    seed = next(
+        seed
+        for seed in range(200)
+        if generate_seeded_system(seed, keywords=KEYWORDS, app_type=APP_TYPE).color_strategy.key
+        == "triadic"
+    )
+    first = generate_seeded_system(seed, keywords=KEYWORDS, app_type=APP_TYPE)
+    second = generate_seeded_system(seed, keywords=KEYWORDS, app_type=APP_TYPE)
+    assert first.palette == second.palette
+    assert first.fingerprint == second.fingerprint
 
 
 # ---- fingerprint collision: detect and re-roll -----------------------------------
