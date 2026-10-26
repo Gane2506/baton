@@ -443,6 +443,23 @@ def test_detail_rich_tokens_show_full_ramps(client: TestClient, home: Path) -> N
     assert "display_xl" in page.text
 
 
+def test_detail_color_swatches_present(client: TestClient, home: Path) -> None:
+    """Issue #285: every color row carries a live swatch (data-swatch-color),
+    and the stylesheet keeps the swatch column at a fixed width so it can
+    never collapse to zero."""
+    rich = rich_tokens(VIBE_PROFILES["minimal"], "both")
+    tokens = dict(TOKENS)
+    tokens["design_tokens"] = rich
+    save_library_system("rich-brand", MARKDOWN, tokens, {"vibe_profile": "minimal"})
+    page = client.get("/design-systems/rich-brand")
+    assert page.status_code == 200
+    assert 'data-swatch-color="#' in page.text
+    css = client.get("/static/design_system.css")
+    assert css.status_code == 200
+    assert ".content-inner:has(> .ds-page)" in css.text
+    assert "64px" in css.text
+
+
 def test_detail_assets_placeholder_without_logo(client: TestClient, home: Path) -> None:
     """Issue #285: no stored mark/favicons render as an honest placeholder,
     never a faked asset."""

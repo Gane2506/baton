@@ -19,6 +19,10 @@
   --ds-faint: #6b6b72;
   --ds-accent: #a3e635;
 }
+/* Let the system page use the full content width: the reference is a
+   wide, dense sheet, and the dashboard's centered max-width column left
+   the renderings too cramped (token swatches collapsed to zero width). */
+.content-inner:has(> .ds-page) { max-width: none; }
 .ds-page {
   background: var(--ds-bg);
   color: var(--ds-text);
@@ -48,7 +52,7 @@
 /* Two-column shell: sticky sidebar nav + content. */
 .ds-layout {
   display: grid;
-  grid-template-columns: 232px minmax(0, 1fr);
+  grid-template-columns: 220px minmax(0, 1fr);
   align-items: start;
 }
 .ds-nav {
@@ -92,7 +96,7 @@
 /* One section: label column + wide live rendering, thin divider. */
 .ds-section {
   display: grid;
-  grid-template-columns: 168px minmax(0, 1fr);
+  grid-template-columns: 150px minmax(0, 1fr);
   gap: 24px;
   padding: 24px 0 28px;
   border-bottom: 1px solid var(--ds-border-soft);
@@ -163,7 +167,9 @@
 .ds-token-grid { display: grid; gap: 1px; background: var(--ds-border-soft); border: 1px solid var(--ds-border-soft); border-radius: 10px; overflow: hidden; }
 .ds-token-row {
   display: grid;
-  grid-template-columns: 220px 140px minmax(0, 1fr);
+  /* Fixed swatch width: a 1fr swatch collapsed to zero when the column
+     ran narrow, hiding the color entirely. */
+  grid-template-columns: minmax(150px, 200px) 110px 64px;
   gap: 12px;
   align-items: center;
   background: var(--ds-surface);
@@ -183,20 +189,20 @@
 .ds-subhead:first-child { margin-top: 0; }
 
 /* Typography specimens. */
-.ds-type-row { display: grid; grid-template-columns: 220px minmax(0, 1fr); gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--ds-border-soft); align-items: baseline; }
+.ds-type-row { display: grid; grid-template-columns: 170px minmax(0, 1fr); gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--ds-border-soft); align-items: baseline; }
 .ds-type-row:last-child { border-bottom: none; }
 .ds-type-meta { font-size: 12px; color: var(--ds-muted); }
 .ds-type-meta .mono { color: var(--ds-text); display: block; margin-bottom: 2px; }
-.ds-font-row { display: grid; grid-template-columns: 220px minmax(0, 1fr); gap: 12px; padding: 8px 0; border-bottom: 1px solid var(--ds-border-soft); font-size: 13px; align-items: baseline; }
+.ds-font-row { display: grid; grid-template-columns: 170px minmax(0, 1fr); gap: 12px; padding: 8px 0; border-bottom: 1px solid var(--ds-border-soft); font-size: 13px; align-items: baseline; }
 .ds-font-row .mono { font-size: 12px; color: var(--ds-muted); word-break: break-all; }
 
 /* Spacing / radii / shadow visuals. */
-.ds-scale-row { display: grid; grid-template-columns: 140px 110px minmax(0, 1fr); gap: 12px; align-items: center; padding: 7px 0; border-bottom: 1px solid var(--ds-border-soft); font-size: 13px; }
+.ds-scale-row { display: grid; grid-template-columns: 120px 90px minmax(0, 1fr); gap: 12px; align-items: center; padding: 7px 0; border-bottom: 1px solid var(--ds-border-soft); font-size: 13px; }
 .ds-scale-row:last-child { border-bottom: none; }
 .ds-scale-row .mono { font-size: 12px; color: var(--ds-muted); }
 .ds-space-bar { height: 12px; border-radius: 3px; background: var(--ds-accent); opacity: 0.85; max-width: 100%; }
 .ds-radius-chip { width: 72px; height: 48px; background: var(--ds-surface-2); border: 1px solid var(--ds-border); }
-.ds-shadow-chip { width: 200px; height: 56px; background: var(--ds-surface-2); border-radius: 10px; }
+.ds-shadow-chip { width: 160px; height: 56px; background: var(--ds-surface-2); border-radius: 10px; }
 .ds-shadow-val { font-size: 12px; color: var(--ds-muted); word-break: break-all; }
 
 /* Motion: duration bars + easing curves. */
