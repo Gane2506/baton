@@ -1,143 +1,639 @@
 {% extends "base.html" %}
 {% from "macros.html" import badge, csrf_input with context %}
 {% block title %}Design system {{ name }}{% endblock %}
+{% block extra_head %}<link rel="stylesheet" href="/static/design_system.css"><script src="/static/design_system.js" defer></script>{% endblock %}
 {% block content %}
-<div class="page-head">
-  <div class="titles">
-    <h1>{{ name }} {% if active %}{{ badge("active", "ok") }}{% endif %}</h1>
-    <p class="lede">Library design system v{{ version }} · updated {{ updated | time }} ·
-    source <span class="mono">{{ source }}</span>{% if app_type != "-" %} · {{ app_type }}{% endif %}{% if stack != "-" %} · {{ stack }}{% endif %}</p>
+{# Design Studio redesign (issue #285): the system page is a single-page
+   reference in the Claude-artifact language — sidebar nav, label column +
+   live renderings, everything visible inline. No preview button, no extra
+   click. Dynamic colors/values travel via data-* attributes (data-attrs.js);
+   there are no inline styles or scripts on this page. #}
+{% set display_font = (fonts | selectattr("name", "equalto", "font_display") | list | first) %}
+{% set body_font = (fonts | selectattr("name", "equalto", "font_body") | list | first) %}
+<div class="ds-page">
+  <div class="ds-head">
+    <div class="titles">
+      <h1>{{ name }} {% if active %}{{ badge("active", "ok") }}{% endif %}</h1>
+      <p class="lede">{{ vibe_name }}{% if vibe_tagline %} — {{ vibe_tagline }}{% endif %} · v{{ version }} · updated {{ updated | time }} ·
+      source <span class="mono">{{ source }}</span>{% if app_type != "-" %} · {{ app_type }}{% endif %}{% if stack != "-" %} · {{ stack }}{% endif %} · theme {{ theme }}</p>
+    </div>
+    <div class="actions ds-actions">
+      <a class="btn btn-sm btn-primary" href="/design-systems/{{ name }}/showcase" target="_blank" rel="noopener">Preview showcase</a>
+      <a class="btn btn-sm btn-secondary" href="/design-systems/{{ name }}/code">Get reusable elements</a>
+      {% if not active %}
+      <form class="inline" method="post" action="/design-systems/use">
+        {{ csrf_input() }}<input type="hidden" name="name" value="{{ name }}">
+        <button class="btn btn-sm btn-secondary" type="submit">Use for this repo</button>
+      </form>
+      {% endif %}
+    </div>
   </div>
-  <div class="actions">
-    <a class="btn btn-sm btn-primary" href="/design-systems/{{ name }}/showcase" target="_blank" rel="noopener">Preview showcase</a>
-    <a class="btn btn-sm btn-secondary" href="/design-systems/{{ name }}/code">Get reusable elements</a>
-    {% if not active %}
-    <form class="inline" method="post" action="/design-systems/use">
-      {{ csrf_input() }}<input type="hidden" name="name" value="{{ name }}">
-      <button class="btn btn-sm btn-secondary" type="submit">Use for this repo</button>
-    </form>
-    {% endif %}
-    <form class="inline" method="post" action="/design-systems/delete">
-      {{ csrf_input() }}<input type="hidden" name="name" value="{{ name }}">
-      <button class="btn btn-sm btn-danger" type="submit">Delete</button>
-    </form>
+
+  <div class="ds-layout">
+    <nav class="ds-nav" aria-label="Design system sections">
+      <input type="search" id="ds-nav-search" class="ds-nav-search" placeholder="Search" aria-label="Search sections" autocomplete="off">
+      <ul class="ds-nav-list">
+        <li data-nav-label="overview"><a href="#overview">Overview</a></li>
+        <li data-nav-label="colors"><a href="#colors">Colors</a></li>
+        <li data-nav-label="typography"><a href="#typography">Typography</a></li>
+        <li data-nav-label="spacing"><a href="#spacing">Spacing</a></li>
+        <li data-nav-label="corner radius"><a href="#corner-radius">Corner radius</a></li>
+        <li data-nav-label="shadows"><a href="#shadows">Shadows</a></li>
+        <li data-nav-label="layout"><a href="#layout">Layout</a></li>
+        <li data-nav-label="z index"><a href="#z-index">Z index</a></li>
+        <li data-nav-label="duration"><a href="#duration">Duration</a></li>
+        <li data-nav-label="easing"><a href="#easing">Easing</a></li>
+        <li data-nav-label="stagger"><a href="#stagger">Stagger</a></li>
+        <li data-nav-label="breakpoint"><a href="#breakpoint">Breakpoint</a></li>
+        <li data-nav-label="components"><a href="#components">Components</a></li>
+        <li data-nav-label="assets"><a href="#assets">Assets</a></li>
+      </ul>
+      <div class="ds-nav-sep"></div>
+      <ul class="ds-nav-list">
+        <li data-nav-label="files"><a href="#files">Files <span class="ds-nav-count">{{ file_count }}</span></a></li>
+      </ul>
+    </nav>
+
+    <div class="ds-content">
+      <section class="ds-section" id="overview" aria-label="Overview">
+        <div class="ds-section-label">
+          <h2>Overview</h2>
+          <p>The system at a glance, and the business it serves.</p>
+        </div>
+        <div>
+          <dl class="studio-summary">
+            <div><dt>Vibe</dt><dd>{{ vibe_name }}{% if vibe_tagline %} — {{ vibe_tagline }}{% endif %}</dd></div>
+            <div><dt>Version</dt><dd>v{{ version }} · updated {{ updated | time }}</dd></div>
+            <div><dt>Source</dt><dd><span class="mono">{{ source }}</span></dd></div>
+            {% if app_type != "-" %}<div><dt>App type</dt><dd>{{ app_type }}</dd></div>{% endif %}
+            {% if stack != "-" %}<div><dt>Stack</dt><dd>{{ stack }}</dd></div>{% endif %}
+            <div><dt>Theme</dt><dd>{{ theme }}</dd></div>
+          </dl>
+          {% if business %}
+          <h3 class="ds-subhead">Business context</h3>
+          <dl class="studio-summary">
+            <div><dt>Industry</dt><dd>{{ business.industry or "—" }}</dd></div>
+            <div><dt>Audience</dt><dd>{{ business.audience or "—" }}</dd></div>
+            <div><dt>Tone</dt><dd>{{ business.tone or "—" }}</dd></div>
+            <div><dt>Offering</dt><dd>{{ business.offering or "—" }}</dd></div>
+            <div><dt>Description</dt><dd>{{ business.description or "—" }}</dd></div>
+          </dl>
+          {% else %}
+          <p class="ds-note">No business context yet — add one so the studio can suggest the reusable elements your business actually needs.</p>
+          {% endif %}
+          <form class="ds-biz-form" method="post" action="/design-systems/business">
+            {{ csrf_input() }}
+            <input type="hidden" name="name" value="{{ name }}">
+            <div class="field-row"><label for="biz-industry">Industry</label><input type="text" id="biz-industry" name="industry" value="{{ business.industry if business else '' }}" placeholder="e.g. Restaurant, SaaS, Clinic" autocomplete="off"></div>
+            <div class="field-row"><label for="biz-audience">Audience</label><input type="text" id="biz-audience" name="audience" value="{{ business.audience if business else '' }}" placeholder="e.g. Busy parents, small teams" autocomplete="off"></div>
+            <div class="field-row"><label for="biz-tone">Tone</label><input type="text" id="biz-tone" name="tone" value="{{ business.tone if business else '' }}" placeholder="e.g. Warm and welcoming" autocomplete="off"></div>
+            <div class="field-row"><label for="biz-offering">Offering</label><input type="text" id="biz-offering" name="offering" value="{{ business.offering if business else '' }}" placeholder="e.g. Online ordering, bookings" autocomplete="off"></div>
+            <div class="field-row"><label for="biz-description">Description</label><textarea id="biz-description" name="description" rows="3" placeholder="e.g. A neighbourhood bistro that takes weeknight reservations online">{{ business.description if business else '' }}</textarea></div>
+            <div class="actions"><button class="btn btn-sm btn-secondary" type="submit">Save business context</button></div>
+          </form>
+          <h3 class="ds-subhead">System notes</h3>
+          <div class="ds-system-notes">{{ markdown_html }}</div>
+        </div>
+      </section>
+
+      <section class="ds-section" id="colors" aria-label="Colors">
+        <div class="ds-section-label">
+          <h2>Colors</h2>
+          <p>Light and dark ramps, semantic roles, and the brand accent.</p>
+        </div>
+        <div>
+          <button class="ds-copy-btn" type="button" data-copy-target="copy-colors" data-copy-label="Copy colors" aria-label="Copy colors" title="Copy colors"><svg aria-hidden="true"><use href="#i-copy"></use></svg></button>
+          <pre class="ds-copy-source" id="copy-colors">{{ colors_json }}</pre>
+          {% if colors_light %}
+          <h3 class="ds-subhead">Light</h3>
+          <div class="ds-token-grid">
+            {% for row in colors_light %}
+            <div class="ds-token-row"><span class="mono">{{ row.name }}</span><span class="ds-token-value mono">{{ row.hex }}</span><span class="ds-swatch" data-swatch-color="{{ row.hex }}"></span></div>
+            {% endfor %}
+          </div>
+          {% endif %}
+          {% if colors_dark %}
+          <h3 class="ds-subhead">Dark</h3>
+          <div class="ds-token-grid">
+            {% for row in colors_dark %}
+            <div class="ds-token-row"><span class="mono">{{ row.name }}</span><span class="ds-token-value mono">{{ row.hex }}</span><span class="ds-swatch" data-swatch-color="{{ row.hex }}"></span></div>
+            {% endfor %}
+          </div>
+          {% endif %}
+          {% if not colors_light and not colors_dark %}
+          <p class="ds-note">No color tokens stored for this system.</p>
+          {% endif %}
+        </div>
+      </section>
+
+      <section class="ds-section" id="typography" aria-label="Typography">
+        <div class="ds-section-label">
+          <h2>Typography</h2>
+          <p>Font stacks and the type scale, set live.</p>
+        </div>
+        <div>
+          <button class="ds-copy-btn" type="button" data-copy-target="copy-typography" data-copy-label="Copy typography" aria-label="Copy typography" title="Copy typography"><svg aria-hidden="true"><use href="#i-copy"></use></svg></button>
+          <pre class="ds-copy-source" id="copy-typography">{{ typography_json }}</pre>
+          {% for font in fonts %}
+          <div class="ds-font-row"><span class="mono">{{ font.name }}</span><span data-font-family="{{ font.stack }}">{{ font.stack }}</span></div>
+          {% endfor %}
+          {% for style in type_styles %}
+          <div class="ds-type-row">
+            <div class="ds-type-meta"><span class="mono">{{ style.name }}</span>{{ style.size }}px · {{ style.weight }} · {{ style.leading }} leading · {{ style.tracking }} tracking</div>
+            <span data-font-size="{{ style.size }}" data-font-weight="{{ style.weight }}" data-line-height="{{ style.leading }}"{% if display_font and style.name.startswith("display") %} data-font-family="{{ display_font.stack }}"{% elif body_font %} data-font-family="{{ body_font.stack }}"{% endif %}>Aa — The quick brown fox</span>
+          </div>
+          {% endfor %}
+          {% if not fonts and not type_styles %}
+          <p class="ds-note">No typography tokens stored for this system.</p>
+          {% endif %}
+        </div>
+      </section>
+
+      <section class="ds-section" id="spacing" aria-label="Spacing">
+        <div class="ds-section-label">
+          <h2>Spacing</h2>
+          <p>The spacing scale, drawn to size.</p>
+        </div>
+        <div>
+          <button class="ds-copy-btn" type="button" data-copy-target="copy-spacing" data-copy-label="Copy spacing" aria-label="Copy spacing" title="Copy spacing"><svg aria-hidden="true"><use href="#i-copy"></use></svg></button>
+          <pre class="ds-copy-source" id="copy-spacing">{{ spacing_json }}</pre>
+          {% if spacing %}
+          {% for row in spacing %}
+          <div class="ds-scale-row"><span class="mono">{{ row.name }}</span><span class="mono">{{ row.value }}px</span><span class="ds-space-bar" data-px-width="{{ row.value }}"></span></div>
+          {% endfor %}
+          {% else %}
+          <p class="ds-note">No spacing tokens stored for this system.</p>
+          {% endif %}
+        </div>
+      </section>
+
+      <section class="ds-section" id="corner-radius" aria-label="Corner radius">
+        <div class="ds-section-label">
+          <h2>Corner radius</h2>
+          <p>How round the system is, from sharp to pill.</p>
+        </div>
+        <div>
+          <button class="ds-copy-btn" type="button" data-copy-target="copy-radii" data-copy-label="Copy corner radius" aria-label="Copy corner radius" title="Copy corner radius"><svg aria-hidden="true"><use href="#i-copy"></use></svg></button>
+          <pre class="ds-copy-source" id="copy-radii">{{ radii_json }}</pre>
+          {% if radii %}
+          {% for row in radii %}
+          <div class="ds-scale-row"><span class="mono">{{ row.name }}</span><span class="mono">{{ row.value }}px</span><span class="ds-radius-chip" data-px-radius="{{ row.value }}"></span></div>
+          {% endfor %}
+          {% else %}
+          <p class="ds-note">No corner-radius tokens stored for this system.</p>
+          {% endif %}
+        </div>
+      </section>
+
+      <section class="ds-section" id="shadows" aria-label="Shadows">
+        <div class="ds-section-label">
+          <h2>Shadows</h2>
+          <p>Elevation, from flat to lifted.</p>
+        </div>
+        <div>
+          <button class="ds-copy-btn" type="button" data-copy-target="copy-shadows" data-copy-label="Copy shadows" aria-label="Copy shadows" title="Copy shadows"><svg aria-hidden="true"><use href="#i-copy"></use></svg></button>
+          <pre class="ds-copy-source" id="copy-shadows">{{ shadows_json }}</pre>
+          {% if shadows %}
+          {% for row in shadows %}
+          <div class="ds-scale-row"><span class="mono">{{ row.name }}</span><span class="ds-shadow-val mono">{{ row.value }}</span><span class="ds-shadow-chip" data-shadow="{{ row.value }}"></span></div>
+          {% endfor %}
+          {% else %}
+          <p class="ds-note">No shadow tokens stored for this system.</p>
+          {% endif %}
+        </div>
+      </section>
+
+      <section class="ds-section" id="layout" aria-label="Layout">
+        <div class="ds-section-label">
+          <h2>Layout</h2>
+          <p>Containers and the grid the system lays out on.</p>
+          <span class="ds-standard-tag">Studio standard — not a system token</span>
+        </div>
+        <div>
+          {% for row in layout_standard %}
+          <div class="ds-scale-row"><span class="mono">{{ row.name }}</span><span class="mono">{{ row.value }}</span><span>{{ row.note }}</span></div>
+          {% endfor %}
+        </div>
+      </section>
+
+      <section class="ds-section" id="z-index" aria-label="Z index">
+        <div class="ds-section-label">
+          <h2>Z index</h2>
+          <p>What floats above what.</p>
+          <span class="ds-standard-tag">Studio standard — not a system token</span>
+        </div>
+        <div>
+          {% for row in z_index_standard %}
+          <div class="ds-scale-row"><span class="mono">{{ row.name }}</span><span class="mono">{{ row.value }}</span><span>{{ row.note }}</span></div>
+          {% endfor %}
+        </div>
+      </section>
+
+      <section class="ds-section" id="duration" aria-label="Duration">
+        <div class="ds-section-label">
+          <h2>Duration</h2>
+          <p>How long motion takes, drawn to scale.</p>
+        </div>
+        <div>
+          <button class="ds-copy-btn" type="button" data-copy-target="copy-motion" data-copy-label="Copy motion" aria-label="Copy motion" title="Copy motion"><svg aria-hidden="true"><use href="#i-copy"></use></svg></button>
+          <pre class="ds-copy-source" id="copy-motion">{{ motion_json }}</pre>
+          {% if durations %}
+          {% for row in durations %}
+          <div class="ds-scale-row"><span class="mono">{{ row.name }}</span><span class="mono">{{ row.value }}</span><span class="ds-duration-bar" data-px-width="{{ (row.value | replace('ms', '') | int) // 2 }}"></span></div>
+          {% endfor %}
+          {% else %}
+          <p class="ds-note">No duration tokens stored for this system.</p>
+          {% endif %}
+        </div>
+      </section>
+
+      <section class="ds-section" id="easing" aria-label="Easing">
+        <div class="ds-section-label">
+          <h2>Easing</h2>
+          <p>How motion feels. Hover a tile to feel the curve.</p>
+        </div>
+        <div>
+          {% if easings %}
+          {% for row in easings %}
+          <div class="ds-scale-row"><span class="mono">{{ row.name }}</span><span class="ds-shadow-val mono">{{ row.value }}</span><span class="ds-ease-demo" data-ease="{{ row.value }}">Hover me</span></div>
+          {% endfor %}
+          {% else %}
+          <p class="ds-note">No easing tokens stored for this system.</p>
+          {% endif %}
+        </div>
+      </section>
+
+      <section class="ds-section" id="stagger" aria-label="Stagger">
+        <div class="ds-section-label">
+          <h2>Stagger</h2>
+          <p>Sequenced entrances, step by step.</p>
+          <span class="ds-standard-tag">Studio standard — not a system token</span>
+        </div>
+        <div>
+          {% for row in stagger_standard %}
+          <div class="ds-scale-row"><span class="mono">{{ row.name }}</span><span class="mono">{{ row.value }}</span><span>{{ row.note }}</span></div>
+          {% endfor %}
+        </div>
+      </section>
+
+      <section class="ds-section" id="breakpoint" aria-label="Breakpoint">
+        <div class="ds-section-label">
+          <h2>Breakpoint</h2>
+          <p>Where layouts change.</p>
+          <span class="ds-standard-tag">Studio standard — not a system token</span>
+        </div>
+        <div>
+          {% for row in breakpoints_standard %}
+          <div class="ds-scale-row"><span class="mono">{{ row.name }}</span><span class="mono">{{ row.value }}</span><span>{{ row.note }}</span></div>
+          {% endfor %}
+        </div>
+      </section>
+
+      <section class="ds-section" id="components" aria-label="Components">
+        <div class="ds-section-label">
+          <h2>Components</h2>
+          <p>Every component live, in its variants. Motion shows a static preview where it can't run.</p>
+        </div>
+        <div>
+          <div class="ds-comp">
+            <h3>Button</h3>
+            <div class="ds-comp-row">
+              <button class="ds-btn" type="button" data-bg-color="{{ primary }}" data-fg-color="{{ on_primary }}">Primary</button>
+              <button class="ds-btn ds-btn-ghost" type="button">Secondary</button>
+              <button class="ds-btn ds-btn-ghost" type="button">Ghost</button>
+              <button class="ds-btn ds-btn-danger" type="button">Danger</button>
+              <button class="ds-btn ds-btn-sm" type="button" data-bg-color="{{ primary }}" data-fg-color="{{ on_primary }}">Small</button>
+              <button class="ds-btn ds-btn-lg" type="button" data-bg-color="{{ primary }}" data-fg-color="{{ on_primary }}">Large</button>
+              <button class="ds-btn" type="button" disabled>Disabled</button>
+            </div>
+          </div>
+
+          <div class="ds-comp">
+            <h3>Field</h3>
+            <div class="ds-field">
+              <label for="ds-field-demo">Email</label>
+              <input id="ds-field-demo" type="email" value="hello@example.com" autocomplete="off">
+              <span class="ds-hint">We'll never share your email.</span>
+            </div>
+          </div>
+
+          <div class="ds-comp">
+            <h3>Badge</h3>
+            <div class="ds-comp-row">
+              <span class="ds-badge" data-bg-color="#DBEAFE" data-fg-color="#1E40AF">Info</span>
+              <span class="ds-badge" data-bg-color="#DCFCE7" data-fg-color="#166534">Success</span>
+              <span class="ds-badge" data-bg-color="#FEF3C7" data-fg-color="#92400E">Warning</span>
+              <span class="ds-badge" data-bg-color="#FEE2E2" data-fg-color="#991B1B">Danger</span>
+              <span class="ds-badge" data-bg-color="#E5E7EB" data-fg-color="#374151">Neutral</span>
+            </div>
+          </div>
+
+          <div class="ds-comp">
+            <h3>Alert</h3>
+            <div class="ds-toast-stack">
+              <div class="ds-alert ds-alert-info"><strong>Information</strong>Your session ends in 5 minutes.</div>
+              <div class="ds-alert ds-alert-success"><strong>Success</strong>Your message has been sent.</div>
+              <div class="ds-alert ds-alert-warning"><strong>Warning</strong>Your storage is 80% full.</div>
+              <div class="ds-alert ds-alert-danger"><strong>Error</strong>The file is larger than 5 MB.</div>
+            </div>
+          </div>
+
+          <div class="ds-comp">
+            <h3>Card</h3>
+            <div class="ds-card">
+              <h4>{{ name }}</h4>
+              <p>{{ vibe_tagline or "A design system from the Baton Design Studio." }}</p>
+              <button class="ds-btn ds-btn-sm" type="button" data-bg-color="{{ primary }}" data-fg-color="{{ on_primary }}">Explore</button>
+            </div>
+          </div>
+
+          <div class="ds-comp">
+            <h3>Avatar</h3>
+            <div class="ds-comp-row">
+              <span class="ds-avatar ds-avatar-sm" data-bg-color="{{ primary }}">GA</span>
+              <span class="ds-avatar ds-avatar-md" data-bg-color="{{ primary }}">{{ name.split("-") | map("first") | join("") | upper }}</span>
+              <span class="ds-avatar ds-avatar-lg" data-bg-color="{{ primary }}">{{ name.split("-") | map("first") | join("") | upper }}</span>
+            </div>
+          </div>
+
+          <div class="ds-comp">
+            <h3>Modal</h3>
+            <div class="ds-comp-row">
+              <button class="ds-btn" type="button" data-modal-open="ds-component-modal" data-bg-color="{{ primary }}" data-fg-color="{{ on_primary }}">Open modal</button>
+            </div>
+            <p class="ds-note">A dialog over the page — Escape or the backdrop closes it.</p>
+          </div>
+
+          <div class="ds-comp">
+            <h3>Table</h3>
+            <table class="ds-table">
+              <thead><tr><th>Token</th><th>Value</th><th>Role</th></tr></thead>
+              <tbody>
+                <tr><td class="mono">primary</td><td class="mono">{{ primary }}</td><td>Main actions</td></tr>
+                <tr><td class="mono">background</td><td class="mono">{{ background }}</td><td>Page background</td></tr>
+                <tr><td class="mono">text</td><td class="mono">{{ text }}</td><td>Body text</td></tr>
+              </tbody>
+            </table>
+          </div>
+
+          <div class="ds-comp">
+            <h3>Progress</h3>
+            <div class="ds-progress-row"><span>Upload</span><span class="ds-progress"><span data-bar-pct="72"></span></span><span>72%</span></div>
+            <div class="ds-progress-row"><span>Export</span><span class="ds-progress"><span data-bar-pct="38"></span></span><span>38%</span></div>
+            <div class="ds-progress-row"><span>Sync</span><span class="ds-progress"><span data-bar-pct="100"></span></span><span>100%</span></div>
+          </div>
+
+          <div class="ds-comp">
+            <h3>Ticker</h3>
+            <p class="ds-static-caption">Static preview — see the note above.</p>
+            <p class="ds-ticker-label">— Running</p>
+            <div class="ds-ticker" id="ds-ticker">
+              <div class="ds-ticker-track">
+                <span>{{ name }}</span><span class="ds-ticker-dot">■</span><span>{{ vibe_tagline or vibe_name }}</span><span class="ds-ticker-dot">■</span><span>{{ name }}</span><span class="ds-ticker-dot">■</span><span>{{ vibe_tagline or vibe_name }}</span><span class="ds-ticker-dot">■</span>
+                <span>{{ name }}</span><span class="ds-ticker-dot">■</span><span>{{ vibe_tagline or vibe_name }}</span><span class="ds-ticker-dot">■</span><span>{{ name }}</span><span class="ds-ticker-dot">■</span><span>{{ vibe_tagline or vibe_name }}</span><span class="ds-ticker-dot">■</span>
+              </div>
+            </div>
+            <p class="ds-ticker-label">— Reduced motion (static)</p>
+            <div class="ds-ticker-static"><span>{{ name }}</span> <span class="ds-ticker-dot">■</span> <span>{{ vibe_tagline or vibe_name }}</span> <span class="ds-ticker-dot">■</span> <span>{{ name }}</span></div>
+            <div class="ds-comp-row ds-mt">
+              <button class="ds-btn ds-btn-sm ds-btn-ghost" type="button" id="ds-ticker-pause" aria-pressed="false">Pause ticker</button>
+            </div>
+            <p class="ds-note">The marquee pauses on hover of the control, and never animates when the browser asks for reduced motion.</p>
+          </div>
+
+          <div class="ds-comp">
+            <h3>Toast</h3>
+            <p class="ds-static-caption">Static preview — see the note above.</p>
+            <div class="ds-toast-stack">
+              <div class="ds-toast ds-toast-info" role="status"><strong>Information.</strong><span>Your session ends in 5 minutes.</span><button type="button" data-dismiss="" aria-label="Dismiss toast">×</button></div>
+              <div class="ds-toast ds-toast-success" role="status"><strong>Success.</strong><span>Your message has been sent.</span><button type="button" data-dismiss="" aria-label="Dismiss toast">×</button></div>
+              <div class="ds-toast ds-toast-error" role="status"><strong>Error.</strong><span>The file is larger than 5 MB. Upload a smaller file.</span><button type="button" data-dismiss="" aria-label="Dismiss toast">×</button></div>
+            </div>
+            <div class="ds-toast-stack ds-toast-live" id="ds-toast-live" aria-live="polite"></div>
+            <div class="ds-comp-row ds-mt">
+              <button class="ds-btn ds-btn-ghost" type="button" id="ds-toast-more">Show another toast</button>
+            </div>
+          </div>
+
+          <div class="ds-comp">
+            <h3>Tooltip</h3>
+            <p class="ds-static-caption">Static preview — see the note above.</p>
+            <div class="ds-tooltip-row">
+              <span class="ds-tooltip-wrap">
+                <span class="ds-tooltip" role="tooltip">Primary — {{ primary }}. Used for main actions and key highlights.</span>
+                <button class="ds-btn ds-btn-ghost" type="button">Primary</button>
+              </span>
+              <span class="ds-tooltip-wrap">
+                <span class="ds-tooltip" role="tooltip">Background — {{ background }}. The page surface everything sits on.</span>
+                <button class="ds-btn ds-btn-ghost" type="button">Background</button>
+              </span>
+              <span class="ds-tooltip-wrap">
+                <span class="ds-tooltip" role="tooltip">Text — {{ text }}. Body copy and headings.</span>
+                <button class="ds-btn ds-btn-ghost" type="button">Text</button>
+              </span>
+            </div>
+            <p class="ds-note">Hover or focus a button to show its tip, and press Escape to dismiss it. The bubble stays open while the pointer is over it.</p>
+          </div>
+
+          <div class="ds-comp">
+            <h3>VideoModal</h3>
+            <p class="ds-static-caption">Static preview — see the note above.</p>
+            <p class="mono ds-trigger-note">Closed: the trigger</p>
+            <div class="ds-video-frame">
+              <button class="ds-video-trigger" type="button" data-modal-open="ds-video-modal">▷&nbsp; Play video: [Video title placeholder]</button>
+            </div>
+            <p class="ds-note">No video asset is stored for this system, so the modal opens on a placeholder state — never a faked video.</p>
+          </div>
+
+          {% if business_proposed or business_enabled %}
+          <div class="ds-comp">
+            <h3>Suggested for your business</h3>
+            <p class="ds-note ds-note-tight">Based on your business context — add the elements you need, remove the ones you don't.</p>
+            {% for item in business_proposed %}
+            <div class="ds-biz">
+              <h4>{{ item.title }} <span class="mono">{{ item.key }}</span></h4>
+              <p>{{ item.description }}</p>
+              <p class="ds-why">Why: {{ item.why }}</p>
+              <form class="inline" method="post" action="/design-systems/business-elements">
+                {{ csrf_input() }}
+                <input type="hidden" name="name" value="{{ name }}">
+                <input type="hidden" name="element" value="{{ item.key }}">
+                <input type="hidden" name="return_to" value="/design-systems/{{ name }}#components">
+                <input type="hidden" name="action" value="{{ 'remove' if item.enabled else 'add' }}">
+                <button class="btn btn-sm btn-secondary" type="submit">{{ 'Remove' if item.enabled else 'Add' }}</button>
+              </form>
+            </div>
+            {% endfor %}
+            {% for item in business_enabled %}
+            {% if item.key not in (business_proposed | map(attribute="key") | list) %}
+            <div class="ds-biz">
+              <h4>{{ item.title }} <span class="mono">{{ item.key }}</span></h4>
+              <p>{{ item.description }}</p>
+              <p class="ds-why">Why: {{ item.why }}</p>
+              <form class="inline" method="post" action="/design-systems/business-elements">
+                {{ csrf_input() }}
+                <input type="hidden" name="name" value="{{ name }}">
+                <input type="hidden" name="element" value="{{ item.key }}">
+                <input type="hidden" name="return_to" value="/design-systems/{{ name }}#components">
+                <input type="hidden" name="action" value="remove">
+                <button class="btn btn-sm btn-secondary" type="submit">Remove</button>
+              </form>
+            </div>
+            {% endif %}
+            {% endfor %}
+          </div>
+          {% endif %}
+        </div>
+      </section>
+
+      <section class="ds-section" id="assets" aria-label="Assets">
+        <div class="ds-section-label">
+          <h2>Assets</h2>
+          <p>Logos, favicons, patterns, social covers, and icons — all derived from this system's tokens and mark.</p>
+        </div>
+        <div>
+          <h3 class="ds-subhead">Logos</h3>
+          {% if logo_svg %}
+          <div class="ds-asset-grid">
+            <figure class="ds-asset-tile ds-logo-96">{{ logo_svg | safe }}<figcaption>96px · color</figcaption></figure>
+            <figure class="ds-asset-tile ds-logo-48">{{ logo_svg | safe }}<figcaption>48px · color</figcaption></figure>
+            <figure class="ds-asset-tile ds-logo-32">{{ logo_svg | safe }}<figcaption>32px · color</figcaption></figure>
+            <figure class="ds-asset-tile ds-logo-24">{{ logo_svg | safe }}<figcaption>24px · color</figcaption></figure>
+            <figure class="ds-asset-tile ds-logo-16">{{ logo_svg | safe }}<figcaption>16px · color</figcaption></figure>
+            <figure class="ds-asset-tile ds-logo-48 ds-logo-mono">{{ logo_svg | safe }}<figcaption>48px · mono</figcaption></figure>
+          </div>
+          <div class="ds-asset-grid ds-mt">
+            <figure class="ds-asset-tile ds-light-tile ds-logo-48">{{ logo_svg | safe }}<figcaption>on light</figcaption></figure>
+            <figure class="ds-asset-tile ds-dark-tile ds-logo-48">{{ logo_svg | safe }}<figcaption>on dark</figcaption></figure>
+          </div>
+          {% if logo_template != "-" %}<p class="ds-note">Mark template: <span class="mono">{{ logo_template }}</span></p>{% endif %}
+          {% else %}
+          <div class="ds-empty"><strong>No logo yet.</strong> This system has no generated mark — run it through the studio wizard to generate one. Nothing is faked here.</div>
+          {% endif %}
+
+          <h3 class="ds-subhead">Wordmark</h3>
+          <div class="ds-asset-tile ds-wordmark-tile">
+            <span class="ds-wordmark-big"{% if display_font %} data-font-family="{{ display_font.stack }}"{% endif %}>{{ name }}</span>
+            {% if vibe_tagline %}<span class="ds-wordmark-tagline">{{ vibe_tagline }}</span>{% endif %}
+          </div>
+
+          <h3 class="ds-subhead">Favicons</h3>
+          {% if favicon_16 or favicon_32 or favicon_180 %}
+          <div class="ds-favicon-row">
+            {% if favicon_16 %}<figure><img src="{{ favicon_16 }}" alt="Favicon 16px" width="16" height="16"><figcaption>16px</figcaption></figure>{% endif %}
+            {% if favicon_32 %}<figure><img src="{{ favicon_32 }}" alt="Favicon 32px" width="32" height="32"><figcaption>32px</figcaption></figure>{% endif %}
+            {% if favicon_180 %}<figure><img class="ds-favicon-180" src="{{ favicon_180 }}" alt="Favicon 180px" width="180" height="180"><figcaption>180px</figcaption></figure>{% endif %}
+          </div>
+          {% else %}
+          <div class="ds-empty"><strong>No favicons yet.</strong> Generated with the logo by the studio wizard.</div>
+          {% endif %}
+
+          <h3 class="ds-subhead">Patterns</h3>
+          <div class="ds-pattern-tiles">
+            <figure class="ds-pattern-wrap"><div class="ds-pattern" data-pattern="dots" data-pattern-color="{{ primary }}" data-pattern-bg="{{ background }}"></div><figcaption>Dots</figcaption></figure>
+            <figure class="ds-pattern-wrap"><div class="ds-pattern" data-pattern="grid" data-pattern-color="{{ primary }}" data-pattern-bg="{{ background }}"></div><figcaption>Grid</figcaption></figure>
+            <figure class="ds-pattern-wrap"><div class="ds-pattern" data-pattern="stripes" data-pattern-color="{{ primary }}" data-pattern-bg="{{ background }}"></div><figcaption>Stripes</figcaption></figure>
+          </div>
+          <p class="ds-note">Patterns are generated from the palette — no stock artwork.</p>
+
+          <h3 class="ds-subhead">Social covers</h3>
+          <div class="ds-cover">
+            <div class="ds-cover-wide" data-bg-color="{{ primary }}" data-fg-color="{{ on_primary }}">
+              <span class="ds-cover-wordmark"{% if display_font %} data-font-family="{{ display_font.stack }}"{% endif %}>{{ name }}</span>
+              <span class="ds-cover-tagline">{{ vibe_tagline or vibe_name }}</span>
+              <span class="ds-cover-size">1200 × 630 · Open Graph</span>
+            </div>
+          </div>
+          <div class="ds-cover">
+            <div class="ds-cover-banner" data-bg-color="{{ background }}" data-fg-color="{{ text }}">
+              {% if logo_svg %}<span class="ds-logo-48">{{ logo_svg | safe }}</span>{% endif %}
+              <span>
+                <span class="ds-cover-wordmark ds-cover-wordmark-sm"{% if display_font %} data-font-family="{{ display_font.stack }}"{% endif %}>{{ name }}</span>
+                <span class="ds-cover-tagline ds-block">{{ vibe_tagline or vibe_name }}</span>
+              </span>
+              <span class="ds-cover-size ds-push-right">820 × 312 · Banner</span>
+            </div>
+          </div>
+
+          <h3 class="ds-subhead">Icons</h3>
+          <div class="ds-icon-row" data-fg-color="{{ primary }}">
+            <svg viewBox="0 0 24 24" aria-label="Search"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+            <svg viewBox="0 0 24 24" aria-label="Add"><path d="M5 12h14"/><path d="M12 5v14"/></svg>
+            <svg viewBox="0 0 24 24" aria-label="Check"><path d="M20 6 9 17l-5-5"/></svg>
+            <svg viewBox="0 0 24 24" aria-label="Close"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+            <svg viewBox="0 0 24 24" aria-label="Arrow right"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg>
+            <svg viewBox="0 0 24 24" aria-label="Heart"><path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z"/></svg>
+            <svg viewBox="0 0 24 24" aria-label="Star"><path d="m12 2 3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg>
+            <svg viewBox="0 0 24 24" aria-label="Bell"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg>
+          </div>
+          <p class="ds-note">UI icons drawn as inline SVG in the system's primary color.</p>
+        </div>
+      </section>
+
+      <section class="ds-section" id="files" aria-label="Files">
+        <div class="ds-section-label">
+          <h2>Files</h2>
+          <p>Everything stored for this system — {{ file_count }} file{{ "s" if file_count != 1 }}.</p>
+        </div>
+        <div>
+          {% if files %}
+          <ul class="ds-file-list">
+            {% for filename in files %}
+            <li><span class="mono">{{ filename }}</span><span class="ds-token-value">library/{{ name }}/{{ filename }}</span></li>
+            {% endfor %}
+          </ul>
+          {% else %}
+          <p class="ds-note">No files stored for this system.</p>
+          {% endif %}
+          <div class="ds-lib-actions">
+            <form method="post" action="/design-systems/clone">
+              {{ csrf_input() }}
+              <input type="hidden" name="name" value="{{ name }}">
+              <label for="clone-name">Clone to a new name (fresh version history)</label>
+              <input id="clone-name" name="new_name" type="text" placeholder="my-copy" required
+                     pattern="[A-Za-z0-9][A-Za-z0-9_-]{0,63}" autocomplete="off">
+              <button class="btn btn-sm btn-secondary" type="submit">Clone</button>
+            </form>
+            <form method="post" action="/design-systems/export">
+              {{ csrf_input() }}
+              <input type="hidden" name="name" value="{{ name }}">
+              <label for="export-format">Export tokens for other toolchains</label>
+              <select id="export-format" name="format">
+                <option value="w3c">W3C design tokens (JSON)</option>
+                <option value="tailwind">Tailwind theme (JS)</option>
+                <option value="css">CSS custom properties</option>
+              </select>
+              <button class="btn btn-sm btn-secondary" type="submit">Download</button>
+            </form>
+            <form method="post" action="/design-systems/delete">
+              {{ csrf_input() }}<input type="hidden" name="name" value="{{ name }}">
+              <button class="btn btn-sm btn-danger" type="submit">Delete</button>
+            </form>
+          </div>
+        </div>
+      </section>
+    </div>
+  </div>
+
+  <div class="ds-modal-backdrop" id="ds-component-modal" hidden>
+    <div class="ds-modal" role="dialog" aria-modal="true" aria-labelledby="ds-component-modal-title">
+      <h3 id="ds-component-modal-title">{{ name }}</h3>
+      <p>{{ vibe_tagline or "A dialog over the page, styled with this system's tokens." }}</p>
+      <div class="ds-comp-row">
+        <button class="ds-btn ds-btn-sm" type="button" data-modal-close="ds-component-modal" data-bg-color="{{ primary }}" data-fg-color="{{ on_primary }}">Confirm</button>
+        <button class="ds-btn ds-btn-sm ds-btn-ghost" type="button" data-modal-close="ds-component-modal">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="ds-modal-backdrop" id="ds-video-modal" hidden>
+    <div class="ds-modal" role="dialog" aria-modal="true" aria-labelledby="ds-video-modal-title">
+      <h3 id="ds-video-modal-title">Video</h3>
+      <p>No video asset is stored for this system — this is the placeholder state, not a faked video.</p>
+      <div class="ds-comp-row">
+        <button class="ds-btn ds-btn-sm ds-btn-ghost" type="button" data-modal-close="ds-video-modal">Close</button>
+      </div>
+    </div>
   </div>
 </div>
-
-<section class="panel">
-  <div class="panel-head"><h2>Tokens</h2></div>
-  {% for section in token_sections %}
-  <h3>{{ section.title }}</h3>
-  {% if section["items"] %}
-  <div class="table-wrap"><table>
-    <thead><tr><th>Token</th><th>Value</th></tr></thead>
-    <tbody>
-    {% for key, value in section["items"] %}
-      <tr><td class="mono">{{ key }}</td><td class="mono">{{ value }}</td></tr>
-    {% endfor %}
-    </tbody>
-  </table></div>
-  {% else %}
-  <p class="small muted">No {{ section.title | lower }} tokens.</p>
-  {% endif %}
-  {% endfor %}
-</section>
-
-<section class="panel">
-  <div class="panel-head"><h2>Business context</h2></div>
-  {% if business %}
-  <dl class="studio-summary">
-    <div><dt>Industry</dt><dd>{{ business.industry or "—" }}</dd></div>
-    <div><dt>Audience</dt><dd>{{ business.audience or "—" }}</dd></div>
-    <div><dt>Tone</dt><dd>{{ business.tone or "—" }}</dd></div>
-    <div><dt>Offering</dt><dd>{{ business.offering or "—" }}</dd></div>
-    <div><dt>Description</dt><dd>{{ business.description or "—" }}</dd></div>
-  </dl>
-  {% else %}
-  <p class="small muted">No business context yet — add one so the studio can suggest the reusable elements your business actually needs.</p>
-  {% endif %}
-  <form method="post" action="/design-systems/business">
-    {{ csrf_input() }}
-    <input type="hidden" name="name" value="{{ name }}">
-    <div class="field-row">
-      <label for="biz-industry">Industry</label>
-      <div class="field-control">
-        <input type="text" id="biz-industry" name="industry"
-               value="{{ business.industry if business else '' }}"
-               placeholder="e.g. Restaurant, SaaS, Clinic" autocomplete="off">
-      </div>
-      <div class="field-actions"></div>
-    </div>
-    <div class="field-row">
-      <label for="biz-audience">Audience</label>
-      <div class="field-control">
-        <input type="text" id="biz-audience" name="audience"
-               value="{{ business.audience if business else '' }}"
-               placeholder="e.g. Busy parents, small teams" autocomplete="off">
-      </div>
-      <div class="field-actions"></div>
-    </div>
-    <div class="field-row">
-      <label for="biz-tone">Tone</label>
-      <div class="field-control">
-        <input type="text" id="biz-tone" name="tone"
-               value="{{ business.tone if business else '' }}"
-               placeholder="e.g. Warm and welcoming" autocomplete="off">
-      </div>
-      <div class="field-actions"></div>
-    </div>
-    <div class="field-row">
-      <label for="biz-offering">Offering</label>
-      <div class="field-control">
-        <input type="text" id="biz-offering" name="offering"
-               value="{{ business.offering if business else '' }}"
-               placeholder="e.g. Online ordering, bookings" autocomplete="off">
-      </div>
-      <div class="field-actions"></div>
-    </div>
-    <div class="field-row">
-      <label for="biz-description">Description</label>
-      <div class="field-control">
-        <textarea id="biz-description" name="description" rows="3"
-                  placeholder="e.g. A neighbourhood bistro that takes weeknight reservations online">{{ business.description if business else '' }}</textarea>
-      </div>
-      <div class="field-actions"></div>
-    </div>
-    <div class="actions">
-      <button class="btn btn-sm btn-secondary" type="submit">Save business context</button>
-    </div>
-  </form>
-</section>
-
-<section class="panel">
-  <div class="panel-head"><h2>Library actions</h2></div>
-  <form method="post" action="/design-systems/clone">
-    {{ csrf_input() }}
-    <input type="hidden" name="name" value="{{ name }}">
-    <label for="clone-name">Clone to a new name (fresh version history)</label>
-    <div class="actions">
-      <input id="clone-name" name="new_name" type="text" placeholder="my-copy" required
-             pattern="[A-Za-z0-9][A-Za-z0-9_-]{0,63}" autocomplete="off">
-      <button class="btn btn-sm btn-secondary" type="submit">Clone</button>
-    </div>
-  </form>
-  <form method="post" action="/design-systems/export">
-    {{ csrf_input() }}
-    <input type="hidden" name="name" value="{{ name }}">
-    <label for="export-format">Export tokens for other toolchains</label>
-    <div class="actions">
-      <select id="export-format" name="format">
-        <option value="w3c">W3C design tokens (JSON)</option>
-        <option value="tailwind">Tailwind theme (JS)</option>
-        <option value="css">CSS custom properties</option>
-      </select>
-      <button class="btn btn-sm btn-secondary" type="submit">Download</button>
-    </div>
-  </form>
-</section>
-
-<section class="panel markdown">
-  <div class="panel-head"><h2>System</h2></div>
-  {{ markdown_html }}
-</section>
 {% endblock %}
