@@ -1668,6 +1668,29 @@ button.studio-card {
 }
 .studio-nav .btn .icon { width: 16px; height: 16px; margin-right: var(--s1); }
 
+/* ---- Design Studio direction step (issue #301) ---------------------------------- */
+/* The compiled brief, shown for tweaking: the OKLCH palette ramp as a strip
+   of swatches (data-swatch-color, like the landing previews), the seven
+   axes as sliders (the settings .slider-row pattern), the named choices as
+   selects in the wizard's .field-row shape, and the editable avoid-list.
+   Form grids use the 0.875rem gap the rest of the product's forms use. */
+.direction-section { margin: var(--s4) 0 0; }
+.direction-section > h3 { margin: 0 0 var(--s2); font-size: var(--text-md); }
+.direction-ramp {
+  display: flex;
+  height: 14px;
+  border-radius: 7px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+}
+.direction-ramp span { flex: 1; }
+.direction-axes { display: grid; gap: 0.875rem; }
+.direction-axes .slider-row label { min-width: 140px; font-weight: 600; }
+.direction-choices { display: grid; gap: 0.875rem; }
+@media (max-width: 640px) {
+  .direction-axes .slider-row label { min-width: 104px; }
+}
+
 .studio-summary {
   display: grid;
   gap: var(--s2);

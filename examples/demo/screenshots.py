@@ -276,6 +276,32 @@ def shoot_studio_wizard(browser: Browser, base: str, out: Path) -> None:
     page.context.close()
 
 
+def shoot_studio_direction(browser: Browser, base: str, out: Path) -> None:
+    """Continue the wizard past the Stack step to the Direction step (issue
+    #301) and capture it: the compiled brief's palette ramp, axis sliders,
+    and named choices. The Brand step needs a name the demo library does not
+    already hold (acme-brand is seeded), so this walk uses acme-direction.
+    """
+    page = open_page(browser, base + "/design-studio/new", 900, dark=False)
+    page.fill("#ws-product", "Acme Analytics")
+    page.click('form[action="/design-studio/new/purpose"] button[type="submit"]')
+    page.wait_for_selector('input[name="industry"]')
+    page.fill("#ws-industry", "SaaS")
+    page.click('form[action="/design-studio/new/business"] button[type="submit"]')
+    page.wait_for_selector('input[name="app_type"]')
+    page.check('input[name="app_type"][value="dashboard"]')
+    page.click('form[action="/design-studio/new/app_type"] button[type="submit"]')
+    page.wait_for_selector('input[name="stack"]')
+    page.check('input[name="stack"][value="Web + Tailwind"]')
+    page.click('form[action="/design-studio/new/stack"] button[type="submit"]')
+    page.wait_for_selector("#ws-name")
+    page.fill("#ws-name", "acme-direction")
+    page.click('form[action="/design-studio/new/brand"] button[type="submit"]')
+    page.wait_for_selector('input[name="axis_warmth"]')
+    page.screenshot(path=out)
+    page.context.close()
+
+
 def shoot_submenu(browser: Browser, base: str, out_dir: Path) -> None:
     """Two-level nav states: the Chats submenu open with the sidebar collapsed
     to icon-only. `/chats` renders the panel open server-side; the closed state
@@ -336,6 +362,8 @@ def shoot_dashboard(base: str, run_id: str, out_dir: Path, chrome: Path | None) 
                 print(f"{shot.file}: {shot.path.format(run=run_id)}")
             shoot_studio_wizard(browser, base, out_dir / "design-studio-wizard.png")
             print("design-studio-wizard.png: /design-studio/new (walked to the Stack step)")
+            shoot_studio_direction(browser, base, out_dir / "design-studio-direction.png")
+            print("design-studio-direction.png: /design-studio/new (walked to the Direction step)")
             shoot_submenu(browser, base, out_dir)
             shoot_quality(browser, f"{base}/runs/{run_id}", out_dir / QUALITY)
             print(f"{QUALITY}: /runs/{run_id} (quality review)")

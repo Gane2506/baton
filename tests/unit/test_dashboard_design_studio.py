@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import html
+import json
 import re
 from collections.abc import Iterator
 from pathlib import Path
@@ -25,8 +26,10 @@ from jev_agent.dashboard.design_studio import (
     StudioWizard,
     WizardError,
     first_incomplete_step,
+    generate_from_state,
     stack_options,
     validate_step,
+    wizard_context,
 )
 from jev_agent.dashboard.security import DashboardSettings
 from jev_agent.dashboard.studio_decisions import StackRecommendation
@@ -74,7 +77,7 @@ def _post(client: TestClient, url: str, data: dict[str, str] | None = None) -> h
 
 
 def _wizard(client: TestClient, **overrides: str) -> None:
-    """Drive the wizard through Purpose -> Business -> App type -> Stack -> Brand."""
+    """Drive the wizard through Purpose -> Business -> App type -> Stack -> Brand -> Direction."""
     defaults = {
         "product": "Acme Analytics",
         "industry": "SaaS",
@@ -108,6 +111,10 @@ def _wizard(client: TestClient, **overrides: str) -> None:
             "theme": defaults["theme"],
         },
     )
+    assert response.request.url.path == "/design-studio/new/direction"
+    # The Direction step is all-optional: submitting it untouched keeps the
+    # compiled brief exactly as previewed.
+    response = _post(client, "/design-studio/new/direction", {})
     assert response.request.url.path == "/design-studio/new/generate"
 
 
@@ -139,8 +146,10 @@ def test_first_incomplete_step() -> None:
         "app_type": {"app_type": "mobile"},
         "stack": {"stack": "Flutter"},
         "brand": {"name": "acme", "vibe": "", "theme": "both"},
+        "direction": {"complete": "1"},
     }
     assert first_incomplete_step(full) is None
+    assert first_incomplete_step({**full, "direction": {}}) == "direction"
 
 
 def test_wizard_store_prunes_and_bounds() -> None:
@@ -331,10 +340,19 @@ def test_stepper_labels_in_order(client: TestClient, home: Path) -> None:
             ("app_type", "App type"),
             ("stack", "Stack"),
             ("brand", "Brand"),
+            ("direction", "Direction"),
             ("generate", "Generate"),
         ]
     ]
-    assert STUDIO_STEPS == ("purpose", "business", "app_type", "stack", "brand", "generate")
+    assert STUDIO_STEPS == (
+        "purpose",
+        "business",
+        "app_type",
+        "stack",
+        "brand",
+        "direction",
+        "generate",
+    )
 
 
 def test_cannot_skip_ahead(client: TestClient, home: Path) -> None:
@@ -435,6 +453,9 @@ def test_full_wizard_creates_library_system(client: TestClient, home: Path) -> N
         "design-system.md",
         "tokens.json",
         "meta.json",
+        "showcase.html",
+        "motion.js",
+        "scene.js",
         "logo.svg",
         "favicon.svg",
         "favicon-16.png",
@@ -444,6 +465,48 @@ def test_full_wizard_creates_library_system(client: TestClient, home: Path) -> N
         "favicon-512.png",
     ):
         assert (system_dir / filename).is_file(), f"missing {filename}"
+    assert "prefers-reduced-motion" in (system_dir / "motion.js").read_text(encoding="utf-8")
+    assert "prefers-reduced-motion" in (system_dir / "scene.js").read_text(encoding="utf-8")
+
+    # Issue #301: meta.json records the brief, the fingerprint, the gates
+    # result, and the scene type — and the generated system honours the
+    # brief's decided choices.
+    meta = json.loads((system_dir / "meta.json").read_text(encoding="utf-8"))
+    brief = meta["design_brief"]
+    assert brief["harmony"] and brief["type_pairing"] and brief["layout"]
+    assert brief["scene"] in (
+        "warm-ambient",
+        "data-geometry",
+        "product-orbit",
+        "storefront",
+        "calm-growth",
+        "campus",
+        "journey",
+    )
+    assert meta["scene_type"] == brief["scene"]
+    assert meta["design_fingerprint"]
+    assert len(meta["design_fingerprint"]) == 64
+    assert len(brief["palette_ramp"]) == 11
+    assert set(brief["axes"]) == {
+        "warmth",
+        "contrast",
+        "density",
+        "geometry",
+        "formality",
+        "motion",
+        "type_personality",
+    }
+    gates = meta["quality_gates"]
+    assert gates["passed"] is True
+    assert gates["attempts"] >= 1
+    assert gates["violations"] == []
+    assert "fallback" not in gates
+    choices = meta["design_choices"]
+    assert choices["color_strategy"] == brief["harmony"]
+    assert choices["type_pairing"] == brief["type_pairing"]
+    assert choices["layout"] == brief["layout"]
+    assert choices["motion"] == brief["motion"]
+    assert choices["components"] == brief["layout_pattern"]
 
 
 def test_generate_clears_wizard_state(client: TestClient, home: Path) -> None:
@@ -536,3 +599,194 @@ def test_stack_decision_made_once_per_session(
     assert len(calls) == 1, "re-rendering the Stack step must not re-ask Jev"
     _post(client, "/design-studio/new/app_type", {"app_type": "mobile"})
     assert len(calls) == 2, "changing the app type re-asks exactly once"
+
+
+# ---- the Design direction step (issue #301) -------------------------------------------------
+
+
+def _direction_state() -> dict[str, dict[str, str]]:
+    """A complete wizard state up to Brand, for a fintech dashboard."""
+    return {
+        "purpose": {"product": "Acme Analytics"},
+        "business": {
+            "industry": "fintech",
+            "audience": "investors",
+            "tone": "professional",
+            "offering": "portfolio analytics",
+            "description": "",
+        },
+        "app_type": {"app_type": "dashboard"},
+        "stack": {"stack": "Web + Tailwind"},
+        "brand": {"name": "acme-brand", "vibe": "precise, trustworthy", "theme": "both"},
+    }
+
+
+def _compiled_form(state: dict[str, dict[str, str]]) -> dict[str, str]:
+    """The Direction form as the template renders it: sliders 0..100, the
+    compiled choice keys, the focal point, and the avoid-list lines."""
+    preview = wizard_context(state, "direction")["direction_brief"]
+    form = {f"axis_{axis['key']}": str(axis["value"]) for axis in preview["axes"]}
+    form.update(
+        {
+            "harmony": preview["harmony"]["key"],
+            "type_pairing": preview["type_pairing"]["key"],
+            "layout": preview["layout"]["key"],
+            "motion_profile": preview["motion"]["key"],
+            "scene": preview["scene"]["key"],
+            "layout_pattern": preview["layout_pattern"]["key"],
+            "focal_point": preview["focal_point"],
+            "avoid": "\n".join(preview["avoid"]),
+        }
+    )
+    return form
+
+
+def test_direction_context_shows_compiled_brief() -> None:
+    context = wizard_context(_direction_state(), "direction")
+    preview = context["direction_brief"]
+    assert [axis["key"] for axis in preview["axes"]] == [
+        "warmth",
+        "contrast",
+        "density",
+        "geometry",
+        "formality",
+        "motion",
+        "type_personality",
+    ]
+    assert all(0 <= axis["value"] <= 100 for axis in preview["axes"])
+    assert len(preview["palette_ramp"]) == 11
+    assert all(re.match(r"^#[0-9A-F]{6}$", hex_value) for hex_value in preview["palette_ramp"])
+    assert preview["primary_hex"] in preview["palette_ramp"]
+    assert preview["harmony"]["name"]
+    assert preview["type_pairing"]["name"]
+    assert preview["layout"]["name"]
+    assert preview["motion"]["name"]
+    assert preview["scene"]["label"]
+    assert preview["layout_pattern"]["name"]
+    assert preview["avoid"], "the avoid-list is part of the preview"
+    assert "no purple gradients" in preview["avoid"]
+    assert preview["current"]["harmony"] == preview["harmony"]["key"]
+    # A fintech brief decides data-geometry, and the preview says so.
+    assert preview["scene"]["key"] == "data-geometry"
+
+
+def test_direction_requires_earlier_steps() -> None:
+    with pytest.raises(WizardError):
+        validate_step("direction", {}, {})
+
+
+def test_direction_untouched_stores_only_complete() -> None:
+    state = _direction_state()
+    assert validate_step("direction", _compiled_form(state), state) == {"complete": "1"}
+
+
+def test_direction_tweaks_are_stored() -> None:
+    state = _direction_state()
+    preview = wizard_context(state, "direction")["direction_brief"]
+    other_harmony = next(
+        opt["key"] for opt in preview["harmonies"] if opt["key"] != preview["harmony"]["key"]
+    )
+    form = _compiled_form(state)
+    form["harmony"] = other_harmony
+    form["axis_warmth"] = "95" if preview["axes"][0]["value"] != 95 else "5"
+    stored = validate_step("direction", form, state)
+    assert stored["complete"] == "1"
+    assert stored["harmony"] == other_harmony
+    assert stored["axis_warmth"] in ("0.95", "0.05")
+    # Unchanged fields are not stored: the step stays a sparse diff.
+    assert "type_pairing" not in stored
+    assert "axis_contrast" not in stored
+
+
+def test_direction_rejects_bad_values() -> None:
+    state = _direction_state()
+    with pytest.raises(WizardError):
+        validate_step("direction", {"axis_warmth": "warm"}, state)
+    with pytest.raises(WizardError):
+        validate_step("direction", {"harmony": "not-a-harmony"}, state)
+    with pytest.raises(WizardError):
+        validate_step("direction", {"scene": "not-a-scene"}, state)
+
+
+def test_direction_page_renders_and_advances(client: TestClient, home: Path) -> None:
+    _post(client, "/design-studio/new/purpose", {"product": "Acme Analytics"})
+    _post(
+        client,
+        "/design-studio/new/business",
+        {"industry": "fintech", "offering": "portfolio analytics"},
+    )
+    _post(client, "/design-studio/new/app_type", {"app_type": "dashboard"})
+    _post(client, "/design-studio/new/stack", {"stack": "Web + Tailwind"})
+    _post(
+        client,
+        "/design-studio/new/brand",
+        {"name": "acme-brand", "vibe": "precise, trustworthy", "theme": "both"},
+    )
+    page = client.get("/design-studio/new/direction")
+    assert page.status_code == 200
+    assert "Which direction should it take?" in page.text
+    assert 'name="axis_warmth"' in page.text
+    assert 'name="harmony"' in page.text
+    assert 'name="avoid"' in page.text
+    assert "data-geometry" in page.text
+    assert ' style="' not in page.text, "no inline styles on the direction step"
+    assert "<script>" not in page.text, "no inline script blocks on the direction step"
+    assert "onclick=" not in page.text
+
+    # Tweak the warmth axis and the harmony, then generate: the brief and
+    # the generated system must honour both.
+    response = _post(
+        client,
+        "/design-studio/new/direction",
+        {"axis_warmth": "95", "harmony": "monochromatic"},
+    )
+    assert response.request.url.path == "/design-studio/new/generate"
+    page = client.get("/design-studio/new/generate")
+    assert "Monochromatic" in page.text
+    response = _post(client, "/design-studio/new/generate", {})
+    assert response.request.url.path == "/design-systems/acme-brand"
+    meta = json.loads(
+        (home / ".jev" / "design-systems" / "acme-brand" / "meta.json").read_text(encoding="utf-8")
+    )
+    assert meta["design_brief"]["axes"]["warmth"] == 0.95
+    assert meta["design_brief"]["harmony"] == "monochromatic"
+    assert meta["design_choices"]["color_strategy"] == "monochromatic"
+
+
+def test_generate_from_state_without_direction_tweaks(
+    home: Path,
+) -> None:
+    state = _direction_state()
+    state["direction"] = {"complete": "1"}
+    assert generate_from_state(state) == "acme-brand"
+    meta = json.loads(
+        (home / ".jev" / "design-systems" / "acme-brand" / "meta.json").read_text(encoding="utf-8")
+    )
+    assert meta["quality_gates"]["passed"] is True
+    assert meta["scene_type"] == "data-geometry"
+    assert (home / ".jev" / "design-systems" / "acme-brand" / "motion.js").is_file()
+    assert (home / ".jev" / "design-systems" / "acme-brand" / "scene.js").is_file()
+
+
+def test_generate_falls_back_to_legacy_palette_when_seeded_path_fails(
+    home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import jev_agent.dashboard.design_studio as studio
+
+    def _boom(*args: object, **kwargs: object) -> object:
+        raise RuntimeError("seeded generation unavailable")
+
+    monkeypatch.setattr(studio, "generate_briefed_system", _boom)
+    state = _direction_state()
+    state["direction"] = {"complete": "1"}
+    assert generate_from_state(state) == "acme-brand"
+    meta = json.loads(
+        (home / ".jev" / "design-systems" / "acme-brand" / "meta.json").read_text(encoding="utf-8")
+    )
+    gates = meta["quality_gates"]
+    assert gates["fallback"] == "legacy-palette"
+    assert "seeded generation unavailable" in str(gates["fallback_reason"])
+    assert isinstance(gates["violations"], list)
+    assert meta["design_brief"]["harmony"], "the brief is still recorded"
+    assert (home / ".jev" / "design-systems" / "acme-brand" / "motion.js").is_file()
+    assert (home / ".jev" / "design-systems" / "acme-brand" / "scene.js").is_file()

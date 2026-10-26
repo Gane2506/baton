@@ -14,8 +14,12 @@ system, and plan and design are approved together.
   the brief (or the README), grounded in the current system when there is one.
 - `jev design new` — interactive wizard: answer questions about purpose, app type
   (mobile / website / PWA / dashboard), stack, and brand, and save a complete
-  system (type-aware `tokens.json`, component docs, logo mark SVG+PNG, multi-size
-  favicon) into your design library at `~/.jev/design-systems/<name>/`.
+  system (type-aware `tokens.json`, component docs, `motion.js` + `scene.js`,
+  logo mark SVG+PNG, multi-size favicon) into your design library at
+  `~/.jev/design-systems/<name>/`. The dashboard wizard adds a Design
+  direction step where the compiled brief (axes, palette, named choices,
+  avoid-list) is previewed and tweaked before generation; `meta.json`
+  records the brief, the quality-gates result, and the scene type.
 - `jev design list` — list the user-level design systems in the library.
 - `jev design use <name>` — install a library system into the repo
   (records `source: library:<name>`).

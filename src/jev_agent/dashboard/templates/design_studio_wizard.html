@@ -7,7 +7,7 @@
 <div class="page-head">
   <div class="titles">
     <h1>Design Studio</h1>
-    <p class="lede">A new design system, six guided questions.</p>
+    <p class="lede">A new design system, seven guided questions.</p>
   </div>
   <div class="actions">
     <a class="btn btn-ghost" href="/design-studio">Exit wizard</a>
@@ -226,6 +226,139 @@
     </div>
   </form>
 
+  {% elif wizard_step == "direction" %}
+  <h2>Which direction should it take?</h2>
+  <p class="lede">The studio compiled this brief from your business, vibe, and app type. Tweak anything — or leave it as is and continue.</p>
+  {% if direction_brief %}
+  <form method="post" action="/design-studio/new/direction">
+    {{ csrf_input() }}
+    <div class="direction-section">
+      <h3>Palette</h3>
+      <div class="direction-ramp" role="img" aria-label="Palette ramp, primary {{ direction_brief.primary_hex }}">
+        {% for hex in direction_brief.palette_ramp %}<span data-swatch-color="{{ hex }}" title="{{ hex }}"></span>{% endfor %}
+      </div>
+      <p class="hint">Primary {{ direction_brief.primary_hex }} · anchor hue {{ direction_brief.anchor_hue }}°{% if direction_brief.industry %} · {{ direction_brief.industry }}{% endif %}</p>
+    </div>
+    <div class="direction-section">
+      <h3>Character</h3>
+      <div class="direction-axes">
+        {% for axis in direction_brief.axes %}
+        {% set shown = direction_brief.current['axis_' ~ axis.key] %}
+        <div class="slider-row">
+          <label for="ws-axis-{{ axis.key }}">{{ axis.label }}</label>
+          <input type="range" id="ws-axis-{{ axis.key }}" name="axis_{{ axis.key }}"
+                 min="0" max="100" step="1" value="{{ shown }}"
+                 data-slider-output="ws-axis-{{ axis.key }}-out">
+          <output id="ws-axis-{{ axis.key }}-out">{{ "%.2f"|format(shown / 100) }}</output>
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+    <div class="direction-section">
+      <h3>Choices</h3>
+      <div class="direction-choices">
+        <div class="field-row">
+          <label for="ws-harmony">Harmony</label>
+          <div class="field-control">
+            <select id="ws-harmony" name="harmony">
+              {% for opt in direction_brief.harmonies %}
+              <option value="{{ opt.key }}" {% if direction_brief.current.harmony == opt.key %}selected{% endif %}>{{ opt.name }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="field-actions"></div>
+        </div>
+        <div class="field-row">
+          <label for="ws-type-pairing">Type pairing</label>
+          <div class="field-control">
+            <select id="ws-type-pairing" name="type_pairing">
+              {% for opt in direction_brief.type_pairings %}
+              <option value="{{ opt.key }}" {% if direction_brief.current.type_pairing == opt.key %}selected{% endif %}>{{ opt.name }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="field-actions"></div>
+        </div>
+        <div class="field-row">
+          <label for="ws-layout">Layout</label>
+          <div class="field-control">
+            <select id="ws-layout" name="layout">
+              {% for opt in direction_brief.layouts %}
+              <option value="{{ opt.key }}" {% if direction_brief.current.layout == opt.key %}selected{% endif %}>{{ opt.name }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="field-actions"></div>
+        </div>
+        <div class="field-row">
+          <label for="ws-motion">Motion</label>
+          <div class="field-control">
+            <select id="ws-motion" name="motion_profile">
+              {% for opt in direction_brief.motions %}
+              <option value="{{ opt.key }}" {% if direction_brief.current.motion_profile == opt.key %}selected{% endif %}>{{ opt.name }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="field-actions"></div>
+        </div>
+        <div class="field-row">
+          <label for="ws-scene">3D scene</label>
+          <div class="field-control">
+            <select id="ws-scene" name="scene">
+              {% for opt in direction_brief.scenes %}
+              <option value="{{ opt.key }}" {% if direction_brief.current.scene == opt.key %}selected{% endif %}>{{ opt.label }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="field-actions"></div>
+        </div>
+        <div class="field-row">
+          <label for="ws-layout-pattern">Layout pattern</label>
+          <div class="field-control">
+            <select id="ws-layout-pattern" name="layout_pattern">
+              {% for opt in direction_brief.layout_patterns %}
+              <option value="{{ opt.key }}" {% if direction_brief.current.layout_pattern == opt.key %}selected{% endif %}>{{ opt.name }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="field-actions"></div>
+        </div>
+      </div>
+    </div>
+    <div class="direction-section">
+      <h3>Focus and guardrails</h3>
+      <div class="field-row">
+        <label for="ws-focal-point">Focal point
+          <span class="hint">The one element each screen leads with.</span>
+        </label>
+        <div class="field-control">
+          <input type="text" id="ws-focal-point" name="focal_point"
+                 value="{{ direction_brief.current.focal_point }}" autocomplete="off">
+        </div>
+        <div class="field-actions"></div>
+      </div>
+      <div class="field-row">
+        <label for="ws-avoid">Avoid
+          <span class="hint">One rule per line — the recognisable defaults this system must not ship.</span>
+        </label>
+        <div class="field-control">
+          <textarea id="ws-avoid" name="avoid" rows="5">{{ direction_brief.current.avoid }}</textarea>
+        </div>
+        <div class="field-actions"></div>
+      </div>
+    </div>
+    <div class="studio-nav">
+      <a class="btn btn-secondary" href="/design-studio/new/brand">Back</a>
+      <button type="submit" class="btn btn-primary">Continue</button>
+    </div>
+  </form>
+  {% else %}
+  <p class="lede">Answer the earlier steps first — the brief needs your business, vibe, and app type.</p>
+  <div class="studio-nav">
+    <a class="btn btn-secondary" href="/design-studio/new/brand">Back</a>
+  </div>
+  {% endif %}
+
   {% elif wizard_step == "generate" %}
   <h2>Ready to generate?</h2>
   <p class="lede">The studio will build the full kit and save it to your library.</p>
@@ -239,14 +372,18 @@
     <div><dt>System name</dt><dd class="mono">{{ answers.brand.get('name', '') }}</dd></div>
     <div><dt>Vibe</dt><dd>{{ answers.brand.get('vibe', '') or "—" }}</dd></div>
     <div><dt>Theme</dt><dd>{{ answers.brand.get('theme', '') | capitalize }}</dd></div>
+    {% if direction_brief %}
+    <div><dt>Direction</dt><dd>{{ direction_brief.current_display.harmony }} · {{ direction_brief.current_display.type_pairing }} · {{ direction_brief.current_display.layout_pattern }}</dd></div>
+    <div><dt>3D scene</dt><dd>{{ direction_brief.current_display.scene }}</dd></div>
+    {% endif %}
   </dl>
   <p class="hint">Generates <code>tokens.json</code>, <code>design-system.md</code>,
-  <code>meta.json</code>, a logo mark and favicons under
+  <code>meta.json</code>, <code>motion.js</code>, <code>scene.js</code>, a logo mark and favicons under
   <code>~/.jev/design-systems/{{ answers.brand.get('name', '') }}/</code>.</p>
   <form method="post" action="/design-studio/new/generate">
     {{ csrf_input() }}
     <div class="studio-nav">
-      <a class="btn btn-secondary" href="/design-studio/new/brand">Back</a>
+      <a class="btn btn-secondary" href="/design-studio/new/direction">Back</a>
       <button type="submit" class="btn btn-primary">{{ icon("i-check") }} Create design system</button>
     </div>
   </form>

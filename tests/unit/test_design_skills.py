@@ -288,3 +288,78 @@ def test_rich_tokens_carry_the_seeded_choices() -> None:
     dark = colors["dark"]
     assert isinstance(dark, dict)
     assert dark["primary"] != system.palette["primary"]
+
+
+# ---- brief enforcement (issue #301) ---------------------------------------------------------
+
+
+def test_force_pins_the_briefs_named_choices() -> None:
+    force = {
+        "harmony": "monochromatic",
+        "type_pairing": "space-grotesk-plex",
+        "layout": "dense-square",
+        "motion_profile": "snappy",
+        "layout_pattern": "table-led",
+        "anchor_hue": 210.0,
+    }
+    system = generate_seeded_system(7, keywords="fintech", app_type="dashboard", force=force)
+    assert system.color_strategy.key == "monochromatic"
+    assert system.type_pairing.key == "space-grotesk-plex"
+    assert system.layout.key == "dense-square"
+    assert system.motion.key == "snappy"
+    assert system.components.key == "table-led"
+    # The anchor hue is honoured: the primary sits near 210°, not wherever
+    # the keyword steer would have put it.
+    assert abs(system.hue - 210.0) <= 12.0 + 1e-9
+
+
+def test_force_is_deterministic_and_still_varies_the_rest() -> None:
+    force = {"harmony": "monochromatic", "type_pairing": "space-grotesk-plex"}
+    first = generate_seeded_system(7, keywords="fintech", app_type="dashboard", force=force)
+    second = generate_seeded_system(7, keywords="fintech", app_type="dashboard", force=force)
+    assert first == second
+    # The unforced axes still vary by seed.
+    other = generate_seeded_system(8, keywords="fintech", app_type="dashboard", force=force)
+    assert other.color_strategy.key == "monochromatic"
+    assert other.type_pairing.key == "space-grotesk-plex"
+    assert (other.layout.key, other.motion.key) != (first.layout.key, first.motion.key)
+
+
+def test_force_motion_alias_must_agree() -> None:
+    system = generate_seeded_system(3, force={"motion": "gentle"})
+    assert system.motion.key == "gentle"
+    with pytest.raises(ValueError):
+        generate_seeded_system(3, force={"motion": "snappy", "motion_profile": "brisk"})
+
+
+def test_force_rejects_unknown_keys_and_values() -> None:
+    with pytest.raises(ValueError):
+        generate_seeded_system(3, force={"harmony": "not-a-harmony"})
+    with pytest.raises(ValueError):
+        generate_seeded_system(3, force={"unknown_key": "x"})
+    with pytest.raises(ValueError):
+        generate_seeded_system(3, force={"layout_pattern": "not-a-pattern"})
+    with pytest.raises(ValueError):
+        generate_seeded_system(3, force={"anchor_hue": "blue"})
+    # A layout pattern for another app type is not honoured for this one.
+    with pytest.raises(ValueError):
+        generate_seeded_system(3, app_type="dashboard", force={"layout_pattern": "hero-led"})
+
+
+def test_generate_unique_system_honours_force_on_reroll() -> None:
+    force = {"harmony": "triadic", "type_pairing": "bebas-roboto"}
+    first, _ = generate_unique_system(11, keywords="x", app_type="website", force=force)
+    assert first.color_strategy.key == "triadic"
+    assert first.type_pairing.key == "bebas-roboto"
+    # Colliding with the first system re-rolls the seed, not the force.
+    second, attempts = generate_unique_system(
+        11,
+        existing_fingerprints={first.fingerprint},
+        keywords="x",
+        app_type="website",
+        force=force,
+    )
+    assert attempts == 2
+    assert second.color_strategy.key == "triadic"
+    assert second.type_pairing.key == "bebas-roboto"
+    assert second.fingerprint != first.fingerprint

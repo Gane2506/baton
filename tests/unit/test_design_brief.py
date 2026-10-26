@@ -480,3 +480,20 @@ def test_brief_dataclass_is_frozen() -> None:
     assert isinstance(brief, DesignBrief)
     with pytest.raises(AttributeError):
         brief.seed = 1  # type: ignore[misc]
+
+
+def test_avoid_override_replaces_the_derived_list() -> None:
+    context = BusinessContext(industry="fintech")
+    brief = compile_brief(context, "", "dashboard", overrides={"avoid": ["custom rule"]})
+    assert brief.avoid == ("custom rule",)
+    assert "no purple gradients" not in brief.avoid
+
+
+def test_avoid_override_rejects_bad_values() -> None:
+    context = BusinessContext(industry="fintech")
+    with pytest.raises(ValueError):
+        compile_brief(context, "", "dashboard", overrides={"avoid": "not a list"})
+    with pytest.raises(ValueError):
+        compile_brief(context, "", "dashboard", overrides={"avoid": [""]})
+    with pytest.raises(ValueError):
+        compile_brief(context, "", "dashboard", overrides={"avoid": [123]})

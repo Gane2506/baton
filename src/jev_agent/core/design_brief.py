@@ -33,6 +33,7 @@ import math
 import random
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from typing import cast
 
 from jev_agent.core.design_business import (
     AXIS_KEYS,
@@ -321,8 +322,18 @@ _KEY_OVERRIDES: dict[str, frozenset[str]] = {
     "layout_pattern": LAYOUT_PATTERNS,
 }
 _TEXT_OVERRIDES: frozenset[str] = frozenset(("focal_point",))
+# List overrides: "avoid" replaces the derived avoid-list wholesale (the
+# direction step's editable avoid-list, issue #301) — a list/tuple of
+# non-empty strings, capped so a forged override cannot bloat the brief.
+_LIST_OVERRIDES: frozenset[str] = frozenset(("avoid",))
+_MAX_AVOID_ITEMS = 50
+_MAX_AVOID_LEN = 200
 OVERRIDABLE_KEYS: frozenset[str] = (
-    _AXIS_OVERRIDES | _SCALAR_OVERRIDES | frozenset(_KEY_OVERRIDES) | _TEXT_OVERRIDES
+    _AXIS_OVERRIDES
+    | _SCALAR_OVERRIDES
+    | frozenset(_KEY_OVERRIDES)
+    | _TEXT_OVERRIDES
+    | _LIST_OVERRIDES
 )
 
 
@@ -342,6 +353,18 @@ def _validate_overrides(overrides: Mapping[str, object]) -> dict[str, object]:
                 raise ValueError(f"brief override {key!r} must be one of {allowed}, got {value!r}")
         elif key in _TEXT_OVERRIDES and (not isinstance(value, str) or not value.strip()):
             raise ValueError(f"brief override {key!r} must be a non-empty string")
+        elif key in _LIST_OVERRIDES:
+            if not isinstance(value, (list, tuple)) or len(value) > _MAX_AVOID_ITEMS:
+                raise ValueError(
+                    f"brief override {key!r} must be a list of at most "
+                    f"{_MAX_AVOID_ITEMS} strings, got {value!r}"
+                )
+            for item in value:
+                if not isinstance(item, str) or not item.strip() or len(item) > _MAX_AVOID_LEN:
+                    raise ValueError(
+                        f"brief override {key!r} items must be non-empty strings "
+                        f"under {_MAX_AVOID_LEN} characters, got {item!r}"
+                    )
     return dict(overrides)
 
 
@@ -517,6 +540,14 @@ def compile_brief(
         if part.strip()
     )
 
+    # 5. The avoid-list: the base list plus the language's additions, unless
+    # the caller replaced it outright (the direction step's edited list).
+    avoid: tuple[str, ...] = BASE_AVOID + language.avoid
+    if "avoid" in clean_overrides:
+        avoid = tuple(
+            str(item) for item in cast("list[str] | tuple[str, ...]", clean_overrides["avoid"])
+        )
+
     return DesignBrief(
         business_context=business_context,
         vibe=vibe,
@@ -533,7 +564,7 @@ def compile_brief(
         layout_pattern=picked["layout_pattern"],
         focal_point=picked["focal_point"],
         scene=picked["scene"],
-        avoid=BASE_AVOID + language.avoid,
+        avoid=avoid,
         palette_ramp=oklch_ramp(anchor_hue, anchor_chroma),
         seed=resolved_seed,
         keywords=keywords,
