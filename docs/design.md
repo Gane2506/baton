@@ -25,6 +25,10 @@ system, and plan and design are approved together.
   toolchains (W3C design tokens, Tailwind config, or CSS variables).
 - `jev design reverse <url>` — reverse-engineer a design system from a website
   URL or screenshots (URL fetching is SSRF-guarded).
+- `jev design figma export|import|sync|edit` — Figma, two-way: import a Figma
+  file as a system, export a system to Figma as `use_figma` Plugin API code,
+  sync a linked file's tokens back in, or generate one granular edit
+  (see [figma.md](figma.md)).
 
 ## Library
 

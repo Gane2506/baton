@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import json
+import os
 import re
 import xml.etree.ElementTree as ET
 from pathlib import Path
@@ -38,6 +39,7 @@ from jev_agent.core.design_library import (
 )
 from jev_agent.core.design_showcase import VIBE_PROFILES, rich_tokens, vibe_for_keywords
 from jev_agent.core.design_system import META_JSON, design_dir, save_design_system
+from jev_agent.core.figma import MCP_SERVER_NAME, TOKEN_ENV
 from jev_agent.core.store import NotFoundError
 from jev_agent.dashboard import views
 from jev_agent.dashboard.helpers import _text
@@ -732,6 +734,55 @@ def _design_system_view(repo: views.Repo, name: str) -> dict[str, Any]:
         "favicon_16": _favicon_data_uri(system_path / "favicon-16.png"),
         "favicon_32": _favicon_data_uri(system_path / "favicon-32.png"),
         "favicon_180": _favicon_data_uri(system_path / "favicon-180.png"),
+    }
+
+
+def _design_system_figma_view(
+    repo: views.Repo,
+    name: str,
+    *,
+    script: str | None = None,
+    snippet: str | None = None,
+    edit_kind: str | None = None,
+    sync: dict[str, object] | None = None,
+) -> dict[str, Any]:
+    """The system's Figma page: the two-way binding, in one place.
+
+    Link state comes from `meta.json` (`figma_file_url`/`figma_file_key`,
+    set by the Link form); token/MCP state is live (never values). `script`
+    is a generated full export, `snippet` one granular edit, `sync` the last
+    sync diff — all three are render-only extras from the POST that made them.
+    """
+    system = load_library_system(name)
+    if system is None:
+        raise NotFoundError(f'no design system named "{name}" in the library')
+    meta = _library_meta(name)
+    tokens = system.tokens if isinstance(system.tokens, dict) else {}
+    light, dark = _flat_colors(tokens)
+    counts: dict[str, int] = {}
+    for section in ("colors", "type_scale", "spacing", "radii"):
+        section_value = tokens.get(section)
+        counts[section] = len(section_value) if isinstance(section_value, dict) else 0
+    file_url = _meta_text(meta, "figma_file_url")
+    file_key = _meta_text(meta, "figma_file_key")
+    return {
+        "name": name,
+        "version": system.version,
+        "updated": system.updated_at,
+        "source": _meta_text(meta, "source"),
+        "figma_file_url": None if file_url == "-" else file_url,
+        "figma_file_key": None if file_key == "-" else file_key,
+        "figma_last_sync": _meta_text(meta, "figma_last_sync"),
+        "token_set": bool(os.environ.get(TOKEN_ENV, "").strip()),
+        "mcp_connected": MCP_SERVER_NAME in repo.config.tools.mcp,
+        "collection_name": f"Baton / {name}",
+        "color_count": len(light),
+        "dark_color_count": len(dark) if dark is not None else 0,
+        "token_counts": counts,
+        "script": script,
+        "snippet": snippet,
+        "edit_kind": edit_kind,
+        "sync": sync,
     }
 
 

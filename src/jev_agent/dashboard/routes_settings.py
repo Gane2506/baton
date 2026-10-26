@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from collections.abc import Callable
 from typing import Any
 
@@ -20,6 +21,13 @@ from jev_agent.config import ConfigError
 from jev_agent.config.schema import BEGINNER_FIELDS, CacheSemanticSettings, McpServerConfig
 from jev_agent.core.benchmarks import DEFAULT_LAST
 from jev_agent.core.cache import CalibrationResult, calibrate_thresholds
+from jev_agent.core.figma import (
+    MCP_SERVER_NAME,
+    MCP_URL,
+    TOKEN_ENV,
+    FigmaClient,
+    FigmaError,
+)
 from jev_agent.core.ship import (
     Gh,
     ShipError,
@@ -167,6 +175,7 @@ class SettingsRoutes(DashboardCore):
                 "level_summaries": LEVEL_SUMMARY,
                 "api_servers": views.api_servers(repo, self.api_tests),
                 "provider_keys": views.provider_api_keys(repo.config),
+                "figma": views.figma_status(repo.config, self.figma_validation),
             }
 
         return self._settings_page(request, "tools", "tools.html", extra)
@@ -312,6 +321,65 @@ class SettingsRoutes(DashboardCore):
             return f"{name}: {detail}"
 
         return await self.act(request, "/tools#apis", test)
+
+    async def figma_validate(self, request: Request) -> Response:
+        """Check the saved Figma token against the API (Tools → APIs → Figma).
+
+        `GET /v1/me` proves the token belongs to a Figma account; the result
+        is remembered for this dashboard process, so the Figma card shows it
+        until a restart. The token itself is never in the form — it already
+        lives in the secrets file — so a bad token flashes the plain reason
+        instead of 500ing (the `act` contract).
+        """
+
+        def validate(repo: views.Repo, form: FormData) -> str:
+            token = os.environ.get(TOKEN_ENV, "").strip()
+            if not token:
+                raise JevError("no Figma token saved yet — add it on Tools → APIs first")
+            try:
+                with FigmaClient(token) as client:
+                    handle = client.validate_token()
+            except FigmaError as exc:
+                self.figma_validation = ("error", str(exc))
+                raise JevError(str(exc)) from exc
+            self.figma_validation = ("ready", f"Connected as {handle}")
+            return f"Figma connected as {handle}"
+
+        return await self.act(request, "/tools#apis", validate)
+
+    async def figma_mcp_add(self, request: Request) -> Response:
+        """One-click add of the official Figma MCP server (Tools → APIs → Figma).
+
+        Adds `[tools.mcp.figma]` with the remote URL `https://mcp.figma.com/mcp`
+        — the server that gives agents `get_design_context`, `get_screenshot`
+        and the write tools (`use_figma`, `generate_figma_design`). Saved to
+        the user config by default (a repo save needs the repo trusted, like
+        every other MCP server — the trust gate answers that in the flash).
+        """
+
+        def add(repo: views.Repo, form: FormData) -> str:
+            target = _text(form, "target") or "user"
+
+            def mutate(layer: dict[str, Any]) -> None:
+                if settings.entity_exists(layer, "tools.mcp", MCP_SERVER_NAME):
+                    raise ValueError(f"tools.mcp.{MCP_SERVER_NAME} already exists")
+                settings.set_path(
+                    layer,
+                    f"tools.mcp.{MCP_SERVER_NAME}",
+                    {"url": MCP_URL, "transport": "http"},
+                )
+
+            error = settings.save(self.settings.root, target, mutate)
+            if error:
+                if settings.TRUST_GATE_MARKER in error:
+                    return error  # act() flashes it as a one-click trust offer
+                raise JevError(error)
+            return (
+                f"added the Figma MCP server ({MCP_URL}) to {target} config — "
+                "agents can now read Figma files and design in them with use_figma"
+            )
+
+        return await self.act(request, "/tools#apis", add)
 
     def _settings_page(
         self,

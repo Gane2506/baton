@@ -72,6 +72,7 @@ class DashboardCore:
         self.claude_flow = ClaudeSetupTokenFlow()
         self.server_stats = ServerStatsCache()
         self.api_tests: dict[str, tuple[str, str]] = {}  # Tools → APIs: last Test per server
+        self.figma_validation: tuple[str, str] | None = None  # Tools → Figma: last /v1/me
         self.started_at = datetime.now(UTC)  # the About panel's uptime
         self.env = _environment()
         self._flash_lock = threading.Lock()
