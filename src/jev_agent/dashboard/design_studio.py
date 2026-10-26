@@ -24,17 +24,23 @@ from jev_agent.core.design_kit import (
     STACKS,
     THEMES,
     design_system_markdown,
-    palette_for_vibe,
     tokens_for_app_type,
 )
 from jev_agent.core.design_library import (
+    library_fingerprints,
     library_system_path,
     list_library,
     save_library_system,
     validate_library_name,
 )
-from jev_agent.core.design_showcase import VIBE_PROFILES, rich_tokens, vibe_for_keywords
+from jev_agent.core.design_showcase import VIBE_PROFILES, vibe_for_keywords
 from jev_agent.core.design_showcase_html import render_showcase
+from jev_agent.core.design_skills import (
+    generate_unique_system,
+    new_seed,
+    rich_tokens_for_seeded,
+    seeded_vibe_profile,
+)
 from jev_agent.core.logo import generate_mark, mark_template, mark_to_png, mark_to_svg
 from jev_agent.dashboard.studio_decisions import (
     STACK_REC_KEY,
@@ -282,14 +288,56 @@ def generate_from_state(state: Mapping[str, Mapping[str, str]]) -> str:
             "pick a different name (the studio only creates new systems)"
         )
 
-    palette = palette_for_vibe(vibe)
-    tokens = tokens_for_app_type(app_type, palette, theme)
+    # Seeded generation (issue #299): the same path as `jev design new` — a
+    # fresh random seed per system, the business context + vibe as a steer
+    # (not a fixed answer), and a fingerprint re-roll on collision with an
+    # existing library system. The seed and chosen skill keys are stored in
+    # meta.json for reproducibility.
+    steer = " ".join(
+        part
+        for part in (
+            vibe,
+            context.industry,
+            context.tone,
+            context.offering,
+            context.description,
+        )
+        if part.strip()
+    )
+    seeded, _attempts = generate_unique_system(
+        new_seed(),
+        existing_fingerprints=set(library_fingerprints().values()),
+        keywords=steer,
+        app_type=app_type,
+    )
+    palette = seeded.palette
+    tokens = tokens_for_app_type(
+        app_type,
+        palette,
+        theme,
+        layout=seeded.layout,
+        pairing=seeded.type_pairing,
+        motion=seeded.motion,
+    )
     # Rich tokens (issue #155): the full design-token set — ramps, dark pairs,
     # typography, shadows, motion — merged under "design_tokens" so legacy
-    # consumers (exports, prompts) keep reading the flat keys untouched.
+    # consumers (exports, prompts) keep reading the flat keys untouched. The
+    # seeded choices flow into the rich tokens (and the showcase) through the
+    # vibe profile, so the detail page shows the same palette, pairing,
+    # spacing, radii, and motion the flat tokens carry.
     vibe_profile = VIBE_PROFILES.get(brand.get("vibe_profile", "")) or vibe_for_keywords(vibe)
-    tokens["design_tokens"] = rich_tokens(vibe_profile, theme)
-    markdown = design_system_markdown(name, app_type, stack, palette, theme, business=context)
+    tokens["design_tokens"] = rich_tokens_for_seeded(vibe_profile, seeded, theme)
+    markdown = design_system_markdown(
+        name,
+        app_type,
+        stack,
+        palette,
+        theme,
+        business=context,
+        components=list(seeded.components.components),
+        choices=seeded.choices,
+        pairing=seeded.type_pairing,
+    )
     seed = f"{name}:{product}"
     template = mark_template(seed)
     meta_extra: dict[str, object] = {
@@ -302,6 +350,9 @@ def generate_from_state(state: Mapping[str, Mapping[str, str]]) -> str:
         "vibe": vibe,
         "vibe_profile": vibe_profile.key,
         "logo_template": template,
+        "design_seed": seeded.seed,
+        "design_fingerprint": seeded.fingerprint,
+        "design_choices": seeded.choices,
     }
     if not context.is_empty():
         meta_extra["business_context"] = context.to_meta()
@@ -311,10 +362,11 @@ def generate_from_state(state: Mapping[str, Mapping[str, str]]) -> str:
     save_library_system(name, markdown, tokens, meta_extra=meta_extra)
 
     # Showcase gallery (issue #155): a stunning standalone preview saved
-    # alongside the system.
+    # alongside the system. It renders from the seeded profile so the hero
+    # matches the tokens, not the base vibe.
     showcase_html = render_showcase(
         name,
-        vibe_profile,
+        seeded_vibe_profile(vibe_profile, seeded),
         cast("dict[str, object]", tokens["design_tokens"]),
         theme,
         business=context,

@@ -33,7 +33,6 @@ from jev_agent.core.design_kit import (
     APP_TYPES,
     STACKS,
     design_system_markdown,
-    palette_for_vibe,
     tokens_for_app_type,
 )
 from jev_agent.core.design_library import (
@@ -42,6 +41,7 @@ from jev_agent.core.design_library import (
     export_tokens_tailwind,
     export_tokens_w3c,
     library_dir,
+    library_fingerprints,
     library_system_path,
     list_library,
     load_library_system,
@@ -55,6 +55,7 @@ from jev_agent.core.design_reverse import (
     palette_from_png,
     suggest_library_name,
 )
+from jev_agent.core.design_skills import generate_unique_system, new_seed
 from jev_agent.core.design_system import (
     META_JSON,
     STARTER_MARKDOWN,
@@ -320,9 +321,36 @@ def new() -> None:
     vibe = Prompt.ask("Vibe keywords (free text, optional)", default="", console=console).strip()
     theme = Prompt.ask("Theme", choices=["light", "dark", "both"], default="both", console=console)
 
-    palette = palette_for_vibe(vibe)
-    tokens = tokens_for_app_type(app_type, palette, theme)
-    markdown = design_system_markdown(name, app_type, stack, palette, theme)
+    # Seeded generation (issue #299): a fresh random seed per system, so the
+    # same vibe keywords produce a different palette, type pairing, layout,
+    # motion, and components every time — and the fingerprint check re-rolls
+    # when the draw collides with an existing library system. The seed and
+    # chosen skill keys are stored in meta.json for reproducibility.
+    seeded, _attempts = generate_unique_system(
+        new_seed(),
+        existing_fingerprints=set(library_fingerprints().values()),
+        keywords=vibe,
+        app_type=app_type,
+    )
+    palette = seeded.palette
+    tokens = tokens_for_app_type(
+        app_type,
+        palette,
+        theme,
+        layout=seeded.layout,
+        pairing=seeded.type_pairing,
+        motion=seeded.motion,
+    )
+    markdown = design_system_markdown(
+        name,
+        app_type,
+        stack,
+        palette,
+        theme,
+        components=list(seeded.components.components),
+        choices=seeded.choices,
+        pairing=seeded.type_pairing,
+    )
     seed = f"{name}:{product}"
     template = mark_template(seed)
     meta_extra: dict[str, object] = {
@@ -333,6 +361,9 @@ def new() -> None:
         "product_name": product,
         "theme": theme,
         "logo_template": template,
+        "design_seed": seeded.seed,
+        "design_fingerprint": seeded.fingerprint,
+        "design_choices": seeded.choices,
     }
     version = save_library_system(name, markdown, tokens, meta_extra=meta_extra)
 
@@ -358,6 +389,12 @@ def new() -> None:
         console.print(f"  [green]✓[/green] {filename}")
     console.print(
         f"App type: {app_type} · stack: {escape(stack)} · theme: {theme} · mark: {template}"
+    )
+    console.print(
+        "Design choices: "
+        + " · ".join(f"{key}={value}" for key, value in seeded.choices.items() if key != "primary")
+        + f" · primary={seeded.palette['primary']}",
+        markup=False,
     )
 
 

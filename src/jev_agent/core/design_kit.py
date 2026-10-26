@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from jev_agent.core.design_business import BusinessContext
+    from jev_agent.core.design_skills import LayoutProfile, MotionProfile, TypePairing
 
 APP_TYPES: dict[str, str] = {
     "mobile": "Mobile app — touch-first UI, platform conventions, safe areas",
@@ -231,7 +232,15 @@ def palette_for_vibe(keywords: str) -> dict[str, str]:
     return _palette_from_hue(float(hue))
 
 
-def tokens_for_app_type(app_type: str, palette: dict[str, str], theme: str) -> dict[str, object]:
+def tokens_for_app_type(
+    app_type: str,
+    palette: dict[str, str],
+    theme: str,
+    *,
+    layout: LayoutProfile | None = None,
+    pairing: TypePairing | None = None,
+    motion: MotionProfile | None = None,
+) -> dict[str, object]:
     """Type-aware design tokens for the wizard's chosen app type.
 
     `palette` is the light-mode base from `palette_for_vibe`; `theme` is one of
@@ -244,6 +253,13 @@ def tokens_for_app_type(app_type: str, palette: dict[str, str], theme: str) -> d
       tabular-numerals note.
     - website: type-forward scale with display sizes and generous line-heights.
     - pwa: website-like tokens plus install/splash/offline guidance.
+
+    The seeded overrides (issue #299) vary what used to be fixed per app
+    type: `layout` scales the spacing ladder (safe-area keys are platform
+    constants and never scale) and replaces the radii, `pairing` adds a
+    `typography` section with the chosen display/body/mono stacks, and
+    `motion` adds the chosen temperament's durations and easings. Omitting
+    all three reproduces the historical fixed tokens exactly.
     """
     if app_type not in APP_TYPES:
         raise ValueError(f"unknown app type: {app_type!r} (expected one of {sorted(APP_TYPES)})")
@@ -358,6 +374,29 @@ def tokens_for_app_type(app_type: str, palette: dict[str, str], theme: str) -> d
                     "and queued actions sync on reconnect."
                 ),
             }
+    if layout is not None:
+        spacing = tokens.get("spacing")
+        if isinstance(spacing, dict):
+            tokens["spacing"] = {
+                key: (
+                    value
+                    if not isinstance(value, (int, float)) or key.startswith("safe_area")
+                    else max(2, round(value * layout.spacing_factor))
+                )
+                for key, value in spacing.items()
+            }
+        tokens["radii"] = dict(layout.radii)
+    if pairing is not None:
+        tokens["typography"] = {
+            "font_display": pairing.display_stack,
+            "font_body": pairing.body_stack,
+            "font_mono": pairing.mono_stack,
+            "display_weight": pairing.display_weight,
+            "tracking": pairing.tracking,
+            "scale_ratio": pairing.scale_ratio,
+        }
+    if motion is not None:
+        tokens["motion"] = dict(motion.tokens)
     return tokens
 
 
@@ -409,6 +448,10 @@ def design_system_markdown(
     palette: dict[str, str],
     theme: str,
     business: BusinessContext | None = None,
+    *,
+    components: list[tuple[str, str]] | None = None,
+    choices: dict[str, str] | None = None,
+    pairing: TypePairing | None = None,
 ) -> str:
     """The starter design system as markdown: token summary, the app type's
     component set, and logo/wordmark guidance.
@@ -417,6 +460,12 @@ def design_system_markdown(
     the geometric mark. When `business` is given and non-empty, a business
     context section records the industry/audience/tone/offering/description
     and the elements proposed for it (issue #283).
+
+    The seeded overrides (issue #299): `components` replaces the app type's
+    fixed component set with the chosen variant, `pairing` sets the wordmark
+    stack from the chosen type pairing, and `choices` (the seed's skill keys)
+    is recorded in a Design choices section so the markdown itself says how
+    this system differs from its siblings.
     """
     if app_type not in APP_TYPES:
         raise ValueError(f"unknown app type: {app_type!r}")
@@ -446,8 +495,19 @@ def design_system_markdown(
         "border",
     ):
         lines.append(f"- `{key}`: {display.get(key, '—')}")
+    if choices:
+        lines += ["", "## Design choices", ""]
+        lines.append(
+            "Seeded from the design skills (`design-color`, `design-typography`, "
+            "`design-layout`, `design-motion`): the same brief with a different "
+            "seed is a different system on every axis below."
+        )
+        lines.append("")
+        for key in ("color_strategy", "type_pairing", "layout", "motion", "components"):
+            if key in choices:
+                lines.append(f"- `{key}`: {choices[key]}")
     lines += ["", "## Components", ""]
-    for component, guidance in _COMPONENTS[app_type]:
+    for component, guidance in components if components is not None else _COMPONENTS[app_type]:
         lines.append(f"- **{component}**: {guidance}")
     if business is not None and not business.is_empty():
         from jev_agent.core.design_business import propose_elements
@@ -470,6 +530,11 @@ def design_system_markdown(
             lines.append("")
             for element in proposed:
                 lines.append(f"- **{element.title}** ({element.key}): {element.why}")
+    # The wordmark stack follows the seeded pairing when one was chosen,
+    # else the app type's fixed stack (the historical default).
+    wordmark_stack = pairing.display_stack if pairing is not None else _WORDMARK_STACKS[app_type]
+    wordmark_weight = pairing.display_weight if pairing is not None else "600-700"
+    wordmark_tracking = pairing.tracking if pairing is not None else -0.01
     lines += [
         "",
         "## Logo",
@@ -479,8 +544,9 @@ def design_system_markdown(
         "",
         "**Wordmark** (the product name set in type, never baked into the mark):",
         "",
-        f"- Font stack: `{_WORDMARK_STACKS[app_type]}`",
-        "- Weight 600-700, tight letter-spacing (-0.01em) for the product name.",
+        f"- Font stack: `{wordmark_stack}`",
+        f"- Weight {wordmark_weight}, tight letter-spacing ({wordmark_tracking}em) "
+        "for the product name.",
         "- On dark surfaces use the text color; the mark carries the brand color.",
         "",
         "## Usage notes",

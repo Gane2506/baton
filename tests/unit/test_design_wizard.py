@@ -27,6 +27,7 @@ from jev_agent.core.design_kit import (
     palette_for_vibe,
     tokens_for_app_type,
 )
+from jev_agent.core.design_skills import COMPONENT_VARIANTS
 
 
 @pytest.fixture
@@ -213,7 +214,16 @@ def test_new_wizard_end_to_end(monkeypatch: pytest.MonkeyPatch, home_tmp: Path) 
     assert _mapping(tokens["colors"])["background"] != "#FFFFFF"  # dark theme
 
     markdown = (system_dir / "design-system.md").read_text(encoding="utf-8")
-    assert "acme-dash" in markdown and "Data table" in markdown
+    assert "acme-dash" in markdown
+    # The component set is the seeded variant recorded in meta (issue #299):
+    # the markdown lists exactly that variant's components.
+    assert "design_seed" in meta and "design_fingerprint" in meta
+    choices = meta["design_choices"]
+    assert isinstance(choices, dict)
+    variant_key = choices["components"]
+    variant = next(item for item in COMPONENT_VARIANTS["dashboard"] if item.key == variant_key)
+    for component_name, _guidance in variant.components:
+        assert f"**{component_name}**" in markdown
 
     assert "acme-dash" in design_library.list_library()
 
