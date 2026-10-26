@@ -708,6 +708,18 @@ def test_direction_rejects_bad_values() -> None:
         validate_step("direction", {"scene": "not-a-scene"}, state)
 
 
+def test_direction_step_uses_shared_form_grid_gap(client: TestClient) -> None:
+    """Issue #318: the direction step used a literal 0.875rem grid gap while
+    the shared .form-grid uses var(--s3) (12px), and the comment claimed
+    0.875rem was the product standard. One gap, the shared one; and
+    .field-actions matches the 0.5rem (var(--s2)) action-row standard."""
+    css = client.get("/static/style.css").text
+    assert ".direction-axes { display: grid; gap: var(--s3); }" in css
+    assert ".direction-choices { display: grid; gap: var(--s3); }" in css
+    assert "0.875rem" not in css
+    assert ".field-actions { display: flex; gap: var(--s2);" in css
+
+
 def test_direction_page_renders_and_advances(client: TestClient, home: Path) -> None:
     _post(client, "/design-studio/new/purpose", {"product": "Acme Analytics"})
     _post(

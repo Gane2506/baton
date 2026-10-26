@@ -263,15 +263,16 @@ def test_showcase_type_scale_comes_from_tokens() -> None:
     assert "--tw-display-xl-tracking: -0.04em;" in html
     assert "--tw-display-xl-leading: 1.0;" in html
     assert "--tw-body-md-size: 18px;" in html
-    # The specimen rules read the variables (with the old sizes as fallbacks).
-    assert "font-size:var(--tw-display-xl-size,76px);" in html
+    # The specimen rules read the variables (with the old sizes as fallbacks),
+    # capped by a clamp() so they fit a 390px viewport (issue #317).
+    assert "font-size:clamp(40px,11vw,var(--tw-display-xl-size,76px));" in html
     assert "font-size:var(--tw-body-md-size,15px);" in html
 
 
 def test_showcase_flat_tokens_keep_the_old_sizes() -> None:
     html = render_showcase("Demo", VIBE_PROFILES["minimal"], {"colors": {}}, "light")
     assert "--tw-display-xl-size:" not in html
-    assert "font-size:var(--tw-display-xl-size,76px);" in html
+    assert "font-size:clamp(40px,11vw,var(--tw-display-xl-size,76px));" in html
 
 
 # ---- 5. core/cache.py: no empty Bearer header ---------------------------------------

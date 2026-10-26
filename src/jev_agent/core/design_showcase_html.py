@@ -610,52 +610,52 @@ body{
   color:var(--c-text-muted);
   margin-top:4px;
 }
-.type-sample{line-height:1.2}
+.type-sample{line-height:1.2;overflow-wrap:break-word}
 .type-display-xl {
   font-family:var(--font-display);
-  font-size:var(--tw-display-xl-size,76px);
+  font-size:clamp(40px,11vw,var(--tw-display-xl-size,76px));
   font-weight:var(--tw-display-xl-weight,700);
   letter-spacing:var(--tw-display-xl-tracking,-0.025em);
   line-height:var(--tw-display-xl-leading,1.02);
 }
 .type-display-lg {
   font-family:var(--font-display);
-  font-size:var(--tw-display-lg-size,60px);
+  font-size:clamp(34px,9vw,var(--tw-display-lg-size,60px));
   font-weight:var(--tw-display-lg-weight,700);
   letter-spacing:var(--tw-display-lg-tracking,-0.025em);
   line-height:var(--tw-display-lg-leading,1.05);
 }
 .type-display-md {
   font-family:var(--font-display);
-  font-size:var(--tw-display-md-size,48px);
+  font-size:clamp(30px,8vw,var(--tw-display-md-size,48px));
   font-weight:var(--tw-display-md-weight,700);
   letter-spacing:var(--tw-display-md-tracking,-0.025em);
   line-height:var(--tw-display-md-leading,1.08);
 }
 .type-display-sm {
   font-family:var(--font-display);
-  font-size:var(--tw-display-sm-size,36px);
+  font-size:clamp(26px,7vw,var(--tw-display-sm-size,36px));
   font-weight:var(--tw-display-sm-weight,700);
   letter-spacing:var(--tw-display-sm-tracking,-0.025em);
   line-height:var(--tw-display-sm-leading,1.1);
 }
 .type-headline-lg {
   font-family:var(--font-display);
-  font-size:var(--tw-headline-lg-size,28px);
+  font-size:clamp(22px,6vw,var(--tw-headline-lg-size,28px));
   font-weight:var(--tw-headline-lg-weight,650);
   letter-spacing:var(--tw-headline-lg-tracking,-0.01em);
   line-height:var(--tw-headline-lg-leading,1.2);
 }
 .type-headline-md {
   font-family:var(--font-display);
-  font-size:var(--tw-headline-md-size,22px);
+  font-size:clamp(20px,5.5vw,var(--tw-headline-md-size,22px));
   font-weight:var(--tw-headline-md-weight,600);
   letter-spacing:var(--tw-headline-md-tracking,-0.008em);
   line-height:var(--tw-headline-md-leading,1.25);
 }
 .type-headline-sm {
   font-family:var(--font-display);
-  font-size:var(--tw-headline-sm-size,18px);
+  font-size:clamp(16px,5vw,var(--tw-headline-sm-size,18px));
   font-weight:var(--tw-headline-sm-weight,600);
   letter-spacing:var(--tw-headline-sm-tracking,-0.005em);
   line-height:var(--tw-headline-sm-leading,1.3);
@@ -875,6 +875,15 @@ body{
   .type-row{grid-template-columns:1fr;gap:8px}
   .hero-split{grid-template-columns:1fr}
   .wrap,.topbar-inner{padding-left:20px;padding-right:20px}
+  /* The brand + 5 nav links + theme toggle measure ~640px wide, so the
+     page overflows a 390px viewport (issue #317). Below 720px the section
+     nav collapses away — the page is single-column and every section is
+     one scroll away — leaving brand + toggle, which fit. */
+  .topbar-inner{gap:16px}
+  .topbar-brand{min-width:0;overflow-wrap:anywhere}
+  .topbar nav{display:none}
+  .demo-nav{flex-wrap:wrap}
+  .card-actions{flex-wrap:wrap}
 }
 """
 
