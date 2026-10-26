@@ -726,6 +726,10 @@ def test_detail_copy_per_value(client: TestClient, home: Path) -> None:
     assert "showCopyTip" in js.text
     assert '"Copied"' in js.text
     assert "copyText" in js.text
+    # Issue #292: a rejected Clipboard API write falls back to the textarea
+    # path instead of reporting failure outright.
+    assert "function fallback()" in js.text
+    assert "function () { fallback(); }" in js.text
     css = client.get("/static/design_system.css")
     assert css.status_code == 200
     assert ".ds-copyable" in css.text

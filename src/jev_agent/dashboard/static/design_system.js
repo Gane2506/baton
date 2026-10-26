@@ -103,20 +103,26 @@
   }
 
   /* Shared clipboard write: navigator.clipboard with a textarea fallback
-     for non-secure contexts. */
+     for non-secure contexts — and for when the Clipboard API is present
+     but rejects (issue #292: headless Chrome has the API and denies the
+     write, so the fallback must run on rejection too, not only when the
+     API is absent). */
   function copyText(text, done) {
-    if (navigator.clipboard && navigator.clipboard.writeText) {
-      navigator.clipboard.writeText(text).then(
-        function () { done(true); },
-        function () { done(false); }
-      );
-    } else {
+    function fallback() {
       var ta = document.createElement("textarea");
       ta.value = text;
       document.body.appendChild(ta);
       ta.select();
       try { done(document.execCommand("copy")); } catch (e) { done(false); }
       document.body.removeChild(ta);
+    }
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(
+        function () { done(true); },
+        function () { fallback(); }
+      );
+    } else {
+      fallback();
     }
   }
 
