@@ -478,13 +478,13 @@ body:has(.ds-page) .shell.app-shell { grid-template-columns: var(--sidebar-w, 23
 .ds-asset-tile figcaption { font-size: 11px; color: var(--ds-faint); }
 .ds-asset-tile.ds-light-tile { background: #fff; }
 .ds-asset-tile.ds-dark-tile { background: #111; }
-.ds-asset-tile svg { display: block; }
-.ds-logo-16 svg { width: 16px; height: 16px; }
-.ds-logo-24 svg { width: 24px; height: 24px; }
-.ds-logo-32 svg { width: 32px; height: 32px; }
-.ds-logo-48 svg { width: 48px; height: 48px; }
-.ds-logo-96 svg { width: 96px; height: 96px; }
-.ds-logo-mono svg { filter: grayscale(1) contrast(1.1); }
+.ds-asset-tile img { display: block; }
+.ds-logo-16 img { width: 16px; height: 16px; }
+.ds-logo-24 img { width: 24px; height: 24px; }
+.ds-logo-32 img { width: 32px; height: 32px; }
+.ds-logo-48 img { width: 48px; height: 48px; }
+.ds-logo-96 img { width: 96px; height: 96px; }
+.ds-logo-mono img { filter: grayscale(1) contrast(1.1); }
 .ds-pattern-tile { display: flex; flex-wrap: wrap; gap: 12px; }
 .ds-pattern {
   width: 180px;

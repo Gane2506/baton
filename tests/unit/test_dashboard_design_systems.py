@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import base64
 import html
 import json
 import re
@@ -493,10 +494,15 @@ def test_detail_assets_render_stored_logo(client: TestClient, home: Path) -> Non
     page = client.get("/design-systems/acme-brand")
     assert page.status_code == 200
     assert "No logo yet" not in page.text
-    # The sanitized SVG serializes without a namespace prefix: `<ns0:svg>`
-    # is not recognised as SVG by HTML parsers and renders as nothing.
-    assert "ns0:" not in page.text
-    assert '<svg xmlns="http://www.w3.org/2000/svg"' in page.text
+    # The mark renders as a data-URI <img> (no `| safe` anywhere — see the
+    # audit test in test_issue224_minors.py). Decode it: a real SVG, with
+    # no namespace prefix (`<ns0:svg>` is not recognised as SVG by HTML
+    # parsers and would render as nothing).
+    match = re.search(r"data:image/svg\+xml;base64,([A-Za-z0-9+/=]+)", page.text)
+    assert match is not None
+    decoded = base64.b64decode(match.group(1)).decode("utf-8")
+    assert decoded.startswith("<svg ")
+    assert "ns0:" not in decoded
     assert "data:image/png;base64," in page.text
     assert "Patterns" in page.text and "Social covers" in page.text
 

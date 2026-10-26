@@ -493,18 +493,18 @@
         </div>
         <div>
           <h3 class="ds-subhead">Logos</h3>
-          {% if logo_svg %}
+          {% if logo_data_uri %}
           <div class="ds-asset-grid">
-            <figure class="ds-asset-tile ds-logo-96">{{ logo_svg | safe }}<figcaption>96px · color</figcaption></figure>
-            <figure class="ds-asset-tile ds-logo-48">{{ logo_svg | safe }}<figcaption>48px · color</figcaption></figure>
-            <figure class="ds-asset-tile ds-logo-32">{{ logo_svg | safe }}<figcaption>32px · color</figcaption></figure>
-            <figure class="ds-asset-tile ds-logo-24">{{ logo_svg | safe }}<figcaption>24px · color</figcaption></figure>
-            <figure class="ds-asset-tile ds-logo-16">{{ logo_svg | safe }}<figcaption>16px · color</figcaption></figure>
-            <figure class="ds-asset-tile ds-logo-48 ds-logo-mono">{{ logo_svg | safe }}<figcaption>48px · mono</figcaption></figure>
+            <figure class="ds-asset-tile ds-logo-96"><img src="{{ logo_data_uri }}" alt="{{ name }} logo"><figcaption>96px · color</figcaption></figure>
+            <figure class="ds-asset-tile ds-logo-48"><img src="{{ logo_data_uri }}" alt="{{ name }} logo"><figcaption>48px · color</figcaption></figure>
+            <figure class="ds-asset-tile ds-logo-32"><img src="{{ logo_data_uri }}" alt="{{ name }} logo"><figcaption>32px · color</figcaption></figure>
+            <figure class="ds-asset-tile ds-logo-24"><img src="{{ logo_data_uri }}" alt="{{ name }} logo"><figcaption>24px · color</figcaption></figure>
+            <figure class="ds-asset-tile ds-logo-16"><img src="{{ logo_data_uri }}" alt="{{ name }} logo"><figcaption>16px · color</figcaption></figure>
+            <figure class="ds-asset-tile ds-logo-48 ds-logo-mono"><img src="{{ logo_data_uri }}" alt="{{ name }} logo, monochrome"><figcaption>48px · mono</figcaption></figure>
           </div>
           <div class="ds-asset-grid ds-mt">
-            <figure class="ds-asset-tile ds-light-tile ds-logo-48">{{ logo_svg | safe }}<figcaption>on light</figcaption></figure>
-            <figure class="ds-asset-tile ds-dark-tile ds-logo-48">{{ logo_svg | safe }}<figcaption>on dark</figcaption></figure>
+            <figure class="ds-asset-tile ds-light-tile ds-logo-48"><img src="{{ logo_data_uri }}" alt="{{ name }} logo"><figcaption>on light</figcaption></figure>
+            <figure class="ds-asset-tile ds-dark-tile ds-logo-48"><img src="{{ logo_data_uri }}" alt="{{ name }} logo"><figcaption>on dark</figcaption></figure>
           </div>
           {% if logo_template != "-" %}<p class="ds-note">Mark template: <span class="mono">{{ logo_template }}</span></p>{% endif %}
           {% else %}
@@ -546,7 +546,7 @@
           </div>
           <div class="ds-cover">
             <div class="ds-cover-banner" data-bg-color="{{ background }}" data-fg-color="{{ text }}">
-              {% if logo_svg %}<span class="ds-logo-48">{{ logo_svg | safe }}</span>{% endif %}
+              {% if logo_data_uri %}<span class="ds-logo-48"><img src="{{ logo_data_uri }}" alt=""></span>{% endif %}
               <span>
                 <span class="ds-cover-wordmark ds-cover-wordmark-sm"{% if display_font %} data-font-family="{{ display_font.stack }}"{% endif %}>{{ name }}</span>
                 <span class="ds-cover-tagline ds-block">{{ vibe_tagline or vibe_name }}</span>

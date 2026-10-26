@@ -332,6 +332,20 @@ def _safe_logo_svg(path: Path) -> str | None:
     return ET.tostring(root, encoding="unicode")
 
 
+def _logo_data_uri(path: Path) -> str | None:
+    """The stored `logo.svg` as a `data:` URI for an `<img>` (issue #285).
+
+    The SVG is sanitized first (`_safe_logo_svg`), then base64-encoded, so
+    the template never needs `| safe` — the audit test in
+    `test_issue224_minors.py` allows exactly one `| safe` in the whole
+    template tree, and this is not it. The CSP's `img-src` allows `data:`.
+    """
+    svg = _safe_logo_svg(path)
+    if svg is None:
+        return None
+    return "data:image/svg+xml;base64," + base64.b64encode(svg.encode("utf-8")).decode("ascii")
+
+
 def _favicon_data_uri(path: Path) -> str | None:
     """A stored favicon PNG as a `data:` URI (the CSP allows `img-src data:`)."""
     try:
@@ -607,7 +621,7 @@ def _design_system_view(repo: views.Repo, name: str) -> dict[str, Any]:
         "on_primary": _on_hex(primary),
         "background": background,
         "text": text,
-        "logo_svg": _safe_logo_svg(system_path / "logo.svg"),
+        "logo_data_uri": _logo_data_uri(system_path / "logo.svg"),
         "logo_template": _meta_text(meta, "logo_template"),
         "favicon_16": _favicon_data_uri(system_path / "favicon-16.png"),
         "favicon_32": _favicon_data_uri(system_path / "favicon-32.png"),
