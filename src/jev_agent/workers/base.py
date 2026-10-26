@@ -34,6 +34,11 @@ class WorkerJob(BaseModel):
     attempt: int = Field(default=1, ge=1)
     # MCP servers, skills and plugins configured for the role (empty: none).
     tools: AgentTools = Field(default_factory=AgentTools)
+    # Ask OpenRouter not to train on this call's data (`provider.data_collection: "deny"`,
+    # issue #327): set by the harness for the planner under the "mixed_no_training"
+    # policy. The api worker applies it to free models only — the paid fallback call
+    # stays unrestricted so it cannot fail on the same filter.
+    no_training: bool = False
 
 
 class WorkerOutput(BaseModel):

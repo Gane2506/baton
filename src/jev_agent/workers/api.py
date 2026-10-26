@@ -56,7 +56,10 @@ def _capped_body(text: str) -> str:
     return text[:ERROR_BODY_LOG_CHARS] + cut
 
 
-# Words in a 429 body that mean "you are out of something" rather than "slow down".
+# Words in a 404 body that mean OpenRouter refused the free model over its data policy
+# rather than the model not existing: "0 endpoints available matching your guardrail
+# restrictions … Free model training violation" (issue #327, parked run 2026-10-25).
+_DATA_POLICY_WORDS = re.compile(r"guardrail|no endpoints|data polic|training", re.I)
 _QUOTA_WORDS = re.compile(
     r"quota|credit|insufficient|exhaust|spend limit|budget|key limit|per[- ]day", re.I
 )
@@ -89,9 +92,16 @@ def classify_api_error(status_code: int, body: str, *, free_model: bool = False)
       credits, a spend/key limit or a per-day limit; otherwise a plain rate limit -> failure
       (transient; `ApiWorker` has already retried once).
     - 403 with a budget `limit_source` -> quota_exhausted; any other 401/403 -> error.
+    - 404 on a free model whose body signals a data-policy/guardrail block
+      ("no endpoints … guardrail … training") -> quota_exhausted: the remedy is
+      another model, not a wait — the existing fallback ladder (next free model,
+      then the first paid model) must engage instead of parking the run (issue
+      #327). Any other 404 (a model that does not exist) stays `error`.
     - 408 -> timeout. 5xx -> failure. Anything else (400, 404, ...) -> error.
     """
     if status_code == 402:
+        return "quota_exhausted"
+    if status_code == 404 and free_model and _DATA_POLICY_WORDS.search(body) is not None:
         return "quota_exhausted"
     if status_code == 429:
         if free_model:
@@ -151,7 +161,13 @@ class ApiWorker:
                     "schema": strict_json_schema(job.output_schema),
                 },
             }
-            body["provider"] = {"require_parameters": True}
+            body["provider"] = {**body.get("provider", {}), "require_parameters": True}
+        if job.no_training and self.is_free(model):
+            # "Paid and free, without training" (issue #327): route this free-model call
+            # only to providers that do not collect user data. Paid models are never
+            # sent this: the paid fallback must not fail on the same filter, and the
+            # account privacy setting — not this flag — is the authoritative control.
+            body["provider"] = {**body.get("provider", {}), "data_collection": "deny"}
         return body
 
     async def run(self, job: WorkerJob) -> WorkerOutput:
@@ -227,6 +243,8 @@ class ApiWorker:
                     summary = _error_summary(response)
                     if free and response.status_code == 429:
                         summary = f"free-model rate limit: {summary}"
+                    if free and response.status_code == 404 and status == "quota_exhausted":
+                        summary = f"free-model data-policy block: {summary}"
                     raise _RequestFailed(status, summary)
         except (httpx.TimeoutException, TimeoutError) as exc:
             raise _RequestFailed(

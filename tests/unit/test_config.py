@@ -523,7 +523,7 @@ def test_autonomy_defaults_match_today_behavior() -> None:
 
 def test_autonomy_mode_is_a_beginner_field() -> None:
     assert "autonomy.mode" in BEGINNER_FIELDS
-    assert len(BEGINNER_FIELDS) == 11  # the beginner view stays small
+    assert len(BEGINNER_FIELDS) == 12  # the beginner view stays small
 
 
 def test_autonomy_fields_all_have_descriptions() -> None:

@@ -177,7 +177,7 @@ def test_template_covers_every_schema_table() -> None:
 
 
 def test_beginner_fields_resolve_to_schema() -> None:
-    assert len(BEGINNER_FIELDS) == 11
+    assert len(BEGINNER_FIELDS) == 12  # the beginner view stays small
     for dotted in BEGINNER_FIELDS:
         node: object = JevConfig
         for part in dotted.split("."):

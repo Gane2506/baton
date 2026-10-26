@@ -3,7 +3,29 @@
 {% block title %}{{ page_title }}{% endblock %}
 
 {% macro field_input(f, field_id) %}
-  {% if f.path == "autonomy.mode" %}
+  {% if f.path == "models.planner_policy" %}
+  {% set current = planner_policy | default(f.text or "paid_only", true) %}
+  <fieldset class="mode-picker">
+    <legend class="hint">Which models may the planner use — and what may they do with your data?</legend>
+    {% for value, title, blurb in [
+      ("free_training_ok", "Free only, allow training", "Costs nothing. The planner uses free OpenRouter models only. Free providers may use your prompts to train their models — only for work you are happy to share."),
+      ("mixed", "Paid and free", "Free models first. When a free call fails or runs out, the paid model (openai/gpt-5-mini) answers instead — you pay only for the calls it handles."),
+      ("mixed_no_training", "Paid and free, without training", "Free models first, but Baton asks OpenRouter to route free calls only to providers that do not collect your data, and falls back to the paid model when none is available."),
+      ("paid_only", "Paid only", "The planner always uses the paid model (openai/gpt-5-mini). No free models, so no free-provider training and no free-model rate limits. You pay for every planning call.")
+    ] %}
+    <label class="check">
+      <input type="radio" name="value" value="{{ value }}"{% if current == value %} checked{% endif %}>
+      <span><strong>{{ title }}</strong><br><span class="hint">{{ blurb }}</span>
+      {% if value == "mixed_no_training" %}
+      <br><span class="hint">Baton cannot change your OpenRouter account setting — that is the control that decides whether training is allowed. Check it in your <a href="https://openrouter.ai/settings/privacy" target="_blank" rel="noreferrer">OpenRouter privacy settings</a>.</span>
+      {% endif %}</span>
+    </label>
+    {% endfor %}
+  </fieldset>
+  {% if not planner_policy_explicit | default(false, true) %}
+  <p class="hint">No mode picked yet — this is derived from your planner models ({{ planner_models | default([], true) | join(", ") }}). Pick a mode to lock it in.</p>
+  {% endif %}
+  {% elif f.path == "autonomy.mode" %}
   <fieldset class="mode-picker">
     <legend class="hint">How much should jev ask you?</legend>
     {% for value, title, blurb in [
@@ -250,7 +272,7 @@
 {% if page == "settings" %}
 <h2 class="section" id="s-basics">The basics</h2>
 <section class="panel" aria-label="Beginner settings">
-  <p class="hint">The eleven settings most people change, in plain language. Everything else is
+  <p class="hint">The twelve settings most people change, in plain language. Everything else is
   under <strong>Advanced</strong> below — nothing is hidden from it.</p>
   {% for s in sections %}
   {% for f in s.fields %}

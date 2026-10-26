@@ -7,7 +7,8 @@
 Free models (OpenRouter, api worker only; docs/config.md "Free models"):
 
 - escalate from a free model goes straight to the first paid model in the pool.
-- `quota_fallback`: a free model that hit its rate limit moves to the next free model, then to
+- `quota_fallback`: a free model that hit its rate limit — or a data-policy/guardrail
+  block (404, issue #327) — moves to the next free model, then to
   the first paid model the api worker can run; None after that, so the caller reassigns the
   worker.
 - `fit_free`: a free model is never sent to a worker other than api.

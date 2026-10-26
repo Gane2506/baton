@@ -386,6 +386,7 @@ below for how they are chosen and what happens when one hits its rate limit.
 | Key | Default | Meaning |
 | --- | --- | --- |
 | `prefer_free` | `false` | Offer free models first to every role that may use the `api` worker. A role's own `prefer_free` overrides this. A role whose pool has no free model gets the `"free"` expansion added in front of it. |
+| `planner_policy` | unset | Which models the planner may use: `"free_training_ok"`, `"mixed"`, `"mixed_no_training"` or `"paid_only"` (see [Planner model policy](#planner-model-policy)). Unset: derived from `[roles.planner] models`. An explicit policy also controls the planner's `prefer_free`: every mode but `"paid_only"` wants free models first, and `"paid_only"` never gets them. |
 | `free_models_limit` | `3` | How many cached free models one `"free"` entry in a role's `models` expands to (>= 0). |
 | `cache_ttl_hours` | `24` | Age (> 0) after which the cached model list (`.jev/cache/openrouter-models.json`) is fetched again, at the start of a run that uses free models or by `jev models`. |
 
@@ -637,10 +638,51 @@ prefer_free = false                       # this role keeps paying
   other worker of the role (with its first runnable model).
   For the planner, validator, learner and reviewer this happens inside the same step; for a
   task it is the D5 decision (`retry` moves to the fallback model). Each try is an attempt.
+  A 404 from a free model whose body says no endpoints match the account's data-policy /
+  guardrail restrictions ("Free model training violation") counts as `quota_exhausted` too,
+  so it falls back the same way instead of parking the run (issue #327).
 - **The model list** is cached in `.jev/cache/openrouter-models.json` and fetched again when
   older than `cache_ttl_hours`. If the fetch fails, the stale list is used and the run prints a
   warning. `jev models list [--free] [--supports json_schema] [--refresh]` and `jev models
   free` show it.
+
+### Planner model policy
+
+`[models] planner_policy` picks which models the planner may use, and on what privacy
+terms — four modes, also offered as a picker on the Settings page:
+
+| Policy | Planner models | Cost | Training on your data |
+| --- | --- | --- | --- |
+| `free_training_ok` | free only | free | Free providers may train on prompts — only for work you are happy to share. |
+| `mixed` | free first, then `openai/gpt-5-mini` | free unless a free call fails | Same as above for the free calls; the paid model does not train on API data. |
+| `mixed_no_training` | free first, then `openai/gpt-5-mini` | as `mixed` | Free calls ask OpenRouter to route only to providers that do not collect user data (see below). |
+| `paid_only` | `openai/gpt-5-mini` | every planning call | No free models at all. |
+
+```toml
+[models]
+planner_policy = "mixed_no_training"
+```
+
+Unset, the policy is derived from `[roles.planner] models` so existing configs keep
+behaving as they do today (free + paid is `mixed`, free only is `free_training_ok`,
+paid only or an empty pool is `paid_only`). Picking a mode on the Settings page also
+writes the matching pool into `[roles.planner] models`, so the config stays readable;
+an explicitly set policy wins over a hand-edited pool that disagrees with it.
+
+**The honest limit on "without training".** Baton controls which models it requests
+and, under `mixed_no_training`, sends `provider: { data_collection: "deny" }` on
+free-model calls — OpenRouter then routes only to providers that do not collect user
+data, and a free model with no such provider answers 404, which falls back to the
+paid model instead of parking the run. But Baton cannot flip the OpenRouter account
+privacy setting, and that setting is the authoritative control: it has separate
+switches for free and paid models, and a request can only narrow within it, never
+widen past it. If the account forbids training, free calls fail with the 404 above
+and the paid model does the work; if the account allows training, the request flag
+still narrows routing, but the account setting is what ultimately decides. Check it
+in your [OpenRouter privacy settings](https://openrouter.ai/settings/privacy).
+(OpenRouter Privacy Policy: "If you do not want your Inputs used for model training,
+select a Model or Model Provider that commits to not using your data for that
+purpose"; OpenRouter itself does not use inputs or outputs for training.)
 
 ## Agent tools: `[tools]`
 
