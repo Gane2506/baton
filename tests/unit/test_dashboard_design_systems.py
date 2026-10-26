@@ -699,3 +699,126 @@ def test_detail_preview_toggle(client: TestClient, home: Path) -> None:
     # color rule (specimens, card titles, token names) inherit the content
     # area's color, and the dark page color would be invisible on light.
     assert "color: var(--ds-text)" in css.text
+
+
+# ---- issue #289: richer Assets, copy per value, mobile nav collapse, header actions ----
+
+
+def test_detail_copy_per_value(client: TestClient, home: Path) -> None:
+    """Issue #289: individual values copy on click — color swatches/hexes,
+    token rows, type-specimen specs — with a "Copied" confirmation."""
+    _seed_rich()
+    page = client.get("/design-systems/rich-brand")
+    assert page.status_code == 200
+    # A color row copies its hex; the overview swatch copies too.
+    assert re.search(r'data-copy-value="#[0-9A-F]{6}"', page.text) is not None
+    assert "ds-overview-swatch ds-copyable" in page.text
+    # Spacing / radii rows copy their px value; a specimen copies its stack+size.
+    assert 'data-copy-value="16px"' in page.text
+    assert 'data-copy-value="display_xl: 52px,' in page.text
+    # Font rows copy the stack.
+    assert page.text.count('class="ds-font-row ds-copyable"') >= 1
+    # Copyable rows are keyboard-reachable (role + tabindex + title).
+    assert 'role="button" title="Click to copy #' in page.text
+    js = client.get("/static/design_system.js")
+    assert js.status_code == 200
+    assert "data-copy-value" in js.text
+    assert "showCopyTip" in js.text
+    assert '"Copied"' in js.text
+    assert "copyText" in js.text
+    css = client.get("/static/design_system.css")
+    assert css.status_code == 200
+    assert ".ds-copyable" in css.text
+    assert ".ds-copy-tip" in css.text
+
+
+def test_detail_assets_richer(client: TestClient, home: Path) -> None:
+    """Issue #289: Assets are real compositions from the system's tokens —
+    social covers with headline + subline + CTA in light and dark, a named
+    icon set in the brand style, and logo lockups in every orientation."""
+    _seed("acme-brand")
+    system_path = library_system_path("acme-brand")
+    mark = generate_mark("acme-brand:Acme", {"primary": "#e8590c", "primary_hover": "#c2410c"})
+    (system_path / "logo.svg").write_text(mark_to_svg(mark, 512), encoding="utf-8")
+    page = client.get("/design-systems/acme-brand")
+    assert page.status_code == 200
+    # Logo lockups: horizontal, stacked, mark-only, mono.
+    assert "Lockups" in page.text
+    for label in ("Horizontal", "Stacked", "Mark only", "Mono"):
+        assert label in page.text
+    # Social covers: headline + subline + CTA, light and dark variants.
+    assert "Get started" in page.text
+    assert "Open Graph · Light" in page.text
+    assert "Open Graph · Dark" in page.text
+    assert "Banner · Light" in page.text
+    assert "Banner · Dark" in page.text
+    # Icon set: the common UI icons, each named.
+    for label in ("Search", "Menu", "Close", "Check", "Arrow", "Plus", "User", "Settings"):
+        assert f"<figcaption>{label}</figcaption>" in page.text
+    assert "ds-icon-grid" in page.text
+    css = client.get("/static/design_system.css")
+    assert css.status_code == 200
+    assert ".ds-lockup" in css.text
+    assert ".ds-cover-headline" in css.text
+    assert ".ds-cover-cta" in css.text
+    assert ".ds-icon-tile" in css.text
+
+
+def test_detail_mobile_nav_collapses(client: TestClient, home: Path) -> None:
+    """Issue #289: at ≤640px the in-page nav collapses to a sticky,
+    horizontally scrollable chip row (search hidden), and token rows slim
+    down so the page fits a 390px phone with no horizontal overflow."""
+    _seed_rich()
+    page = client.get("/design-systems/rich-brand")
+    assert page.status_code == 200
+    css = client.get("/static/design_system.css")
+    assert css.status_code == 200
+    assert "@media (max-width: 640px)" in css.text
+    mobile = css.text.split("@media (max-width: 640px)")[1]
+    assert ".ds-nav-list { display: contents; }" in mobile
+    assert ".ds-nav-search, .ds-nav-sep { display: none; }" in mobile
+    assert "overflow-x: auto" in mobile
+    assert "position: sticky" in mobile
+    assert "border-radius: 999px" in mobile
+    # Token rows slim: the name column flexes, the hex/swatch columns shrink.
+    assert "grid-template-columns: minmax(0, 1fr) 92px 40px" in mobile
+
+
+def test_detail_header_actions(client: TestClient, home: Path) -> None:
+    """Issue #289: Clone and Export live in the page header now (the page is
+    long and they were buried in Files); Delete stays buried."""
+    _seed("acme-brand")
+    page = client.get("/design-systems/acme-brand")
+    assert page.status_code == 200
+    header = page.text.split('class="ds-layout"')[0]
+    files = page.text.split('id="files"')[1]
+    assert 'action="/design-systems/clone"' in header
+    assert 'action="/design-systems/export"' in header
+    assert 'action="/design-systems/clone"' not in files
+    assert 'action="/design-systems/export"' not in files
+    assert 'action="/design-systems/delete"' in files
+    # The old labels survive as accessible names on the compact controls.
+    assert "Clone to a new name" in page.text
+    assert "Export tokens" in page.text
+
+
+def test_detail_no_inline_styles_or_scripts(client: TestClient, home: Path) -> None:
+    """Issue #289: the CSP forbids inline styles/scripts — the rendered
+    detail page must carry none, and neither may the template source."""
+    _seed_rich()
+    page = client.get("/design-systems/rich-brand")
+    assert page.status_code == 200
+    assert ' style="' not in page.text
+    # Every <script> on the page is an external file (src=) or a JSON data
+    # island (type="application/json", never executed); no inline code.
+    for tag in re.findall(r"<script[^>]*>", page.text):
+        assert "src=" in tag or 'type="application/json"' in tag, f"inline script tag: {tag}"
+    import jev_agent.dashboard
+
+    template = Path(jev_agent.dashboard.__file__).parent / "templates" / "design_system.html"
+    source = template.read_text(encoding="utf-8")
+    assert "| safe" not in source
+    assert 'style="' not in source
+    # The template's only <script> is the external design_system.js include.
+    for tag in re.findall(r"<script[^>]*>", source):
+        assert "src=" in tag, f"inline script tag in template: {tag}"
