@@ -72,7 +72,7 @@ SHOTS = [
     Shot("dashboard-connections.png", "/connections", height=1600),
     Shot("dashboard-design-systems.png", "/design-systems"),
     Shot("dashboard-design-system.png", "/design-systems/acme-brand", height=1400),
-    Shot("design-studio.png", "/design-studio"),
+    Shot("design-studio.png", "/design-studio", height=1400),  # tall enough to cover the library previews
     Shot("design-studio-wizard.png", "/design-studio/new/purpose", height=1200),
     Shot("design-studio-reverse.png", "/design-studio/reverse"),
 ]
