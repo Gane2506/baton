@@ -1145,7 +1145,11 @@ def test_csrf_rejections(client: TestClient, planned: tuple[Path, str]) -> None:
     )
     assert ok.status_code == 303
     assert client.get("/queue/add").status_code == 405
-    assert client.get(f"/runs/{run_id}/approve").status_code == 405
+    # Run actions accept a GET as a redirect back to the run (issue #316):
+    # refreshing the ship confirmation page, or a stray GET, never acts.
+    redirect = client.get(f"/runs/{run_id}/approve", follow_redirects=False)
+    assert redirect.status_code == 303
+    assert redirect.headers["location"] == f"/runs/{run_id}"
 
 
 def test_token_required_off_loopback(planned: tuple[Path, str]) -> None:
@@ -1452,6 +1456,16 @@ def test_ship_button_confirmation_and_background_job(
         live = client.get(f"/runs/{run_id}/live").text
         assert "https://github.com/acme/widgets/pull/42" in live
         assert "Ship as PR</button>" not in live and "already shipped" not in live
+
+
+def test_ship_confirm_get_redirects_to_run(planned: tuple[Path, str]) -> None:
+    """Refreshing the ship confirmation (GET, issue #316) goes back to the run, never a 405."""
+    repo, run_id = planned
+    for client in _client(repo, Calls()):
+        response = client.get(f"/runs/{run_id}/ship", follow_redirects=False)
+        assert response.status_code == 303
+        assert response.headers["location"] == f"/runs/{run_id}"
+        assert "only follows its form" in client.get(f"/runs/{run_id}").text
 
 
 # ---- job errors and warnings (#51) ---------------------------------------------------------

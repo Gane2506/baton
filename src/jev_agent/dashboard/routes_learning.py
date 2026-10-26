@@ -97,6 +97,13 @@ class LearningRoutes(DashboardCore):
 
     async def learning_action(self, request: Request) -> Response:
         action: str = request.path_params["action"]
+        if request.method == "GET":
+            # Refreshing a confirmation page (flush/delete, issue #316), or a
+            # stray GET to any learning action: back to Learning, never a 405.
+            self.flash(
+                request, "error", "start again from Learning — this page only follows its form"
+            )
+            return self.back("/learning")
         if action == "flush":
             return await self.learning_flush(request)
         if action == "delete":

@@ -68,6 +68,10 @@ class CodeRoutes(DashboardCore):
         return self.page(request, "code_grade.html", build)
 
     async def code_grade_grade(self, request: Request) -> Response:
+        if request.method == "GET":
+            # Refreshing the validation-error page (issue #316): back to the
+            # form, never a 405. The entered values are not kept on a refresh.
+            return self.back("/code-grade")
         form = await checked_form(request)
         task = _text(form, "task") or ""
         tests = _text(form, "tests") or ""
@@ -103,6 +107,10 @@ class CodeRoutes(DashboardCore):
         return self.back("/code-grade/status")
 
     async def code_grade_route(self, request: Request) -> Response:
+        if request.method == "GET":
+            # Refreshing the validation-error page (issue #316): back to the
+            # form, never a 405. The entered values are not kept on a refresh.
+            return self.back("/code-grade")
         form = await checked_form(request)
         route_request = _text(form, "route_request") or ""
         to = "/code-grade"

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 from collections.abc import Callable
 from typing import Any
@@ -14,6 +15,7 @@ from starlette.responses import (
     Response,
 )
 
+from jev_agent import __version__
 from jev_agent.app import settings
 from jev_agent.app.errors import JevError
 from jev_agent.app.models import fetch_catalog
@@ -69,38 +71,144 @@ def _cache_clear_filters(form: FormData) -> tuple[str | None, float | None, str]
     return store_kind, older_than, kind
 
 
+def _probe_auth_headers(server: McpServerConfig) -> dict[str, str]:
+    """The auth headers a configured MCP server needs, values from the environment.
+
+    The config names env vars only (`bearer_token_env`, `headers_from_env`); the
+    values are read here, at probe time, and never stored or rendered.
+    """
+    headers: dict[str, str] = {}
+    if server.bearer_token_env:
+        token = os.environ.get(server.bearer_token_env, "").strip()
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
+    for header, var in sorted(server.headers_from_env.items()):
+        value = os.environ.get(var, "").strip()
+        if value:
+            headers[header] = value
+    return headers
+
+
+def _mcp_protocol_version(text: str) -> str | None:
+    """The MCP protocol version in a handshake answer, if it is one.
+
+    Accepts a plain JSON-RPC body or an SSE stream (`data: {...}` lines). Only a
+    `result` carrying `protocolVersion` counts: a JSON-RPC error, an HTML page
+    or any other JSON is not an MCP server answering.
+    """
+    candidates = [text]
+    if "data:" in text:
+        candidates = [line[5:].strip() for line in text.splitlines() if line.startswith("data:")]
+    for raw in candidates:
+        try:
+            payload = json.loads(raw)
+        except ValueError:
+            continue
+        if isinstance(payload, dict):
+            result = payload.get("result")
+            if isinstance(result, dict) and isinstance(result.get("protocolVersion"), str):
+                return str(result["protocolVersion"])
+    return None
+
+
+def _probe_http_server(client: httpx.Client, url: str, headers: dict[str, str]) -> tuple[str, str]:
+    """Streamable HTTP (`transport="http"`): POST an MCP `initialize` handshake.
+
+    Only a result carrying a `protocolVersion` passes. Any other HTTP answer —
+    a 404 from a plain web server, a 405, an HTML page — is "reachable, but not
+    verified as MCP", never a pass (issue #315). The body is read in chunks and
+    the stream closed as soon as the answer is decided, so an SSE endpoint
+    holding the connection open does not hang the probe.
+    """
+    request = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": {
+            "protocolVersion": "2024-11-05",
+            "capabilities": {},
+            "clientInfo": {"name": "jev", "version": __version__},
+        },
+    }
+    with client.stream(
+        "POST",
+        url,
+        json=request,
+        headers={**headers, "Content-Type": "application/json"},
+    ) as response:
+        code = response.status_code
+        body = bytearray()
+        for chunk in response.iter_bytes():
+            body += chunk
+            if len(body) > 65536:
+                break
+            text = body.decode("utf-8", "replace")
+            if _mcp_protocol_version(text) is not None:
+                break
+            try:
+                json.loads(text)
+            except ValueError:
+                pass
+            else:
+                break  # a complete JSON answer that is not an MCP result
+        version = _mcp_protocol_version(body.decode("utf-8", "replace"))
+    if version is not None:
+        return "ready", f"speaks MCP (initialize answered, protocol {version})"
+    hint = ""
+    if code in (401, 403):
+        hint = " — it may need auth (check the bearer/header env vars)"
+    return (
+        "error",
+        f"answered HTTP {code} — reachable, but did not complete an MCP initialize "
+        f"handshake, so it is not verified as an MCP server{hint}",
+    )
+
+
+def _probe_sse_server(client: httpx.Client, url: str, headers: dict[str, str]) -> tuple[str, str]:
+    """Legacy SSE (`transport="sse"`): the endpoint must open an event stream.
+
+    The MCP SSE handshake starts with this GET, so a 200 with
+    `text/event-stream` that actually sends a chunk is the transport's own
+    proof — a plain web page answering the same GET is not.
+    """
+    with client.stream("GET", url, headers=headers) as response:
+        code = response.status_code
+        content_type = response.headers.get("content-type", "")
+        if code == 200 and "text/event-stream" in content_type:
+            for _ in response.iter_bytes():
+                break  # one chunk proves the stream flows
+            return "ready", "opened an MCP event stream"
+    return (
+        "error",
+        f"answered HTTP {code} — reachable, but did not open an MCP event stream, "
+        "so it is not verified as an MCP server",
+    )
+
+
 def _probe_api_server(server: McpServerConfig) -> tuple[str, str]:
-    """Test one MCP server: does it answer? Returns (status, plain-language detail).
+    """Test one MCP server: does it speak MCP? Returns (status, plain-language detail).
 
     Local: the command must resolve on PATH (same check as the render-time
-    status). Remote: a GET to the URL with `stream=True` — an SSE endpoint
-    holds the connection open, so the body is never read; the status line
-    alone proves the server is there. Any HTTP response counts, even a 4xx:
-    an MCP endpoint answers a bare GET with 405/400 because it carries no
-    MCP request. Only transport failures (refused, DNS, timeout) are errors.
+    status). Remote: an MCP `initialize` handshake for streamable HTTP, an
+    event stream for legacy SSE (see `_probe_http_server` / `_probe_sse_server`).
+    Only transport failures (refused, DNS, timeout) are connection errors.
     """
     if server.command is not None:
         return views.local_server_status(server)
     url = server.url or ""
+    headers = {
+        "Accept": "application/json, text/event-stream",
+        **_probe_auth_headers(server),
+    }
     try:
-        with (
-            httpx.Client(timeout=5.0, follow_redirects=True) as client,
-            client.stream("GET", url) as response,
-        ):
-            code = response.status_code
+        with httpx.Client(timeout=5.0, follow_redirects=True) as client:
+            if server.transport == "sse":
+                return _probe_sse_server(client, url, headers)
+            return _probe_http_server(client, url, headers)
     except httpx.TimeoutException:
         return "error", "timed out after 5s — the server did not answer"
     except httpx.HTTPError as exc:
         return "error", _friendly_error(exc)
-    if 200 <= code < 300:
-        return "ready", f"answered HTTP {code} — the server is reachable"
-    if 400 <= code < 500:
-        return (
-            "ready",
-            f"answered HTTP {code} — the server is reachable "
-            "(an MCP endpoint answers a bare GET with 4xx; that still proves it is there)",
-        )
-    return "error", f"answered HTTP {code} — the server is up but returned an error"
 
 
 class SettingsRoutes(DashboardCore):
@@ -183,7 +291,14 @@ class SettingsRoutes(DashboardCore):
     async def cache_clear(self, request: Request) -> Response:
         """Two steps (Tier 2), like `queue_clear`: the first POST counts what the
         filters would delete and shows it on a confirmation page; only
-        `confirm=yes` clears (clearing is destructive and cannot be undone)."""
+        `confirm=yes` clears (clearing is destructive and cannot be undone).
+
+        A GET (refreshing the confirmation page, issue #316) goes back to Tools:
+        the confirmation only follows its form, it never re-runs from a GET.
+        """
+        if request.method == "GET":
+            self.flash(request, "error", "start again from Tools — this page only follows its form")
+            return self.back("/tools#cache")
         form = await checked_form(request)
         to = "/tools#cache"
         try:
@@ -230,7 +345,18 @@ class SettingsRoutes(DashboardCore):
         """`jev cache calibrate` behind a button: run the pairwise-SimHash curve over
         stored decision history and show the table, the candidate threshold (if any)
         and the one-click apply for it. Read-only: nothing is served or configured
-        until the user applies a threshold and turns serving on."""
+        until the user applies a threshold and turns serving on.
+
+        A GET (refreshing the result page, issue #316) goes back to Tools: the
+        result only follows its run, it never re-runs from a GET.
+        """
+        if request.method == "GET":
+            self.flash(
+                request,
+                "error",
+                "run the calibration again from Tools — this result only follows its run",
+            )
+            return self.back("/tools#cache")
         await checked_form(request)
         to = "/tools#cache"
 
