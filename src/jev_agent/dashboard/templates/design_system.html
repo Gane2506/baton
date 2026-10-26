@@ -18,6 +18,11 @@
       source <span class="mono">{{ source }}</span>{% if app_type != "-" %} · {{ app_type }}{% endif %}{% if stack != "-" %} · {{ stack }}{% endif %} · theme {{ theme }}</p>
     </div>
     <div class="actions ds-actions">
+      <div class="ds-preview-toggle" role="group" aria-label="Preview theme">
+        <span class="ds-preview-label">Preview</span>
+        <button class="ds-preview-btn" type="button" data-preview-theme="light" aria-pressed="{{ 'true' if preview_theme == 'light' else 'false' }}">Light</button>
+        <button class="ds-preview-btn" type="button" data-preview-theme="dark" aria-pressed="{{ 'true' if preview_theme == 'dark' else 'false' }}">Dark</button>
+      </div>
       <a class="btn btn-sm btn-primary" href="/design-systems/{{ name }}/showcase" target="_blank" rel="noopener">Preview showcase</a>
       <a class="btn btn-sm btn-secondary" href="/design-systems/{{ name }}/code">Get reusable elements</a>
       {% if not active %}
@@ -47,6 +52,7 @@
         <li data-nav-label="breakpoint"><a href="#breakpoint">Breakpoint</a></li>
         <li data-nav-label="components"><a href="#components">Components</a></li>
         <li data-nav-label="assets"><a href="#assets">Assets</a></li>
+        <li data-nav-label="notes"><a href="#notes">Notes</a></li>
       </ul>
       <div class="ds-nav-sep"></div>
       <ul class="ds-nav-list">
@@ -54,45 +60,70 @@
       </ul>
     </nav>
 
-    <div class="ds-content">
-      <section class="ds-section" id="overview" aria-label="Overview">
+    <div class="ds-content ds-preview-{{ preview_theme }}" id="ds-content"
+         data-preview-light-bg="{{ preview_light.background }}" data-preview-light-surface="{{ preview_light.surface }}" data-preview-light-text="{{ preview_light.text }}" data-preview-light-muted="{{ preview_light.muted }}" data-preview-light-border="{{ preview_light.border }}"
+         data-preview-dark-bg="{{ preview_dark.background }}" data-preview-dark-surface="{{ preview_dark.surface }}" data-preview-dark-text="{{ preview_dark.text }}" data-preview-dark-muted="{{ preview_dark.muted }}" data-preview-dark-border="{{ preview_dark.border }}">
+      <section class="ds-section ds-overview" id="overview" aria-label="Overview">
         <div class="ds-section-label">
           <h2>Overview</h2>
-          <p>The system at a glance, and the business it serves.</p>
+          <p>The system at a glance — palette, type, mark, and signature components.</p>
         </div>
         <div>
-          <dl class="studio-summary">
-            <div><dt>Vibe</dt><dd>{{ vibe_name }}{% if vibe_tagline %} — {{ vibe_tagline }}{% endif %}</dd></div>
-            <div><dt>Version</dt><dd>v{{ version }} · updated {{ updated | time }}</dd></div>
-            <div><dt>Source</dt><dd><span class="mono">{{ source }}</span></dd></div>
-            {% if app_type != "-" %}<div><dt>App type</dt><dd>{{ app_type }}</dd></div>{% endif %}
-            {% if stack != "-" %}<div><dt>Stack</dt><dd>{{ stack }}</dd></div>{% endif %}
-            <div><dt>Theme</dt><dd>{{ theme }}</dd></div>
-          </dl>
+          {% if overview_palette %}
+          <h3 class="ds-subhead">Palette</h3>
+          <div class="ds-overview-palette">
+            {% for row in overview_palette %}
+            <figure class="ds-overview-swatch"><span class="ds-overview-swatch-block" data-swatch-color="{{ row.hex }}"></span><figcaption><span class="mono">{{ row.name }}</span><span class="mono">{{ row.hex }}</span></figcaption></figure>
+            {% endfor %}
+          </div>
+          <p class="ds-note"><a href="#colors">See all colors ↓</a></p>
+          {% endif %}
+          {% if type_specimens %}
+          <h3 class="ds-subhead">Type</h3>
+          {% set spec = type_specimens[0] %}
+          <p class="ds-overview-type"><span data-font-size="{{ spec.size }}" data-font-weight="{{ spec.weight }}" data-line-height="{{ spec.leading }}"{% if display_font %} data-font-family="{{ display_font.stack }}"{% endif %}>Aa — {{ vibe_tagline or vibe_name }}</span><span class="ds-overview-type-meta mono">{{ spec.name }} · {{ spec.size }}px · {{ display_font.stack if display_font else "" }}</span></p>
+          {% endif %}
+          {% if logo_data_uri %}
+          <h3 class="ds-subhead">Mark</h3>
+          <figure class="ds-asset-tile ds-logo-48 ds-overview-logo"><img src="{{ logo_data_uri }}" alt="{{ name }} logo"><figcaption>{{ name }}</figcaption></figure>
+          {% endif %}
+          <h3 class="ds-subhead">Signature components</h3>
+          <div class="ds-overview-sig">
+            <button class="ds-btn" type="button" data-bg-color="{{ primary }}" data-fg-color="{{ on_primary }}">Primary</button>
+            <span class="ds-badge" data-bg-color="#DBEAFE" data-fg-color="#1E40AF">Info</span>
+            <span class="ds-badge" data-bg-color="#DCFCE7" data-fg-color="#166534">Success</span>
+            <div class="ds-card ds-overview-card">
+              <h4>{{ name }}</h4>
+              <p>{{ vibe_tagline or "A design system from the Baton Design Studio." }}</p>
+              <a class="ds-btn ds-btn-sm" href="#components" data-bg-color="{{ primary }}" data-fg-color="{{ on_primary }}">Explore</a>
+            </div>
+          </div>
           {% if business %}
           <h3 class="ds-subhead">Business context</h3>
-          <dl class="studio-summary">
-            <div><dt>Industry</dt><dd>{{ business.industry or "—" }}</dd></div>
-            <div><dt>Audience</dt><dd>{{ business.audience or "—" }}</dd></div>
-            <div><dt>Tone</dt><dd>{{ business.tone or "—" }}</dd></div>
-            <div><dt>Offering</dt><dd>{{ business.offering or "—" }}</dd></div>
-            <div><dt>Description</dt><dd>{{ business.description or "—" }}</dd></div>
-          </dl>
-          {% else %}
-          <p class="ds-note">No business context yet — add one so the studio can suggest the reusable elements your business actually needs.</p>
+          <p class="ds-overview-biz">
+            {% if business.industry %}<span><strong>Industry</strong> {{ business.industry }}</span>{% endif %}
+            {% if business.audience %}<span><strong>Audience</strong> {{ business.audience }}</span>{% endif %}
+            {% if business.tone %}<span><strong>Tone</strong> {{ business.tone }}</span>{% endif %}
+            {% if business.offering %}<span><strong>Offering</strong> {{ business.offering }}</span>{% endif %}
+          </p>
+          {% if business.description %}<p class="ds-note">{{ business.description }}</p>{% endif %}
           {% endif %}
-          <form class="ds-biz-form" method="post" action="/design-systems/business">
-            {{ csrf_input() }}
-            <input type="hidden" name="name" value="{{ name }}">
-            <div class="field-row"><label for="biz-industry">Industry</label><input type="text" id="biz-industry" name="industry" value="{{ business.industry if business else '' }}" placeholder="e.g. Restaurant, SaaS, Clinic" autocomplete="off"></div>
-            <div class="field-row"><label for="biz-audience">Audience</label><input type="text" id="biz-audience" name="audience" value="{{ business.audience if business else '' }}" placeholder="e.g. Busy parents, small teams" autocomplete="off"></div>
-            <div class="field-row"><label for="biz-tone">Tone</label><input type="text" id="biz-tone" name="tone" value="{{ business.tone if business else '' }}" placeholder="e.g. Warm and welcoming" autocomplete="off"></div>
-            <div class="field-row"><label for="biz-offering">Offering</label><input type="text" id="biz-offering" name="offering" value="{{ business.offering if business else '' }}" placeholder="e.g. Online ordering, bookings" autocomplete="off"></div>
-            <div class="field-row"><label for="biz-description">Description</label><textarea id="biz-description" name="description" rows="3" placeholder="e.g. A neighbourhood bistro that takes weeknight reservations online">{{ business.description if business else '' }}</textarea></div>
-            <div class="actions"><button class="btn btn-sm btn-secondary" type="submit">Save business context</button></div>
-          </form>
-          <h3 class="ds-subhead">System notes</h3>
-          <div class="ds-system-notes">{{ markdown_html }}</div>
+          <details class="ds-details">
+            <summary>Edit business context</summary>
+            {% if not business %}
+            <p class="ds-note">No business context yet — add one so the studio can suggest the reusable elements your business actually needs.</p>
+            {% endif %}
+            <form class="ds-biz-form" method="post" action="/design-systems/business">
+              {{ csrf_input() }}
+              <input type="hidden" name="name" value="{{ name }}">
+              <div class="field-row"><label for="biz-industry">Industry</label><input type="text" id="biz-industry" name="industry" value="{{ business.industry if business else '' }}" placeholder="e.g. Restaurant, SaaS, Clinic" autocomplete="off"></div>
+              <div class="field-row"><label for="biz-audience">Audience</label><input type="text" id="biz-audience" name="audience" value="{{ business.audience if business else '' }}" placeholder="e.g. Busy parents, small teams" autocomplete="off"></div>
+              <div class="field-row"><label for="biz-tone">Tone</label><input type="text" id="biz-tone" name="tone" value="{{ business.tone if business else '' }}" placeholder="e.g. Warm and welcoming" autocomplete="off"></div>
+              <div class="field-row"><label for="biz-offering">Offering</label><input type="text" id="biz-offering" name="offering" value="{{ business.offering if business else '' }}" placeholder="e.g. Online ordering, bookings" autocomplete="off"></div>
+              <div class="field-row"><label for="biz-description">Description</label><textarea id="biz-description" name="description" rows="3" placeholder="e.g. A neighbourhood bistro that takes weeknight reservations online">{{ business.description if business else '' }}</textarea></div>
+              <div class="actions"><button class="btn btn-sm btn-secondary" type="submit">Save business context</button></div>
+            </form>
+          </details>
         </div>
       </section>
 
@@ -137,12 +168,17 @@
           {% for font in fonts %}
           <div class="ds-font-row"><span class="mono">{{ font.name }}</span><span data-font-family="{{ font.stack }}">{{ font.stack }}</span></div>
           {% endfor %}
-          {% for style in type_styles %}
-          <div class="ds-type-row">
+          {# Issue #287: three specimens — display, headline, body — set big,
+             not the full ~12-style scale repeating "Aa — The quick brown
+             fox" until the display sizes wrap. The full scale stays in the
+             copied JSON above. #}
+          {% for style in type_specimens %}
+          <div class="ds-type-specimen">
             <div class="ds-type-meta"><span class="mono">{{ style.name }}</span>{{ style.size }}px · {{ style.weight }} · {{ style.leading }} leading · {{ style.tracking }} tracking</div>
-            <span data-font-size="{{ style.size }}" data-font-weight="{{ style.weight }}" data-line-height="{{ style.leading }}"{% if display_font and style.name.startswith("display") %} data-font-family="{{ display_font.stack }}"{% elif body_font %} data-font-family="{{ body_font.stack }}"{% endif %}>Aa — The quick brown fox</span>
+            <span class="ds-type-specimen-text" data-font-size="{{ style.size }}" data-font-weight="{{ style.weight }}" data-line-height="{{ style.leading }}"{% if display_font and style.name.startswith("display") %} data-font-family="{{ display_font.stack }}"{% elif body_font %} data-font-family="{{ body_font.stack }}"{% endif %}>Aa — The quick brown fox</span>
           </div>
           {% endfor %}
+          <p class="ds-note">Display, headline, and body specimens — the full {{ type_styles | length }}-style scale is in the copied JSON.</p>
           {% if not fonts and not type_styles %}
           <p class="ds-note">No typography tokens stored for this system.</p>
           {% endif %}
@@ -610,6 +646,19 @@
               <button class="btn btn-sm btn-danger" type="submit">Delete</button>
             </form>
           </div>
+        </div>
+      </section>
+
+      <section class="ds-section" id="notes" aria-label="Notes">
+        <div class="ds-section-label">
+          <h2>Notes</h2>
+          <p>The system's own notes, as written — kept out of the Overview so it stays visual.</p>
+        </div>
+        <div>
+          <details class="ds-details" id="ds-notes-details">
+            <summary>System notes</summary>
+            <div class="ds-system-notes">{{ markdown_html }}</div>
+          </details>
         </div>
       </section>
     </div>

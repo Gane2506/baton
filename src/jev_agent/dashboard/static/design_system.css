@@ -89,12 +89,56 @@ body:has(.ds-page) .shell.app-shell { grid-template-columns: var(--sidebar-w, 23
   text-decoration: none;
 }
 .ds-nav-list li a:hover { background: var(--ds-surface-2); color: var(--ds-text); }
-.ds-nav-list li a.active { background: var(--ds-surface-2); color: var(--ds-text); }
+.ds-nav-list li a.active { background: var(--ds-surface-2); color: var(--ds-text); font-weight: 600; box-shadow: inset 2px 0 0 var(--ds-accent); }
 .ds-nav-list li a .ds-nav-count { margin-left: auto; color: var(--ds-faint); font-size: 12px; }
 .ds-nav-sep { border-top: 1px solid var(--ds-border); margin: 10px 4px; }
 .ds-nav-hidden { display: none !important; }
 
-.ds-content { min-width: 0; padding: 8px 24px 0; }
+.ds-content { min-width: 0; padding: 8px 24px 0; background: var(--ds-bg); }
+
+/* Light/dark preview (issue #287): the toggle re-skins the content area in
+   the system's own light or dark theme — the page chrome (head, sidebar)
+   stays dark. The light class carries a generic light palette so the page
+   is right even without JS; design_system.js refines the five variables
+   with the system's exact token colors (data-preview-light-*/dark-*). */
+.ds-content.ds-preview-light {
+  --ds-bg: #ffffff;
+  --ds-surface: #f7f7f8;
+  --ds-surface-2: #ececef;
+  --ds-border: #e2e2e6;
+  --ds-border-soft: #ececef;
+  --ds-text: #141416;
+  --ds-muted: #5b5b63;
+  --ds-faint: #8a8a92;
+  --ds-accent: #65a30d;
+}
+
+/* Preview toggle: a segmented Light/Dark control in the page head. */
+.ds-preview-toggle { display: inline-flex; align-items: center; gap: 2px; background: var(--ds-surface-2); border: 1px solid var(--ds-border); border-radius: 999px; padding: 2px; }
+.ds-preview-label { font-size: 12px; color: var(--ds-muted); padding: 0 6px 0 10px; }
+.ds-preview-btn { background: transparent; border: none; border-radius: 999px; color: var(--ds-muted); font-size: 12px; font-weight: 600; padding: 5px 12px; cursor: pointer; }
+.ds-preview-btn:hover { color: var(--ds-text); }
+.ds-preview-btn[aria-pressed="true"] { background: var(--ds-text); color: #101010; }
+
+/* Visual overview (issue #287): palette strip, type, mark, signature
+   components, business chips — a summary, not the notes as prose. */
+.ds-overview-palette { display: flex; flex-wrap: wrap; gap: 12px; }
+.ds-overview-swatch { margin: 0; display: grid; gap: 6px; width: 108px; align-content: start; }
+.ds-overview-swatch-block { display: block; height: 56px; border-radius: 8px; border: 1px solid var(--ds-border); }
+.ds-overview-swatch figcaption { display: grid; gap: 2px; font-size: 11px; color: var(--ds-muted); }
+.ds-overview-swatch figcaption .mono { font-size: 11px; color: var(--ds-muted); }
+.ds-overview-type { margin: 0; }
+.ds-overview-type > span:first-child { display: block; }
+.ds-overview-type-meta { display: block; margin-top: 10px; font-size: 12px; color: var(--ds-muted); }
+.ds-overview-logo { display: inline-grid; margin: 0; }
+.ds-overview-sig { display: flex; flex-wrap: wrap; gap: 16px; align-items: flex-start; }
+.ds-overview-card { margin: 0; }
+.ds-overview-biz { display: flex; flex-wrap: wrap; gap: 8px 24px; font-size: 13px; color: var(--ds-muted); margin: 0; }
+.ds-overview-biz strong { color: var(--ds-text); font-weight: 600; margin-right: 6px; }
+.ds-details { margin-top: 16px; border: 1px solid var(--ds-border); border-radius: 10px; padding: 12px 16px; }
+.ds-details summary { cursor: pointer; font-size: 13px; font-weight: 600; }
+.ds-details .ds-biz-form { margin-top: 12px; }
+.ds-details .ds-system-notes { margin-top: 12px; }
 
 /* One section: label column + wide live rendering, thin divider. */
 .ds-section {
@@ -104,6 +148,7 @@ body:has(.ds-page) .shell.app-shell { grid-template-columns: var(--sidebar-w, 23
   padding: 24px 0 28px;
   border-bottom: 1px solid var(--ds-border-soft);
   position: relative;
+  scroll-margin-top: 12px;
 }
 .ds-section-label h2 { font-size: 13px; font-weight: 600; margin: 0 0 4px; }
 .ds-section-label p { font-size: 12px; color: var(--ds-faint); margin: 0; line-height: 1.5; }
@@ -191,9 +236,13 @@ body:has(.ds-page) .shell.app-shell { grid-template-columns: var(--sidebar-w, 23
 }
 .ds-subhead:first-child { margin-top: 0; }
 
-/* Typography specimens. */
-.ds-type-row { display: grid; grid-template-columns: 170px minmax(0, 1fr); gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--ds-border-soft); align-items: baseline; }
-.ds-type-row:last-child { border-bottom: none; }
+/* Typography specimens (issue #287): three big ones — display, headline,
+   body — meta above, specimen below, room to breathe. The old per-style
+   row loop (one row per style, ~12 repeats) is gone with the template. */
+.ds-type-specimen { padding: 20px 0; border-bottom: 1px solid var(--ds-border-soft); }
+.ds-type-specimen:last-of-type { border-bottom: none; }
+.ds-type-specimen .ds-type-meta { margin-bottom: 10px; }
+.ds-type-specimen-text { display: block; }
 .ds-type-meta { font-size: 12px; color: var(--ds-muted); }
 .ds-type-meta .mono { color: var(--ds-text); display: block; margin-bottom: 2px; }
 .ds-font-row { display: grid; grid-template-columns: 170px minmax(0, 1fr); gap: 12px; padding: 8px 0; border-bottom: 1px solid var(--ds-border-soft); font-size: 13px; align-items: baseline; }

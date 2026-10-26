@@ -569,3 +569,112 @@ def test_code_page_restyle(client: TestClient, home: Path) -> None:
     assert page.status_code == 200
     assert "design_system.css" in page.text
     assert "tokens.css" in page.text
+
+
+# ---- issue #287: visual overview, scroll-spy, type specimens, preview toggle ----
+
+
+def _seed_rich(name: str = "rich-brand") -> None:
+    rich = rich_tokens(VIBE_PROFILES["minimal"], "both")
+    tokens = dict(TOKENS)
+    tokens["design_tokens"] = rich
+    save_library_system(name, MARKDOWN, tokens, {"vibe_profile": "minimal"})
+
+
+def test_detail_overview_is_visual_summary(client: TestClient, home: Path) -> None:
+    """Issue #287: Overview is a visual summary — palette strip, type, mark,
+    signature components — and the markdown notes live in the collapsed
+    Notes section at the bottom instead of leading the page."""
+    _seed_rich()
+    page = client.get("/design-systems/rich-brand")
+    assert page.status_code == 200
+    overview = page.text.split('id="colors"')[0]
+    assert "ds-overview-palette" in overview
+    assert "ds-overview-type" in overview
+    assert "Signature components" in overview
+    assert 'href="#notes"' in page.text
+    notes = page.text.split('id="notes"')[1]
+    assert "System notes" in page.text
+    assert "A warm, confident marketing system" in notes
+    assert "A warm, confident marketing system" not in overview
+
+
+def test_detail_overview_business_chips_and_collapsed_form(client: TestClient, home: Path) -> None:
+    """Issue #287: business context shows as compact chips in the Overview;
+    the edit form is kept, collapsed behind a disclosure."""
+    _seed(
+        "acme-brand",
+        business_context={
+            "industry": "Restaurant",
+            "audience": "Hungry neighbours",
+            "tone": "Warm",
+            "offering": "Online ordering",
+            "description": "A neighbourhood bistro with a seasonal menu.",
+        },
+    )
+    page = client.get("/design-systems/acme-brand")
+    assert page.status_code == 200
+    overview = page.text.split('id="colors"')[0]
+    assert "Restaurant" in overview
+    assert "Hungry neighbours" in overview
+    assert "Edit business context" in overview
+    assert 'id="biz-industry"' in page.text
+
+
+def test_detail_typography_three_specimens(client: TestClient, home: Path) -> None:
+    """Issue #287: three big specimens (display, headline, body) instead of
+    the ~12-row repeat that wrapped the display sizes to 2-3 lines. The
+    full scale stays in the copied JSON."""
+    _seed_rich()
+    page = client.get("/design-systems/rich-brand")
+    assert page.status_code == 200
+    assert page.text.count('class="ds-type-specimen"') == 3
+    assert page.text.count("Aa — The quick brown fox") == 3
+    assert "display_xl" in page.text
+    css = client.get("/static/design_system.css")
+    assert ".ds-type-specimen-text" in css.text
+    assert ".ds-type-row" not in css.text
+
+
+def test_detail_scroll_spy(client: TestClient, home: Path) -> None:
+    """Issue #287: an IntersectionObserver scroll-spy highlights the sidebar
+    link for the section in view; sections carry a scroll margin so anchor
+    jumps land cleanly."""
+    _seed_rich()
+    page = client.get("/design-systems/rich-brand")
+    assert page.status_code == 200
+    assert "ds-nav-search" in page.text  # the search filter still exists
+    js = client.get("/static/design_system.js")
+    assert js.status_code == 200
+    assert "IntersectionObserver" in js.text
+    assert "setActiveNav" in js.text
+    css = client.get("/static/design_system.css")
+    assert css.status_code == 200
+    assert ".ds-nav-list li a.active" in css.text
+    assert "scroll-margin-top" in css.text
+
+
+def test_detail_preview_toggle(client: TestClient, home: Path) -> None:
+    """Issue #287: a Light/Dark toggle previews the components/tokens area
+    in the system's own themes. A both-theme system opens on light; the
+    exact palettes travel as validated data attributes, no inline styles."""
+    _seed_rich()
+    page = client.get("/design-systems/rich-brand")
+    assert page.status_code == 200
+    assert 'data-preview-theme="light"' in page.text
+    assert 'data-preview-theme="dark"' in page.text
+    assert 'id="ds-content"' in page.text
+    assert "ds-preview-light" in page.text
+    assert 'data-preview-light-bg="#' in page.text
+    assert 'data-preview-dark-bg="#' in page.text
+    assert 'data-preview-light-text="#' in page.text
+    assert 'data-preview-dark-text="#' in page.text
+    assert ' style="' not in page.text
+    js = client.get("/static/design_system.js")
+    assert js.status_code == 200
+    assert "applyPreview" in js.text
+    assert "data-preview-theme" in js.text
+    css = client.get("/static/design_system.css")
+    assert css.status_code == 200
+    assert ".ds-content.ds-preview-light" in css.text
+    assert ".ds-preview-btn" in css.text
