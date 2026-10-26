@@ -31,7 +31,12 @@ body:has(.ds-page) .shell.app-shell { grid-template-columns: var(--sidebar-w, 23
   color: var(--ds-text);
   border: 1px solid var(--ds-border);
   border-radius: 14px;
-  overflow: hidden;
+  /* overflow: clip, not hidden (issue #287): hidden makes .ds-page the
+     scroll container, so the sticky sidebar nav never sticks and scrolls
+     away with the page — the scroll-spy highlight would be invisible
+     mid-page. clip still clips to the rounded corners, but creates no
+     scroll container, so sticky works. */
+  overflow: clip;
   padding: 0 0 48px;
 }
 
@@ -100,7 +105,7 @@ body:has(.ds-page) .shell.app-shell { grid-template-columns: var(--sidebar-w, 23
    the system's own light or dark theme — the page chrome (head, sidebar)
    stays dark. The light class carries a generic light palette so the page
    is right even without JS; design_system.js refines the five variables
-   with the system's exact token colors (data-preview-light-*/dark-*). */
+   with the system's exact token colors (data-preview-light-* / dark-*). */
 .ds-content.ds-preview-light {
   --ds-bg: #ffffff;
   --ds-surface: #f7f7f8;

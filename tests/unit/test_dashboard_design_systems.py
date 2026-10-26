@@ -652,6 +652,15 @@ def test_detail_scroll_spy(client: TestClient, home: Path) -> None:
     assert css.status_code == 200
     assert ".ds-nav-list li a.active" in css.text
     assert "scroll-margin-top" in css.text
+    # The sticky sidebar must stay visible mid-page: overflow: hidden on
+    # .ds-page makes it the scroll container, so the nav scrolls away and
+    # the scroll-spy highlight is invisible. overflow: clip keeps the
+    # rounded-corner clipping without breaking sticky.
+    assert "overflow: clip" in css.text
+    # A `*/` inside a comment ends it early and swallows the next rule:
+    # that exact bug killed the light-preview class (issue #287). Every
+    # opener must have exactly one terminator, in both the CSS and the JS.
+    assert css.text.count("/*") == css.text.count("*/")
 
 
 def test_detail_preview_toggle(client: TestClient, home: Path) -> None:
@@ -674,10 +683,18 @@ def test_detail_preview_toggle(client: TestClient, home: Path) -> None:
     assert js.status_code == 200
     assert "applyPreview" in js.text
     assert "data-preview-theme" in js.text
+    assert js.text.count("/*") == js.text.count("*/")
     css = client.get("/static/design_system.css")
     assert css.status_code == 200
     assert ".ds-content.ds-preview-light" in css.text
     assert ".ds-preview-btn" in css.text
+    # The light class must actually declare the full palette — not just the
+    # five JS-refined variables. surface-2, faint, and accent come from the
+    # class alone; if the rule is swallowed (see the comment-balance check
+    # above), inputs stay dark-on-dark in light preview.
+    assert "--ds-surface-2: #ececef" in css.text
+    assert "--ds-faint: #8a8a92" in css.text
+    assert "--ds-accent: #65a30d" in css.text
     # The inherited text color must flip too: elements with no explicit
     # color rule (specimens, card titles, token names) inherit the content
     # area's color, and the dark page color would be invisible on light.
