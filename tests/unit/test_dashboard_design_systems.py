@@ -456,7 +456,7 @@ def test_detail_color_swatches_present(client: TestClient, home: Path) -> None:
     assert 'data-swatch-color="#' in page.text
     css = client.get("/static/design_system.css")
     assert css.status_code == 200
-    assert ".content-inner:has(> .ds-page)" in css.text
+    assert ".content-inner:has(.ds-page)" in css.text
     assert "64px" in css.text
 
 

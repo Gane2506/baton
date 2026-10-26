@@ -22,7 +22,7 @@
 /* Let the system page use the full content width: the reference is a
    wide, dense sheet, and the dashboard's centered max-width column left
    the renderings too cramped (token swatches collapsed to zero width). */
-.content-inner:has(> .ds-page) { max-width: none; }
+.content-inner:has(.ds-page) { max-width: none; }
 .ds-page {
   background: var(--ds-bg);
   color: var(--ds-text);
