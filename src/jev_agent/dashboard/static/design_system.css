@@ -25,7 +25,15 @@
    The app grid also reserves a 360px live-panes column even when no panes
    are mounted (this page mounts none), so collapse it here too. */
 .content-inner:has(.ds-page) { max-width: none; }
-body:has(.ds-page) .shell.app-shell { grid-template-columns: var(--sidebar-w, 236px) minmax(0, 1fr); }
+/* The 236px sidebar column + no live-panes column, but ONLY where the
+   sidebar is actually in the grid (issue #294): shell.css turns the
+   sidebar into a fixed off-canvas drawer at <=1080px and the grid to
+   1fr — an unscoped override re-imposes a 236px column for a drawer
+   that isn't there, crushing the page to ~204px at phone width while
+   overflow: clip hides the damage from scrollWidth checks. */
+@media (min-width: 1081px) {
+  body:has(.ds-page) .shell.app-shell { grid-template-columns: var(--sidebar-w, 236px) minmax(0, 1fr); }
+}
 .ds-page {
   background: var(--ds-bg);
   color: var(--ds-text);
