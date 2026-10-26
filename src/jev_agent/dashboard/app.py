@@ -181,6 +181,7 @@ def create_app(
         Route("/design-studio/reverse/status", dash.design_reverse_status),
         Route("/design-studio/reverse/live", dash.design_reverse_live),
         Route("/tools", dash.tools_page),
+        Route("/tools/apis/test", dash.apis_test, methods=["POST"]),
         Route("/tools/models/refresh", dash.models_refresh, methods=["POST"]),
         Route("/tools/cache/clear", dash.cache_clear, methods=["POST"]),
         Route("/tools/cache/calibrate", dash.cache_calibrate, methods=["POST"]),

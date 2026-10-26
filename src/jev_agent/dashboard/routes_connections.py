@@ -293,7 +293,11 @@ class ConnectionsRoutes(DashboardCore):
     async def connections_key_add(self, request: Request) -> Response:
         """Save a key to ~/.jev/secrets.env (POST): it applies to this process at
         once, so the page shows "Set" without a restart. The value travels only in
-        the POST body and is never rendered, logged, or flashed back."""
+        the POST body and is never rendered, logged, or flashed back.
+
+        A same-origin `return_to` (e.g. the Tools page's provider cards) lands
+        back where the form was posted from; anything else stays on Connections.
+        """
 
         def add(repo: views.Repo, form: FormData) -> str:
             from jev_agent.core.secrets import write_secret
@@ -303,7 +307,12 @@ class ConnectionsRoutes(DashboardCore):
             write_secret(name, value)
             return f"{name} saved to the secrets file; it is in effect now."
 
-        return await self.act(request, "/connections", add)
+        form = await checked_form(request)
+        to = "/connections"
+        return_to = _text(form, "return_to") or ""
+        if return_to.startswith("/") and not return_to.startswith("//") and "\\" not in return_to:
+            to = return_to
+        return await self.act(request, to, add)
 
     async def connections_key_remove(self, request: Request) -> Response:
         """Two steps (Tier 2), like `design_system_delete`: the first POST shows a

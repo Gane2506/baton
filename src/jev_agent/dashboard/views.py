@@ -11,6 +11,8 @@ import json
 import math
 import os
 import re
+import shlex
+import shutil
 import sqlite3
 import statistics
 from collections import Counter
@@ -34,7 +36,7 @@ from jev_agent.app.models import ModelListing
 from jev_agent.app.quality import CheckRow, check_rows, review_text
 from jev_agent.app.queue import item_flags
 from jev_agent.config import STATE_DIRNAME, JevConfig, load_config
-from jev_agent.config.schema import ShipConfig
+from jev_agent.config.schema import McpServerConfig, ShipConfig
 from jev_agent.core.benchmarks import DEFAULT_LAST, Summary, Trend, summarize, trends
 from jev_agent.core.budget import (
     CostEstimate,
@@ -1527,6 +1529,136 @@ def cli_providers(config: JevConfig) -> list[ProviderAuth]:
         claude_code_auth(command=claude.command, bare=claude.bare),
         codex_auth(command=codex.command),
     ]
+
+
+# ---- tools: APIs ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class ApiServerRow:
+    """One `[tools.mcp.<name>]` entry as the Tools page's APIs section shows it.
+
+    `status` is "ready" (local command found on PATH, or the last Test
+    answered), "not tested" (remote server, no Test yet), or "error"
+    (local command not found, or the last Test failed). `detail` explains
+    it in plain language. Auth is env var names only — never values.
+    """
+
+    name: str
+    kind: str  # "Local command" or "Remote URL"
+    target: str  # the command (with args) or the URL
+    auth: str  # env var names, names only
+    status: str
+    detail: str
+    source: str  # repo / user / "User + repo"
+
+
+PROVIDER_API_KEYS: tuple[tuple[str, str, str], ...] = (
+    ("OpenRouter", "OPENROUTER_API_KEY", "Chat + Jev decisions via OpenRouter"),
+    ("Anthropic", "ANTHROPIC_API_KEY", "Claude Code workers fallback (billed per token)"),
+    ("OpenAI", "OPENAI_API_KEY", "Codex workers fallback (billed per token)"),
+    ("TypeSafe", "TYPESAFE_API_KEY", "Native Jev decisions"),
+)
+
+
+@dataclass(frozen=True)
+class ProviderApiKeyRow:
+    """One provider API key for the Tools page's APIs section (status only)."""
+
+    title: str
+    env_name: str
+    description: str
+    is_set: bool
+    from_secrets: bool
+
+
+def provider_api_keys(config: JevConfig) -> list[ProviderApiKeyRow]:
+    """The provider API keys, with set status only — never values.
+
+    The same four cards as Connections; Tools shows them read-only plus an
+    inline Add when unset, so every API the agents can call is visible in
+    one place. Removal stays on Connections.
+    """
+    by_name = {var.name: var for var in env_vars(config)}
+    rows = []
+    for title, env_name, description in PROVIDER_API_KEYS:
+        var = by_name.get(env_name)
+        rows.append(
+            ProviderApiKeyRow(
+                title=title,
+                env_name=env_name,
+                description=description,
+                is_set=bool(var and var.is_set),
+                from_secrets=bool(var and var.from_secrets),
+            )
+        )
+    return rows
+
+
+def local_server_status(server: McpServerConfig) -> tuple[str, str]:
+    """(status, detail) for a local MCP server: its command must resolve on PATH."""
+    command = (server.command or "").strip()
+    try:
+        first = shlex.split(command)[0] if command else ""
+    except ValueError:
+        return "error", "command could not be parsed"
+    found = shutil.which(first) if first else None
+    if found:
+        return "ready", f"command found: {found}"
+    return "error", "command not found on PATH"
+
+
+def api_servers(repo: Repo, last_tests: dict[str, tuple[str, str]]) -> list[ApiServerRow]:
+    """Every `[tools.mcp.<name>]` entry with a render-time status.
+
+    No network on render (the Connections page's rule): a local server is
+    "ready" when its command resolves on PATH, "error" when it doesn't; a
+    remote server is "not tested" until the Test button proves it answers,
+    then shows that last result. `last_tests` is the dashboard's in-memory
+    map (name -> (status, detail)) from the Test endpoint; a restart resets
+    remote servers to "not tested", which is the honest default.
+    """
+    from jev_agent.app import settings
+
+    repo_raw, user_raw, _user_file = settings.read_layers(repo.root)
+    rows = []
+    for name, server in sorted(repo.config.tools.mcp.items()):
+        source = (
+            "User + repo"
+            if settings.entity_exists(repo_raw, "tools.mcp", name)
+            and settings.entity_exists(user_raw, "tools.mcp", name)
+            else ("repo" if settings.entity_exists(repo_raw, "tools.mcp", name) else "user")
+        )
+        if server.command is not None:
+            kind = "Local command"
+            target = server.command
+            if server.args:
+                target += " " + " ".join(server.args)
+            auth = ", ".join(server.env_from) or "—"
+            status, detail = local_server_status(server)
+        else:
+            kind = "Remote URL"
+            target = server.url or ""
+            auth_bits = []
+            if server.bearer_token_env:
+                auth_bits.append(f"bearer: {server.bearer_token_env}")
+            auth_bits += [
+                f"{header}: {var}" for header, var in sorted(server.headers_from_env.items())
+            ]
+            auth = ", ".join(auth_bits) or "—"
+            status, detail = last_tests.get(name, ("not tested", "Use Test to check it answers."))
+        rows.append(
+            ApiServerRow(
+                name=name,
+                kind=kind,
+                target=target,
+                auth=auth,
+                status=status,
+                detail=detail,
+                source=source,
+            )
+        )
+    return rows
 
 
 def _worker_summary_rows(c: JevConfig) -> list[tuple[str, str]]:

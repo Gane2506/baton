@@ -71,6 +71,7 @@ class DashboardCore:
         self.codex_flow = CodexDeviceFlow()
         self.claude_flow = ClaudeSetupTokenFlow()
         self.server_stats = ServerStatsCache()
+        self.api_tests: dict[str, tuple[str, str]] = {}  # Tools → APIs: last Test per server
         self.started_at = datetime.now(UTC)  # the About panel's uptime
         self.env = _environment()
         self._flash_lock = threading.Lock()

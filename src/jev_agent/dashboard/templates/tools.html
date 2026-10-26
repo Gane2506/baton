@@ -135,7 +135,7 @@
 {% endfor %}
 {% endmacro %}
 
-{% block extra_head %}<script src="/static/models.js" defer></script>{% endblock %}
+{% block extra_head %}<script src="/static/models.js" defer></script><script src="/static/tools.js" defer></script>{% endblock %}
 {% block content %}
 <div class="page-head">
   <div class="titles">
@@ -151,9 +151,160 @@
 
 <nav class="panel tight" aria-label="Tools sections">
   <div class="actions">
+  <a class="btn btn-sm btn-ghost" href="#apis">APIs</a>
   {% for e in entities %}<a class="btn btn-sm btn-ghost" href="#s-{{ e.path | replace('.', '-') }}">{{ _SECTION_TITLES.get(e.path, e.title) }}</a>{% endfor %}
   </div>
 </nav>
+
+<h2 class="section" id="apis">APIs</h2>
+<section class="panel" aria-label="APIs">
+  <p class="hint">Every external API your agents can call — MCP servers you connect
+  here, and the provider keys that power the models. An MCP server is either
+  a local command to run or a remote URL to reach; roles pick servers by name
+  on the Agents page.</p>
+  {% if api_servers %}
+  <div class="table-wrap table-scroll"><table>
+    <thead><tr><th>Name</th><th>Type</th><th>Target</th><th>Auth</th><th>Status</th><th><span class="sr-only">Actions</span></th></tr></thead>
+    <tbody>
+    {% for s in api_servers %}
+      <tr>
+        <td class="mono">{{ s.name }}</td>
+        <td>{{ s.kind }}</td>
+        <td class="mono wrap">{{ s.target }}</td>
+        <td class="mono small">{{ s.auth }}</td>
+        <td>{{ badge(s.status, "ok" if s.status == "ready" else ("warn" if s.status == "not tested" else "fail")) }}<br><span class="hint small">{{ s.detail }}</span></td>
+        <td class="actions">
+          <form method="post" action="/tools/apis/test" class="inline">
+            {{ csrf_input() }}
+            <input type="hidden" name="name" value="{{ s.name }}">
+            <button class="btn btn-sm btn-secondary" type="submit">Test</button>
+          </form>
+          <form method="post" action="/settings/entity" class="inline" data-confirm="Remove MCP server {{ s.name }}?">
+            {{ csrf_input() }}
+            <input type="hidden" name="section" value="tools.mcp">
+            <input type="hidden" name="action" value="remove">
+            <input type="hidden" name="name" value="{{ s.name }}">
+            <input type="hidden" name="return_to" value="/tools#apis">
+            <select name="target" aria-label="Remove from"><option value="repo">repo</option><option value="user">user</option></select>
+            <button class="btn btn-sm btn-danger" type="submit">Remove</button>
+          </form>
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table></div>
+  {% else %}
+  <div class="empty-inline">No APIs connected yet — connect one below and your agents can call it.</div>
+  {% endif %}
+
+  <details class="disclosure">
+    <summary>{{ icon("i-plus", "sm") }} Connect an API</summary>
+    <form method="post" action="/settings/entity" id="api-connect-form">
+      {{ csrf_input() }}
+      <input type="hidden" name="section" value="tools.mcp">
+      <input type="hidden" name="action" value="add">
+      <input type="hidden" name="keys" value="command,args,env_from,url,transport,bearer_token_env">
+      <input type="hidden" name="kinds" value="str,list,list,str,enum,env">
+      <input type="hidden" name="return_to" value="/tools#apis">
+      <div class="form-grid">
+        <div>
+          {{ field_label("name", "api-name") }}
+          <input type="text" id="api-name" name="name" required pattern="[A-Za-z0-9][A-Za-z0-9_-]*" placeholder="github">
+        </div>
+        <div>
+          {{ field_label("save_to", "api-target") }}
+          <select id="api-target" name="target">
+            <option value="repo">repo jev.toml</option>
+            <option value="user">user config</option>
+          </select>
+        </div>
+        <div>
+          <span class="field-label" id="api-kind-label">Type</span>
+          <div class="radio-inline" role="radiogroup" aria-labelledby="api-kind-label">
+            <label><input type="radio" name="api_kind" value="remote" checked> Remote URL</label>
+            <label><input type="radio" name="api_kind" value="local"> Local command</label>
+          </div>
+        </div>
+      </div>
+      <div id="api-connect-remote">
+        <div class="form-grid">
+          <div>
+            {{ field_label("url", "api-url") }}
+            <input type="text" id="api-url" name="f_url" placeholder="https://api.example.com/mcp">
+            <p class="hint small">The server's https URL. Set exactly one of URL or command.</p>
+          </div>
+          <div>
+            {{ field_label("transport", "api-transport") }}
+            <select id="api-transport" name="f_transport">
+              <option value="">Use default (http)</option>
+              <option value="http">http</option>
+              <option value="sse">sse</option>
+            </select>
+          </div>
+          <div>
+            {{ field_label("bearer_token_env", "api-bearer") }}
+            <input type="text" id="api-bearer" name="f_bearer_token_env" placeholder="EXAMPLE_API_TOKEN">
+            <p class="hint small">Name of the environment variable holding the token — never the
+            value itself. Add the value under Keys on <a href="/connections">Connections</a>.</p>
+          </div>
+        </div>
+      </div>
+      <div id="api-connect-local">
+        <div class="form-grid">
+          <div>
+            {{ field_label("command", "api-command") }}
+            <input type="text" id="api-command" name="f_command" placeholder="npx">
+            <p class="hint small">The executable to start. Set exactly one of command or URL.</p>
+          </div>
+          <div>
+            {{ field_label("args", "api-args") }}
+            <textarea id="api-args" name="f_args" rows="2" placeholder="-y&#10;@modelcontextprotocol/server-github"></textarea>
+            <p class="hint small">One argument per line.</p>
+          </div>
+          <div>
+            {{ field_label("env_from", "api-env") }}
+            <textarea id="api-env" name="f_env_from" rows="2" placeholder="GITHUB_PERSONAL_ACCESS_TOKEN"></textarea>
+            <p class="hint small">Environment variable names passed to the server — names only,
+            never values.</p>
+          </div>
+        </div>
+      </div>
+      <p class="hint">Secrets never go in config: name the environment variable here and add its
+      value under Keys on <a href="/connections">Connections</a>. Extra HTTP headers
+      can be added afterwards in the MCP servers editor below. Saved entries take
+      effect from a trusted repo, otherwise save to your user config.</p>
+      <button class="btn btn-primary" type="submit">Connect API</button>
+    </form>
+  </details>
+
+  <h3 class="subsection">Provider APIs</h3>
+  <p class="hint">The API keys that power the models themselves. Add one here and it is saved
+  to the secrets file, in effect immediately; manage or remove keys on
+  <a href="/connections">Connections</a>.</p>
+  <div class="provider-cards">
+    {% for p in provider_keys %}
+    <div class="provider-card">
+      <div class="provider-card-head">
+        <strong>{{ p.title }}</strong>
+        {{ badge(p.env_name ~ ": set", "ok") if p.is_set else badge(p.env_name ~ ": not set", "warn") }}
+      </div>
+      <p class="small muted">{{ p.description }}</p>
+      {% if not p.is_set %}
+      <form method="post" action="/connections/keys/add" class="field-row">
+        {{ csrf_input() }}
+        <input type="hidden" name="name" value="{{ p.env_name }}">
+        <input type="hidden" name="return_to" value="/tools#apis">
+        <div class="field-control">
+          <input type="password" name="value" required autocomplete="new-password"
+                 placeholder="Paste your {{ p.title }} API key" aria-label="{{ p.title }} API key">
+        </div>
+        <div class="field-actions"><button type="submit" class="btn btn-primary btn-sm">Add key</button></div>
+      </form>
+      {% endif %}
+    </div>
+    {% endfor %}
+  </div>
+</section>
 
 {{ render_entities(entities) }}
 
