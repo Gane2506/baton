@@ -306,10 +306,11 @@ def test_get_new_never_clears_wizard_state(client: TestClient, home: Path) -> No
     response = cast(httpx.Response, client.get("/design-studio/new", follow_redirects=False))
     assert response.status_code in (302, 303)
     assert response.headers["location"] == "/design-studio/new/purpose"
-    # The visitor is still on App type: the Purpose answer survived the GET.
-    page = client.get("/design-studio/new/app_type")
+    # The visitor is still on Business (first incomplete step after Purpose,
+    # issue #283): the Purpose answer survived the GET.
+    page = client.get("/design-studio/new/business")
     assert page.status_code == 200
-    assert "What kind of product is it?" in page.text
+    assert "What business is this for?" in page.text
 
 
 def test_unknown_step_404s(client: TestClient, home: Path) -> None:
