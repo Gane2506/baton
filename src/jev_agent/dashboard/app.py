@@ -20,6 +20,7 @@ from starlette.middleware import Middleware
 from starlette.requests import Request
 from starlette.responses import (
     PlainTextResponse,
+    RedirectResponse,
     Response,
 )
 from starlette.routing import Mount, Route
@@ -94,6 +95,14 @@ class Dashboard(
 
 
 JOB_SHUTDOWN_TIMEOUT_S = 30.0  # per job, for blocking steps that ignore cancellation
+
+
+async def _favicon_redirect(request: Request) -> Response:
+    """Browsers request /favicon.ico on pages without an icon link (the
+    standalone showcase pages carry none); redirect to the dashboard's SVG
+    favicon instead of 404ing. A redirect reuses StaticFiles' correct
+    ``image/svg+xml`` content type; a 204 would leave the tab iconless."""
+    return RedirectResponse(url="/static/favicon.svg")
 
 
 def create_app(
@@ -260,6 +269,7 @@ def create_app(
         Route("/settings/unset", dash.settings_unset, methods=["POST"]),
         Route("/ui-style", dash.ui_style_set, methods=["POST"]),
         Route("/settings/entity", dash.settings_entity, methods=["POST"]),
+        Route("/favicon.ico", _favicon_redirect),
         Mount("/static", app=StaticFiles(directory=STATIC_DIR), name="static"),
     ]
 
