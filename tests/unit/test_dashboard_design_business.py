@@ -334,7 +334,10 @@ def test_detail_edit_unknown_system_flashes_error(client: TestClient, home: Path
 
 def test_code_page_shows_business_panel_and_file_entries(client: TestClient, home: Path) -> None:
     _seed(business_context=RESTAURANT.to_meta())
-    page = client.get("/design-systems/acme-brand/code?target=html-css")
+    page = cast(
+        httpx.Response,
+        client.get("/design-systems/acme-brand/code?target=html-css"),
+    )
     assert page.status_code == 200
     assert "Suggested for your business" in page.text
     visible = _visible(page)
