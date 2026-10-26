@@ -386,6 +386,7 @@ below for how they are chosen and what happens when one hits its rate limit.
 | Key | Default | Meaning |
 | --- | --- | --- |
 | `prefer_free` | `false` | Offer free models first to every role that may use the `api` worker. A role's own `prefer_free` overrides this. A role whose pool has no free model gets the `"free"` expansion added in front of it. |
+| `planner_policy` | unset | Which models the planner may use: `"free_training_ok"`, `"mixed"`, `"mixed_no_training"` or `"paid_only"` (see [Planner model policy](#planner-model-policy)). Unset: derived from `[roles.planner] models`. An explicit policy also controls the planner's `prefer_free`: every mode but `"paid_only"` wants free models first, and `"paid_only"` never gets them. |
 | `free_models_limit` | `3` | How many cached free models one `"free"` entry in a role's `models` expands to (>= 0). |
 | `cache_ttl_hours` | `24` | Age (> 0) after which the cached model list (`.jev/cache/openrouter-models.json`) is fetched again, at the start of a run that uses free models or by `jev models`. |
 

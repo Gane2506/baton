@@ -1251,13 +1251,27 @@ class RolesConfig(_Strict):
 
 
 def role_prefers_free(config: JevConfig, role: str) -> bool:
-    """`[roles.<role>] prefer_free` if set, else `[models] prefer_free`."""
+    """`[roles.<role>] prefer_free` if set, else `[models] prefer_free`.
+
+    An explicit planner policy controls this for the planner (issue #327): every
+    mode but "paid_only" wants free models first, and "paid_only" must never get
+    them — `_free_models` prepends the "free" expansion whenever this is true, so
+    a paid-only pool would leak free models if the global `prefer_free` stayed on.
+    """
+    if role == "planner" and config.models.planner_policy is not None:
+        return config.models.planner_policy != "paid_only"
     override: bool | None = getattr(config.roles, role).prefer_free
     return config.models.prefer_free if override is None else override
 
 
 def role_uses_free(config: JevConfig, role: str) -> bool:
-    """The role asks for free models: it prefers them or lists the `"free"` token."""
+    """The role asks for free models: it prefers them or lists the `"free"` token.
+
+    As with `role_prefers_free`, an explicit planner policy decides for the planner:
+    "paid_only" never uses free models, whatever the pool or the global setting says.
+    """
+    if role == "planner" and config.models.planner_policy is not None:
+        return config.models.planner_policy != "paid_only"
     return (
         role_prefers_free(config, role) or FREE_MODELS_TOKEN in getattr(config.roles, role).models
     )

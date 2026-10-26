@@ -129,6 +129,32 @@ def test_planner_policy_mixed_keeps_free_first() -> None:
     assert opts.free == (NEMOTRON, LING, APODEX)
 
 
+def test_paid_only_pool_has_no_free_models_even_with_prefer_free() -> None:
+    # `_free_models` prepends the "free" expansion whenever `prefer_free` is on, so
+    # a paid-only pool would leak free models if the mode did not control it too.
+    from jev_agent.config.schema import role_prefers_free, role_uses_free
+
+    cfg = JevConfig.model_validate(
+        {
+            "models": {"prefer_free": True, "planner_policy": "paid_only"},
+            "roles": {"planner": {"workers": ["api", "claude_code"], "models": [MINI]}},
+        }
+    )
+    assert not role_prefers_free(cfg, "planner") and not role_uses_free(cfg, "planner")
+    opts = role_options(cfg, "planner", ALL, _catalog())
+    assert opts.models == [MINI] and opts.free == () and not opts.prefer_free
+
+    # The role-level override leaks the same way without the fix.
+    cfg = JevConfig.model_validate(
+        {
+            "models": {"planner_policy": "paid_only"},
+            "roles": {"planner": {"workers": ["api"], "models": [MINI], "prefer_free": True}},
+        }
+    )
+    opts = role_options(cfg, "planner", ALL, _catalog())
+    assert opts.models == [MINI] and opts.free == ()
+
+
 def test_free_token_expands_with_capability_filter_and_limit() -> None:
     cfg = _config(planner={"workers": ["claude_code", "api"], "models": [MINI, "free"]})
     opts = role_options(cfg, "planner", ALL, _catalog())
@@ -393,6 +419,93 @@ async def test_planner_falls_back_free_then_paid_then_other_worker(fixture_repo:
             ("claude_code", "sonnet"),  # the first model claude_code can run
         ]
         assert [a.attempt_no for a in planner] == [1, 2, 3, 4, 5]
+
+
+async def test_planner_guardrail_404_falls_through_to_paid(
+    fixture_repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The 2026-10-25 parked run, end to end (issue #327): the free-model 404 guardrail
+    # error must fall through the paid model instead of parking the run. The api worker
+    # is real here (MockTransport) so the 404 -> quota_exhausted mapping and the ladder
+    # are pinned together, not just the mapping. Policy is "mixed_no_training", so the
+    # free calls must also carry `data_collection: "deny"` and the paid call must not.
+    from jev_agent.workers.api import ApiWorker
+
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+    guardrail = httpx.Response(
+        404,
+        content=(
+            '{"error": {"code": 404, "message": "0 endpoints available matching your '
+            'guardrail restrictions. Free model training violation."}}'
+        ),
+    )
+    success = httpx.Response(
+        200,
+        json={
+            "choices": [
+                {
+                    "message": {
+                        "role": "assistant",
+                        "content": Plan(
+                            summary="Add search",
+                            tasks=[
+                                TaskCard(
+                                    id="T1",
+                                    title="Index",
+                                    description="Build index",
+                                    files_hint=["src/index.py"],
+                                    acceptance_criteria=["index builds"],
+                                )
+                            ],
+                        ).model_dump_json(),
+                    }
+                }
+            ]
+        },
+    )
+    queue = [guardrail, guardrail, guardrail, success]
+    calls: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        return queue.pop(0)
+
+    api = ApiWorker(
+        "https://openrouter.test/api/v1",
+        "OPENROUTER_API_KEY",
+        default_model=MINI,
+        transport=httpx.MockTransport(handler),
+        free_models={NEMOTRON, LING, APODEX},
+    )
+    fake = FakeWorker("fake", {})
+    registry = WorkerRegistry({"api": api, "claude_code": fake, "codex": fake})
+    config = JevConfig.model_validate(
+        {
+            "approval": {"require_plan_approval": False},
+            "models": {"planner_policy": "mixed_no_training"},
+            "roles": {
+                "planner": {"workers": ["api", "claude_code"], "models": ["free", MINI, "sonnet"]},
+                "coder": {"workers": ["claude_code"]},
+            },
+        }
+    )
+    with Store.open(fixture_repo / ".jev" / "state.db") as store:
+        pipeline = build_pipeline(fixture_repo, config, store, registry, catalog=_catalog())
+        run = await pipeline.start(Idea(text="add a module", repo_path=fixture_repo))
+        assert run.state is RunState.DONE, run.reason
+        planner = [a for a in store.list_attempts(run.id) if a.role == "planner"]
+        assert [(a.worker, a.model) for a in planner] == [
+            ("api", NEMOTRON),
+            ("api", LING),
+            ("api", APODEX),
+            ("api", MINI),
+        ]
+    assert len(calls) == 4
+    bodies = [json.loads(call.content) for call in calls]
+    assert [b["model"] for b in bodies] == [NEMOTRON, LING, APODEX, MINI]
+    for body in bodies[:3]:  # free calls: no-training routing requested
+        assert body["provider"]["data_collection"] == "deny"
+    assert "data_collection" not in bodies[3]["provider"]  # paid fallback: unrestricted
 
 
 async def test_planner_paid_quota_is_not_retried(fixture_repo: Path) -> None:
