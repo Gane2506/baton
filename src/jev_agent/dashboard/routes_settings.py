@@ -20,7 +20,14 @@ from jev_agent.app import settings
 from jev_agent.app.errors import JevError
 from jev_agent.app.models import fetch_catalog
 from jev_agent.config import ConfigError
-from jev_agent.config.schema import BEGINNER_FIELDS, CacheSemanticSettings, McpServerConfig
+from jev_agent.config.schema import (
+    BEGINNER_FIELDS,
+    PLANNER_POLICY_MODELS,
+    CacheSemanticSettings,
+    McpServerConfig,
+    planner_models,
+    planner_policy,
+)
 from jev_agent.core.benchmarks import DEFAULT_LAST
 from jev_agent.core.cache import CalibrationResult, calibrate_thresholds
 from jev_agent.core.figma import (
@@ -529,6 +536,9 @@ class SettingsRoutes(DashboardCore):
                 "summary": views.config_summary(repo),
                 "env_vars": views.env_vars(repo.config),
                 "checks": views.doctor_checks(repo.root),
+                "planner_policy": planner_policy(repo.config),
+                "planner_policy_explicit": repo.config.models.planner_policy is not None,
+                "planner_models": planner_models(repo.config),
                 "settings": self.settings,
                 "dashboard_started": _time(self.started_at),
                 "dashboard_uptime": _age(self.started_at),
@@ -571,6 +581,14 @@ class SettingsRoutes(DashboardCore):
             return self.back("/settings")
         values = {key: value for key, value in form.items() if isinstance(value, str)}
         to = "/" + settings.page_of(path) + "#" + settings.anchor_of(path)
+        if path == "models.planner_policy" and not unset:
+            # The picker is four radios, not free text: refuse anything else here
+            # (the schema Literal would refuse it too, but only after the sync below
+            # looked the value up — a KeyError, not a flashed error).
+            picked = values.get("value", "").strip()
+            if picked and picked not in PLANNER_POLICY_MODELS:
+                self.flash(request, "error", f"unknown planner model policy {picked!r}")
+                return self.back(to)
 
         def job() -> tuple[str | None, str]:
             root = self.settings.root
@@ -595,6 +613,27 @@ class SettingsRoutes(DashboardCore):
                 return str(exc), ""
             if value is settings.UNSET:
                 return remove(), f"reset {path}"
+            if path == "models.planner_policy":
+                # Picking a mode sets the planner's pool too, so the config stays
+                # readable and every other reader of `roles.planner.models` (the
+                # dispatcher, the doctor, the effective-config table) sees the same
+                # pool the policy promises. Resetting the policy leaves the pool
+                # alone: the policy is then derived from it instead.
+                pool = list(PLANNER_POLICY_MODELS[value])
+
+                def mutate(layer: dict[str, Any]) -> None:
+                    settings.set_path(layer, path, value)
+                    settings.set_path(layer, "roles.planner.models", pool)
+
+                return (
+                    settings.save(
+                        root,
+                        target,
+                        mutate,
+                        lambda: settings.write_value(file, path, value),
+                    ),
+                    f"saved planner model policy: {value}",
+                )
             return (
                 settings.save(
                     root,

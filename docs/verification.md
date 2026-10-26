@@ -505,7 +505,16 @@ Checked on 2026-10-12 against the OpenRouter docs and one unauthenticated `GET /
 - Cache `GET /models` for 24h; the key is optional.
 - Classify any 429 for a free model as `quota_exhausted` (no `limit_source` to rely on, and
   the remedy is another model, not a wait) and fall back: next free model, first paid model,
-  another worker.
+  another worker. A 404 on a free model whose body signals a data-policy/guardrail block
+  ("no endpoints … guardrail … training") is `quota_exhausted` too (issue #327): the
+  2026-10-25 parked run failed with HTTP 404 "0 endpoints available matching your guardrail
+  restrictions … Free model training violation" and parked at NEEDS_HUMAN because 404 mapped
+  to plain `error`, so the ladder never engaged.
+- Under the `mixed_no_training` planner policy (issue #327), free-model calls send
+  `provider: { data_collection: "deny" }` so OpenRouter routes only to providers that do not
+  collect user data; the paid fallback call is sent without it. This is a per-request
+  narrowing only: the OpenRouter account privacy setting (separate for free and paid models)
+  is the authoritative control and Baton cannot change it.
 - jev does **not** send the `models` fallback array: one attempt would then be served and
   billed by a model jev did not choose (possibly a paid one), which breaks per-attempt model
   records and budget reasoning. The fallback chain is explicit, one attempt per model, instead.

@@ -608,6 +608,34 @@ class EventsConfig(_Strict):
 
 FREE_MODELS_TOKEN = "free"  # in a role's `models`: the cached free models (docs/config.md)
 
+# The paid model the planner falls back to (and the only model "paid only" uses):
+# the api worker's documented default (examples/jev.toml, docs/config.md "Free models").
+PAID_PLANNER_MODEL = "openai/gpt-5-mini"
+
+# `models.planner_policy` (issue #327): which models the planner may use, and on what
+# privacy terms. The four modes, in the user's words: free only allowing training on
+# data; paid and free; paid and free without training; paid only.
+PlannerPolicy = Literal["free_training_ok", "mixed", "mixed_no_training", "paid_only"]
+
+PLANNER_POLICIES: tuple[str, ...] = (
+    "free_training_ok",
+    "mixed",
+    "mixed_no_training",
+    "paid_only",
+)
+
+# The planner model pool each policy maps to. The "without training" mode shares the
+# mixed pool: what makes it different is the request, not the pool — free-model calls
+# send `provider: {data_collection: "deny"}` (workers/api.py) and fall back to the
+# paid model on a policy error. See docs/config.md "Planner model policy" for the
+# honest limit: Baton cannot flip the OpenRouter account privacy setting.
+PLANNER_POLICY_MODELS: dict[str, list[str]] = {
+    "free_training_ok": [FREE_MODELS_TOKEN],
+    "mixed": [FREE_MODELS_TOKEN, PAID_PLANNER_MODEL],
+    "mixed_no_training": [FREE_MODELS_TOKEN, PAID_PLANNER_MODEL],
+    "paid_only": [PAID_PLANNER_MODEL],
+}
+
 
 class ModelsConfig(_Strict):
     """`[models]`: free OpenRouter models (docs/config.md "Free models"). They only apply to
@@ -616,6 +644,15 @@ class ModelsConfig(_Strict):
     prefer_free: bool = Field(
         default=False,
         description="Offer free OpenRouter models first for roles that can use the API worker.",
+    )
+    planner_policy: PlannerPolicy | None = Field(
+        default=None,
+        description=(
+            'Which models the planner may use: "free_training_ok" (free only, data may be '
+            'used for training), "mixed" (free first, then the paid model), '
+            '"mixed_no_training" (free and paid, with no-training requests on free models), '
+            'or "paid_only". Unset: derived from [roles.planner] models.'
+        ),
     )
     free_models_limit: int = Field(
         default=3, ge=0, description='How many cached free models the "free" entry expands to.'
@@ -1231,6 +1268,34 @@ def role_can_use_free(config: JevConfig, role: str) -> bool:
     return "api" in getattr(config.roles, role).workers and config.workers.api.enabled
 
 
+def planner_policy(config: JevConfig) -> PlannerPolicy:
+    """The planner's effective model policy (issue #327).
+
+    Explicit `models.planner_policy` wins; unset, it is derived from the planner's
+    configured pool so existing configs keep behaving as they do today: a pool with
+    free models and a paid model is "mixed", free only is "free_training_ok", anything
+    else (paid only, or an empty pool that falls back to the api worker's default
+    paid model) is "paid_only". "mixed_no_training" can only be chosen explicitly —
+    nothing in a model list says "without training".
+    """
+    if config.models.planner_policy is not None:
+        return config.models.planner_policy
+    models = config.roles.planner.models
+    if FREE_MODELS_TOKEN in models:
+        return "mixed" if any(m != FREE_MODELS_TOKEN for m in models) else "free_training_ok"
+    return "paid_only"
+
+
+def planner_models(config: JevConfig) -> list[str]:
+    """The planner's model pool for its effective policy (a fresh list each call)."""
+    return list(PLANNER_POLICY_MODELS[planner_policy(config)])
+
+
+def planner_no_training(config: JevConfig) -> bool:
+    """Whether planner calls must ask OpenRouter not to train on the data."""
+    return planner_policy(config) == "mixed_no_training"
+
+
 class TrustConfig(_Strict):
     """`[trust]` (user config only): repositories whose jev.toml may change the guarded keys
     (`config.loader.GUARDED_KEYS`): absolute paths, or `"*"` for every repository.
@@ -1246,7 +1311,7 @@ class TrustConfig(_Strict):
     )
 
 
-# The eleven settings the dashboard shows first: plain-language, everyday knobs a beginner
+# The twelve settings the dashboard shows first: plain-language, everyday knobs a beginner
 # can understand and safely change. Every other field stays available under the "Advanced"
 # toggle. Dotted paths into `JevConfig`; the settings page renders these in its beginner view.
 BEGINNER_FIELDS: tuple[str, ...] = (
@@ -1260,6 +1325,7 @@ BEGINNER_FIELDS: tuple[str, ...] = (
     "learning.enabled",
     "ship.enabled",
     "models.prefer_free",
+    "models.planner_policy",
     "autonomy.mode",
 )
 

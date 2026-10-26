@@ -14,7 +14,7 @@ from pathlib import Path
 
 from pydantic import ValidationError
 
-from jev_agent.config.schema import JevConfig
+from jev_agent.config.schema import JevConfig, planner_no_training
 from jev_agent.core.assign import Assignment, fit_free, quota_fallback, reassign
 from jev_agent.core.budget import Budget
 from jev_agent.core.cache import (
@@ -427,6 +427,9 @@ class Harness:
             task_id=task_id,
             attempt=attempt_no,
             tools=tools,
+            # Planner under "paid and free, without training" (issue #327): the api
+            # worker sends `data_collection: "deny"` on free-model calls.
+            no_training=role == "planner" and planner_no_training(self.config),
         )
         role_key = None
         role_entry = None

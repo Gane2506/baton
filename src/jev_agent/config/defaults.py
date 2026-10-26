@@ -145,6 +145,9 @@ DEFAULT_CONFIG_TOML = """\
 # only run on the api worker; Claude Code and Codex are unaffected. `jev models free` lists them.
 [models]
 # prefer_free = false              # true: offer free models first to roles that can use api
+# planner_policy = "mixed"         # planner models: "free_training_ok" | "mixed" |
+                                   # "mixed_no_training" | "paid_only" (docs/config.md
+                                   # "Planner model policy"); unset: from [roles.planner] models
 # free_models_limit = 3            # how many cached free models `models = ["free"]` expands to
 # cache_ttl_hours = 24             # refetch the model list (.jev/cache/) when older than this
 

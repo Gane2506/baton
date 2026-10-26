@@ -36,7 +36,7 @@ from jev_agent.app.models import ModelListing
 from jev_agent.app.quality import CheckRow, check_rows, review_text
 from jev_agent.app.queue import item_flags
 from jev_agent.config import STATE_DIRNAME, JevConfig, load_config
-from jev_agent.config.schema import McpServerConfig, ShipConfig
+from jev_agent.config.schema import McpServerConfig, ShipConfig, planner_policy
 from jev_agent.core.benchmarks import DEFAULT_LAST, Summary, Trend, summarize, trends
 from jev_agent.core.budget import (
     CostEstimate,
@@ -1739,6 +1739,8 @@ def config_summary(repo: Repo) -> list[tuple[str, str]]:
         ("learning", f"{'on' if status.enabled else 'off'} ({status.enabled_source})"),
         ("learning.profile", f"{status.profile} ({status.profile_source})"),
         ("models.prefer_free", str(c.models.prefer_free).lower()),
+        ("models.planner_policy", planner_policy(c)),
+        ("roles.planner.models", ", ".join(c.roles.planner.models) or "-"),
     ]
     rows += _worker_summary_rows(c)
     rows += _role_summary_rows(c)

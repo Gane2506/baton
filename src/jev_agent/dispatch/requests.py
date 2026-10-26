@@ -27,6 +27,7 @@ from typing import Any
 from jev_agent.config.schema import (
     FREE_MODELS_TOKEN,
     JevConfig,
+    planner_models,
     role_can_use_free,
     role_prefers_free,
 )
@@ -151,7 +152,12 @@ def role_options(
     """
     rc = getattr(config.roles, role)
     workers = [w for w in rc.workers if config.workers.is_enabled(w) and w in available]
-    models, free, unknown = _free_models(config, role, list(rc.models), catalog)
+    # An explicit planner policy is authoritative for the planner's pool (issue #327):
+    # it wins over a hand-edited `roles.planner.models` that disagrees with it. The
+    # dashboard picker keeps the two in sync, so this only bites on manual edits.
+    explicit = role == "planner" and config.models.planner_policy is not None
+    pool = planner_models(config) if explicit else list(rc.models)
+    models, free, unknown = _free_models(config, role, pool, catalog)
     models = models or [DEFAULT_MODEL]
     if rc.selection == "fixed":
         workers, models = workers[:1], models[:1]

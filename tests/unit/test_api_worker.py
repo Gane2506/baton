@@ -237,6 +237,27 @@ def test_classify_daily_free_limit_as_quota() -> None:
     assert classify_api_error(429, body) == "quota_exhausted"
 
 
+def test_classify_free_model_guardrail_404_as_quota() -> None:
+    # The 2026-10-25 parked run: HTTP 404 "0 endpoints available matching your guardrail
+    # restrictions … Free model training violation". The remedy is another model, so it
+    # counts as quota_exhausted and the fallback ladder engages (issue #327).
+    body = (
+        '{"error": {"code": 404, "message": "0 endpoints available matching your guardrail '
+        'restrictions. Free model training violation."}}'
+    )
+    assert classify_api_error(404, body, free_model=True) == "quota_exhausted"
+
+
+def test_classify_other_404s_stay_error() -> None:
+    assert classify_api_error(404, "model not found") == "error"
+    assert classify_api_error(404, "model not found", free_model=True) == "error"
+    body = (
+        '{"error": {"code": 404, "message": "0 endpoints available matching your guardrail '
+        'restrictions. Free model training violation."}}'
+    )
+    assert classify_api_error(404, body, free_model=False) == "error"
+
+
 def test_classify_other_codes() -> None:
     assert classify_api_error(400, "bad request") == "error"
     assert classify_api_error(408, "") == "timeout"
@@ -260,6 +281,43 @@ async def test_run_maps_http_errors(
     assert out.result.status == expected
     assert out.result.summary.startswith(f"HTTP {status}: ")
     assert len(rec.requests) == 1  # no retry
+
+
+async def test_run_free_model_guardrail_404_is_quota_exhausted_without_retry(
+    tmp_path: Path,
+) -> None:
+    body = (
+        '{"error": {"code": 404, "message": "0 endpoints available matching your guardrail '
+        'restrictions. Free model training violation."}}'
+    )
+    rec = Recorder(httpx.Response(404, content=body))
+    out = await _worker(rec).run(_job(tmp_path, model="nvidia/nemotron-3-super-120b-a12b:free"))
+    assert out.result.status == "quota_exhausted"
+    assert "data-policy block" in out.result.summary
+    assert len(rec.requests) == 1  # no retry: the ladder, not this worker, moves on
+
+
+# --- no-training requests -----------------------------------------------------------------------
+
+
+def test_no_training_sends_data_collection_deny_on_free_only(tmp_path: Path) -> None:
+    worker = ApiWorker(BASE_URL, KEY_ENV)
+    free = _job(tmp_path, no_training=True)
+    body = worker.build_request_body(free, "nvidia/nemotron-3-super-120b-a12b:free")
+    assert body["provider"] == {"data_collection": "deny"}
+    paid = worker.build_request_body(free, "openai/gpt-5-mini")
+    assert "provider" not in paid  # the paid fallback stays unrestricted
+    plain = _job(tmp_path)
+    assert "provider" not in worker.build_request_body(
+        plain, "nvidia/nemotron-3-super-120b-a12b:free"
+    )
+
+
+def test_no_training_keeps_require_parameters(tmp_path: Path) -> None:
+    worker = ApiWorker(BASE_URL, KEY_ENV)
+    job = _job(tmp_path, no_training=True, output_schema=Plan)
+    body = worker.build_request_body(job, "nvidia/nemotron-3-super-120b-a12b:free")
+    assert body["provider"] == {"require_parameters": True, "data_collection": "deny"}
 
 
 # --- retry ----------------------------------------------------------------------------------

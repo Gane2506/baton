@@ -181,3 +181,56 @@ def test_entity_add_edit_remove_in_the_user_config(client: TestClient, fixture_r
     )
     assert removed.status_code == 303
     assert "github" not in load_config(fixture_repo).tools.mcp
+
+
+def test_planner_policy_picker_saves_policy_and_syncs_pool(
+    client: TestClient, fixture_repo: Path
+) -> None:
+    # The picker renders all four modes with the honest mode-3 warning (issue #327).
+    page = client.get("/settings")
+    assert page.status_code == 200
+    for value in ("free_training_ok", "mixed", "mixed_no_training", "paid_only"):
+        assert f'value="{value}"' in page.text
+    assert "openrouter.ai/settings/privacy" in page.text
+    assert "Baton cannot change your OpenRouter account setting" in page.text
+
+    saved = _post(
+        client,
+        "/settings/set",
+        {
+            "path": "models.planner_policy",
+            "kind": "enum",
+            "value": "mixed_no_training",
+            "target": "repo",
+        },
+    )
+    assert saved.status_code == 303
+    config = load_config(fixture_repo)
+    assert config.models.planner_policy == "mixed_no_training"
+    # The pool is synced so every reader of `roles.planner.models` sees the same pool.
+    assert config.roles.planner.models == ["free", "openai/gpt-5-mini"]
+    assert "saved planner model policy: mixed_no_training" in client.get("/settings").text
+
+    paid = _post(
+        client,
+        "/settings/set",
+        {"path": "models.planner_policy", "kind": "enum", "value": "paid_only", "target": "repo"},
+    )
+    assert paid.status_code == 303
+    assert load_config(fixture_repo).roles.planner.models == ["openai/gpt-5-mini"]
+
+    bad = _post(
+        client,
+        "/settings/set",
+        {"path": "models.planner_policy", "kind": "enum", "value": "everything", "target": "repo"},
+    )
+    assert bad.status_code == 303
+    assert "unknown planner model policy" in client.get("/settings").text
+    assert load_config(fixture_repo).models.planner_policy == "paid_only"
+
+    reset = _post(client, "/settings/unset", {"path": "models.planner_policy", "target": "repo"})
+    assert reset.status_code == 303
+    config = load_config(fixture_repo)
+    assert config.models.planner_policy is None
+    # Reset leaves the pool alone: the policy is then derived from it (paid_only).
+    assert config.roles.planner.models == ["openai/gpt-5-mini"]

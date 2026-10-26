@@ -75,6 +75,60 @@ def test_defaults_are_off() -> None:
     assert opts.model_state() == {}
 
 
+# ---- planner model policy (issue #327) ---------------------------------------------------------
+
+
+def test_planner_policy_derived_from_planner_models() -> None:
+    from jev_agent.config.schema import planner_models, planner_no_training, planner_policy
+
+    assert planner_policy(JevConfig()) == "paid_only"  # empty pool: worker default is paid
+    assert planner_policy(_config(planner={"models": ["free"]})) == "free_training_ok"
+    assert planner_policy(_config(planner={"models": ["free", MINI]})) == "mixed"
+    assert planner_policy(_config(planner={"models": [MINI]})) == "paid_only"
+    assert planner_models(_config(planner={"models": ["free", MINI]})) == ["free", MINI]
+    assert not planner_no_training(_config(planner={"models": ["free", MINI]}))
+
+
+def test_planner_policy_explicit_wins_and_maps_to_pool() -> None:
+    from jev_agent.config.schema import planner_models, planner_no_training, planner_policy
+
+    cfg = JevConfig.model_validate({"models": {"planner_policy": "mixed_no_training"}})
+    assert planner_policy(cfg) == "mixed_no_training"
+    assert planner_models(cfg) == ["free", MINI]
+    assert planner_no_training(cfg)
+    assert planner_models(
+        JevConfig.model_validate({"models": {"planner_policy": "paid_only"}})
+    ) == [MINI]
+    assert planner_models(
+        JevConfig.model_validate({"models": {"planner_policy": "free_training_ok"}})
+    ) == ["free"]
+
+
+def test_planner_policy_overrides_a_disagreeing_pool() -> None:
+    # A hand-edited `roles.planner.models` that disagrees with the explicit policy
+    # loses: the policy is authoritative for the planner's pool.
+    cfg = JevConfig.model_validate(
+        {
+            "models": {"planner_policy": "paid_only"},
+            "roles": {"planner": {"workers": ["api"], "models": ["free", MINI]}},
+        }
+    )
+    opts = role_options(cfg, "planner", ALL, _catalog())
+    assert opts.models == [MINI] and opts.free == ()
+
+
+def test_planner_policy_mixed_keeps_free_first() -> None:
+    cfg = JevConfig.model_validate(
+        {
+            "models": {"planner_policy": "mixed"},
+            "roles": {"planner": {"workers": ["api", "claude_code"]}},
+        }
+    )
+    opts = role_options(cfg, "planner", ALL, _catalog())
+    assert opts.models == [NEMOTRON, LING, APODEX, MINI]
+    assert opts.free == (NEMOTRON, LING, APODEX)
+
+
 def test_free_token_expands_with_capability_filter_and_limit() -> None:
     cfg = _config(planner={"workers": ["claude_code", "api"], "models": [MINI, "free"]})
     opts = role_options(cfg, "planner", ALL, _catalog())
