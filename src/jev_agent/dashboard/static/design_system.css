@@ -57,6 +57,44 @@ body:has(.ds-page) .shell.app-shell { grid-template-columns: var(--sidebar-w, 23
 .ds-page .ds-actions .btn { background: var(--ds-surface-2); border-color: var(--ds-border); color: var(--ds-text); }
 .ds-page .ds-actions .btn-primary { background: var(--ds-text); color: #101010; border-color: var(--ds-text); }
 
+/* Header Clone/Export (issue #289): compact inline forms beside the other
+   header actions — a short name field and a format picker, not the full
+   labelled forms that used to live at the bottom of the page. */
+.ds-head-form { gap: 6px; }
+.ds-head-input, .ds-head-select {
+  background: var(--ds-surface-2);
+  border: 1px solid var(--ds-border);
+  border-radius: 8px;
+  color: var(--ds-text);
+  font-size: 12px;
+  padding: 6px 9px;
+}
+.ds-head-input { width: 118px; }
+.ds-head-input::placeholder { color: var(--ds-faint); }
+.ds-head-select { max-width: 148px; }
+
+/* Copy per value (issue #289): rows and swatches that copy on click show a
+   pointer, and the "Copied" bubble (created by design_system.js) floats
+   above the clicked value. Keyboard users get the same copy on Enter/Space
+   via role="button" + tabindex in the template. */
+.ds-copyable { cursor: pointer; }
+.ds-copyable:focus-visible { outline: 2px solid var(--ds-accent); outline-offset: 2px; border-radius: 6px; }
+.ds-copyable.copied { background: var(--ds-surface-2); }
+.ds-copy-tip {
+  position: fixed;
+  z-index: 600;
+  transform: translate(-50%, -100%);
+  background: var(--ds-text);
+  color: var(--ds-bg);
+  font-size: 12px;
+  font-weight: 600;
+  border-radius: 999px;
+  padding: 5px 12px;
+  pointer-events: none;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+  white-space: nowrap;
+}
+
 /* Two-column shell: sticky sidebar nav + content. */
 .ds-layout {
   display: grid;
@@ -555,13 +593,54 @@ body:has(.ds-page) .shell.app-shell { grid-template-columns: var(--sidebar-w, 23
   margin-bottom: 12px;
   max-width: 640px;
 }
-.ds-cover-wide { aspect-ratio: 1200 / 630; display: flex; flex-direction: column; justify-content: center; padding: 24px 28px; gap: 6px; }
+.ds-cover-wide { aspect-ratio: 1200 / 630; display: flex; flex-direction: column; justify-content: center; align-items: flex-start; padding: 24px 28px; gap: 8px; }
 .ds-cover-banner { aspect-ratio: 820 / 312; display: flex; align-items: center; padding: 20px 28px; gap: 16px; }
 .ds-cover .ds-cover-wordmark { font-size: 28px; font-weight: 700; letter-spacing: -0.01em; }
 .ds-cover .ds-cover-tagline { font-size: 14px; opacity: 0.85; }
 .ds-cover .ds-cover-size { font-size: 11px; color: inherit; opacity: 0.7; margin-top: 8px; }
-.ds-icon-row { display: flex; flex-wrap: wrap; gap: 14px; align-items: center; }
-.ds-icon-row svg { width: 22px; height: 22px; stroke: currentColor; fill: none; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+/* Cover compositions (issue #289): eyebrow + headline + subline + CTA,
+   built from the system's own type and palette. */
+.ds-cover-eyebrow { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.12em; opacity: 0.7; }
+.ds-cover-headline { font-size: 34px; font-weight: 700; letter-spacing: -0.02em; line-height: 1.1; }
+.ds-cover-subline { font-size: 14px; line-height: 1.5; opacity: 0.85; max-width: 480px; }
+.ds-cover-cta {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  font-size: 13px;
+  font-weight: 600;
+  padding: 8px 16px;
+  margin-top: 6px;
+}
+.ds-cover-cta-sm { margin-top: 0; flex-shrink: 0; }
+/* Icon set (issue #289): a named grid, each icon in the primary color. */
+.ds-icon-grid { display: flex; flex-wrap: wrap; gap: 16px; align-items: flex-start; }
+.ds-icon-tile { margin: 0; display: grid; gap: 6px; justify-items: center; min-width: 52px; }
+.ds-icon-tile svg { width: 22px; height: 22px; stroke: currentColor; fill: none; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.ds-icon-tile figcaption { font-size: 11px; color: var(--ds-faint); }
+/* Logo lockups (issue #289): the stored mark + wordmark in every
+   orientation — horizontal, stacked, mark-only, mono. */
+.ds-lockup-grid { display: flex; flex-wrap: wrap; gap: 12px; align-items: stretch; }
+.ds-lockup-tile { margin: 0; display: grid; gap: 6px; align-content: start; }
+.ds-lockup-tile figcaption { font-size: 11px; color: var(--ds-faint); }
+.ds-lockup {
+  border: 1px solid var(--ds-border);
+  border-radius: 10px;
+  background: var(--ds-surface);
+  padding: 18px 20px;
+  display: flex;
+  gap: 14px;
+  align-items: center;
+  min-width: 200px;
+  min-height: 84px;
+}
+.ds-lockup-stacked { flex-direction: column; justify-content: center; text-align: center; gap: 10px; }
+.ds-lockup-mark-only { justify-content: center; }
+.ds-lockup-mark img { width: 48px; height: 48px; display: block; }
+.ds-lockup-name { font-size: 20px; font-weight: 700; letter-spacing: -0.01em; }
+.ds-lockup-tagline { display: block; font-size: 12px; color: var(--ds-muted); margin-top: 2px; }
+.ds-lockup-mono img { filter: grayscale(1) contrast(1.1); }
+.ds-lockup-mono .ds-lockup-name { color: var(--ds-muted); }
 .ds-favicon-row { display: flex; gap: 16px; align-items: flex-end; flex-wrap: wrap; }
 .ds-favicon-row figure { margin: 0; display: grid; gap: 6px; justify-items: center; }
 .ds-favicon-row figcaption { font-size: 11px; color: var(--ds-faint); }
@@ -612,4 +691,45 @@ body:has(.ds-page) .shell.app-shell { grid-template-columns: var(--sidebar-w, 23
   .ds-nav { position: static; max-height: none; border-right: none; border-bottom: 1px solid var(--ds-border); }
   .ds-section { grid-template-columns: 1fr; gap: 12px; }
   .ds-token-row { grid-template-columns: 160px 110px minmax(0, 1fr); }
+}
+
+/* Phones (issue #289): the in-page nav collapses to a sticky, horizontally
+   scrollable chip row — the 16-item vertical list plus search crushed the
+   page at phone width, and the label column already stacks above its
+   content from the 900px rule above. Token rows slim down so nothing
+   overflows at 390px. */
+@media (max-width: 640px) {
+  .ds-page .ds-head { padding: 16px 16px 12px; }
+  .ds-content { padding: 8px 16px 0; }
+  .ds-nav {
+    position: sticky;
+    top: 0;
+    z-index: 60;
+    display: flex;
+    gap: 6px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    padding: 10px 12px;
+    background: var(--ds-bg);
+    scrollbar-width: none;
+  }
+  .ds-nav::-webkit-scrollbar { display: none; }
+  .ds-nav-search, .ds-nav-sep { display: none; }
+  .ds-nav-list { display: contents; }
+  .ds-nav-list li a {
+    white-space: nowrap;
+    border: 1px solid var(--ds-border);
+    border-radius: 999px;
+    padding: 6px 12px;
+  }
+  .ds-nav-list li a.active { background: var(--ds-surface-2); box-shadow: none; }
+  .ds-token-row { grid-template-columns: minmax(0, 1fr) 92px 40px; gap: 8px; padding: 8px 10px; }
+  .ds-token-row .mono { overflow-wrap: anywhere; }
+  .ds-scale-row { grid-template-columns: 96px 76px minmax(0, 1fr); gap: 8px; }
+  .ds-font-row { grid-template-columns: minmax(0, 1fr); gap: 2px; }
+  .ds-cover-wide { padding: 18px 20px; }
+  .ds-cover-headline { font-size: 26px; }
+  .ds-cover-banner { padding: 16px 18px; gap: 12px; flex-wrap: wrap; }
+  .ds-cover-banner .ds-cover-size { display: none; }
+  .ds-overview-swatch { width: 96px; }
 }

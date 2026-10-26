@@ -25,6 +25,27 @@
       </div>
       <a class="btn btn-sm btn-primary" href="/design-systems/{{ name }}/showcase" target="_blank" rel="noopener">Preview showcase</a>
       <a class="btn btn-sm btn-secondary" href="/design-systems/{{ name }}/code">Get reusable elements</a>
+      {# Issue #289: Clone and Export live in the header now — the page is
+         long and they were buried at the very bottom in Files. Delete stays
+         buried: destructive actions stay out of the header. #}
+      <form class="inline ds-head-form" method="post" action="/design-systems/clone">
+        {{ csrf_input() }}
+        <input type="hidden" name="name" value="{{ name }}">
+        <input class="ds-head-input" name="new_name" type="text" placeholder="Clone as…" required
+               pattern="[A-Za-z0-9][A-Za-z0-9_-]{0,63}" autocomplete="off"
+               aria-label="Clone to a new name" title="Clone to a new name (fresh version history)">
+        <button class="btn btn-sm btn-secondary" type="submit">Clone</button>
+      </form>
+      <form class="inline ds-head-form" method="post" action="/design-systems/export">
+        {{ csrf_input() }}
+        <input type="hidden" name="name" value="{{ name }}">
+        <select class="ds-head-select" name="format" aria-label="Export tokens for other toolchains" title="Export tokens for other toolchains">
+          <option value="w3c">W3C tokens</option>
+          <option value="tailwind">Tailwind theme</option>
+          <option value="css">CSS variables</option>
+        </select>
+        <button class="btn btn-sm btn-secondary" type="submit">Export</button>
+      </form>
       {% if not active %}
       <form class="inline" method="post" action="/design-systems/use">
         {{ csrf_input() }}<input type="hidden" name="name" value="{{ name }}">
@@ -73,7 +94,7 @@
           <h3 class="ds-subhead">Palette</h3>
           <div class="ds-overview-palette">
             {% for row in overview_palette %}
-            <figure class="ds-overview-swatch"><span class="ds-overview-swatch-block" data-swatch-color="{{ row.hex }}"></span><figcaption><span class="mono">{{ row.name }}</span><span class="mono">{{ row.hex }}</span></figcaption></figure>
+            <figure class="ds-overview-swatch ds-copyable" data-copy-value="{{ row.hex }}" tabindex="0" role="button" title="Click to copy {{ row.hex }}"><span class="ds-overview-swatch-block" data-swatch-color="{{ row.hex }}"></span><figcaption><span class="mono">{{ row.name }}</span><span class="mono">{{ row.hex }}</span></figcaption></figure>
             {% endfor %}
           </div>
           <p class="ds-note"><a href="#colors">See all colors ↓</a></p>
@@ -139,7 +160,7 @@
           <h3 class="ds-subhead">Light</h3>
           <div class="ds-token-grid">
             {% for row in colors_light %}
-            <div class="ds-token-row"><span class="mono">{{ row.name }}</span><span class="ds-token-value mono">{{ row.hex }}</span><span class="ds-swatch" data-swatch-color="{{ row.hex }}"></span></div>
+            <div class="ds-token-row ds-copyable" data-copy-value="{{ row.hex }}" tabindex="0" role="button" title="Click to copy {{ row.hex }}"><span class="mono">{{ row.name }}</span><span class="ds-token-value mono">{{ row.hex }}</span><span class="ds-swatch" data-swatch-color="{{ row.hex }}"></span></div>
             {% endfor %}
           </div>
           {% endif %}
@@ -147,7 +168,7 @@
           <h3 class="ds-subhead">Dark</h3>
           <div class="ds-token-grid">
             {% for row in colors_dark %}
-            <div class="ds-token-row"><span class="mono">{{ row.name }}</span><span class="ds-token-value mono">{{ row.hex }}</span><span class="ds-swatch" data-swatch-color="{{ row.hex }}"></span></div>
+            <div class="ds-token-row ds-copyable" data-copy-value="{{ row.hex }}" tabindex="0" role="button" title="Click to copy {{ row.hex }}"><span class="mono">{{ row.name }}</span><span class="ds-token-value mono">{{ row.hex }}</span><span class="ds-swatch" data-swatch-color="{{ row.hex }}"></span></div>
             {% endfor %}
           </div>
           {% endif %}
@@ -166,15 +187,17 @@
           <button class="ds-copy-btn" type="button" data-copy-target="copy-typography" data-copy-label="Copy typography" aria-label="Copy typography" title="Copy typography"><svg aria-hidden="true"><use href="#i-copy"></use></svg></button>
           <pre class="ds-copy-source" id="copy-typography">{{ typography_json }}</pre>
           {% for font in fonts %}
-          <div class="ds-font-row"><span class="mono">{{ font.name }}</span><span data-font-family="{{ font.stack }}">{{ font.stack }}</span></div>
+          <div class="ds-font-row ds-copyable" data-copy-value="{{ font.stack }}" tabindex="0" role="button" title="Click to copy {{ font.stack }}"><span class="mono">{{ font.name }}</span><span data-font-family="{{ font.stack }}">{{ font.stack }}</span></div>
           {% endfor %}
           {# Issue #287: three specimens — display, headline, body — set big,
              not the full ~12-style scale repeating "Aa — The quick brown
              fox" until the display sizes wrap. The full scale stays in the
-             copied JSON above. #}
+             copied JSON above. Issue #289: the spec line copies the style's
+             font stack and size on click. #}
           {% for style in type_specimens %}
+          {% set spec_stack = display_font.stack if (display_font and style.name.startswith("display")) else (body_font.stack if body_font else "") %}
           <div class="ds-type-specimen">
-            <div class="ds-type-meta"><span class="mono">{{ style.name }}</span>{{ style.size }}px · {{ style.weight }} · {{ style.leading }} leading · {{ style.tracking }} tracking</div>
+            <div class="ds-type-meta ds-copyable" data-copy-value="{{ style.name }}: {{ style.size }}px, {{ spec_stack }}" tabindex="0" role="button" title="Click to copy {{ style.name }} {{ style.size }}px"><span class="mono">{{ style.name }}</span>{{ style.size }}px · {{ style.weight }} · {{ style.leading }} leading · {{ style.tracking }} tracking</div>
             <span class="ds-type-specimen-text" data-font-size="{{ style.size }}" data-font-weight="{{ style.weight }}" data-line-height="{{ style.leading }}"{% if display_font and style.name.startswith("display") %} data-font-family="{{ display_font.stack }}"{% elif body_font %} data-font-family="{{ body_font.stack }}"{% endif %}>Aa — The quick brown fox</span>
           </div>
           {% endfor %}
@@ -195,7 +218,7 @@
           <pre class="ds-copy-source" id="copy-spacing">{{ spacing_json }}</pre>
           {% if spacing %}
           {% for row in spacing %}
-          <div class="ds-scale-row"><span class="mono">{{ row.name }}</span><span class="mono">{{ row.value }}px</span><span class="ds-space-bar" data-px-width="{{ row.value }}"></span></div>
+          <div class="ds-scale-row ds-copyable" data-copy-value="{{ row.value }}px" tabindex="0" role="button" title="Click to copy {{ row.value }}px"><span class="mono">{{ row.name }}</span><span class="mono">{{ row.value }}px</span><span class="ds-space-bar" data-px-width="{{ row.value }}"></span></div>
           {% endfor %}
           {% else %}
           <p class="ds-note">No spacing tokens stored for this system.</p>
@@ -213,7 +236,7 @@
           <pre class="ds-copy-source" id="copy-radii">{{ radii_json }}</pre>
           {% if radii %}
           {% for row in radii %}
-          <div class="ds-scale-row"><span class="mono">{{ row.name }}</span><span class="mono">{{ row.value }}px</span><span class="ds-radius-chip" data-px-radius="{{ row.value }}"></span></div>
+          <div class="ds-scale-row ds-copyable" data-copy-value="{{ row.value }}px" tabindex="0" role="button" title="Click to copy {{ row.value }}px"><span class="mono">{{ row.name }}</span><span class="mono">{{ row.value }}px</span><span class="ds-radius-chip" data-px-radius="{{ row.value }}"></span></div>
           {% endfor %}
           {% else %}
           <p class="ds-note">No corner-radius tokens stored for this system.</p>
@@ -231,7 +254,7 @@
           <pre class="ds-copy-source" id="copy-shadows">{{ shadows_json }}</pre>
           {% if shadows %}
           {% for row in shadows %}
-          <div class="ds-scale-row"><span class="mono">{{ row.name }}</span><span class="ds-shadow-val mono">{{ row.value }}</span><span class="ds-shadow-chip" data-shadow="{{ row.value }}"></span></div>
+          <div class="ds-scale-row ds-copyable" data-copy-value="{{ row.value }}" tabindex="0" role="button" title="Click to copy {{ row.value }}"><span class="mono">{{ row.name }}</span><span class="ds-shadow-val mono">{{ row.value }}</span><span class="ds-shadow-chip" data-shadow="{{ row.value }}"></span></div>
           {% endfor %}
           {% else %}
           <p class="ds-note">No shadow tokens stored for this system.</p>
@@ -247,7 +270,7 @@
         </div>
         <div>
           {% for row in layout_standard %}
-          <div class="ds-scale-row"><span class="mono">{{ row.name }}</span><span class="mono">{{ row.value }}</span><span>{{ row.note }}</span></div>
+          <div class="ds-scale-row ds-copyable" data-copy-value="{{ row.value }}" tabindex="0" role="button" title="Click to copy {{ row.value }}"><span class="mono">{{ row.name }}</span><span class="mono">{{ row.value }}</span><span>{{ row.note }}</span></div>
           {% endfor %}
         </div>
       </section>
@@ -260,7 +283,7 @@
         </div>
         <div>
           {% for row in z_index_standard %}
-          <div class="ds-scale-row"><span class="mono">{{ row.name }}</span><span class="mono">{{ row.value }}</span><span>{{ row.note }}</span></div>
+          <div class="ds-scale-row ds-copyable" data-copy-value="{{ row.value }}" tabindex="0" role="button" title="Click to copy {{ row.value }}"><span class="mono">{{ row.name }}</span><span class="mono">{{ row.value }}</span><span>{{ row.note }}</span></div>
           {% endfor %}
         </div>
       </section>
@@ -275,7 +298,7 @@
           <pre class="ds-copy-source" id="copy-motion">{{ motion_json }}</pre>
           {% if durations %}
           {% for row in durations %}
-          <div class="ds-scale-row"><span class="mono">{{ row.name }}</span><span class="mono">{{ row.value }}</span><span class="ds-duration-bar" data-px-width="{{ (row.value | replace('ms', '') | int) // 2 }}"></span></div>
+          <div class="ds-scale-row ds-copyable" data-copy-value="{{ row.value }}" tabindex="0" role="button" title="Click to copy {{ row.value }}"><span class="mono">{{ row.name }}</span><span class="mono">{{ row.value }}</span><span class="ds-duration-bar" data-px-width="{{ (row.value | replace('ms', '') | int) // 2 }}"></span></div>
           {% endfor %}
           {% else %}
           <p class="ds-note">No duration tokens stored for this system.</p>
@@ -291,7 +314,7 @@
         <div>
           {% if easings %}
           {% for row in easings %}
-          <div class="ds-scale-row"><span class="mono">{{ row.name }}</span><span class="ds-shadow-val mono">{{ row.value }}</span><span class="ds-ease-demo" data-ease="{{ row.value }}">Hover me</span></div>
+          <div class="ds-scale-row ds-copyable" data-copy-value="{{ row.value }}" tabindex="0" role="button" title="Click to copy {{ row.value }}"><span class="mono">{{ row.name }}</span><span class="ds-shadow-val mono">{{ row.value }}</span><span class="ds-ease-demo" data-ease="{{ row.value }}">Hover me</span></div>
           {% endfor %}
           {% else %}
           <p class="ds-note">No easing tokens stored for this system.</p>
@@ -307,7 +330,7 @@
         </div>
         <div>
           {% for row in stagger_standard %}
-          <div class="ds-scale-row"><span class="mono">{{ row.name }}</span><span class="mono">{{ row.value }}</span><span>{{ row.note }}</span></div>
+          <div class="ds-scale-row ds-copyable" data-copy-value="{{ row.value }}" tabindex="0" role="button" title="Click to copy {{ row.value }}"><span class="mono">{{ row.name }}</span><span class="mono">{{ row.value }}</span><span>{{ row.note }}</span></div>
           {% endfor %}
         </div>
       </section>
@@ -320,7 +343,7 @@
         </div>
         <div>
           {% for row in breakpoints_standard %}
-          <div class="ds-scale-row"><span class="mono">{{ row.name }}</span><span class="mono">{{ row.value }}</span><span>{{ row.note }}</span></div>
+          <div class="ds-scale-row ds-copyable" data-copy-value="{{ row.value }}" tabindex="0" role="button" title="Click to copy {{ row.value }}"><span class="mono">{{ row.name }}</span><span class="mono">{{ row.value }}</span><span>{{ row.note }}</span></div>
           {% endfor %}
         </div>
       </section>
@@ -542,6 +565,39 @@
             <figure class="ds-asset-tile ds-light-tile ds-logo-48"><img src="{{ logo_data_uri }}" alt="{{ name }} logo"><figcaption>on light</figcaption></figure>
             <figure class="ds-asset-tile ds-dark-tile ds-logo-48"><img src="{{ logo_data_uri }}" alt="{{ name }} logo"><figcaption>on dark</figcaption></figure>
           </div>
+
+          {# Issue #289: real lockups from the stored mark + wordmark, in
+             every orientation — horizontal, stacked, mark-only, mono. #}
+          <h3 class="ds-subhead">Lockups</h3>
+          <div class="ds-lockup-grid">
+            <figure class="ds-lockup-tile">
+              <div class="ds-lockup">
+                <span class="ds-lockup-mark"><img src="{{ logo_data_uri }}" alt=""></span>
+                <span><span class="ds-lockup-name"{% if display_font %} data-font-family="{{ display_font.stack }}"{% endif %}>{{ name }}</span>{% if vibe_tagline %}<span class="ds-lockup-tagline">{{ vibe_tagline }}</span>{% endif %}</span>
+              </div>
+              <figcaption>Horizontal</figcaption>
+            </figure>
+            <figure class="ds-lockup-tile">
+              <div class="ds-lockup ds-lockup-stacked">
+                <span class="ds-lockup-mark"><img src="{{ logo_data_uri }}" alt=""></span>
+                <span><span class="ds-lockup-name"{% if display_font %} data-font-family="{{ display_font.stack }}"{% endif %}>{{ name }}</span>{% if vibe_tagline %}<span class="ds-lockup-tagline">{{ vibe_tagline }}</span>{% endif %}</span>
+              </div>
+              <figcaption>Stacked</figcaption>
+            </figure>
+            <figure class="ds-lockup-tile">
+              <div class="ds-lockup ds-lockup-mark-only">
+                <span class="ds-lockup-mark"><img src="{{ logo_data_uri }}" alt="{{ name }} mark"></span>
+              </div>
+              <figcaption>Mark only</figcaption>
+            </figure>
+            <figure class="ds-lockup-tile">
+              <div class="ds-lockup ds-lockup-mono">
+                <span class="ds-lockup-mark"><img src="{{ logo_data_uri }}" alt=""></span>
+                <span><span class="ds-lockup-name"{% if display_font %} data-font-family="{{ display_font.stack }}"{% endif %}>{{ name }}</span></span>
+              </div>
+              <figcaption>Mono</figcaption>
+            </figure>
+          </div>
           {% if logo_template != "-" %}<p class="ds-note">Mark template: <span class="mono">{{ logo_template }}</span></p>{% endif %}
           {% else %}
           <div class="ds-empty"><strong>No logo yet.</strong> This system has no generated mark — run it through the studio wizard to generate one. Nothing is faked here.</div>
@@ -573,34 +629,49 @@
           <p class="ds-note">Patterns are generated from the palette — no stock artwork.</p>
 
           <h3 class="ds-subhead">Social covers</h3>
+          {# Issue #289: real compositions from the system's own tokens —
+             eyebrow + headline + subline + CTA in the display font and
+             palette — in light and dark variants, not flat color cards. #}
+          {% for cover_label, cover_bg, cover_fg in [("Light", background, text), ("Dark", preview_dark.background, preview_dark.text)] %}
           <div class="ds-cover">
-            <div class="ds-cover-wide" data-bg-color="{{ primary }}" data-fg-color="{{ on_primary }}">
-              <span class="ds-cover-wordmark"{% if display_font %} data-font-family="{{ display_font.stack }}"{% endif %}>{{ name }}</span>
-              <span class="ds-cover-tagline">{{ vibe_tagline or vibe_name }}</span>
-              <span class="ds-cover-size">1200 × 630 · Open Graph</span>
+            <div class="ds-cover-wide" data-bg-color="{{ cover_bg }}" data-fg-color="{{ cover_fg }}">
+              <span class="ds-cover-eyebrow">{{ vibe_name }}</span>
+              <span class="ds-cover-headline"{% if display_font %} data-font-family="{{ display_font.stack }}"{% endif %}>{{ vibe_tagline or name }}</span>
+              <span class="ds-cover-subline">{% if business and business.description %}{{ business.description }}{% else %}A design system from the Baton Design Studio.{% endif %}</span>
+              <span class="ds-cover-cta" data-bg-color="{{ primary }}" data-fg-color="{{ on_primary }}">Get started →</span>
+              <span class="ds-cover-size">1200 × 630 · Open Graph · {{ cover_label }}</span>
             </div>
           </div>
+          {% endfor %}
+          {% for cover_label, cover_bg, cover_fg in [("Light", background, text), ("Dark", preview_dark.background, preview_dark.text)] %}
           <div class="ds-cover">
-            <div class="ds-cover-banner" data-bg-color="{{ background }}" data-fg-color="{{ text }}">
+            <div class="ds-cover-banner" data-bg-color="{{ cover_bg }}" data-fg-color="{{ cover_fg }}">
               {% if logo_data_uri %}<span class="ds-logo-48"><img src="{{ logo_data_uri }}" alt=""></span>{% endif %}
               <span>
                 <span class="ds-cover-wordmark ds-cover-wordmark-sm"{% if display_font %} data-font-family="{{ display_font.stack }}"{% endif %}>{{ name }}</span>
                 <span class="ds-cover-tagline ds-block">{{ vibe_tagline or vibe_name }}</span>
               </span>
-              <span class="ds-cover-size ds-push-right">820 × 312 · Banner</span>
+              <span class="ds-cover-cta ds-cover-cta-sm" data-bg-color="{{ primary }}" data-fg-color="{{ on_primary }}">Get started →</span>
+              <span class="ds-cover-size ds-push-right">820 × 312 · Banner · {{ cover_label }}</span>
             </div>
           </div>
+          {% endfor %}
 
           <h3 class="ds-subhead">Icons</h3>
-          <div class="ds-icon-row" data-fg-color="{{ primary }}">
-            <svg viewBox="0 0 24 24" aria-label="Search"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
-            <svg viewBox="0 0 24 24" aria-label="Add"><path d="M5 12h14"/><path d="M12 5v14"/></svg>
-            <svg viewBox="0 0 24 24" aria-label="Check"><path d="M20 6 9 17l-5-5"/></svg>
-            <svg viewBox="0 0 24 24" aria-label="Close"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
-            <svg viewBox="0 0 24 24" aria-label="Arrow right"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg>
-            <svg viewBox="0 0 24 24" aria-label="Heart"><path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z"/></svg>
-            <svg viewBox="0 0 24 24" aria-label="Star"><path d="m12 2 3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg>
-            <svg viewBox="0 0 24 24" aria-label="Bell"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg>
+          {# Issue #289: a proper icon set in the brand style — the common
+             UI icons, each named, all drawn in the primary color. #}
+          <div class="ds-icon-grid" data-fg-color="{{ primary }}">
+            <figure class="ds-icon-tile"><svg viewBox="0 0 24 24" aria-label="Search"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg><figcaption>Search</figcaption></figure>
+            <figure class="ds-icon-tile"><svg viewBox="0 0 24 24" aria-label="Menu"><path d="M4 6h16"/><path d="M4 12h16"/><path d="M4 18h16"/></svg><figcaption>Menu</figcaption></figure>
+            <figure class="ds-icon-tile"><svg viewBox="0 0 24 24" aria-label="Close"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg><figcaption>Close</figcaption></figure>
+            <figure class="ds-icon-tile"><svg viewBox="0 0 24 24" aria-label="Check"><path d="M20 6 9 17l-5-5"/></svg><figcaption>Check</figcaption></figure>
+            <figure class="ds-icon-tile"><svg viewBox="0 0 24 24" aria-label="Arrow right"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg><figcaption>Arrow</figcaption></figure>
+            <figure class="ds-icon-tile"><svg viewBox="0 0 24 24" aria-label="Plus"><path d="M5 12h14"/><path d="M12 5v14"/></svg><figcaption>Plus</figcaption></figure>
+            <figure class="ds-icon-tile"><svg viewBox="0 0 24 24" aria-label="User"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg><figcaption>User</figcaption></figure>
+            <figure class="ds-icon-tile"><svg viewBox="0 0 24 24" aria-label="Settings"><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/><circle cx="12" cy="12" r="3"/></svg><figcaption>Settings</figcaption></figure>
+            <figure class="ds-icon-tile"><svg viewBox="0 0 24 24" aria-label="Heart"><path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z"/></svg><figcaption>Heart</figcaption></figure>
+            <figure class="ds-icon-tile"><svg viewBox="0 0 24 24" aria-label="Star"><path d="m12 2 3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg><figcaption>Star</figcaption></figure>
+            <figure class="ds-icon-tile"><svg viewBox="0 0 24 24" aria-label="Bell"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg><figcaption>Bell</figcaption></figure>
           </div>
           <p class="ds-note">UI icons drawn as inline SVG in the system's primary color.</p>
         </div>
@@ -621,26 +692,9 @@
           {% else %}
           <p class="ds-note">No files stored for this system.</p>
           {% endif %}
+          {# Issue #289: Clone and Export moved to the page header; only the
+             destructive action stays buried down here. #}
           <div class="ds-lib-actions">
-            <form method="post" action="/design-systems/clone">
-              {{ csrf_input() }}
-              <input type="hidden" name="name" value="{{ name }}">
-              <label for="clone-name">Clone to a new name (fresh version history)</label>
-              <input id="clone-name" name="new_name" type="text" placeholder="my-copy" required
-                     pattern="[A-Za-z0-9][A-Za-z0-9_-]{0,63}" autocomplete="off">
-              <button class="btn btn-sm btn-secondary" type="submit">Clone</button>
-            </form>
-            <form method="post" action="/design-systems/export">
-              {{ csrf_input() }}
-              <input type="hidden" name="name" value="{{ name }}">
-              <label for="export-format">Export tokens for other toolchains</label>
-              <select id="export-format" name="format">
-                <option value="w3c">W3C design tokens (JSON)</option>
-                <option value="tailwind">Tailwind theme (JS)</option>
-                <option value="css">CSS custom properties</option>
-              </select>
-              <button class="btn btn-sm btn-secondary" type="submit">Download</button>
-            </form>
             <form method="post" action="/design-systems/delete">
               {{ csrf_input() }}<input type="hidden" name="name" value="{{ name }}">
               <button class="btn btn-sm btn-danger" type="submit">Delete</button>

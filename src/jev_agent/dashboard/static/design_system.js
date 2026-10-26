@@ -1,8 +1,9 @@
 /* Design Studio system page interactions (issue #285).
  *
- * Sidebar search filter, per-section copy buttons, the toast demo, the
- * ticker pause control, tooltip Escape dismissal, and the VideoModal /
- * component Modal dialogs. No inline scripts: everything is wired here.
+ * Sidebar search filter, per-section copy buttons, copy-per-value on
+ * individual tokens (issue #289), the toast demo, the ticker pause
+ * control, tooltip Escape dismissal, and the VideoModal / component
+ * Modal dialogs. No inline scripts: everything is wired here.
  */
 (function () {
   "use strict";
@@ -101,6 +102,24 @@
     });
   }
 
+  /* Shared clipboard write: navigator.clipboard with a textarea fallback
+     for non-secure contexts. */
+  function copyText(text, done) {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(
+        function () { done(true); },
+        function () { done(false); }
+      );
+    } else {
+      var ta = document.createElement("textarea");
+      ta.value = text;
+      document.body.appendChild(ta);
+      ta.select();
+      try { done(document.execCommand("copy")); } catch (e) { done(false); }
+      document.body.removeChild(ta);
+    }
+  }
+
   /* Section copy buttons: copy the section's JSON from its hidden <pre>.
      The original icon is kept (unlike copy.js, which swaps button text). */
   document.querySelectorAll(".ds-copy-btn").forEach(function (btn) {
@@ -117,18 +136,49 @@
           btn.title = btn.getAttribute("data-copy-label") || "Copy section";
         }, 1600);
       }
-      if (navigator.clipboard && navigator.clipboard.writeText) {
-        navigator.clipboard.writeText(text).then(
-          function () { done(true); },
-          function () { done(false); }
-        );
-      } else {
-        var ta = document.createElement("textarea");
-        ta.value = text;
-        document.body.appendChild(ta);
-        ta.select();
-        try { done(document.execCommand("copy")); } catch (e) { done(false); }
-        document.body.removeChild(ta);
+      copyText(text, done);
+    });
+  });
+
+  /* Copy per value (issue #289): click a color swatch or hex, a token row,
+     or a type specimen's spec to copy just that value. A small "Copied"
+     bubble floats above the clicked value; Enter/Space do the same for
+     keyboard users (the rows carry role="button" + tabindex). */
+  var copyTip = null;
+  var copyTipTimer = null;
+  function showCopyTip(el, ok) {
+    if (copyTip) { copyTip.remove(); copyTip = null; }
+    if (copyTipTimer) { clearTimeout(copyTipTimer); copyTipTimer = null; }
+    var tip = document.createElement("div");
+    tip.className = "ds-copy-tip";
+    tip.textContent = ok ? "Copied" : "Copy failed";
+    document.body.appendChild(tip);
+    var rect = el.getBoundingClientRect();
+    var left = rect.left + rect.width / 2;
+    left = Math.max(48, Math.min(window.innerWidth - 48, left));
+    tip.style.left = left + "px";
+    tip.style.top = Math.max(24, rect.top + 6) + "px";
+    copyTip = tip;
+    copyTipTimer = setTimeout(function () {
+      tip.remove();
+      if (copyTip === tip) { copyTip = null; }
+    }, 1200);
+  }
+  function copyValue(el) {
+    var value = el.getAttribute("data-copy-value") || "";
+    if (!value) { return; }
+    copyText(value, function (ok) {
+      el.classList.toggle("copied", ok);
+      showCopyTip(el, ok);
+      setTimeout(function () { el.classList.remove("copied"); }, 1200);
+    });
+  }
+  document.querySelectorAll("[data-copy-value]").forEach(function (el) {
+    el.addEventListener("click", function () { copyValue(el); });
+    el.addEventListener("keydown", function (event) {
+      if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        copyValue(el);
       }
     });
   });
