@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import base64
 import html
 import json
 import re
@@ -352,3 +353,219 @@ def test_actions_require_csrf(client: TestClient, home: Path) -> None:
 def test_unknown_action_404(client: TestClient, home: Path) -> None:
     response = client.post("/design-systems/bogus", data={"csrf_token": _csrf(client), "name": "x"})
     assert response.status_code == 404
+
+
+# ---- redesign (issue #285) ---------------------------------------------------------------
+
+from jev_agent.core.design_library import library_system_path  # noqa: E402
+from jev_agent.core.design_showcase import VIBE_PROFILES, rich_tokens  # noqa: E402
+from jev_agent.core.logo import generate_mark, mark_to_png, mark_to_svg  # noqa: E402
+
+_SECTION_IDS = (
+    "overview",
+    "colors",
+    "typography",
+    "spacing",
+    "corner-radius",
+    "shadows",
+    "layout",
+    "z-index",
+    "duration",
+    "easing",
+    "stagger",
+    "breakpoint",
+    "components",
+    "assets",
+    "files",
+)
+
+
+def test_detail_redesign_renders_every_section_inline(client: TestClient, home: Path) -> None:
+    """Issue #285: the detail page is the single-page reference — all 14
+    categories + Files, live components, no extra click, no inline styles."""
+    _seed("acme-brand")
+    page = client.get("/design-systems/acme-brand")
+    assert page.status_code == 200
+    for section in _SECTION_IDS:
+        assert f'id="{section}"' in page.text
+    for label in (
+        "Overview",
+        "Colors",
+        "Typography",
+        "Spacing",
+        "Corner radius",
+        "Shadows",
+        "Layout",
+        "Z index",
+        "Duration",
+        "Easing",
+        "Stagger",
+        "Breakpoint",
+        "Components",
+        "Assets",
+        "Files",
+    ):
+        assert label in page.text
+    for target in (
+        "copy-colors",
+        "copy-typography",
+        "copy-spacing",
+        "copy-radii",
+        "copy-shadows",
+        "copy-motion",
+    ):
+        assert f'data-copy-target="{target}"' in page.text
+    # Studio-standard scales are labelled as such, never as system tokens.
+    assert page.text.count("Studio standard — not a system token") == 4
+    # Live components from the reference: ticker, toast, tooltip, videomodal.
+    assert "Ticker" in page.text and "Show another toast" in page.text
+    assert "Tooltip" in page.text and "VideoModal" in page.text
+    assert "Static preview" in page.text
+    # The CSP forbids inline styles: the page must carry none
+    # (a bare `style="` would also match data-ui-style, hence the space).
+    assert ' style="' not in page.text
+    # Library actions still live on the page (old tests' anchors).
+    assert "Clone to a new name" in page.text
+    assert "Export tokens" in page.text
+
+
+def test_detail_rich_tokens_show_full_ramps(client: TestClient, home: Path) -> None:
+    """Issue #285: a wizard system shows the rich ramps, durations, easings."""
+    rich = rich_tokens(VIBE_PROFILES["minimal"], "both")
+    tokens = dict(TOKENS)
+    tokens["design_tokens"] = rich
+    save_library_system("rich-brand", MARKDOWN, tokens, {"vibe_profile": "minimal"})
+    page = client.get("/design-systems/rich-brand")
+    assert page.status_code == 200
+    assert "primary_hover" in page.text
+    assert "accent_500" in page.text
+    assert "duration_fast" in page.text
+    assert "ease_standard" in page.text
+    assert "display_xl" in page.text
+
+
+def test_detail_color_swatches_present(client: TestClient, home: Path) -> None:
+    """Issue #285: every color row carries a live swatch (data-swatch-color),
+    and the stylesheet keeps the swatch column at a fixed width so it can
+    never collapse to zero."""
+    rich = rich_tokens(VIBE_PROFILES["minimal"], "both")
+    tokens = dict(TOKENS)
+    tokens["design_tokens"] = rich
+    save_library_system("rich-brand", MARKDOWN, tokens, {"vibe_profile": "minimal"})
+    page = client.get("/design-systems/rich-brand")
+    assert page.status_code == 200
+    assert 'data-swatch-color="#' in page.text
+    css = client.get("/static/design_system.css")
+    assert css.status_code == 200
+    assert ".content-inner:has(.ds-page)" in css.text
+    assert "body:has(.ds-page) .shell.app-shell" in css.text
+    assert "64px" in css.text
+
+
+def test_detail_primary_comes_from_stored_colors(client: TestClient, home: Path) -> None:
+    """Issue #285: components use the system's stored primary, not the
+    fallback blue — the flat `light.primary` row name must not leak into
+    the lookup."""
+    _seed("acme-brand")
+    page = client.get("/design-systems/acme-brand")
+    assert page.status_code == 200
+    assert 'data-bg-color="#E8590C"' in page.text  # stored #e8590c, normalized
+    assert 'data-bg-color="#2563EB"' not in page.text
+
+
+def test_detail_assets_placeholder_without_logo(client: TestClient, home: Path) -> None:
+    """Issue #285: no stored mark/favicons render as an honest placeholder,
+    never a faked asset."""
+    _seed("acme-brand")
+    page = client.get("/design-systems/acme-brand")
+    assert "No logo yet" in page.text
+    assert "No favicons yet" in page.text
+
+
+def test_detail_assets_render_stored_logo(client: TestClient, home: Path) -> None:
+    """Issue #285: the wizard's stored mark + favicons render in the Assets
+    section (sanitized SVG, data-URI PNGs)."""
+    _seed("acme-brand")
+    system_path = library_system_path("acme-brand")
+    mark = generate_mark("acme-brand:Acme", {"primary": "#e8590c", "primary_hover": "#c2410c"})
+    (system_path / "logo.svg").write_text(mark_to_svg(mark, 512), encoding="utf-8")
+    (system_path / "favicon-16.png").write_bytes(mark_to_png(mark, 16))
+    (system_path / "favicon-32.png").write_bytes(mark_to_png(mark, 32))
+    page = client.get("/design-systems/acme-brand")
+    assert page.status_code == 200
+    assert "No logo yet" not in page.text
+    # The mark renders as a data-URI <img> (no `| safe` anywhere — see the
+    # audit test in test_issue224_minors.py). Decode it: a real SVG, with
+    # no namespace prefix (`<ns0:svg>` is not recognised as SVG by HTML
+    # parsers and would render as nothing).
+    match = re.search(r"data:image/svg\+xml;base64,([A-Za-z0-9+/=]+)", page.text)
+    assert match is not None
+    decoded = base64.b64decode(match.group(1)).decode("utf-8")
+    assert decoded.startswith("<svg ")
+    assert "ns0:" not in decoded
+    assert "data:image/png;base64," in page.text
+    assert "Patterns" in page.text and "Social covers" in page.text
+
+
+def test_detail_business_suggested_elements_inline(client: TestClient, home: Path) -> None:
+    """Issue #285: proposed business elements render in Components with why."""
+    _seed(
+        "acme-brand",
+        business_context={
+            "industry": "Restaurant",
+            "audience": "Hungry neighbours",
+            "tone": "Warm",
+            "offering": "Online ordering",
+            "description": "A neighbourhood bistro with a seasonal menu.",
+        },
+    )
+    page = client.get("/design-systems/acme-brand")
+    assert page.status_code == 200
+    assert "Suggested for your business" in page.text
+    assert "menu-card" in page.text
+    assert "Why:" in page.text
+
+
+def test_business_toggle_returns_to_system_page(client: TestClient, home: Path) -> None:
+    """Issue #285: toggles posted from the system page return there."""
+    _seed(
+        "acme-brand",
+        business_context={
+            "industry": "Restaurant",
+            "audience": "Hungry neighbours",
+            "tone": "Warm",
+            "offering": "Online ordering",
+            "description": "A neighbourhood bistro with a seasonal menu.",
+        },
+    )
+    response = _post(
+        client,
+        "/design-systems/business-elements",
+        {
+            "name": "acme-brand",
+            "element": "menu-card",
+            "action": "remove",
+            "return_to": "/design-systems/acme-brand#components",
+        },
+    )
+    assert response.status_code == 200
+    assert response.request.url.path == "/design-systems/acme-brand"
+
+
+def test_design_system_static_assets_served(client: TestClient, home: Path) -> None:
+    """Issue #285: the new CSS/JS exist and are served (CSP: style/script-src 'self')."""
+    css = client.get("/static/design_system.css")
+    assert css.status_code == 200
+    assert ".ds-ticker" in css.text
+    js = client.get("/static/design_system.js")
+    assert js.status_code == 200
+    assert "ds-toast-more" in js.text
+
+
+def test_code_page_restyle(client: TestClient, home: Path) -> None:
+    """Issue #285: the code page keeps its function, restyled to match."""
+    _seed("acme-brand")
+    page = client.get("/design-systems/acme-brand/code?target=html-css")
+    assert page.status_code == 200
+    assert "design_system.css" in page.text
+    assert "tokens.css" in page.text

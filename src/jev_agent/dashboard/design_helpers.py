@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import base64
 import json
 import re
+import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Any
 
@@ -34,7 +36,7 @@ from jev_agent.core.design_library import (
     update_library_meta,
     validate_library_name,
 )
-from jev_agent.core.design_showcase import VIBE_PROFILES
+from jev_agent.core.design_showcase import VIBE_PROFILES, rich_tokens, vibe_for_keywords
 from jev_agent.core.design_system import META_JSON, design_dir, save_design_system
 from jev_agent.core.store import NotFoundError
 from jev_agent.dashboard import views
@@ -242,8 +244,286 @@ def _business_entry(element: BusinessElement, enabled: bool) -> dict[str, object
     }
 
 
+# ---------------------------------------------------------------------------
+# Design Studio redesign (issue #285): the system detail page is a single-page
+# reference — sidebar nav, label column + live renderings, every token and
+# component visible inline, like the Claude artifact the user pointed at.
+# ---------------------------------------------------------------------------
+
+# Studio-standard scales (issue #285): Layout / Z index / Stagger / Breakpoint
+# have no per-system tokens, so the studio ships one shared scale for them.
+# They are ALWAYS labelled "Studio standard" in the UI — never presented as
+# a system token.
+_STUDIO_LAYOUT = [
+    ("container-sm", "640px", "Narrow content, mobile-first layouts"),
+    ("container-md", "768px", "Tablets and small laptops"),
+    ("container-lg", "1024px", "Standard desktop content width"),
+    ("container-xl", "1280px", "Wide desktop content width"),
+    ("grid", "12 columns", "Fluid grid; gutters 16px / 24px / 32px"),
+]
+_STUDIO_Z_INDEX = [
+    ("base", "0", "Page content"),
+    ("dropdown", "100", "Menus, popovers, selects"),
+    ("sticky", "200", "Sticky headers and bars"),
+    ("modal", "300", "Dialogs and drawers"),
+    ("toast", "400", "Toast notifications"),
+    ("tooltip", "500", "Hover bubbles, always on top"),
+]
+_STUDIO_STAGGER = [
+    ("stagger-1", "40ms", "First item in a sequence"),
+    ("stagger-2", "80ms", "Second item"),
+    ("stagger-3", "120ms", "Third item"),
+    ("stagger-4", "160ms", "Fourth item and beyond"),
+]
+_STUDIO_BREAKPOINTS = [
+    ("sm", "640px", "Large phones, small tablets"),
+    ("md", "768px", "Tablets"),
+    ("lg", "1024px", "Laptops"),
+    ("xl", "1280px", "Desktops"),
+    ("2xl", "1536px", "Wide desktops"),
+]
+
+_FONT_STACK_RE = re.compile(r"^[A-Za-z0-9\s,'\"\-]+$")
+
+_LOGO_TAG_ATTRS: dict[str, frozenset[str]] = {
+    "svg": frozenset({"xmlns", "viewBox", "width", "height", "role"}),
+    "circle": frozenset({"cx", "cy", "r", "fill", "stroke", "stroke-width"}),
+    "rect": frozenset({"x", "y", "width", "height", "rx", "fill", "stroke", "stroke-width"}),
+    "path": frozenset({"d", "fill", "stroke", "stroke-width"}),
+    "polygon": frozenset({"points", "fill", "stroke", "stroke-width"}),
+    "polyline": frozenset({"points", "fill", "stroke", "stroke-width"}),
+    "line": frozenset({"x1", "y1", "x2", "y2", "stroke", "stroke-width"}),
+    "ellipse": frozenset({"cx", "cy", "rx", "ry", "fill", "stroke", "stroke-width"}),
+}
+_LOGO_ATTR_VALUE_RE = re.compile(r"^[#0-9A-Za-z\s,.\-+:/]+$")
+
+
+def _safe_logo_svg(path: Path) -> str | None:
+    """The stored `logo.svg`, sanitized — or None when it cannot be trusted.
+
+    The wizard's mark has no text primitive and only geometric shapes colored
+    from the palette, so a strict allowlist (tags, attribute names, value
+    characters) is enough to embed it. Anything else — a hand-edited file, a
+    `<script>` smuggled in — renders as a placeholder, never as markup.
+    """
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return None
+    try:
+        root = ET.fromstring(raw)
+    except ET.ParseError:
+        return None
+    if root.tag.split("}")[-1] != "svg":
+        return None
+    for element in root.iter():
+        tag = element.tag.split("}")[-1]
+        allowed = _LOGO_TAG_ATTRS.get(tag)
+        if allowed is None:
+            return None
+        for attr, value in element.attrib.items():
+            if attr not in allowed or not _LOGO_ATTR_VALUE_RE.match(value):
+                return None
+    root.set("xmlns", "http://www.w3.org/2000/svg")
+    # Serialize without a namespace prefix: ElementTree defaults to
+    # `<ns0:svg>`/`<ns0:rect>`, which HTML parsers do not recognise as SVG
+    # — the mark would silently render as nothing.
+    ET.register_namespace("", "http://www.w3.org/2000/svg")
+    return ET.tostring(root, encoding="unicode")
+
+
+def _logo_data_uri(path: Path) -> str | None:
+    """The stored `logo.svg` as a `data:` URI for an `<img>` (issue #285).
+
+    The SVG is sanitized first (`_safe_logo_svg`), then base64-encoded, so
+    the template never needs `| safe` — the audit test in
+    `test_issue224_minors.py` allows exactly one `| safe` in the whole
+    template tree, and this is not it. The CSP's `img-src` allows `data:`.
+    """
+    svg = _safe_logo_svg(path)
+    if svg is None:
+        return None
+    return "data:image/svg+xml;base64," + base64.b64encode(svg.encode("utf-8")).decode("ascii")
+
+
+def _favicon_data_uri(path: Path) -> str | None:
+    """A stored favicon PNG as a `data:` URI (the CSP allows `img-src data:`)."""
+    try:
+        data = path.read_bytes()
+    except OSError:
+        return None
+    if not data.startswith(b"\x89PNG"):
+        return None
+    return "data:image/png;base64," + base64.b64encode(data).decode("ascii")
+
+
+def _rich_for(meta: dict[str, object], tokens: dict[str, object]) -> dict[str, object]:
+    """The system's rich tokens: stored `design_tokens`, else derived.
+
+    The wizard stores the full set under `design_tokens`; older systems only
+    have the flat keys, so the view derives the same set from the vibe
+    profile (`rich_tokens`) — same source the showcase uses.
+    """
+    stored = tokens.get("design_tokens")
+    if isinstance(stored, dict):
+        return stored
+    profile_key = meta.get("vibe_profile")
+    profile = VIBE_PROFILES.get(profile_key) if isinstance(profile_key, str) else None
+    if profile is None:
+        profile = vibe_for_keywords(str(meta.get("vibe") or meta.get("product_name") or ""))
+    theme = meta.get("theme")
+    return rich_tokens(profile, str(theme) if isinstance(theme, str) else "both")
+
+
+def _hex_case(value: object) -> str | None:
+    """A token value that is a valid 6-digit hex, in its stored case.
+
+    Unlike `_hex_color` (which normalizes to upper case for the landing
+    previews), the detail page shows the token exactly as stored — the
+    existing tests assert the stored `#e8590c` / `#18150C` verbatim.
+    """
+    if isinstance(value, str):
+        text = value.strip()
+        if _HEX_COLOR_RE.match(text):
+            return text
+    return None
+
+
+def _color_rows(
+    rich: dict[str, object], tokens: dict[str, object]
+) -> tuple[dict[str, list[dict[str, str]]], dict[str, str]]:
+    """(Color rows, flat light dict) for the Colors section.
+
+    Systems with stored rich tokens show the full ramps. Legacy systems
+    (flat `colors` only, e.g. the screenshots seed) show exactly what they
+    stored — flattened `light.*` / `dark.*` rows — and nothing invented.
+    The flat dict keeps UNPREFIXED names: the view derives the page's
+    primary/background/text from it, and the prefixed row names
+    (`light.primary`) would never match a plain lookup.
+    """
+    stored = tokens.get("design_tokens")
+    if isinstance(stored, dict):
+        colors = rich.get("colors")
+        if isinstance(colors, dict):
+            out: dict[str, list[dict[str, str]]] = {"light": [], "dark": []}
+            flat_light: dict[str, str] = {}
+            for mode in ("light", "dark"):
+                section = colors.get(mode)
+                if not isinstance(section, dict):
+                    continue
+                for name in sorted(section):
+                    hex_value = _hex_case(section[name])
+                    if hex_value is not None:
+                        out[mode].append({"name": name, "hex": hex_value})
+                        if mode == "light":
+                            flat_light[name] = hex_value
+            return out, flat_light
+    flat = tokens.get("colors")
+    rows: dict[str, list[dict[str, str]]] = {"light": [], "dark": []}
+    flat_light = {}
+    if isinstance(flat, dict) and ("light" in flat or "dark" in flat):
+        for mode in ("light", "dark"):
+            section = flat.get(mode)
+            if not isinstance(section, dict):
+                continue
+            for name in sorted(section):
+                hex_value = _hex_case(section[name])
+                if hex_value is not None:
+                    rows[mode].append({"name": f"{mode}.{name}", "hex": hex_value})
+                    if mode == "light":
+                        flat_light[name] = hex_value
+    elif isinstance(flat, dict):
+        for name in sorted(flat):
+            hex_value = _hex_case(flat[name])
+            if hex_value is not None:
+                rows["light"].append({"name": name, "hex": hex_value})
+                flat_light[name] = hex_value
+    return rows, flat_light
+
+
+def _typography_rows(rich: dict[str, object]) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
+    """(font stacks, type styles) for the Typography section, from rich tokens."""
+    typography = rich.get("typography")
+    fonts: list[dict[str, str]] = []
+    styles: list[dict[str, str]] = []
+    if not isinstance(typography, dict):
+        return fonts, styles
+    for key in ("font_display", "font_body", "font_mono"):
+        stack = typography.get(key)
+        if isinstance(stack, str) and _FONT_STACK_RE.match(stack):
+            fonts.append({"name": key, "stack": stack})
+    for name in sorted(typography):
+        if name.startswith("font_"):
+            continue
+        spec = typography[name]
+        if not isinstance(spec, dict):
+            continue
+        size = spec.get("size")
+        weight = spec.get("weight")
+        leading = spec.get("leading")
+        tracking = spec.get("tracking")
+        if not isinstance(size, (int, float)) or not isinstance(weight, (int, float)):
+            continue
+        styles.append(
+            {
+                "name": name,
+                "size": str(size),
+                "weight": str(weight),
+                "leading": str(leading) if isinstance(leading, (int, float)) else "1.5",
+                "tracking": str(tracking) if isinstance(tracking, (int, float)) else "0",
+            }
+        )
+    return fonts, styles
+
+
+def _scale_rows(rich: dict[str, object], key: str) -> list[dict[str, str]]:
+    """(name, value) rows for a flat numeric token scale (spacing / radii)."""
+    section = rich.get(key)
+    rows: list[dict[str, str]] = []
+    if isinstance(section, dict):
+        for name in sorted(section):
+            value = section[name]
+            if isinstance(value, (int, float, str)):
+                rows.append({"name": str(name), "value": str(value)})
+    return rows
+
+
+def _shadow_rows(rich: dict[str, object]) -> list[dict[str, str]]:
+    section = rich.get("shadows")
+    rows: list[dict[str, str]] = []
+    if isinstance(section, dict):
+        for name in sorted(section):
+            value = section[name]
+            if isinstance(value, str):
+                rows.append({"name": str(name), "value": value})
+    return rows
+
+
+def _motion_rows(rich: dict[str, object]) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
+    """(durations, easings) from the rich motion tokens."""
+    motion = rich.get("motion")
+    durations: list[dict[str, str]] = []
+    easings: list[dict[str, str]] = []
+    if isinstance(motion, dict):
+        for name in sorted(motion):
+            value = motion[name]
+            if not isinstance(value, str):
+                continue
+            if name.startswith("duration_"):
+                durations.append({"name": name, "value": value})
+            elif name.startswith("ease_"):
+                easings.append({"name": name, "value": value})
+    return durations, easings
+
+
 def _design_system_view(repo: views.Repo, name: str) -> dict[str, Any]:
-    """One library system for the detail page: tokens and the system markdown."""
+    """One library system for the detail page: the single-page reference view.
+
+    Every token category and component renders inline on the page (issue
+    #285): Colors / Typography / Spacing / Corner radius / Shadows / Duration
+    / Easing come from the rich tokens; Layout / Z index / Stagger /
+    Breakpoint are the studio's standard scale, labelled as such in the UI.
+    """
     system = load_library_system(name)
     if system is None:
         raise NotFoundError(f'no design system named "{name}" in the library')
@@ -258,6 +538,37 @@ def _design_system_view(repo: views.Repo, name: str) -> dict[str, Any]:
     token_sections = [
         {"title": title, "items": _flatten_token_section(section)} for title, section in sections
     ]
+    rich = _rich_for(meta, tokens)
+    colors, light_colors = _color_rows(rich, tokens)
+    fonts, type_styles = _typography_rows(rich)
+    spacing = _scale_rows(rich, "spacing")
+    radii = _scale_rows(rich, "radii")
+    shadows = _shadow_rows(rich)
+    durations, easings = _motion_rows(rich)
+    primary = _hex_color(light_colors.get("primary")) or "#2563EB"
+    background = _hex_color(light_colors.get("background")) or "#FFFFFF"
+    text = _hex_color(light_colors.get("text")) or "#101418"
+    system_path = library_system_path(name)
+    files = (
+        sorted(entry.name for entry in system_path.iterdir() if entry.is_file())
+        if system_path.is_dir()
+        else []
+    )
+    context = BusinessContext.from_meta(meta)
+    proposed: list[dict[str, object]] = []
+    enabled: list[dict[str, object]] = []
+    if context is not None and not context.is_empty():
+        enabled_set = set(enabled_element_keys(meta, context))
+        proposed = [
+            _business_entry(element, element.key in enabled_set)
+            for element in propose_elements(context)
+        ]
+        enabled = [
+            _business_entry(element, True)
+            for element in elements_for_keys(enabled_element_keys(meta, context))
+        ]
+    vibe_key = meta.get("vibe_profile")
+    vibe = VIBE_PROFILES.get(vibe_key) if isinstance(vibe_key, str) else None
     return {
         "name": name,
         "source": _meta_text(meta, "source"),
@@ -268,7 +579,53 @@ def _design_system_view(repo: views.Repo, name: str) -> dict[str, Any]:
         "token_sections": token_sections,
         "markdown_html": render_markdown(system.markdown),
         "active": _repo_design_source(repo.root) == f"library:{name}",
-        "business": _business_dict(BusinessContext.from_meta(meta)),
+        "business": _business_dict(context),
+        "vibe_name": vibe.name if vibe is not None else str(rich.get("vibe_name") or "-"),
+        "vibe_tagline": str(rich.get("vibe_tagline") or ""),
+        "theme": str(meta.get("theme") or rich.get("theme") or "both"),
+        "colors_light": colors["light"],
+        "colors_dark": colors["dark"],
+        "colors_json": json.dumps(
+            {"light": light_colors, "dark": {row["name"]: row["hex"] for row in colors["dark"]}},
+            indent=2,
+        ),
+        "fonts": fonts,
+        "type_styles": type_styles,
+        "typography_json": json.dumps(rich.get("typography") or {}, indent=2, default=str),
+        "spacing": spacing,
+        "spacing_json": json.dumps(rich.get("spacing") or {}, indent=2, default=str),
+        "radii": radii,
+        "radii_json": json.dumps(rich.get("radii") or {}, indent=2, default=str),
+        "shadows": shadows,
+        "shadows_json": json.dumps(rich.get("shadows") or {}, indent=2, default=str),
+        "durations": durations,
+        "easings": easings,
+        "motion_json": json.dumps(rich.get("motion") or {}, indent=2, default=str),
+        "layout_standard": [
+            {"name": item[0], "value": item[1], "note": item[2]} for item in _STUDIO_LAYOUT
+        ],
+        "z_index_standard": [
+            {"name": item[0], "value": item[1], "note": item[2]} for item in _STUDIO_Z_INDEX
+        ],
+        "stagger_standard": [
+            {"name": item[0], "value": item[1], "note": item[2]} for item in _STUDIO_STAGGER
+        ],
+        "breakpoints_standard": [
+            {"name": item[0], "value": item[1], "note": item[2]} for item in _STUDIO_BREAKPOINTS
+        ],
+        "files": files,
+        "file_count": len(files),
+        "business_proposed": proposed,
+        "business_enabled": enabled,
+        "primary": primary,
+        "on_primary": _on_hex(primary),
+        "background": background,
+        "text": text,
+        "logo_data_uri": _logo_data_uri(system_path / "logo.svg"),
+        "logo_template": _meta_text(meta, "logo_template"),
+        "favicon_16": _favicon_data_uri(system_path / "favicon-16.png"),
+        "favicon_32": _favicon_data_uri(system_path / "favicon-32.png"),
+        "favicon_180": _favicon_data_uri(system_path / "favicon-180.png"),
     }
 
 

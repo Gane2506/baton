@@ -216,6 +216,7 @@ class DesignRoutes(DashboardCore):
             form = await checked_form(request)
             name = (_text(form, "name") or "").strip()
             raw_target = (_text(form, "target") or "").strip()
+            raw_return = (_text(form, "return_to") or "").strip()
             try:
                 system_name = validate_library_name(name)
             except ValueError as exc:
@@ -224,6 +225,10 @@ class DesignRoutes(DashboardCore):
             to = f"/design-systems/{system_name}/code"
             if raw_target:
                 to += f"?target={validate_target(raw_target)}"
+            if raw_return.startswith(f"/design-systems/{system_name}"):
+                # Toggles posted from the redesigned system page (issue #285)
+                # return there instead of the code page.
+                to = raw_return
             return await self.act(request, to, _design_system_business_elements)
         if action == "export":
             return await self.design_system_export(request)
