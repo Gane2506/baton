@@ -21,8 +21,11 @@
 }
 /* Let the system page use the full content width: the reference is a
    wide, dense sheet, and the dashboard's centered max-width column left
-   the renderings too cramped (token swatches collapsed to zero width). */
+   the renderings too cramped (token swatches collapsed to zero width).
+   The app grid also reserves a 360px live-panes column even when no panes
+   are mounted (this page mounts none), so collapse it here too. */
 .content-inner:has(.ds-page) { max-width: none; }
+body:has(.ds-page) .shell.app-shell { grid-template-columns: var(--sidebar-w, 236px) minmax(0, 1fr); }
 .ds-page {
   background: var(--ds-bg);
   color: var(--ds-text);

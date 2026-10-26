@@ -457,6 +457,7 @@ def test_detail_color_swatches_present(client: TestClient, home: Path) -> None:
     css = client.get("/static/design_system.css")
     assert css.status_code == 200
     assert ".content-inner:has(.ds-page)" in css.text
+    assert "body:has(.ds-page) .shell.app-shell" in css.text
     assert "64px" in css.text
 
 
