@@ -786,6 +786,19 @@ def test_detail_mobile_nav_collapses(client: TestClient, home: Path) -> None:
     assert "border-radius: 999px" in mobile
     # Token rows slim: the name column flexes, the hex/swatch columns shrink.
     assert "grid-template-columns: minmax(0, 1fr) 92px 40px" in mobile
+    # Issue #294: the shell-grid override that collapses the live-panes
+    # column must NOT apply at phone width — shell.css turns the sidebar
+    # into a fixed drawer at <=1080px, and an unscoped override reserves a
+    # 236px grid column for it, crushing the page to ~204px while
+    # overflow: clip hides the damage from scrollWidth checks. It lives
+    # inside the min-width: 1081px block, where the sidebar is in the grid.
+    rule = "body:has(.ds-page) .shell.app-shell"
+    assert css.text.count(rule) == 1
+    idx = css.text.index(rule)
+    head = css.text[:idx]
+    media_idx = head.rfind("@media (min-width: 1081px)")
+    assert media_idx != -1
+    assert head[media_idx:].count("{") > head[media_idx:].count("}")
 
 
 def test_detail_header_actions(client: TestClient, home: Path) -> None:
