@@ -326,6 +326,14 @@ def test_delete_unknown_system_flashes_error(client: TestClient, home: Path) -> 
     assert 'no design system named "nope"' in _visible(response)
 
 
+def test_delete_confirm_get_redirects_to_library(client: TestClient, home: Path) -> None:
+    """Refreshing the delete confirmation (GET, issue #316) goes back to the
+    library, never a 404/405 — no system is named "delete"."""
+    response = client.get("/design-systems/delete", follow_redirects=False)
+    assert response.status_code == 303
+    assert response.headers["location"] == "/design-systems"
+
+
 def test_delete_confirm_mentions_active_system(
     client: TestClient, home: Path, fixture_repo: Path
 ) -> None:

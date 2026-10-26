@@ -527,6 +527,30 @@ def test_queue_clear_on_an_empty_queue_flashes(client: TestClient) -> None:
     assert "already empty" in _follow(client, response).text
 
 
+def test_get_refresh_of_post_pages_redirects(client: TestClient) -> None:
+    """Refreshing a POST-rendered page (GET, issue #316) goes back to its
+    form/status page, never a bare 405 — for every confirm page and the
+    code-grade validation re-render."""
+    chat_id = _new_chat(client)
+    cases = [
+        ("/queue/scheduler/start", "/queue", True),
+        ("/queue/clear", "/queue", True),
+        ("/learning/flush", "/learning", True),
+        ("/learning/delete", "/learning", True),
+        (f"/chats/{chat_id}/delete", "/chats", True),
+        ("/connections/keys/remove", "/connections", True),
+        ("/connections/browser/install", "/connections", True),
+        ("/code-grade/grade", "/code-grade", False),
+        ("/code-grade/route", "/code-grade", False),
+    ]
+    for url, target, flashes in cases:
+        response = cast(httpx.Response, client.get(url, follow_redirects=False))
+        assert response.status_code == 303, url
+        assert response.headers["location"] == target, url
+        if flashes:
+            assert "only follows its form" in _follow(client, response).text, url
+
+
 # ---- tools: models, quality checks, MCP note -----------------------------------------------------
 
 

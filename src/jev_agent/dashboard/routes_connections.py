@@ -318,8 +318,16 @@ class ConnectionsRoutes(DashboardCore):
         """Two steps (Tier 2), like `design_system_delete`: the first POST shows a
         confirmation page; only `confirm=yes` deletes the secrets-file key. Keys
         from the real environment cannot reach this path: the template only
-        offers removal for file-backed keys. The value is never rendered."""
+        offers removal for file-backed keys. The value is never rendered.
 
+        A GET (refreshing the confirmation page, issue #316) goes back to
+        Connections: the confirmation only follows its form.
+        """
+        if request.method == "GET":
+            self.flash(
+                request, "error", "start again from Connections — this page only follows its form"
+            )
+            return self.back("/connections")
         form = await checked_form(request)
         name = str(form.get("name", "")).strip()
         if form.get("confirm") != "yes":
@@ -457,7 +465,16 @@ class ConnectionsRoutes(DashboardCore):
 
     async def browser_install(self, request: Request) -> Response:
         """Two steps (Tier 2: it downloads and runs an installer): the first POST names
-        the exact command on a confirmation page; only `confirm=yes` starts it, once."""
+        the exact command on a confirmation page; only `confirm=yes` starts it, once.
+
+        A GET (refreshing the confirmation page, issue #316) goes back to
+        Connections: the confirmation only follows its form.
+        """
+        if request.method == "GET":
+            self.flash(
+                request, "error", "start again from Connections — this page only follows its form"
+            )
+            return self.back("/connections")
         form = await checked_form(request)
         to = "/connections"
         status = self.browser_installer.status()

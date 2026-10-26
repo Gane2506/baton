@@ -85,6 +85,15 @@ class DesignRoutes(DashboardCore):
             validate_library_name(name)
         except ValueError:
             raise HTTPException(404, "no such design system") from None
+        if name == "delete" and load_library_system(name) is None:
+            # Refreshing the delete-confirmation page (POST /design-systems/delete,
+            # issue #316): that URL is shadowed by this route, and no system is
+            # named "delete" — back to the library instead of a 404. A real
+            # system named "delete" still renders normally above.
+            self.flash(
+                request, "error", "start again from the library — this page only follows its form"
+            )
+            return self.back("/design-systems")
         return self.page(
             request, "design_system.html", lambda repo: _design_system_view(repo, name)
         )

@@ -178,7 +178,16 @@ class QueueRoutes(DashboardCore):
     async def scheduler_start(self, request: Request) -> Response:
         """Two steps (Tier 2: a scheduler spends real money): the first POST names the
         spend implication on a confirmation page; only `confirm=yes` starts the
-        dashboard's own scheduler, which dies with the dashboard."""
+        dashboard's own scheduler, which dies with the dashboard.
+
+        A GET (refreshing the confirmation page, issue #316) goes back to the
+        queue: the confirmation only follows its form.
+        """
+        if request.method == "GET":
+            self.flash(
+                request, "error", "start again from the queue — this page only follows its form"
+            )
+            return self.back("/queue")
         form = await checked_form(request)
         to = "/queue"
         if form.get("confirm") != "yes":
@@ -222,7 +231,16 @@ class QueueRoutes(DashboardCore):
 
     async def queue_clear(self, request: Request) -> Response:
         """Two steps (Tier 2), like `learning_flush`: the first POST shows how many queued
-        ideas would go; only `confirm=yes` deletes them (items with a run are kept)."""
+        ideas would go; only `confirm=yes` deletes them (items with a run are kept).
+
+        A GET (refreshing the confirmation page, issue #316) goes back to the
+        queue: the confirmation only follows its form.
+        """
+        if request.method == "GET":
+            self.flash(
+                request, "error", "start again from the queue — this page only follows its form"
+            )
+            return self.back("/queue")
         form = await checked_form(request)
         to = "/queue"
         if form.get("confirm") != "yes":

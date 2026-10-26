@@ -155,7 +155,14 @@ class ChatRoutes(DashboardCore):
     async def chat_delete(self, request: Request) -> Response:
         """Two steps (Tier 2), like `design_system_delete`: the first POST shows a
         confirmation page; only `confirm=yes` deletes the chat. Deleting removes
-        its transcript and brief. Runs it started are kept."""
+        its transcript and brief. Runs it started are kept.
+
+        A GET (refreshing the confirmation page, issue #316) goes back to Chats:
+        the confirmation only follows its form, it never re-runs from a GET.
+        """
+        if request.method == "GET":
+            self.flash(request, "error", "start again from Chats — this page only follows its form")
+            return self.back("/chats")
         form = await checked_form(request)  # CSRF; the id comes from the path
         chat_id = request.path_params["chat_id"]
         if self.chat_runner.busy(chat_id):

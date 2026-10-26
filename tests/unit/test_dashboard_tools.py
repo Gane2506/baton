@@ -11,7 +11,7 @@ import re
 import time
 from collections.abc import Iterator
 from pathlib import Path
-from typing import cast
+from typing import ClassVar, cast
 
 import httpx
 import pytest
@@ -279,6 +279,20 @@ def test_cache_clear_bad_older_than_is_an_error(client: TestClient) -> None:
         assert "older-than hours" in client.get("/tools").text
 
 
+def test_cache_calibrate_get_redirects_to_tools(client: TestClient) -> None:
+    """Refreshing the calibration result (GET, issue #316) goes back to Tools, never a 405."""
+    response = client.get("/tools/cache/calibrate", follow_redirects=False)
+    assert response.status_code == 303
+    assert response.headers["location"] == "/tools#cache"
+
+
+def test_cache_clear_get_redirects_to_tools(client: TestClient) -> None:
+    """Refreshing the cache-clear confirmation (GET, issue #316) goes back to Tools, never a 405."""
+    response = client.get("/tools/cache/clear", follow_redirects=False)
+    assert response.status_code == 303
+    assert response.headers["location"] == "/tools#cache"
+
+
 def test_cache_calibrate_empty_history(client: TestClient) -> None:
     response = _post(client, "/tools/cache/calibrate", {})
     assert response.status_code == 200
@@ -428,17 +442,26 @@ def test_apis_test_local_command_missing(client: TestClient) -> None:
     assert "ghost: command not found on PATH" in html
 
 
-def test_apis_test_remote_reachable(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_apis_test_remote_mcp_handshake_passes(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A remote server that answers the MCP initialize handshake passes (issue #315)."""
     _add_mcp_server(client, "remote-docs", url="https://example.test/mcp")
 
+    body = b'{"jsonrpc": "2.0", "id": 1, "result": {"protocolVersion": "2024-11-05"}}'
+
     class _FakeStream:
-        status_code = 405
+        status_code = 200
+        headers: ClassVar[dict[str, str]] = {}
 
         def __enter__(self) -> _FakeStream:
             return self
 
         def __exit__(self, *exc: object) -> None:
             return None
+
+        def iter_bytes(self) -> Iterator[bytes]:
+            yield body
 
     class _FakeClient:
         def __init__(self, *args: object, **kwargs: object) -> None:
@@ -450,19 +473,144 @@ def test_apis_test_remote_reachable(client: TestClient, monkeypatch: pytest.Monk
         def __exit__(self, *exc: object) -> None:
             return None
 
-        def stream(self, method: str, url: str) -> _FakeStream:
-            assert method == "GET"
+        def stream(self, method: str, url: str, **kwargs: object) -> _FakeStream:
+            assert method == "POST"
             assert url == "https://example.test/mcp"
+            payload = kwargs["json"]
+            assert isinstance(payload, dict)
+            assert payload["method"] == "initialize"
             return _FakeStream()
 
     monkeypatch.setattr(httpx, "Client", _FakeClient)
     response = _post(client, "/tools/apis/test", {"name": "remote-docs"})
     assert response.status_code == 303
     html = client.get("/tools").text
-    assert "remote-docs: answered HTTP 405" in html
-    assert "the server is reachable" in html
+    assert "remote-docs: speaks MCP (initialize answered, protocol 2024-11-05)" in html
     # The row now shows the tested status instead of "not tested".
     assert html.count("not tested") == 0
+
+
+def test_apis_test_remote_non_mcp_url_fails(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A non-MCP URL that 404s must NOT pass (issue #315): the audit's example.com/mcp."""
+    _add_mcp_server(client, "remote-docs", url="https://example.test/mcp")
+
+    class _FakeStream:
+        status_code = 404
+        headers: ClassVar[dict[str, str]] = {}
+
+        def __enter__(self) -> _FakeStream:
+            return self
+
+        def __exit__(self, *exc: object) -> None:
+            return None
+
+        def iter_bytes(self) -> Iterator[bytes]:
+            yield b"<html>not found</html>"
+
+    class _FakeClient:
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            pass
+
+        def __enter__(self) -> _FakeClient:
+            return self
+
+        def __exit__(self, *exc: object) -> None:
+            return None
+
+        def stream(self, method: str, url: str, **kwargs: object) -> _FakeStream:
+            assert method == "POST"
+            return _FakeStream()
+
+    monkeypatch.setattr(httpx, "Client", _FakeClient)
+    response = _post(client, "/tools/apis/test", {"name": "remote-docs"})
+    assert response.status_code == 303
+    html = client.get("/tools").text
+    assert "remote-docs: answered HTTP 404" in html
+    assert "not verified as an MCP server" in html
+    assert "speaks MCP" not in html
+
+
+def test_apis_test_remote_sse_transport(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A legacy SSE endpoint that opens an event stream passes (issue #315)."""
+    _add_mcp_server(client, "remote-sse", url="https://example.test/sse", transport="sse")
+
+    class _FakeStream:
+        status_code = 200
+        headers: ClassVar[dict[str, str]] = {"content-type": "text/event-stream"}
+
+        def __enter__(self) -> _FakeStream:
+            return self
+
+        def __exit__(self, *exc: object) -> None:
+            return None
+
+        def iter_bytes(self) -> Iterator[bytes]:
+            yield b"event: endpoint\ndata: /message\n\n"
+
+    class _FakeClient:
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            pass
+
+        def __enter__(self) -> _FakeClient:
+            return self
+
+        def __exit__(self, *exc: object) -> None:
+            return None
+
+        def stream(self, method: str, url: str, **kwargs: object) -> _FakeStream:
+            assert method == "GET"
+            assert url == "https://example.test/sse"
+            return _FakeStream()
+
+    monkeypatch.setattr(httpx, "Client", _FakeClient)
+    response = _post(client, "/tools/apis/test", {"name": "remote-sse"})
+    assert response.status_code == 303
+    html = client.get("/tools").text
+    assert "remote-sse: opened an MCP event stream" in html
+
+
+def test_apis_test_remote_sse_non_mcp_fails(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An SSE-configured URL that answers HTML instead of an event stream fails."""
+    _add_mcp_server(client, "remote-sse", url="https://example.test/sse", transport="sse")
+
+    class _FakeStream:
+        status_code = 200
+        headers: ClassVar[dict[str, str]] = {"content-type": "text/html"}
+
+        def __enter__(self) -> _FakeStream:
+            return self
+
+        def __exit__(self, *exc: object) -> None:
+            return None
+
+        def iter_bytes(self) -> Iterator[bytes]:
+            yield b"<html>hello</html>"
+
+    class _FakeClient:
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            pass
+
+        def __enter__(self) -> _FakeClient:
+            return self
+
+        def __exit__(self, *exc: object) -> None:
+            return None
+
+        def stream(self, method: str, url: str, **kwargs: object) -> _FakeStream:
+            return _FakeStream()
+
+    monkeypatch.setattr(httpx, "Client", _FakeClient)
+    response = _post(client, "/tools/apis/test", {"name": "remote-sse"})
+    assert response.status_code == 303
+    html = client.get("/tools").text
+    assert "remote-sse: answered HTTP 200" in html
+    assert "not verified as an MCP server" in html
 
 
 def test_apis_test_remote_unreachable(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -478,7 +626,7 @@ def test_apis_test_remote_unreachable(client: TestClient, monkeypatch: pytest.Mo
         def __exit__(self, *exc: object) -> None:
             return None
 
-        def stream(self, method: str, url: str) -> object:
+        def stream(self, method: str, url: str, **kwargs: object) -> object:
             raise httpx.ConnectError("connection refused", request=None)
 
     monkeypatch.setattr(httpx, "Client", _FakeClient)

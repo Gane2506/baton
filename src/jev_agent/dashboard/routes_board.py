@@ -218,6 +218,13 @@ class BoardRoutes(DashboardCore):
         actions = ("approve", "resume", "cancel", "ship", "modify", "stop")
         if not views.valid_run_id(run_id) or action not in actions:
             raise HTTPException(404, "no such action")
+        if request.method == "GET":
+            # Refreshing the ship confirmation page (issue #316), or a stray
+            # GET to any run action: back to the run, never a 405 or a 403.
+            self.flash(
+                request, "error", "start again from the run page — this page only follows its form"
+            )
+            return self.back(to)
         if action == "ship":
             return await self.ship(request, run_id)
         if action == "modify":

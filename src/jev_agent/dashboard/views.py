@@ -1539,7 +1539,7 @@ class ApiServerRow:
     """One `[tools.mcp.<name>]` entry as the Tools page's APIs section shows it.
 
     `status` is "ready" (local command found on PATH, or the last Test
-    answered), "not tested" (remote server, no Test yet), or "error"
+    completed an MCP handshake), "not tested" (remote server, no Test yet), or "error"
     (local command not found, or the last Test failed). `detail` explains
     it in plain language. Auth is env var names only — never values.
     """
@@ -1651,7 +1651,7 @@ def api_servers(repo: Repo, last_tests: dict[str, tuple[str, str]]) -> list[ApiS
 
     No network on render (the Connections page's rule): a local server is
     "ready" when its command resolves on PATH, "error" when it doesn't; a
-    remote server is "not tested" until the Test button proves it answers,
+    remote server is "not tested" until the Test button proves it speaks MCP,
     then shows that last result. `last_tests` is the dashboard's in-memory
     map (name -> (status, detail)) from the Test endpoint; a restart resets
     remote servers to "not tested", which is the honest default.
