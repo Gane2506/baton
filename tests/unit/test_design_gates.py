@@ -20,7 +20,7 @@ from jev_agent.core.design_gates import (
     is_generic,
     reduced_motion_gate,
 )
-from jev_agent.core.design_kit import palette_for_vibe
+from jev_agent.core.design_kit import _palette_from_hue, palette_for_vibe
 
 # A light palette that passes in the light theme (blue primary, dark text,
 # muted text dark enough for 4.5:1 on white and on the surface).
@@ -77,25 +77,46 @@ def test_contrast_gate_kit_palettes_pass_both_themes() -> None:
     for keywords in (
         "fintech",
         "playful",
+        "health",
         "luxury",
         "food",
+        "travel",
         "music",
         "education",
+        "eco",
         "social",
         "productivity",
     ):
         assert contrast_gate(palette_for_vibe(keywords)) == [], keywords
 
 
-def test_contrast_gate_catches_kit_muted_text_gap() -> None:
-    # Known design_kit gap (not this issue's to fix): `_palette_from_hue`
-    # sets muted text at lightness 0.44, which is too light for
-    # green/cyan hues — the green channel carries most of the luminance.
-    # The gate must catch it; fixing the palette builder is follow-up.
-    for keywords in ("health", "eco"):
-        violations = contrast_gate(palette_for_vibe(keywords))
-        assert _violations_matching(violations, "text_muted on background"), keywords
-        assert _violations_matching(violations, "text_muted on surface"), keywords
+def test_contrast_gate_kit_muted_text_gap_fixed() -> None:
+    # Issue #309: `_palette_from_hue` set muted text at lightness 0.44,
+    # too light for green/cyan hues — health 4.32:1, eco 4.36:1,
+    # travel-on-surface 4.18:1. The builder now darkens muted text until
+    # it clears 4.6:1 on both bases; the gate must pass for all three.
+    for keywords in ("health", "eco", "travel"):
+        assert contrast_gate(palette_for_vibe(keywords)) == [], keywords
+
+
+def test_kit_muted_text_darkened_only_where_it_failed() -> None:
+    # Vibes that already passed keep their exact muted color — the fix
+    # moves only the hues that failed the gate.
+    assert palette_for_vibe("fintech")["text_muted"] == "#5F6C81"
+    assert palette_for_vibe("playful")["text_muted"] == "#81685F"
+    assert palette_for_vibe("music")["text_muted"] == "#705F81"
+    # The three that failed are darkened, not re-hued.
+    assert palette_for_vibe("health")["text_muted"] == "#577567"
+    assert palette_for_vibe("eco")["text_muted"] == "#57755C"
+    assert palette_for_vibe("travel")["text_muted"] == "#597378"
+
+
+def test_kit_muted_text_passes_every_hue() -> None:
+    # The hash fallback in `palette_for_vibe` can land on any hue, so the
+    # builder must clear the gate for all of them, not just the families.
+    for hue in range(360):
+        palette = _palette_from_hue(float(hue))
+        assert contrast_gate(palette) == [], f"hue {hue}"
 
 
 def test_contrast_gate_fails_dark_only() -> None:
