@@ -59,3 +59,86 @@ jobs:
         with:
           name: screenshots
           path: preview/
+
+  windows-latest:
+    # Deploy Phase 4 (issue #334, audit §5 4.1): the job that proves Windows works —
+    # install from this checkout, `jev init` in a temp repo, boot the dashboard and
+    # curl it for a 200. Addition only: the 7 required checks above are untouched.
+    # Install choice: `pip install .[dashboard]` from the checkout, NOT install.ps1 —
+    # install.ps1 installs from PyPI or a GitHub ref (never a local path) and exits 1
+    # when `jev` is not yet on PATH in the current session (install.ps1:106-114),
+    # which is the default state on a fresh windows-latest runner. It stays the
+    # documented one-command for users; making it CI-runnable is Phase 2 installer work.
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Install Baton from the checkout
+        run: python -m pip install '.[dashboard]'
+      - name: jev --version
+        run: jev --version
+      - name: jev init in a temp repo
+        shell: pwsh
+        run: |
+          $repo = Join-Path $env:RUNNER_TEMP "jev-windows-smoke"
+          New-Item -ItemType Directory -Force -Path $repo | Out-Null
+          Set-Location $repo
+          git init -q
+          jev init
+          $repo | Out-File -FilePath (Join-Path $env:RUNNER_TEMP "jev-smoke-repo.txt")
+      - name: Boot the dashboard and curl it for a 200
+        shell: pwsh
+        run: |
+          $repo = (Get-Content (Join-Path $env:RUNNER_TEMP "jev-smoke-repo.txt") -Raw).Trim()
+          # Pick a free loopback port instead of assuming 8765 is free.
+          $listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, 0)
+          $listener.Start()
+          $port = $listener.LocalEndpoint.Port
+          $listener.Stop()
+          $outLog = Join-Path $env:RUNNER_TEMP "jev-dashboard.out.log"
+          $errLog = Join-Path $env:RUNNER_TEMP "jev-dashboard.err.log"
+          $proc = Start-Process -FilePath "jev" -ArgumentList @("dashboard", "--no-open", "--host", "127.0.0.1", "--port", $port, "--repo", $repo) -RedirectStandardOutput $outLog -RedirectStandardError $errLog -PassThru -NoNewWindow
+          $proc.Id | Out-File -FilePath (Join-Path $env:RUNNER_TEMP "jev-dashboard.pid")
+          # Poll for a 200 instead of sleeping a fixed amount: loopback needs no
+          # token (dashboard_cmd.py), so a plain GET must succeed once uvicorn is up.
+          $deadline = (Get-Date).AddSeconds(90)
+          $ok = $false
+          while ((Get-Date) -lt $deadline) {
+            if ($proc.HasExited) { break }
+            try {
+              $resp = Invoke-WebRequest -Uri "http://127.0.0.1:$port/" -UseBasicParsing -TimeoutSec 5
+              if ($resp.StatusCode -eq 200) { $ok = $true; break }
+            } catch { }
+            Start-Sleep -Seconds 2
+          }
+          if (-not $ok) {
+            $exitCode = if ($proc.HasExited) { $proc.ExitCode } else { "n/a (still running)" }
+            Write-Host "Dashboard did not serve HTTP 200 within 90s (process exited: $($proc.HasExited), exit code: $exitCode)"
+            Write-Host "--- dashboard stdout ---"
+            Get-Content $outLog -ErrorAction SilentlyContinue
+            Write-Host "--- dashboard stderr ---"
+            Get-Content $errLog -ErrorAction SilentlyContinue
+            exit 1
+          }
+          Write-Host "Dashboard served HTTP 200 on http://127.0.0.1:$port/"
+      - name: Show dashboard logs on failure
+        if: failure()
+        shell: pwsh
+        run: |
+          Get-ChildItem $env:RUNNER_TEMP -Filter "jev-dashboard.*.log" | ForEach-Object {
+            Write-Host "--- $($_.Name) ---"
+            Get-Content $_.FullName -ErrorAction SilentlyContinue
+          }
+      - name: Stop the dashboard
+        if: always()
+        shell: pwsh
+        run: |
+          $pidFile = Join-Path $env:RUNNER_TEMP "jev-dashboard.pid"
+          if (Test-Path $pidFile) {
+            $id = [int](Get-Content $pidFile -Raw).Trim()
+            Stop-Process -Id $id -Force -ErrorAction SilentlyContinue
+            Write-Host "Stopped dashboard process $id"
+          }
