@@ -7,6 +7,10 @@ same port names the owner and points at `jev dashboard stop` instead of `lsof`.
 port is bindable again before reporting success, and the start probe binds the way
 uvicorn binds (SO_REUSEADDR), so TIME_WAIT left by the previous server does not read
 as a busy port.
+
+A dashboard with no pid file is not invisible to `stop` (issue #362): it falls back
+to the port itself — identifying the listener over HTTP and finding the owning pid
+from the port — so a pre-existing instance is stoppable without PID hunting.
 """
 
 import contextlib
@@ -15,8 +19,10 @@ import os
 import signal
 import socket
 import subprocess
+import sys
 import threading
 import time
+import urllib.request
 from pathlib import Path
 
 import pytest
@@ -109,6 +115,172 @@ def _write_pidfile(repo: Path, pid: int, port: int) -> Path:
         encoding="utf-8",
     )
     return path
+
+
+def test_stop_without_pidfile_and_free_port(fixture_repo: Path) -> None:
+    """No pid file and nothing listening: the old clean message stands."""
+    result = runner.invoke(app, ["dashboard", "stop", "--repo", str(fixture_repo)])
+    assert result.exit_code == 0, result.output
+    assert "no dashboard recorded" in result.output
+
+
+def _serve(directory: Path, port: int, marker: bool) -> subprocess.Popen[str]:
+    """A `python -m http.server` on `port` whose index page does (or does not)
+    carry the dashboard's `<title>Baton` marker. Its process is a stand-in
+    for a dashboard that never wrote a pid file."""
+    directory.mkdir(parents=True, exist_ok=True)
+    title = "Baton · Board" if marker else "Some other page"
+    (directory / "index.html").write_text(
+        f"<!doctype html><html><head><title>{title}</title></head><body>hi</body></html>",
+        encoding="utf-8",
+    )
+    proc = subprocess.Popen(
+        [
+            sys.executable,
+            "-m",
+            "http.server",
+            str(port),
+            "--bind",
+            "127.0.0.1",
+            "--directory",
+            str(directory),
+        ],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        text=True,
+    )
+    # Reap it like a shell parent would: a child killed by `stop` lingers as
+    # a zombie until reaped, and `pid_alive` (kill(pid, 0)) still sees a
+    # zombie — the same reason `test_stop_live_process` double-forks.
+    threading.Thread(target=proc.wait, daemon=True).start()
+    deadline = time.monotonic() + 10.0
+    while time.monotonic() < deadline:
+        try:
+            with urllib.request.urlopen(f"http://127.0.0.1:{port}/", timeout=1.0) as resp:
+                if resp.status == 200:
+                    return proc
+        except OSError:
+            time.sleep(0.1)
+    proc.terminate()
+    raise AssertionError(f"test server on port {port} never came up")
+
+
+def _server_gone(proc: subprocess.Popen[str]) -> bool:
+    try:
+        proc.wait(timeout=5.0)
+    except subprocess.TimeoutExpired:
+        return False
+    return True
+
+
+def test_stop_by_port_stops_live_dashboard_without_pidfile(
+    fixture_repo: Path, tmp_path: Path
+) -> None:
+    """Issue #362: no pid file, but a dashboard is listening — `stop` finds it
+    on the port and stops it, with no manual PID hunting."""
+    port = _free_port()
+    proc = _serve(tmp_path / "site", port, marker=True)
+    try:
+        result = runner.invoke(
+            app,
+            ["dashboard", "stop", "--repo", str(fixture_repo), "--port", str(port)],
+        )
+        assert result.exit_code == 0, result.output
+        assert f"stopped the dashboard (pid {proc.pid})" in result.output
+        assert "no pid file" in result.output
+        assert _server_gone(proc), "stop did not kill the server"
+        assert dashboard_cmd._port_bindable("127.0.0.1", port)
+    finally:
+        with contextlib.suppress(ProcessLookupError, PermissionError):
+            proc.terminate()
+
+
+def test_stop_by_port_leaves_non_dashboard_alone(fixture_repo: Path, tmp_path: Path) -> None:
+    """Issue #362: a listener that is not a jev dashboard is reported, never
+    killed — even though there is no pid file to tell `stop` apart."""
+    port = _free_port()
+    proc = _serve(tmp_path / "site", port, marker=False)
+    try:
+        result = runner.invoke(
+            app,
+            ["dashboard", "stop", "--repo", str(fixture_repo), "--port", str(port)],
+        )
+        assert result.exit_code == 0, result.output
+        assert "not a jev dashboard" in result.output
+        assert proc.poll() is None, "stop killed a process that is not a dashboard"
+    finally:
+        with contextlib.suppress(ProcessLookupError, PermissionError):
+            proc.terminate()
+        _server_gone(proc)
+
+
+def test_stop_stale_pidfile_finds_live_dashboard_on_recorded_port(
+    fixture_repo: Path, tmp_path: Path
+) -> None:
+    """Issue #362: the pid file is stale (its pid is dead) but a dashboard is
+    listening on the recorded port — `stop` finds it there."""
+    port = _free_port()
+    proc = _serve(tmp_path / "site", port, marker=True)
+    try:
+        path = _write_pidfile(fixture_repo, _dead_pid(), port)
+        result = runner.invoke(app, ["dashboard", "stop", "--repo", str(fixture_repo)])
+        assert result.exit_code == 0, result.output
+        assert "no dashboard running" in result.output
+        assert "stale pid file" in result.output
+        assert f"stopped the dashboard (pid {proc.pid})" in result.output
+        assert _server_gone(proc), "stop did not kill the server"
+        assert not path.exists()
+    finally:
+        with contextlib.suppress(ProcessLookupError, PermissionError):
+            proc.terminate()
+
+
+def test_listening_pid_finds_local_listener() -> None:
+    """The port-to-pid lookup names this process for a socket it holds."""
+    probe = socket.socket()
+    probe.bind(("127.0.0.1", 0))
+    probe.listen(1)
+    try:
+        assert dashboard_cmd._listening_pid(probe.getsockname()[1]) == os.getpid()
+    finally:
+        probe.close()
+
+
+def test_is_jev_dashboard_marker(tmp_path: Path) -> None:
+    """The HTTP probe identifies the marker page and rejects anything else."""
+    port = _free_port()
+    marker_proc = _serve(tmp_path / "marker", port, marker=True)
+    other_port = _free_port()
+    other_proc = _serve(tmp_path / "other", other_port, marker=False)
+    try:
+        assert dashboard_cmd._is_jev_dashboard("127.0.0.1", port) is True
+        assert dashboard_cmd._is_jev_dashboard("127.0.0.1", other_port) is False
+        assert dashboard_cmd._is_jev_dashboard("127.0.0.1", _free_port()) is False
+    finally:
+        for proc in (marker_proc, other_proc):
+            with contextlib.suppress(ProcessLookupError, PermissionError):
+                proc.terminate()
+            _server_gone(proc)
+
+
+def test_parse_lsof_pids() -> None:
+    assert dashboard_cmd._parse_lsof_pids("123\n456\n") == [123, 456]
+    assert dashboard_cmd._parse_lsof_pids("") == []
+    assert dashboard_cmd._parse_lsof_pids("  78  \nnot-a-pid\n90\n") == [78, 90]
+
+
+def test_parse_netstat_pid() -> None:
+    text = (
+        "Active Connections\n"
+        "  Proto  Local Address          Foreign Address        State           PID\n"
+        "  TCP    127.0.0.1:8765         0.0.0.0:0              LISTENING       1234\n"
+        "  TCP    127.0.0.1:9000         0.0.0.0:0              LISTENING       5678\n"
+        "  TCP    127.0.0.1:8766         127.0.0.1:50000        ESTABLISHED     9999\n"
+    )
+    assert dashboard_cmd._parse_netstat_pid(text, 8765) == 1234
+    assert dashboard_cmd._parse_netstat_pid(text, 9000) == 5678
+    assert dashboard_cmd._parse_netstat_pid(text, 8766) is None
+    assert dashboard_cmd._parse_netstat_pid(text, 1234) is None
 
 
 def test_stop_without_pidfile(fixture_repo: Path) -> None:

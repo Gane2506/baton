@@ -198,7 +198,10 @@ repo — only enable it for a repo with no `.jev/` yet: it shadows an existing
   at `jev dashboard stop --repo <repo>` instead of sending you to `lsof`.
   `jev dashboard stop` finds the dashboard through
   `<repo>/.jev/dashboard.pid` and stops it; a stale pid file (crashed
-  dashboard) never names a dead process as the owner. `stop` waits until the
+  dashboard) never names a dead process as the owner. When there is no usable
+  pid file, `stop` probes the port instead (`--port`, default 8765): a
+  dashboard listening there is identified and stopped; anything else on the
+  port is reported, never killed. `stop` waits until the
   port is bindable again before reporting success (bounded: 5 s), so a start
   right after a stop works first time; if the port stays busy it fails with a
   port-busy error instead of claiming success.

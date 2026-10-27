@@ -13,6 +13,13 @@ Port handling (issue #355): `stop` means stopped — after the process is gone, 
 (bounded) until the port is bindable again before reporting success, and the start probe
 binds the way uvicorn binds (SO_REUSEADDR), so a port left in TIME_WAIT by the previous
 server's closed connections does not read as busy.
+
+Port handling (issue #362): a dashboard with no pid file is not invisible to `stop`.
+When the pid file is missing, unreadable or stale, `stop` falls back to the port itself
+(`--port`, default 8765): it identifies the listener as a jev dashboard over HTTP
+(the root page's `<title>Baton` marker) and finds the owning pid from the port
+(Linux /proc, macOS `lsof`, Windows `netstat`). A listener that is not a jev
+dashboard is reported, never killed.
 """
 
 from __future__ import annotations
@@ -23,10 +30,13 @@ import os
 import secrets
 import signal
 import socket
+import subprocess
 import sys
 import threading
 import time
+import urllib.request
 import webbrowser
+from collections.abc import Callable
 from pathlib import Path
 from typing import Annotated, Any
 
@@ -48,6 +58,14 @@ TOKEN_ENV = "JEV_DASHBOARD_TOKEN"
 PID_FILENAME = "dashboard.pid"
 _STOP_WAIT_S = 10.0  # how long `stop` waits for a graceful shutdown before forcing it
 _PORT_FREE_WAIT_S = 5.0  # how long `stop` then waits for the port to be bindable again
+_DASHBOARD_MARKER = "<title>Baton"  # the root page of a jev dashboard, always
+_IDENTIFY_TIMEOUT_S = 2.0  # how long `stop` waits on the HTTP probe below
+RunFn = Callable[[list[str]], subprocess.CompletedProcess[str]]
+
+
+def _default_run(argv: list[str]) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(argv, capture_output=True, text=True, timeout=10, check=False)
+
 
 dashboard_app = typer.Typer(
     name="dashboard",
@@ -215,6 +233,170 @@ def _wait_port_free(host: str, port: int, timeout_s: float) -> bool:
         if time.monotonic() >= deadline:
             return False
         time.sleep(0.1)
+
+
+def _is_jev_dashboard(host: str, port: int, timeout_s: float = _IDENTIFY_TIMEOUT_S) -> bool:
+    """True when the listener on `host:port` answers like a jev dashboard.
+
+    The root page always carries `<title>Baton`. A dashboard bound off
+    loopback with a token answers 401 plain text to an unauthenticated probe,
+    so this only identifies loopback (tokenless) dashboards — the common case.
+    Anything else answers False, and `stop` reports instead of killing.
+    """
+    try:
+        with urllib.request.urlopen(f"http://{host}:{port}/", timeout=timeout_s) as response:
+            if response.status != 200:
+                return False
+            body = response.read(65536)
+    except (OSError, ValueError):
+        return False
+    return _DASHBOARD_MARKER in body.decode("utf-8", errors="ignore")
+
+
+def _parse_lsof_pids(text: str) -> list[int]:
+    """Pids from `lsof -t` output (one pid per line, anything else ignored)."""
+    pids: list[int] = []
+    for line in text.splitlines():
+        line = line.strip()
+        if line.isdigit():
+            pids.append(int(line))
+    return pids
+
+
+def _listening_pid_lsof(port: int, run: RunFn = _default_run) -> int | None:
+    """The pid listening on `port` via `lsof` (macOS), or None. `lsof` ships
+    with macOS; a missing binary or a failed run is None, not an error."""
+    try:
+        result = run(["lsof", "-nP", f"-iTCP:{port}", "-sTCP:LISTEN", "-t"])
+    except (OSError, subprocess.SubprocessError):
+        return None
+    pids = _parse_lsof_pids(result.stdout or "")
+    return pids[0] if pids else None
+
+
+def _parse_netstat_pid(text: str, port: int) -> int | None:
+    """The pid of the LISTENING TCP socket on `port` in `netstat -ano` output."""
+    for line in text.splitlines():
+        parts = line.split()
+        if len(parts) < 5 or parts[0] != "TCP" or parts[3] != "LISTENING":
+            continue
+        local = parts[1]
+        try:
+            local_port = int(local.rsplit(":", 1)[1])
+            pid = int(parts[4])
+        except ValueError:
+            continue
+        if local_port == port:
+            return pid
+    return None
+
+
+def _listening_pid_netstat(port: int, run: RunFn = _default_run) -> int | None:
+    """The pid listening on `port` via `netstat -ano` (Windows), or None."""
+    try:
+        result = run(["netstat", "-ano"])
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return _parse_netstat_pid(result.stdout or "", port)
+
+
+def _listening_pid_proc(port: int) -> int | None:
+    """The pid listening on `port` via /proc (Linux), or None.
+
+    Pure stdlib: /proc/net/tcp{,6} names the listening socket's inode, and
+    /proc/<pid>/fd names the process holding it. No external tool is needed,
+    so this works in minimal containers that have no `ss` or `lsof`.
+    """
+    inodes: set[str] = set()
+    for name in ("tcp", "tcp6"):
+        try:
+            lines = (Path("/proc/net") / name).read_text(encoding="utf-8").splitlines()[1:]
+        except OSError:
+            continue
+        for line in lines:
+            parts = line.split()
+            if len(parts) < 10 or parts[3] != "0A":  # 0A = LISTEN
+                continue
+            try:
+                local_port = int(parts[1].rsplit(":", 1)[1], 16)
+            except ValueError:
+                continue
+            if local_port == port:
+                inodes.add(parts[9])
+    if not inodes:
+        return None
+    try:
+        pid_dirs = [p for p in Path("/proc").iterdir() if p.name.isdigit()]
+    except OSError:
+        return None
+    for pid_dir in pid_dirs:
+        try:
+            # Materialised inside the try: iterdir() is lazy, and listing
+            # another user's /proc/<pid>/fd raises PermissionError only when
+            # the generator is consumed.
+            fds = list(pid_dir.joinpath("fd").iterdir())
+        except OSError:
+            continue
+        for fd in fds:
+            try:
+                target = os.readlink(fd)
+            except OSError:
+                continue
+            if target.startswith("socket:[") and target[8:-1] in inodes:
+                return int(pid_dir.name)
+    return None
+
+
+def _listening_pid(port: int) -> int | None:
+    """The pid of the process listening on `port`, or None when it cannot be
+    determined on this platform (or no process is listening)."""
+    if sys.platform == "linux":
+        return _listening_pid_proc(port)
+    if sys.platform == "darwin":
+        return _listening_pid_lsof(port)
+    if sys.platform == "win32":
+        return _listening_pid_netstat(port)
+    return None
+
+
+def _stop_by_port(root: Path, host: str, port: int, timeout_s: float) -> bool:
+    """Stop the dashboard listening on `host:port`, with no pid file (issue #362).
+
+    Returns True when the case was handled (something stopped, or a listener
+    was reported instead of killed); False only when the port is free, so the
+    caller can say nothing is recorded. A listener that is not a jev
+    dashboard is never killed.
+    """
+    if _port_bindable(host, port):
+        return False
+    if _is_jev_dashboard(host, port):
+        pid = _listening_pid(port)
+        if pid is None:
+            console.print(
+                f"a dashboard is running on {host}:{port} but its pid could not "
+                "be determined; stop the process on that port by hand"
+            )
+            return True
+        if _stop_pid(pid, timeout_s):
+            _wait_port_free_after_stop(root, {"host": host, "port": port}, pid)
+            _remove_dashboard_pid(root)
+            console.print(f"stopped the dashboard (pid {pid}) — no pid file, found on port {port}")
+            return True
+        raise fail(
+            f"could not stop the dashboard (pid {pid}): it is still running "
+            f"after {timeout_s:g} s; stop it by hand (kill {pid})"
+        )
+    pid = _listening_pid(port)
+    if pid is not None:
+        console.print(
+            f"port {port} is in use by pid {pid}, which is not a jev dashboard; "
+            f"stop it by hand (kill {pid})"
+        )
+    else:
+        console.print(
+            f"port {port} is in use by another process, not a jev dashboard; stop it by hand"
+        )
+    return True
 
 
 def _check_port_free(host: str, port: int, root: Path) -> None:
@@ -433,29 +615,49 @@ def _wait_port_free_after_stop(root: Path, info: dict[str, Any], pid: int) -> No
 @dashboard_app.command("stop")
 def dashboard_stop(
     repo: RepoOption = Path("."),
+    port: Annotated[
+        int,
+        typer.Option(
+            "--port",
+            min=1,
+            max=65535,
+            help="Port to probe when no pid file records the dashboard "
+            "(a stale pid file's recorded port is used instead).",
+        ),
+    ] = 8765,
     timeout: Annotated[
         float,
         typer.Option("--timeout", min=1.0, help="Seconds to wait for a graceful stop."),
     ] = _STOP_WAIT_S,
 ) -> None:
-    """Stop the dashboard serving this repo (the one `jev dashboard` started)."""
+    """Stop the dashboard serving this repo (the one `jev dashboard` started).
+
+    The pid file is the first lookup, but a dashboard whose pid file is
+    missing, unreadable or stale is not invisible: `stop` falls back to the
+    port itself and stops the dashboard listening there (issue #362).
+    """
     with cli_errors():
         root = repo_root(repo)
     path = dashboard_pid_path(root)
     info = read_dashboard_pid(root)
     if info is None:
-        console.print(f"no dashboard recorded for {escape(str(root))} (is one running?)")
+        if not _stop_by_port(root, "127.0.0.1", port, timeout):
+            console.print(f"no dashboard recorded for {escape(str(root))} (is one running?)")
         return
     pid = info.get("pid")
     if not isinstance(pid, int) or pid <= 0:
         with contextlib.suppress(OSError):
             path.unlink()
-        console.print(f"removed an unreadable pid file at {escape(str(path))}; nothing to stop")
+        if not _stop_by_port(root, "127.0.0.1", port, timeout):
+            console.print(f"removed an unreadable pid file at {escape(str(path))}; nothing to stop")
         return
     if not pid_alive(pid):
         with contextlib.suppress(OSError):
             path.unlink()
         console.print(f"no dashboard running (pid {pid} is gone); removed the stale pid file")
+        recorded_port = info.get("port")
+        probe_port = recorded_port if isinstance(recorded_port, int) and recorded_port > 0 else port
+        _stop_by_port(root, "127.0.0.1", probe_port, timeout)
         return
     if _stop_pid(pid, timeout):
         # The process being gone is not the same as the port being free:
