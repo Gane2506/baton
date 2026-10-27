@@ -517,3 +517,110 @@ def test_ensure_passing_gates_terminates_at_default_max() -> None:
 def test_ensure_passing_gates_rejects_zero_attempts() -> None:
     with pytest.raises(ValueError, match="max_attempts"):
         ensure_passing_gates(lambda: (_SYSTEM, []), max_attempts=0)
+
+
+# ---------------------------------------------------------------------------
+# Contrast gate, issue #358 extension: primary-as-text, semantic text on
+# tint, swatch labels
+# ---------------------------------------------------------------------------
+
+# The scanned health system (issue #309 verification report): primary
+# #DB26AB reads 4.31:1 on white and 3.88:1 on its surface, so the raw
+# primary must never be text — the derived ink reads 5.18:1 / 4.67:1.
+_SCANNED_HEALTH: dict[str, str] = {
+    **_PASSING_LIGHT,
+    "primary": "#DB26AB",
+    "primary_hover": "#B91F90",
+    "primary_text": "#FFFFFF",
+    "surface": "#F8F1F6",
+    "text": "#21121D",
+    "text_muted": "#815F78",
+    "border": "#E5D3E0",
+    "primary_ink": "#C52199",
+    "success_subtle": "#DCFCE7",
+    "success_text": "#117E39",
+    "warning_subtle": "#FEF3C7",
+    "warning_text": "#A45A05",
+    "danger_subtle": "#FEE2E2",
+    "danger_text": "#C62020",
+    "info": "#2563EB",
+    "info_subtle": "#DBEAFE",
+    "info_text": "#1A5BEA",
+}
+
+
+def test_contrast_gate_scanned_health_palette_passes() -> None:
+    # The exact palette the Mac scan measured, with the derived text roles
+    # the fix adds: the gate must pass it in both themes.
+    assert contrast_gate(_SCANNED_HEALTH) == []
+
+
+def test_contrast_gate_primary_ink_too_light_is_a_violation() -> None:
+    bad = dict(_SCANNED_HEALTH, primary_ink="#DB26AB")  # the raw primary as text
+    violations = contrast_gate(bad, theme="light")
+    assert _violations_matching(violations, "primary_ink on background")
+    assert _violations_matching(violations, "primary_ink on surface")
+
+
+def test_contrast_gate_semantic_text_on_subtle() -> None:
+    # The raw semantic colors as badge text: warning 2.86, success 3.00,
+    # danger 3.95, info 4.24 on their tints — all violations.
+    for role, base in (
+        ("success", "#16A34A"),
+        ("warning", "#D97706"),
+        ("danger", "#DC2626"),
+        ("info", "#2563EB"),
+    ):
+        bad = dict(_SCANNED_HEALTH, **{f"{role}_text": base})
+        assert _violations_matching(
+            contrast_gate(bad, theme="light"), f"{role}_text on {role}_subtle"
+        ), role
+    # The derived text roles pass.
+    assert contrast_gate(_SCANNED_HEALTH, theme="light") == []
+
+
+def test_contrast_gate_swatch_label_crossover_needs_the_black_fallback() -> None:
+    # #DB26AB sits at the white/near-black crossover: white reads 4.31:1,
+    # near-black 4.30:1 — neither clears 4.5. The label rule's pure-black
+    # fallback (4.88:1) is what makes the gate pass; a white-only pick
+    # would fail. The gate pins the rule against the real palette.
+    from jev_agent.core.design_kit import label_on_color
+
+    assert label_on_color("#DB26AB") == "#000000"
+    assert label_on_color("#DB24AA") == "#000000"
+    assert contrast_gate(_SCANNED_HEALTH, theme="light") == []
+
+
+def test_label_on_color_clears_45_for_every_ramp_color() -> None:
+    # The swatch label rule must clear 4.5:1 for every color any ramp can
+    # produce — accent steps and neutral steps at every hue — plus the
+    # fixed semantic bases. The worst case of max(white, black) is 4.58:1,
+    # so the rule always has a passing pick.
+    from jev_agent.core.design_kit import _hsl, contrast_ratio, label_on_color
+
+    for hue in range(360):
+        for lightness in (0.88, 0.68, 0.50, 0.36, 0.22, 0.97, 0.04):
+            color = _hsl(float(hue), 0.72, lightness)
+            assert contrast_ratio(label_on_color(color), color) >= 4.5, (hue, lightness)
+        for lightness in (0.97, 0.93, 0.88, 0.80, 0.68, 0.52, 0.36, 0.24, 0.14, 0.08, 0.04):
+            color = _hsl(float(hue), 0.05, lightness)
+            assert contrast_ratio(label_on_color(color), color) >= 4.5, (hue, lightness)
+    for base in (
+        "#16A34A",
+        "#D97706",
+        "#DC2626",
+        "#2563EB",
+        "#22C55E",
+        "#F59E0B",
+        "#F87171",
+        "#60A5FA",
+    ):
+        assert contrast_ratio(label_on_color(base), base) >= 4.5, base
+
+
+def test_contrast_gate_kit_palettes_pass_extended_checks_every_hue() -> None:
+    # The extended checks ride on the same builders the #309 sweep covers:
+    # every hue must pass in both themes with the derived roles included.
+    for hue in range(360):
+        palette = _palette_from_hue(float(hue))
+        assert contrast_gate(palette) == [], f"hue {hue}"

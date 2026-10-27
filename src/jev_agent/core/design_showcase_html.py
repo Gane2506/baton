@@ -13,6 +13,7 @@ import html
 import re
 from typing import TYPE_CHECKING
 
+from jev_agent.core.design_kit import label_on_color
 from jev_agent.core.design_motion3d import (
     build_motion_spec,
     build_scene_spec,
@@ -21,7 +22,7 @@ from jev_agent.core.design_motion3d import (
     scene_type_for_context,
     showcase_motion3d_script,
 )
-from jev_agent.core.design_showcase import VibeProfile, _relative_luminance
+from jev_agent.core.design_showcase import VibeProfile
 
 if TYPE_CHECKING:
     from jev_agent.core.design_business import BusinessContext
@@ -232,8 +233,11 @@ def _palette_section(colors: dict[str, str]) -> str:
     """Swatch grids: neutrals ramp, accent ramp, semantic roles."""
 
     def swatch(name: str, value: str) -> str:
+        # The hex label must read on the swatch: the max-contrast pick
+        # (issue #358 - the old `_is_dark` 0.35-luminance rule put white on
+        # light pinks and mid-greens at 2.68-3.57:1).
         try:
-            text = "#FFFFFF" if _is_dark(value) else "#101418"
+            text = label_on_color(value)
         except (ValueError, TypeError):
             text = "#101418"
         safe_value = _css_value(value)
@@ -279,10 +283,6 @@ def _palette_section(colors: dict[str, str]) -> str:
       <h3 class="group-title">Semantic</h3>
       <div class="swatch-grid">{semantic}</div>
     </section>"""
-
-
-def _is_dark(hex_color: str) -> bool:
-    return _relative_luminance(hex_color) < 0.35
 
 
 def _type_section(typo: dict[str, object]) -> str:
@@ -528,7 +528,7 @@ body{
   letter-spacing:var(--hero-tracking,-0.025em);line-height:1.04;
   font-size:clamp(48px,7vw,88px);margin-bottom:18px}
 .hero-tagline{font-family:var(--font-display);font-size:22px;font-weight:500;
-  color:var(--c-primary);margin-bottom:14px}
+  color:var(--c-primary-ink,var(--c-primary));margin-bottom:14px}
 .hero-business{font-size:15px;font-weight:600;color:var(--c-text-muted);margin-bottom:14px}
 .hero-desc{max-width:620px;margin:0 auto 34px;color:var(--c-text-muted);font-size:17px}
 .hero-actions{display:flex;gap:12px;justify-content:center;flex-wrap:wrap}
@@ -559,6 +559,10 @@ body{
 .hero-dark{background:#0B0B0D;color:#F5F5F4}
 .hero-dark .hero-overline,.hero-dark .hero-desc{color:#A8A29E}
 .hero-dark .hero-tagline{color:var(--c-primary)}
+/* ^-- stays on the raw primary, not --c-primary-ink: the dark hero sits on
+   a near-black background, where the darkened ink would read worse (issue
+   #358 — only the brutalist profile uses the dark hero, and its primary
+   reads 14.36:1 on #0B0B0D). */
 .hero-type .hero-giant{font-family:var(--font-display);font-weight:800;
   font-size:clamp(120px,22vw,260px);line-height:.9;letter-spacing:-0.04em;
   color:transparent;-webkit-text-stroke:1.5px
@@ -566,7 +570,7 @@ body{
 /* sections */
 .section{padding:72px 0;border-top:1px solid var(--c-border)}
 .overline{font-family:var(--font-mono);font-size:12px;letter-spacing:.16em;text-transform:uppercase;
-  color:var(--c-primary);margin-bottom:12px}
+  color:var(--c-primary-ink,var(--c-primary));margin-bottom:12px}
 .section-title{font-family:var(--font-display);font-weight:700;letter-spacing:-0.02em;
   font-size:clamp(30px,4vw,44px);line-height:1.1;margin-bottom:10px}
 .section-desc{color:var(--c-text-muted);font-size:16px;max-width:640px;margin-bottom:36px}
@@ -713,7 +717,7 @@ body{
 }
 .btn-secondary{background:var(--c-surface);color:var(--c-text);border-color:var(--c-border-strong)}
 .btn-secondary:hover{border-color:var(--c-text-faint)}
-.btn-ghost{background:transparent;color:var(--c-primary)}
+.btn-ghost{background:transparent;color:var(--c-primary-ink,var(--c-primary))}
 .btn-ghost:hover{background:var(--c-primary-subtle)}
 .btn-danger{background:var(--c-danger);color:#fff}
 .btn-danger:hover{filter:brightness(.94)}
@@ -739,10 +743,10 @@ body{
   padding:5px 12px;
   border-radius:var(--r-full);
 }
-.badge-success{background:var(--c-success-subtle);color:var(--c-success)}
-.badge-warning{background:var(--c-warning-subtle);color:var(--c-warning)}
-.badge-danger{background:var(--c-danger-subtle);color:var(--c-danger)}
-.badge-info{background:var(--c-info-subtle);color:var(--c-info)}
+.badge-success{background:var(--c-success-subtle);color:var(--c-success-text,var(--c-success))}
+.badge-warning{background:var(--c-warning-subtle);color:var(--c-warning-text,var(--c-warning))}
+.badge-danger{background:var(--c-danger-subtle);color:var(--c-danger-text,var(--c-danger))}
+.badge-info{background:var(--c-info-subtle);color:var(--c-info-text,var(--c-info))}
 .badge-muted{background:var(--c-surface-raised);color:var(--c-text-muted)}
 .alert{padding:14px 18px;border-radius:var(--r-md);font-size:14.5px;border:1px solid}
 .alert-success{background:var(--c-success-subtle);border-color:var(--c-success);color:var(--c-text)}

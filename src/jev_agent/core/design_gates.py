@@ -8,7 +8,12 @@ The gates encode the research report
 
 - `contrast_gate` — WCAG 2.2 AA contrast (§2.4, §9): body and muted text
   >= 4.5:1 on background and surface, button text >= 3:1 on both primary
-  states, in BOTH light and dark themes. The light-mode-only check in
+  states, in BOTH light and dark themes. Issue #358 extends it to the
+  pairs the #309 Mac scan found the gate passing: the primary hue as text
+  (via the derived `primary_ink` role, never the raw primary), semantic
+  text on its tinted background (`{role}_text` on `{role}_subtle`), and
+  swatch hex labels (the `label_on_color` pick must read >= 4.5:1 on the
+  swatch). The light-mode-only check in
   `design_skills.check_palette_contrast` (issue #299, parallel work) is the
   same shape with a narrower scope; this gate is the one that covers both
   themes, and it reuses `design_kit.contrast_ratio` rather than
@@ -60,7 +65,13 @@ import colorsys
 import re
 from collections.abc import Callable
 
-from jev_agent.core.design_kit import THEMES, _dark_variant, contrast_ratio
+from jev_agent.core.design_kit import (
+    SEMANTIC_ROLES,
+    THEMES,
+    _dark_variant,
+    contrast_ratio,
+    label_on_color,
+)
 
 # WCAG 2.2 AA minimums (report §9.2): normal text 4.5:1, UI components 3:1.
 BODY_TEXT_MIN = 4.5
@@ -147,13 +158,29 @@ def _hue_saturation(hex_color: str) -> tuple[float, float] | None:
 
 
 def _check_palette(palette: dict[str, str], label: str) -> list[str]:
-    """The per-theme checks: body/muted text >= 4.5:1 on background and
-    surface, button text >= 3:1 on both primary states. Each violation
-    names the role pair and the measured ratio."""
+    """The per-theme checks. Each violation names the role pair and the
+    measured ratio.
+
+    - body/muted text >= 4.5:1 on background and surface;
+    - button text >= 3:1 on both primary states;
+    - `primary_ink` (the primary hue adjusted to read as text) >= 4.5:1 on
+      background and surface — the raw primary is never text (issue #358:
+      health primary `#DB26AB` reads 4.31:1 on white, 3.88:1 on its surface,
+      so the gate checks the ink role, not the primary);
+    - semantic text >= 4.5:1 on its tinted background (`success_text` on
+      `success_subtle`, and so on - the raw semantic colors read 2.86-4.24:1
+      on their tints, so the gate checks the text roles, not the bases);
+    - swatch labels: the `label_on_color` pick must read >= 4.5:1 on the
+      swatch color, for every palette color that renders as a swatch
+      (primary, primary_hover, and the semantics). The rule itself
+      guarantees this for any color, so the check pins the rule: a palette
+      whose primary sits at the white/near-black crossover (`#DB26AB`,
+      best pick 4.34:1) fails unless the pure-black fallback is in place.
+    """
     violations: list[str] = []
     background = palette.get("background")
     surface = palette.get("surface")
-    for role in ("text", "text_muted"):
+    for role in ("text", "text_muted", "primary_ink"):
         color = palette.get(role)
         if color is None:
             continue
@@ -177,6 +204,28 @@ def _check_palette(palette: dict[str, str], label: str) -> list[str]:
                     f"{label}: primary_text on {state} is {ratio:.2f}:1 "
                     f"(minimum {BUTTON_TEXT_MIN}:1)"
                 )
+    for role in SEMANTIC_ROLES:
+        text_color = palette.get(f"{role}_text")
+        subtle = palette.get(f"{role}_subtle")
+        if text_color is None or subtle is None:
+            continue
+        ratio = contrast_ratio(text_color, subtle)
+        if ratio < BODY_TEXT_MIN:
+            violations.append(
+                f"{label}: {role}_text on {role}_subtle is {ratio:.2f}:1 "
+                f"(minimum {BODY_TEXT_MIN}:1)"
+            )
+    for role in ("primary", "primary_hover", *SEMANTIC_ROLES):
+        color = palette.get(role)
+        if color is None:
+            continue
+        label_color = label_on_color(color)
+        ratio = contrast_ratio(label_color, color)
+        if ratio < BODY_TEXT_MIN:
+            violations.append(
+                f"{label}: swatch label {label_color} on {role} {color} is "
+                f"{ratio:.2f}:1 (minimum {BODY_TEXT_MIN}:1)"
+            )
     return violations
 
 
@@ -193,6 +242,12 @@ def contrast_gate(
     from the light palette — imported, not copied, so the gate can never
     drift from what the generator actually ships. A palette with no
     primary has no derivable dark variant, so the dark check is skipped.
+
+    Beyond body/muted/button text, the gate covers the issue #358 pairs:
+    `primary_ink` on background/surface, each `{role}_text` on its
+    `{role}_subtle` tint, and the swatch-label pick on every swatch color.
+    Roles missing from a palette are skipped, matching
+    `design_skills.check_palette_contrast`.
     """
     if theme not in THEMES:
         raise ValueError(f"unknown theme: {theme!r} (expected one of {list(THEMES)})")

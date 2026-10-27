@@ -23,6 +23,7 @@ from jev_agent.core.design_codegen import (
     target_for_stack,
     validate_target,
 )
+from jev_agent.core.design_kit import contrast_ratio
 from jev_agent.core.design_showcase import (
     VIBE_PROFILES,
     rich_tokens,
@@ -251,3 +252,107 @@ def test_codegen_targets_documented() -> None:
     assert set(CODEGEN_TARGETS) == {"html-css", "react-tailwind"}
     for info in CODEGEN_TARGETS.values():
         assert info["label"] and info["description"]
+
+
+# ---------------------------------------------------------------------------
+# Contrast gate extension (issue #358): text-safe roles in the showcase and
+# the generated code
+# ---------------------------------------------------------------------------
+
+
+def test_rich_tokens_carries_text_roles_in_both_themes() -> None:
+    # Every vibe profile's rich tokens carry the derived text roles, and
+    # each clears 4.6:1 on its base in both themes.
+    for key, profile in VIBE_PROFILES.items():
+        tokens = rich_tokens(profile, "both")
+        colors = tokens["colors"]
+        assert isinstance(colors, dict)
+        for section_name in ("light", "dark"):
+            section = colors[section_name]
+            assert isinstance(section, dict)
+            assert contrast_ratio(section["primary_ink"], section["background"]) >= 4.6, (
+                key,
+                section_name,
+            )
+            assert contrast_ratio(section["primary_ink"], section["surface"]) >= 4.6, (
+                key,
+                section_name,
+            )
+            for role in ("success", "warning", "danger", "info"):
+                assert contrast_ratio(section[f"{role}_text"], section[f"{role}_subtle"]) >= 4.6, (
+                    key,
+                    section_name,
+                    role,
+                )
+
+
+def test_showcase_tagline_badges_and_ghost_use_text_roles() -> None:
+    # The rendered showcase never puts the raw primary or raw semantic
+    # colors on text: tagline/overlines/ghost use the primary ink, badges
+    # use the semantic text roles (with a var() fallback so flat/legacy
+    # token sets render exactly as before).
+    html = render_showcase("demo", VIBE_PROFILES["minimal"], _rich(), "both")
+    assert "color:var(--c-primary-ink,var(--c-primary))" in html
+    assert "color:var(--c-success-text,var(--c-success))" in html
+    assert "color:var(--c-warning-text,var(--c-warning))" in html
+    assert "color:var(--c-danger-text,var(--c-danger))" in html
+    assert "color:var(--c-info-text,var(--c-info))" in html
+    # The dark hero keeps the raw primary: its background is near-black,
+    # where the darkened ink would read worse (brutalist, 14.36:1).
+    assert ".hero-dark .hero-tagline{color:var(--c-primary)}" in html
+
+
+def test_showcase_swatch_labels_clear_45_for_flagged_colors() -> None:
+    # The exact swatches the #309 scan flagged white-on at 2.68-4.33:1
+    # (light pink, mid-greens, the magenta crossover) must each carry a
+    # label clearing 4.5:1 in the rendered page.
+    import re
+
+    colors = {
+        "background": "#FFFFFF",
+        "surface": "#FFFFFF",
+        "text": "#21121D",
+        "text_muted": "#815F78",
+        "border": "#E5D3E0",
+        "primary": "#DB26AB",
+        "primary_hover": "#B91F90",
+        "primary_text": "#FFFFFF",
+        "accent_100": "#F0D1E8",
+        "accent_300": "#DF7CC5",
+        "accent_500": "#DB26AB",
+        "accent_700": "#DB24AA",
+        "accent_900": "#5C1449",
+        "neutral_400": "#7E8B7F",
+        "neutral_500": "#878980",
+        "success": "#16A34A",
+        "warning": "#D97706",
+        "danger": "#DC2626",
+        "info": "#2563EB",
+    }
+    html = render_showcase("demo", VIBE_PROFILES["minimal"], {"colors": colors}, "light")
+    spans = re.findall(
+        r'<span class="swatch-color" style="background:([^;]+);color:([^"]+)">([^<]+)</span>',
+        html,
+    )
+    assert spans, "no swatches rendered"
+    for bg, fg, label in spans:
+        assert contrast_ratio(fg, bg) >= 4.5, (label, fg, bg)
+    by_label = {label: (fg, bg) for bg, fg, label in spans}
+    # The crossover swatch takes the pure-black fallback, not white.
+    assert by_label["#DB24AA"][0] == "#000000"
+    assert by_label["#DF7CC5"][0] == "#101418"
+
+
+def test_codegen_emits_text_roles_and_badges_use_them() -> None:
+    # The generated CSS defines the text roles and the badge/ghost/error
+    # rules read them (with a var() fallback for hand-written token sets).
+    css = css_variables(_TOKENS)
+    for role in ("primary-ink", "success-text", "warning-text", "danger-text", "info-text"):
+        assert f"--color-{role}:" in css, role
+    components = generate_files("html-css", "demo", _TOKENS)["components.css"]
+    assert "color: var(--color-success-text, var(--color-success));" in components
+    assert "color: var(--color-warning-text, var(--color-warning));" in components
+    assert "color: var(--color-danger-text, var(--color-danger));" in components
+    assert "color: var(--color-info-text, var(--color-info));" in components
+    assert "color: var(--color-primary-ink, var(--color-primary));" in components
+    assert "color: var(--color-danger-text, var(--color-danger));" in components

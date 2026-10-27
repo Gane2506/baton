@@ -36,7 +36,14 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
-from jev_agent.core.design_kit import contrast_ratio, palette_for_vibe
+from jev_agent.core.design_kit import (
+    SEMANTIC_LIGHT,
+    SEMANTIC_ROLES,
+    SEMANTIC_SUBTLE_LIGHT,
+    contrast_ratio,
+    derive_text_roles,
+    palette_for_vibe,
+)
 
 if TYPE_CHECKING:
     from jev_agent.core.design_showcase import VibeProfile
@@ -980,10 +987,10 @@ def build_palette(
         "text": _hsl(hue, 0.30, 0.10),
         "text_muted": _hsl(hue, 0.15, 0.44),
         "border": _hsl(hue, 0.20, 0.88),
-        "success": "#16A34A",
-        "warning": "#D97706",
-        "danger": "#DC2626",
+        **{role: SEMANTIC_LIGHT[role] for role in SEMANTIC_ROLES},
+        **{f"{role}_subtle": SEMANTIC_SUBTLE_LIGHT[role] for role in SEMANTIC_ROLES},
     }
+    palette.update(derive_text_roles(palette))
     if accents:
         palette["accent"] = accents[0]
         accent_hue, accent_sat, accent_light = accent_specs[0]
@@ -1031,12 +1038,15 @@ def _ensure_contrast(palette: dict[str, str], hue: float) -> dict[str, str]:
     short on a primary state, the primary lightness is walked toward the
     nearer extreme until the best available text color clears 3:1. The
     construction already keeps these passing for the sampled ranges — this
-    is the gate's enforcement, not its hope.
+    is the gate's enforcement, not its hope. The derived text roles
+    (`primary_ink`, `{role}_text`) are recomputed from the final bases on
+    every exit: walking the primary moves its ink with it.
     """
     fixed = dict(palette)
     for _ in range(12):
         violations = check_palette_contrast(fixed)
         if not violations:
+            fixed.update(derive_text_roles(fixed))
             return fixed
         muted = fixed.get("text_muted")
         if muted is not None and any("text_muted" in v for v in violations):
@@ -1057,6 +1067,7 @@ def _ensure_contrast(palette: dict[str, str], hue: float) -> dict[str, str]:
             fixed["primary_text"] = _on_color(fixed["primary"])
             continue
         break
+    fixed.update(derive_text_roles(fixed))
     return fixed
 
 
@@ -1370,6 +1381,8 @@ def rich_tokens_for_seeded(
     if isinstance(colors, dict):
         if theme == "dark":
             colors.update(dark_overrides)
+            # The override moves the primary, so its ink moves with it.
+            colors.update(derive_text_roles(colors))
         elif theme == "light":
             colors.update(seeded.palette)
         else:
@@ -1379,4 +1392,5 @@ def rich_tokens_for_seeded(
                 light_section.update(seeded.palette)
             if isinstance(dark_section, dict):
                 dark_section.update(dark_overrides)
+                dark_section.update(derive_text_roles(dark_section))
     return rich
