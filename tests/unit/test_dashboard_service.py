@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import os
 import plistlib
+import re
 import subprocess
 import sys
 import xml.etree.ElementTree as ET
@@ -441,14 +442,19 @@ def test_service_flags_before_a_subcommand_are_rejected(fixture_repo: Path) -> N
 def test_dashboard_help_lists_service_flags() -> None:
     """The flags are listed by `jev dashboard --help`.
 
-    The terminal width is forced wide: Rich truncates long option names when
-    it is narrow (CI renders `--open --no-…`), so the literal flag string is
-    not always in `--help` output.
+    The output is de-ANSI-fied first: in color mode Rich's option highlighter
+    splits a hyphenated option into highlighted segments (`-`, `install`,
+    `-service`), each wrapped in its own escape sequence, so the literal
+    `--install-service` never appears in the raw output. Locally `TERM=dumb`
+    hides this (no color); CI forces color on (`GITHUB_ACTIONS` sets Typer's
+    `FORCE_TERMINAL`), which is why this failed only there. The width is
+    forced wide as well: Rich truncates long option names in a narrow terminal.
     """
     result = runner.invoke(app, ["dashboard", "--help"], env={"COLUMNS": "200"})
     assert result.exit_code == 0, result.output
-    assert "--install-service" in result.output
-    assert "--uninstall-service" in result.output
+    plain = re.sub(r"\x1b\[[0-9;]*m", "", result.output)
+    assert "--install-service" in plain
+    assert "--uninstall-service" in plain
 
 
 def test_refuse_home_root_directly(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
