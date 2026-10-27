@@ -200,6 +200,11 @@ def test_discover_cli_path_finds_clis_outside_path(
     npx.chmod(0o755)
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("PATH", "/usr/bin:/bin")
+    # The machine's own search dirs may hold a real `npx` that shadows the
+    # fake one (CI's /usr/local/bin does), so pin the fallback to this dir.
+    # `_platform_search_dirs` lives in core.executables, where
+    # `resolve_executable` looks it up.
+    monkeypatch.setattr("jev_agent.core.executables._platform_search_dirs", lambda: [bindir])
     found = service.discover_cli_path()
     assert found is not None
     assert found.startswith(str(bindir) + os.pathsep)
@@ -396,10 +401,18 @@ def test_service_flags_before_a_subcommand_are_rejected(fixture_repo: Path) -> N
 
 
 def test_dashboard_help_lists_service_flags() -> None:
-    result = runner.invoke(app, ["dashboard", "--help"])
-    assert result.exit_code == 0, result.output
-    assert "--install-service" in result.output
-    assert "--uninstall-service" in result.output
+    """The flags are registered on the `dashboard` command.
+
+    Asserted on the command structure, not the rendered help text: Rich
+    truncates long option names when the terminal is narrow (CI renders
+    `--open --no-…`), so the literal flag string is not always in `--help`.
+    """
+    from typer.main import get_command
+
+    dashboard = get_command(app).commands["dashboard"]
+    opts = {opt for param in dashboard.params for opt in param.opts}
+    assert "--install-service" in opts
+    assert "--uninstall-service" in opts
 
 
 def test_refuse_home_root_directly(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
