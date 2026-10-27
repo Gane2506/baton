@@ -123,21 +123,25 @@ def dashboard_argv(spec: ServiceSpec) -> list[str]:
 
 
 def jev_executable_path() -> str:
-    """Absolute path to the `jev` binary, resolved the Phase 1 way.
+    """Absolute path to the `jev` binary — the one actually running this process.
 
-    `resolve_executable` checks PATH first, then the well-known per-platform
-    install locations — so an install run from a terminal finds the same binary
-    the service manager (with its minimal PATH) would never find on its own.
-    Falls back to `sys.argv[0]` when this process *is* the installed script.
+    `sys.argv[0]` wins when it names this binary: a service must record the
+    `jev` that is running the install, not whichever `jev` happens to resolve
+    first on PATH (on the Mac, PATH finds a Homebrew shim to the main venv
+    while the install may be running from a different venv). The basename
+    check matters: under a test runner `argv[0]` is the runner's binary, not
+    `jev`, and under `python -m` it is the module file — both fall through to
+    the PATH lookup below, which checks PATH first and then the well-known
+    per-platform install locations (the Phase 1 seam).
     """
+    argv0 = Path(sys.argv[0])
+    if argv0.name in ("jev", "jev.exe"):
+        candidate = argv0 if argv0.is_absolute() else Path.cwd() / argv0
+        if candidate.is_file():
+            return str(candidate.resolve())
     found = resolve_executable("jev")
     if found:
         return found
-    argv0 = Path(sys.argv[0])
-    if argv0.is_absolute() and argv0.is_file():
-        return str(argv0.resolve())
-    if (Path.cwd() / argv0).is_file():
-        return str((Path.cwd() / argv0).resolve())
     raise JevError(
         "could not find the `jev` binary to record in the service definition: "
         "run `jev dashboard --install-service` from a shell where `jev` is on PATH."

@@ -170,6 +170,27 @@ def test_jev_executable_path_prefers_path(tmp_path: Path, monkeypatch: pytest.Mo
     assert service.jev_executable_path() == str(fake)
 
 
+def test_jev_executable_path_prefers_the_running_binary(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The service must record the `jev` running the install, not whichever
+    `jev` PATH resolves first (on the Mac, PATH finds a Homebrew shim to the
+    main venv while the install may run from another venv — issue #341)."""
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    path_jev = bindir / "jev"
+    path_jev.write_text("#!/bin/sh\n")
+    path_jev.chmod(0o755)
+    otherdir = tmp_path / "other"
+    otherdir.mkdir()
+    running_jev = otherdir / "jev"
+    running_jev.write_text("#!/bin/sh\n")
+    running_jev.chmod(0o755)
+    monkeypatch.setenv("PATH", str(bindir))
+    monkeypatch.setattr(sys, "argv", [str(running_jev), "dashboard"])
+    assert service.jev_executable_path() == str(running_jev)
+
+
 def test_jev_executable_path_falls_back_to_argv0(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
