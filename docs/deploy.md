@@ -151,10 +151,7 @@ and also on a manual workflow dispatch, so it can point at unreleased `main`.
 Pin the version tag for a stable deploy. Images are published automatically
 for every `v*` tag (`.github/workflows/docker.yml`).
 
-Known limitation: with a token set, the container's healthcheck reports
-unhealthy — it still sends a placeholder token instead of the real one
-(issue #349). The dashboard itself serves fine; only the health status is
-wrong.
+The healthcheck probes with the real `JEV_DASHBOARD_TOKEN` when one is set, and falls back to a TCP connect probe when no token is set (the generated token lives only in `docker logs`, so the probe cannot know it).
 
 ## Upgrade / uninstall
 
