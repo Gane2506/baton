@@ -66,11 +66,20 @@ class LearningRoutes(DashboardCore):
                 if tab == "graph" and lv.selected
                 else None
             )
+            # The Ratings tab is repo-wide (the ledger is per-repo, not
+            # per-profile), so it loads without a selected profile.
+            ratings = views.ratings_view(repo) if tab == "ratings" else None
+            resolved = "list"
+            if tab == "graph" and graph is not None:
+                resolved = "graph"
+            elif tab == "ratings":
+                resolved = "ratings"
             return {
                 "lv": lv,
                 "include_retired": include_retired,
-                "tab": tab if tab == "graph" and graph is not None else "list",
+                "tab": resolved,
                 "graph": graph,
+                "ratings": ratings,
                 "relation_facets": views.RELATION_FACETS,
             }
 

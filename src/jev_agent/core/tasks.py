@@ -14,7 +14,9 @@ merge, the task stops in NEEDS_HUMAN before any attempt is spent.
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import Callable
+from contextlib import suppress
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TypeVar
@@ -22,7 +24,13 @@ from typing import TypeVar
 from jev_agent.code_orchestrator import (
     CodeOrchestrator,
     CodeOrchestratorError,
+    RatingLedger,
+    RoutingGrade,
+    enrich_hint,
+    ledger_path,
     routing_hint,
+    routing_record,
+    unavailable_record,
 )
 from jev_agent.core.assign import Assignment, can_reassign, escalate, quota_fallback, reassign
 from jev_agent.core.commands import CommandResult
@@ -37,6 +45,8 @@ from jev_agent.quality.gate import latest_task_gate, run_gate
 from jev_agent.roles import ReviewResult
 from jev_agent.runlog import log_path
 from jev_agent.workers.base import WorkerOutput
+
+log = logging.getLogger(__name__)
 
 T = TypeVar("T")
 
@@ -79,6 +89,9 @@ class AttemptOutcome:
     review_issues: list[str] = field(default_factory=list)
     quality: str = "skipped"  # "passed" | "failed" (the gate blocked) | "skipped"
     quality_findings: list[str] = field(default_factory=list)  # compact, most severe first
+    # The gate's rework brief (issue #329, Phase 1): the grade's signals +
+    # the failed checks + the AI review, for the next attempt's coder.
+    rework_brief: str = ""
 
 
 class TaskRunner:
@@ -128,12 +141,23 @@ class TaskRunner:
                     max_diff_chars=self.h.config.code_orchestrator.max_diff_chars,
                 )
                 if orchestrator.available:
+                    grade = orchestrator.route(f"{task.card.title}: {task.card.description}")
                     hint = routing_hint(
-                        orchestrator.route(f"{task.card.title}: {task.card.description}"),
+                        grade,
                         threshold=self.h.config.code_orchestrator.confidence_threshold,
                     )
                     if hint:
+                        # Phase 1 (issue #329): the hint carries the
+                        # ledger's evidence for its tier, so Jev can
+                        # prefer tiers that grade well — still advisory,
+                        # still gated at 0.7, never an override.
+                        hint = await self._ledger_enriched_hint(hint)
                         req.state["code_routing"] = hint
+                    await self._record_routing(run_id, task, grade, bool(hint))
+                else:
+                    # A missing backend at D4 records as unavailable, never
+                    # as a score — the same rule as the gate's ledger.
+                    await self._record_routing_unavailable(run_id, task)
             except (CodeOrchestratorError, ValueError):
                 pass
         decision = await self.h.decide(run_id, task.id, req)
@@ -141,6 +165,62 @@ class TaskRunner:
         self.h.store.set_task_assignment(
             run_id, task.id, TaskState.DISPATCHED, a.worker, a.model, a.effort
         )
+
+    def _ledger(self) -> RatingLedger:
+        """The repo's rating ledger (issue #329, Phase 1)."""
+        return RatingLedger(ledger_path(self.h.state_dir))
+
+    async def _ledger_enriched_hint(self, hint: dict[str, str]) -> dict[str, str]:
+        """The routing hint plus the ledger's evidence for its tier.
+
+        Best-effort: a ledger that cannot be read (an unreadable file)
+        leaves the hint exactly as the model gave it — D4 never waits on
+        the ledger, and never fails because of it. An empty ledger still
+        adds the "no grades yet" line, so Jev knows the absence is absence
+        of data, not a bad record.
+        """
+        try:
+            return enrich_hint(hint, await asyncio.to_thread(self._ledger().aggregate))
+        except Exception as exc:
+            # Best-effort (see the method docstring), but the failure is
+            # still recorded at debug level — a silently missing hint
+            # enrichment must leave a trace somewhere (P7).
+            log.debug(
+                "rating ledger read failed, D4 proceeds without it: %s: %s",
+                type(exc).__name__,
+                exc,
+            )
+            return hint
+
+    async def _record_routing(
+        self, run_id: str, task: TaskRecord, grade: RoutingGrade, hint_given: bool
+    ) -> None:
+        """Ledger one D4 routing grade (write-after-grade, never blocking)."""
+        with suppress(Exception):
+            await asyncio.to_thread(
+                self._ledger().record,
+                routing_record(
+                    grade,
+                    run_id=run_id,
+                    task_id=task.id,
+                    source="d4",
+                    hint_given=hint_given,
+                ),
+            )
+
+    async def _record_routing_unavailable(self, run_id: str, task: TaskRecord) -> None:
+        """Ledger a D4 routing that did not run (missing backend, not a score)."""
+        with suppress(Exception):
+            await asyncio.to_thread(
+                self._ledger().record,
+                unavailable_record(
+                    "routing",
+                    detail="Coding Decision Agent backend not installed",
+                    run_id=run_id,
+                    task_id=task.id,
+                    source="d4",
+                ),
+            )
 
     async def _attempt(self, run_id: str, task: TaskRecord) -> None:
         store, limit = self.h.store, self.h.config.budget.max_task_attempts
@@ -262,6 +342,7 @@ class TaskRunner:
             return AttemptOutcome(output, tests, test_result)
 
         quality, findings = "skipped", []
+        rework_brief = ""
         level = h.store.get_run(run_id).quality_level
         if level != "none":
             h.store.set_task_state(run_id, task.id, TaskState.REVIEWING)
@@ -275,11 +356,18 @@ class TaskRunner:
                 workdir=workdir,
                 diff=await self._git(task, "git diff", h.workspace.task_diff, run_id, task.id),
                 passed_commands=[card.test_command] if card.test_command else [],
+                assignment=a,
             )
             quality, findings = ("failed" if gate.blocked else "passed"), gate.top_findings()
+            rework_brief = gate.rework_brief
         if quality == "failed" or not h.config.review_enabled:
             return AttemptOutcome(
-                output, tests, test_result, quality=quality, quality_findings=findings
+                output,
+                tests,
+                test_result,
+                quality=quality,
+                quality_findings=findings,
+                rework_brief=rework_brief,
             )
 
         h.store.set_task_state(run_id, task.id, TaskState.REVIEWING)
@@ -288,7 +376,16 @@ class TaskRunner:
         review, issues = await self._review(
             run_id, task, reviewer, attempt, workdir, diff, test_result
         )
-        return AttemptOutcome(output, tests, test_result, review, issues, quality, findings)
+        return AttemptOutcome(
+            output,
+            tests,
+            test_result,
+            review,
+            issues,
+            quality,
+            findings,
+            rework_brief=rework_brief,
+        )
 
     async def _pick_reviewer(
         self,
@@ -441,4 +538,10 @@ def _feedback(attempt: int, outcome: AttemptOutcome) -> str:
     if outcome.quality == "failed":
         lines.append("The quality gate blocked it (see the quality findings):")
         lines.extend(f"- {finding}" for finding in outcome.quality_findings)
+    if outcome.quality == "failed" and outcome.rework_brief:
+        # Phase 1 (issue #329): the rework brief carries the reasons — the
+        # grade's signals, the failed checks, the AI review — so the next
+        # attempt's coder gets instructive correction, not just a verdict.
+        lines.append("Rework brief (grade signals, failed checks, AI review):")
+        lines.append(clip(outcome.rework_brief, 3000))
     return "\n".join(lines)

@@ -10,15 +10,27 @@ D5 or D6. Each gate is stored (`quality_reports`) and written to
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import Collection, Iterable
 from pathlib import Path
+from typing import cast
 
 from jev_agent.code_orchestrator import (
     CodeOrchestrator,
     CodeOrchestratorUnavailable,
+    CodeReviewGrade,
+    GateOutcome,
+    GradeRecord,
+    RatingLedger,
+    code_review_record,
+    compose_rework_brief,
     gate_code_review,
+    ledger_path,
+    unavailable_record,
 )
+from jev_agent.code_orchestrator.grades import GateDecision, MergeAction
 from jev_agent.config.schema import CodeOrchestratorSettings, JevConfig
+from jev_agent.core.assign import Assignment
 from jev_agent.core.harness import Halt, Harness
 from jev_agent.core.models import TaskCard
 from jev_agent.quality import tools
@@ -31,6 +43,8 @@ from jev_agent.quality.review import ai_review
 from jev_agent.quality.scoring import score_gate
 from jev_agent.quality.tools import QualitySettings, ToolRunner
 from jev_agent.runlog import log_path, redact
+
+log = logging.getLogger(__name__)
 
 QUALITY_DIRNAME = "quality"
 RUN_REVIEW_FILENAME = "review.md"
@@ -163,6 +177,87 @@ def apply_code_grade(
     )
 
 
+async def _record_gate_grade(
+    h: Harness, run_id: str, result: GateResult, assignment: Assignment | None
+) -> None:
+    """Ledger one gate's grade, best-effort (issue #329, Phase 1).
+
+    The record is built from the stored `code_grade` dict, so this works
+    for graded, unavailable and error grades alike. A ledger failure never
+    raises and never blocks the gate: the write runs in a thread and every
+    failure is swallowed, so a missing grade in the ledger is the worst
+    outcome, never a broken run.
+    """
+    grade = result.code_grade
+    if not isinstance(grade, dict):
+        return
+    status = str(grade.get("status") or "")
+    agent = assignment.worker if assignment is not None else ""
+    model = assignment.model or "" if assignment is not None and assignment.model else ""
+    effort = assignment.effort or "" if assignment is not None and assignment.effort else ""
+    try:
+        if status == "graded":
+            gate_d = grade.get("gate")
+            gate = gate_d if isinstance(gate_d, dict) else {}
+            outcome = GateOutcome(
+                decision=cast(GateDecision, str(gate.get("decision") or "human_review")),
+                reason=str(gate.get("reason") or ""),
+                merge_action=cast(MergeAction, str(gate.get("merge_action") or "")),
+                confidence=float(gate.get("confidence") or 0.0),
+            )
+            record = code_review_record(
+                CodeReviewGrade(
+                    code_quality=int(grade.get("code_quality") or 0),
+                    instruction_followed=bool(grade.get("instruction_followed")),
+                    likely_correct=bool(grade.get("likely_correct")),
+                    merge_action=cast(MergeAction, str(grade.get("merge_action") or "")),
+                    answer_confidence=(
+                        dict(grade["answer_confidence"])
+                        if isinstance(grade.get("answer_confidence"), dict)
+                        else {}
+                    ),
+                ),
+                gate=outcome,
+                run_id=run_id,
+                task_id=result.task_id or "",
+                agent=agent,
+                model=model,
+                effort=effort,
+                source="gate",
+            )
+        elif status == "unavailable":
+            record = unavailable_record(
+                "code_review",
+                detail=str(grade.get("detail") or ""),
+                run_id=run_id,
+                task_id=result.task_id or "",
+                source="gate",
+                agent=agent,
+                model=model,
+                effort=effort,
+            )
+        elif status == "error":
+            record = GradeRecord(
+                kind="code_review",
+                status="error",
+                source="gate",
+                run_id=run_id,
+                task_id=result.task_id or "",
+                agent=agent,
+                model=model,
+                effort=effort,
+                detail=str(grade.get("detail") or ""),
+            )
+        else:
+            return
+        await asyncio.to_thread(RatingLedger(ledger_path(h.state_dir)).record, record)
+    except Exception as exc:
+        # Best-effort by design (see the function docstring), but the
+        # failure is still recorded at debug level — a silently lost grade
+        # must leave a trace somewhere (P7).
+        log.debug("rating ledger write failed: %s: %s", type(exc).__name__, exc)
+
+
 def settings_for(config: JevConfig, level: QualityLevel) -> QualitySettings:
     q = config.quality
     return QualitySettings(
@@ -187,9 +282,12 @@ async def run_gate(
     passed_commands: Collection[str] = (),
     checks: Iterable[QualityCheck] | None = None,
     code_orchestrator: CodeOrchestrator | None = None,
+    assignment: Assignment | None = None,
 ) -> GateResult:
     """Run the gate and persist it. `number` is the task attempt or the integration round;
-    `passed_commands` are test commands that already passed in this step (not run again)."""
+    `passed_commands` are test commands that already passed in this step (not run again).
+    `assignment` is the attempt's coder assignment, when known: the ledger records the
+    grade against that worker/model (issue #329, Phase 1)."""
     settings = settings_for(h.config, level)
     task_id = None if task is None else task.id
     label = f"{number}" if scope == "task" else f"integration-{number}"
@@ -245,6 +343,23 @@ async def run_gate(
             task_text=_code_grade_task_text(task),
             diff=diff,
             orchestrator=code_orchestrator,
+        )
+        # Phase 1 (issue #329): the grade is ledgered (write-after-grade, in
+        # a thread, best-effort — a ledger failure must never break a run),
+        # so it survives as learning signal, not just as gate output.
+        await _record_gate_grade(h, run_id, result, assignment)
+    if result.blocked:
+        # Phase 1 (issue #329): the rework brief, composed from the grade's
+        # signals + the failed checks + the AI review, so the next attempt
+        # gets instructive correction. Stored on the result (and rendered
+        # into the gate report) before anything persists it.
+        result = result.model_copy(
+            update={
+                "rework_brief": compose_rework_brief(
+                    result,
+                    threshold=h.config.code_orchestrator.confidence_threshold,
+                )
+            }
         )
     # The 0-100 ship score (quality/scoring.py): deterministic, from this gate's
     # checks, findings and diff. Stored on the result, so the score and its

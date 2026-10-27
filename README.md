@@ -172,7 +172,10 @@ card (state plus allowed answers) and acts on the answer:
 Jev, the main orchestrator, makes every decision; if a question cannot be settled confidently,
 the run stops for a human (`jev resume` continues it). For code work, the Coding Decision Agent
 (`S4MPL3BI4S/Coding_Decision_Agent`, opt-in via `[code_orchestrator]`) grades diffs at the
-quality gate and routes coding tasks at D4, gated on calibrated confidence (0.7) — see [docs/code-orchestrator.md](docs/code-orchestrator.md). With
+quality gate and routes coding tasks at D4, gated on calibrated confidence (0.7); every grade is
+ledgered per agent/tier/skill (`<repo>/.jev/cda-ratings.jsonl`, Ratings tab on the Learning page),
+and a blocked gate hands the next attempt a rework brief composed from the grade, the failed
+checks and the AI review — see [docs/code-orchestrator.md](docs/code-orchestrator.md). With
 `[dispatcher] primary = "jev"`, Jev answers alone and a deterministic rules dispatcher answers
 any decision Jev cannot. `jev log` shows who made each decision and why a fallback happened. The harness
 itself makes no routing choices; it only enforces hard limits (plan rounds, task attempts,

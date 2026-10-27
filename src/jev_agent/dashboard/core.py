@@ -20,6 +20,7 @@ from starlette.responses import HTMLResponse, RedirectResponse, Response
 
 from jev_agent.app import settings
 from jev_agent.app.errors import JevError
+from jev_agent.code_orchestrator import ledger_path_for_repo
 from jev_agent.config import ConfigError
 from jev_agent.core.chat import ChatError
 from jev_agent.core.learning import LearningError
@@ -67,7 +68,10 @@ class DashboardCore:
             if reverse_executor is not None
             else ReverseRunner(settings.root)
         )
-        self.code_grade_runner = CodeGradeRunner(executor=code_grade_executor)
+        self.code_grade_runner = CodeGradeRunner(
+            executor=code_grade_executor,
+            ledger_path=ledger_path_for_repo(settings.root),
+        )
         self.codex_flow = CodexDeviceFlow()
         self.claude_flow = ClaudeSetupTokenFlow()
         self.server_stats = ServerStatsCache()

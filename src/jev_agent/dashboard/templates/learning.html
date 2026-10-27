@@ -15,6 +15,7 @@
       <span class="muted">({{ lv.status.enabled_source }})</span>; active profile <strong>{{ lv.status.profile }}</strong>
       <span class="muted">({{ lv.status.profile_source }})</span>.</p>
     <div class="actions">
+      <a class="btn btn-sm {% if tab == 'ratings' %}btn-primary{% else %}btn-secondary{% endif %}" href="/learning?tab=ratings">Ratings</a>
       {% if lv.status.enabled %}
       <form class="inline" method="post" action="/learning/disable">{{ csrf_input() }}<button class="btn btn-secondary" type="submit">Turn learning off</button></form>
       {% else %}
@@ -73,10 +74,12 @@
   <p class="small muted">{% if include_retired %}<a class="btn btn-sm btn-ghost" href="/learning?profile={{ lv.selected | urlencode }}">Hide retired lessons</a>{% else %}<a class="btn btn-sm btn-ghost" href="/learning?profile={{ lv.selected | urlencode }}&amp;all=1">Include retired lessons</a>{% endif %}</p>
 </div>
 <div class="actions actions-gap">
-  <a class="btn btn-sm {% if tab != 'graph' %}btn-primary{% else %}btn-ghost{% endif %}" href="/learning?profile={{ lv.selected | urlencode }}{% if include_retired %}&amp;all=1{% endif %}">List</a>
+  <a class="btn btn-sm {% if tab == 'list' %}btn-primary{% else %}btn-ghost{% endif %}" href="/learning?profile={{ lv.selected | urlencode }}{% if include_retired %}&amp;all=1{% endif %}">List</a>
   <a class="btn btn-sm {% if tab == 'graph' %}btn-primary{% else %}btn-ghost{% endif %}" href="/learning?profile={{ lv.selected | urlencode }}&amp;tab=graph">Graph</a>
+  <a class="btn btn-sm {% if tab == 'ratings' %}btn-primary{% else %}btn-ghost{% endif %}" href="/learning?tab=ratings">Ratings</a>
 </div>
-{% if tab == "graph" and graph %}
+{% if tab == "ratings" %}
+{% elif tab == "graph" and graph %}
 {% set edges = graph.stats.edges %}
 <p class="small muted">{{ graph.stats.lessons }} lessons{% if graph.stats.retired %} ({{ graph.stats.retired }} retired){% endif %} ·
   edges: {% for kind in ["applies-to", "supersedes", "contradicts", "derived-from"] %}{% if edges.get(kind) %}{{ kind }} {{ edges[kind] }}{% if not loop.last %} · {% endif %}{% endif %}{% endfor %} ·
@@ -272,6 +275,90 @@
   {% endfor %}
   </tbody>
 </table></div>
+{% endif %}
+{% endif %}
+
+{% if tab == "ratings" and ratings %}
+<h2 class="section">Ratings — Coding Decision Agent</h2>
+<p class="lede">Grades from the Coding Decision Agent, aggregated per agent, tier and skill. D4 reads these ratings when it routes coding work, and the rework briefs behind them go to the next attempt's coder. Ledger: <span class="mono">{{ ratings.ledger_file }}</span> — a separate file next to <span class="mono">state.db</span>, so it survives the state-database flush on version updates.</p>
+<p class="small muted">{{ ratings.ratings.total }} record(s) · {{ ratings.ratings.graded }} graded diff(s) · {{ ratings.ratings.unavailable }} unavailable (backend not installed, never scored as 0).</p>
+{% if ratings.ratings.total == 0 %}
+<div class="empty"><div class="title">No grades recorded yet</div><p>Grades land here when the Coding Decision Agent runs: enable <span class="mono">[code_orchestrator]</span> and install the backend (<span class="mono">pip install "jev-agent[code-orchestrator]"</span>) — see <a href="/code-grade">Code grade</a> or docs/code-orchestrator.md. Until then the gate records grades as unavailable, not as scores.</p></div>
+{% else %}
+{% if ratings.ratings.by_agent %}
+<h3 class="small">By agent</h3>
+<div class="table-wrap"><table>
+  <thead><tr><th>Agent</th><th class="num">Records</th><th class="num">Graded diffs</th><th class="num">Mean quality / 4</th><th class="num">Accept rate</th><th class="num">Human-review rate</th></tr></thead>
+  <tbody>
+  {% for name, agg in ratings.ratings.by_agent.items() %}
+    <tr>
+      <td class="mono">{{ name }}</td>
+      <td class="num">{{ agg.n }}</td>
+      <td class="num">{{ agg.graded }}</td>
+      <td class="num">{{ "%.2f" % agg.mean_quality if agg.mean_quality is not none else "—" }}</td>
+      <td class="num">{{ "%.0f%%" % (agg.accept_rate * 100) if agg.accept_rate is not none else "—" }}</td>
+      <td class="num">{{ "%.0f%%" % (agg.human_review_rate * 100) if agg.human_review_rate is not none else "—" }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table></div>
+{% endif %}
+{% if ratings.ratings.by_tier %}
+<h3 class="small">By model tier</h3>
+<div class="table-wrap"><table>
+  <thead><tr><th>Tier</th><th class="num">Records</th><th class="num">Graded diffs</th><th class="num">Mean quality / 4</th><th class="num">Accept rate</th><th class="num">Human-review rate</th></tr></thead>
+  <tbody>
+  {% for name, agg in ratings.ratings.by_tier.items() %}
+    <tr>
+      <td class="mono">{{ name }}</td>
+      <td class="num">{{ agg.n }}</td>
+      <td class="num">{{ agg.graded }}</td>
+      <td class="num">{{ "%.2f" % agg.mean_quality if agg.mean_quality is not none else "—" }}</td>
+      <td class="num">{{ "%.0f%%" % (agg.accept_rate * 100) if agg.accept_rate is not none else "—" }}</td>
+      <td class="num">{{ "%.0f%%" % (agg.human_review_rate * 100) if agg.human_review_rate is not none else "—" }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table></div>
+{% endif %}
+{% if ratings.ratings.by_skill %}
+<h3 class="small">By skill</h3>
+<div class="table-wrap"><table>
+  <thead><tr><th>Skill</th><th class="num">Records</th><th class="num">Graded diffs</th><th class="num">Mean quality / 4</th><th class="num">Accept rate</th><th class="num">Human-review rate</th></tr></thead>
+  <tbody>
+  {% for name, agg in ratings.ratings.by_skill.items() %}
+    <tr>
+      <td class="mono">{{ name }}</td>
+      <td class="num">{{ agg.n }}</td>
+      <td class="num">{{ agg.graded }}</td>
+      <td class="num">{{ "%.2f" % agg.mean_quality if agg.mean_quality is not none else "—" }}</td>
+      <td class="num">{{ "%.0f%%" % (agg.accept_rate * 100) if agg.accept_rate is not none else "—" }}</td>
+      <td class="num">{{ "%.0f%%" % (agg.human_review_rate * 100) if agg.human_review_rate is not none else "—" }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table></div>
+{% endif %}
+{% if ratings.ratings.recent %}
+<h3 class="small">Recent grades</h3>
+<div class="table-wrap"><table>
+  <thead><tr><th>When</th><th>Kind</th><th>Agent / tier</th><th>Skill</th><th class="num">Quality</th><th>Merge action</th><th>Gate</th><th>Status</th></tr></thead>
+  <tbody>
+  {% for r in ratings.ratings.recent %}
+    <tr>
+      <td class="small mono">{{ r.recorded_at[:19] }}</td>
+      <td>{{ r.kind }}</td>
+      <td class="mono">{{ r.agent or r.tier or "—" }}</td>
+      <td class="mono">{{ r.skill or "—" }}</td>
+      <td class="num">{{ r.code_quality if r.code_quality is not none else "—" }}</td>
+      <td class="mono">{{ r.merge_action or "—" }}</td>
+      <td>{{ r.gate_decision or "—" }}</td>
+      <td>{{ r.status }}{% if r.detail %} <span class="muted small">{{ r.detail }}</span>{% endif %}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table></div>
+{% endif %}
 {% endif %}
 {% endif %}
 {% endblock %}

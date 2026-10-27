@@ -217,7 +217,12 @@ POINT_QUESTION_INSTRUCTIONS: dict[tuple[DecisionPoint, str], str] = {
 CODE_ROUTING_INSTRUCTION = (
     "The coding decision agent's routing hint is in state.code_routing "
     "(model_tier, skill, task_difficulty, suggested_effort): prefer it when "
-    "it fits the allowed answers, but you still make this decision."
+    "it fits the allowed answers, but you still make this decision. The hint "
+    "also carries the rating ledger's evidence for its tier "
+    "(ledger_tier_grades, ledger_tier_mean_quality, and ledger_best_tier "
+    "when another tier grades better): prefer tiers and skills with a strong "
+    "ledger record when choosing among the allowed answers, and treat "
+    '"no grades yet" as no evidence, not as a bad record.'
 )
 # Appended to the model (and worker) instructions when `state.models.prefer_free` is set.
 PREFER_FREE_INSTRUCTION = (

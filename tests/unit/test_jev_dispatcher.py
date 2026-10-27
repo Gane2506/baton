@@ -139,6 +139,9 @@ def test_d4_instructions_name_code_routing_only_when_present() -> None:
     with_hint = JevDispatcher().build_payload("D4", {"code_routing": hint}, questions)["questions"]
     for name in ("worker", "model", "effort"):
         assert CODE_ROUTING_INSTRUCTION in with_hint[name]["instructions"]
+    # Phase 1 (issue #329): the instruction also names the ledger evidence
+    # the hint carries, so Jev knows to prefer well-graded tiers.
+    assert "ledger" in CODE_ROUTING_INSTRUCTION
     # And a non-D4 point never gets it, even with the hint in state.
     other = JevDispatcher().build_payload("D2", {"code_routing": hint}, questions)["questions"]
     for question in other.values():
