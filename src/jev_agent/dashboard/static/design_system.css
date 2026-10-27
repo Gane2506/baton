@@ -317,6 +317,7 @@
 .ds-duration-bar { height: 10px; border-radius: 999px; background: var(--ds-accent); opacity: 0.85; max-width: 100%; }
 .ds-ease-demo {
   width: 120px;
+  max-width: 100%;
   height: 34px;
   border-radius: 8px;
   background: var(--ds-surface-2);
