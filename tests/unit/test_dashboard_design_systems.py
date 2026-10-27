@@ -573,6 +573,9 @@ def test_detail_duration_bars_are_proportional_not_px(client: TestClient, home: 
     # 390px track — it is capped at the track width too.
     assert ".ds-shadow-chip { width: 160px; height: 56px; " in css.text
     assert "border-radius: 10px; max-width: 100%; }" in css.text
+    # Issue #352: the same widening shrank the easing track below the
+    # 120px "Hover me" tile, so it overflowed its row by 8px — capped too.
+    assert ".ds-ease-demo {\n  width: 120px;\n  max-width: 100%;" in css.text
 
 
 def test_detail_color_swatches_present(client: TestClient, home: Path) -> None:
