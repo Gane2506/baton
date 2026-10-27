@@ -501,6 +501,23 @@ def _shadow_rows(rich: dict[str, object]) -> list[dict[str, str]]:
     return rows
 
 
+def _duration_pct(value: str) -> float:
+    """A duration's bar length as a % of its grid track (issue #344).
+
+    The showcase ladder draws durations to scale at ms / 10 (1000ms =
+    100%), and the dashboard bars use the same scale — a percentage of the
+    track, never absolute px, so a 700ms bar cannot run off a 390px
+    viewport the way the old ``ms // 2`` px width did. Unparseable values
+    draw nothing rather than breaking the page.
+    """
+    raw = value.strip().removesuffix("ms")
+    try:
+        ms = float(raw)
+    except ValueError:
+        return 0.0
+    return max(0.0, min(100.0, ms / 10.0))
+
+
 def _motion_rows(rich: dict[str, object]) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
     """(durations, easings) from the rich motion tokens."""
     motion = rich.get("motion")
@@ -512,7 +529,7 @@ def _motion_rows(rich: dict[str, object]) -> tuple[list[dict[str, str]], list[di
             if not isinstance(value, str):
                 continue
             if name.startswith("duration_"):
-                durations.append({"name": name, "value": value})
+                durations.append({"name": name, "value": value, "pct": f"{_duration_pct(value):g}"})
             elif name.startswith("ease_"):
                 easings.append({"name": name, "value": value})
     return durations, easings

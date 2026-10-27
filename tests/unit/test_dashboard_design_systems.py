@@ -515,6 +515,66 @@ def test_detail_rich_tokens_show_full_ramps(client: TestClient, home: Path) -> N
     assert "display_xl" in page.text
 
 
+def test_duration_pct_parses_ms_and_clamps() -> None:
+    """Issue #344: the dashboard duration bar is a % of its grid track at
+    the showcase ladder's scale (ms / 10), never absolute px."""
+    from jev_agent.dashboard.design_helpers import _duration_pct
+
+    assert _duration_pct("90ms") == 9.0
+    assert _duration_pct("700ms") == 70.0
+    assert _duration_pct("60ms") == 6.0
+    assert _duration_pct("125ms") == 12.5
+    assert _duration_pct("5000ms") == 100.0
+    assert _duration_pct("not-a-duration") == 0.0
+    assert _duration_pct("") == 0.0
+
+
+def test_detail_duration_bars_are_proportional_not_px(client: TestClient, home: Path) -> None:
+    """Issue #344: on the detail page the Duration rows carry a percentage
+    bar, not the old `ms // 2` px width — slower was 350px in a ~180px
+    track at 390px, so it ran off the viewport, and the 96px name column
+    let `duration_instant` paint over its value (`duration_instan90ms`)."""
+    rich = rich_tokens(VIBE_PROFILES["minimal"], "both")
+    tokens = dict(TOKENS)
+    tokens["design_tokens"] = rich
+    save_library_system("rich-brand", MARKDOWN, tokens, {"vibe_profile": "minimal"})
+    page = client.get("/design-systems/rich-brand")
+    assert page.status_code == 200
+    # Bars drawn to scale at ms / 10, the showcase ladder's scale.
+    for name, pct in (
+        ("duration_instant", "9"),
+        ("duration_fast", "16"),
+        ("duration_normal", "26"),
+        ("duration_slow", "42"),
+        ("duration_slower", "70"),
+    ):
+        assert f">{name}</span>" in page.text
+        assert f'class="ds-duration-bar" data-bar-pct="{pct}"' in page.text
+    assert 'class="ds-duration-bar" data-px-width' not in page.text
+    css = client.get("/static/design_system.css")
+    assert css.status_code == 200
+    # The bar can never exceed its grid track, even if JS mis-scales it.
+    assert (
+        ".ds-duration-bar { height: 10px; border-radius: 999px; "
+        "background: var(--ds-accent); opacity: 0.85; max-width: 100%; }" in css.text
+    )
+    # The phone name column fits the longest standard duration name
+    # (`duration_instant`, ~116px in 12px monospace) on one line…
+    assert (
+        ".ds-scale-row { grid-template-columns: 120px 76px minmax(0, 1fr); "
+        "gap: var(--s2); }" in css.text
+    )
+    # …and any longer custom name wraps instead of colliding with its value.
+    assert (
+        ".ds-scale-row .mono { font-size: 12px; color: var(--ds-muted); "
+        "overflow-wrap: anywhere; }" in css.text
+    )
+    # Widening the name column must not push the 160px shadow chip off the
+    # 390px track — it is capped at the track width too.
+    assert ".ds-shadow-chip { width: 160px; height: 56px; " in css.text
+    assert "border-radius: 10px; max-width: 100%; }" in css.text
+
+
 def test_detail_color_swatches_present(client: TestClient, home: Path) -> None:
     """Issue #285: every color row carries a live swatch (data-swatch-color),
     and the stylesheet keeps the swatch column at a fixed width so it can
