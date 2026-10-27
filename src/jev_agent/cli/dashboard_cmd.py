@@ -17,16 +17,19 @@ server's closed connections does not read as busy.
 Port handling (issue #362): a dashboard with no pid file is not invisible to `stop`.
 When the pid file is missing, unreadable or stale, `stop` falls back to the port itself
 (`--port`, default 8765): it identifies the listener as a jev dashboard over HTTP
-(the root page's `<title>Baton` marker) and finds the owning pid from the port
-(Linux /proc, macOS `lsof`, Windows `netstat`). A listener that is not a jev
-dashboard is reported, never killed.
+(the root page's `<title>Baton` marker) and reads the repo it serves from the page,
+and stops it only when that repo is this one. The owning pid comes from the port
+(Linux /proc, macOS `lsof`, Windows `netstat`). Another repo's dashboard on the
+port, or a listener that is not a jev dashboard, is reported, never killed.
 """
 
 from __future__ import annotations
 
 import contextlib
+import html
 import json
 import os
+import re
 import secrets
 import signal
 import socket
@@ -235,22 +238,35 @@ def _wait_port_free(host: str, port: int, timeout_s: float) -> bool:
         time.sleep(0.1)
 
 
-def _is_jev_dashboard(host: str, port: int, timeout_s: float = _IDENTIFY_TIMEOUT_S) -> bool:
-    """True when the listener on `host:port` answers like a jev dashboard.
+def _dashboard_served_root(
+    host: str, port: int, timeout_s: float = _IDENTIFY_TIMEOUT_S
+) -> str | None:
+    """The repo root the listener on `host:port` serves, or None when it is
+    not a jev dashboard.
 
-    The root page always carries `<title>Baton`. A dashboard bound off
-    loopback with a token answers 401 plain text to an unauthenticated probe,
-    so this only identifies loopback (tokenless) dashboards — the common case.
-    Anything else answers False, and `stop` reports instead of killing.
+    The root page always carries `<title>Baton`, and the sidebar renders the
+    served repo root as `<div>{{ root }}</div>` (both since 2026-10-13, so
+    every dashboard a pid file could be missing for serves them). A dashboard
+    bound off loopback with a token answers 401 plain text to an
+    unauthenticated probe, so this only identifies loopback (tokenless)
+    dashboards. Returns "" for a dashboard whose root could not be read:
+    identified, but not attributable to a repo — `stop` reports it instead
+    of killing it.
     """
     try:
         with urllib.request.urlopen(f"http://{host}:{port}/", timeout=timeout_s) as response:
             if response.status != 200:
-                return False
+                return None
             body = response.read(65536)
     except (OSError, ValueError):
-        return False
-    return _DASHBOARD_MARKER in body.decode("utf-8", errors="ignore")
+        return None
+    text = body.decode("utf-8", errors="ignore")
+    if _DASHBOARD_MARKER not in text:
+        return None
+    match = re.search(r"<div>([^<]+)</div>\s*</div>\s*</aside>", text)
+    if match is None:
+        return ""
+    return html.unescape(match.group(1).strip())
 
 
 def _parse_lsof_pids(text: str) -> list[int]:
@@ -360,43 +376,60 @@ def _listening_pid(port: int) -> int | None:
 
 
 def _stop_by_port(root: Path, host: str, port: int, timeout_s: float) -> bool:
-    """Stop the dashboard listening on `host:port`, with no pid file (issue #362).
+    """Stop the dashboard for `root` listening on `host:port`, with no pid file (issue #362).
 
     Returns True when the case was handled (something stopped, or a listener
     was reported instead of killed); False only when the port is free, so the
-    caller can say nothing is recorded. A listener that is not a jev
-    dashboard is never killed.
+    caller can say nothing is recorded. The listener is only stopped when it
+    is a jev dashboard serving this very repo: the root page names the repo
+    it serves, so another repo's dashboard on the same port — or a listener
+    that is not a jev dashboard at all — is reported, never killed.
     """
     if _port_bindable(host, port):
         return False
-    if _is_jev_dashboard(host, port):
+    served = _dashboard_served_root(host, port)
+    if served is None:
         pid = _listening_pid(port)
-        if pid is None:
+        if pid is not None:
             console.print(
-                f"a dashboard is running on {host}:{port} but its pid could not "
-                "be determined; stop the process on that port by hand"
+                f"port {port} is in use by pid {pid}, which is not a jev dashboard; "
+                f"stop it by hand (kill {pid})"
             )
-            return True
-        if _stop_pid(pid, timeout_s):
-            _wait_port_free_after_stop(root, {"host": host, "port": port}, pid)
-            _remove_dashboard_pid(root)
-            console.print(f"stopped the dashboard (pid {pid}) — no pid file, found on port {port}")
-            return True
-        raise fail(
-            f"could not stop the dashboard (pid {pid}): it is still running "
-            f"after {timeout_s:g} s; stop it by hand (kill {pid})"
-        )
+        else:
+            console.print(
+                f"port {port} is in use by another process, not a jev dashboard; stop it by hand"
+            )
+        return True
+    if not served or Path(served).resolve() != Path(root).resolve():
+        if served:
+            console.print(
+                f"port {port} is in use by a jev dashboard serving {served} — "
+                "not this repo's dashboard. Stop it from its own repo "
+                f"(`jev dashboard stop --repo {served}`) or with --port."
+            )
+        else:
+            console.print(
+                f"port {port} is in use by a jev dashboard whose repo could not "
+                "be determined — not this repo's dashboard. Stop it from its "
+                "own repo or with --port."
+            )
+        return True
     pid = _listening_pid(port)
-    if pid is not None:
+    if pid is None:
         console.print(
-            f"port {port} is in use by pid {pid}, which is not a jev dashboard; "
-            f"stop it by hand (kill {pid})"
+            f"a dashboard for {escape(str(root))} is running on {host}:{port} but "
+            "its pid could not be determined; stop the process on that port by hand"
         )
-    else:
-        console.print(
-            f"port {port} is in use by another process, not a jev dashboard; stop it by hand"
-        )
-    return True
+        return True
+    if _stop_pid(pid, timeout_s):
+        _wait_port_free_after_stop(root, {"host": host, "port": port}, pid)
+        _remove_dashboard_pid(root)
+        console.print(f"stopped the dashboard (pid {pid}) — no pid file, found on port {port}")
+        return True
+    raise fail(
+        f"could not stop the dashboard (pid {pid}): it is still running "
+        f"after {timeout_s:g} s; stop it by hand (kill {pid})"
+    )
 
 
 def _check_port_free(host: str, port: int, root: Path) -> None:

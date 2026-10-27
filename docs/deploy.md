@@ -200,8 +200,8 @@ repo — only enable it for a repo with no `.jev/` yet: it shadows an existing
   `<repo>/.jev/dashboard.pid` and stops it; a stale pid file (crashed
   dashboard) never names a dead process as the owner. When there is no usable
   pid file, `stop` probes the port instead (`--port`, default 8765): a
-  dashboard listening there is identified and stopped; anything else on the
-  port is reported, never killed. `stop` waits until the
+  dashboard listening there is identified and stopped only when it serves
+  this repo; anything else on the port is reported, never killed. `stop` waits until the
   port is bindable again before reporting success (bounded: 5 s), so a start
   right after a stop works first time; if the port stays busy it fails with a
   port-busy error instead of claiming success.

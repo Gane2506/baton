@@ -9,8 +9,9 @@ uvicorn binds (SO_REUSEADDR), so TIME_WAIT left by the previous server does not 
 as a busy port.
 
 A dashboard with no pid file is not invisible to `stop` (issue #362): it falls back
-to the port itself — identifying the listener over HTTP and finding the owning pid
-from the port — so a pre-existing instance is stoppable without PID hunting.
+to the port itself — identifying the listener over HTTP and reading the repo it
+serves — so a pre-existing instance is stoppable without PID hunting, while
+another repo's dashboard on the same port is reported, never killed.
 """
 
 import contextlib
@@ -118,20 +119,30 @@ def _write_pidfile(repo: Path, pid: int, port: int) -> Path:
 
 
 def test_stop_without_pidfile_and_free_port(fixture_repo: Path) -> None:
-    """No pid file and nothing listening: the old clean message stands."""
-    result = runner.invoke(app, ["dashboard", "stop", "--repo", str(fixture_repo)])
+    """No pid file and nothing listening: the old clean message stands. The
+    port is explicit: the default 8765 must not be assumed free — another
+    test (or another repo's dashboard) may hold it, and the fallback must
+    not be judged on a port it does not own."""
+    result = runner.invoke(
+        app,
+        ["dashboard", "stop", "--repo", str(fixture_repo), "--port", str(_free_port())],
+    )
     assert result.exit_code == 0, result.output
     assert "no dashboard recorded" in result.output
 
 
-def _serve(directory: Path, port: int, marker: bool) -> subprocess.Popen[str]:
+def _serve(
+    directory: Path, port: int, marker: bool, root: str | None = None
+) -> subprocess.Popen[str]:
     """A `python -m http.server` on `port` whose index page does (or does not)
-    carry the dashboard's `<title>Baton` marker. Its process is a stand-in
-    for a dashboard that never wrote a pid file."""
+    carry the dashboard's `<title>Baton` marker, and — when `root` is given —
+    the sidebar's `<div>{{ root }}</div>` naming the repo it serves. Its
+    process is a stand-in for a dashboard that never wrote a pid file."""
     directory.mkdir(parents=True, exist_ok=True)
     title = "Baton · Board" if marker else "Some other page"
+    aside = f"<aside><div>{root}</div></div></aside>" if root is not None else ""
     (directory / "index.html").write_text(
-        f"<!doctype html><html><head><title>{title}</title></head><body>hi</body></html>",
+        f"<!doctype html><html><head><title>{title}</title></head><body>{aside}hi</body></html>",
         encoding="utf-8",
     )
     proc = subprocess.Popen(
@@ -176,10 +187,10 @@ def _server_gone(proc: subprocess.Popen[str]) -> bool:
 def test_stop_by_port_stops_live_dashboard_without_pidfile(
     fixture_repo: Path, tmp_path: Path
 ) -> None:
-    """Issue #362: no pid file, but a dashboard is listening — `stop` finds it
-    on the port and stops it, with no manual PID hunting."""
+    """Issue #362: no pid file, but a dashboard for this repo is listening —
+    `stop` finds it on the port and stops it, with no manual PID hunting."""
     port = _free_port()
-    proc = _serve(tmp_path / "site", port, marker=True)
+    proc = _serve(tmp_path / "site", port, marker=True, root=str(fixture_repo))
     try:
         result = runner.invoke(
             app,
@@ -193,6 +204,29 @@ def test_stop_by_port_stops_live_dashboard_without_pidfile(
     finally:
         with contextlib.suppress(ProcessLookupError, PermissionError):
             proc.terminate()
+
+
+def test_stop_by_port_leaves_other_repos_dashboard_alone(
+    fixture_repo: Path, tmp_path: Path
+) -> None:
+    """Issue #362: the listener is a jev dashboard, but for another repo —
+    `stop` reports it and leaves it alone. Stopping it would stop a
+    dashboard this repo does not own."""
+    port = _free_port()
+    proc = _serve(tmp_path / "site", port, marker=True, root=str(tmp_path / "other-repo"))
+    try:
+        result = runner.invoke(
+            app,
+            ["dashboard", "stop", "--repo", str(fixture_repo), "--port", str(port)],
+        )
+        assert result.exit_code == 0, result.output
+        assert "not this repo's dashboard" in result.output
+        assert str(tmp_path / "other-repo") in result.output
+        assert proc.poll() is None, "stop killed another repo's dashboard"
+    finally:
+        with contextlib.suppress(ProcessLookupError, PermissionError):
+            proc.terminate()
+        _server_gone(proc)
 
 
 def test_stop_by_port_leaves_non_dashboard_alone(fixture_repo: Path, tmp_path: Path) -> None:
@@ -217,10 +251,10 @@ def test_stop_by_port_leaves_non_dashboard_alone(fixture_repo: Path, tmp_path: P
 def test_stop_stale_pidfile_finds_live_dashboard_on_recorded_port(
     fixture_repo: Path, tmp_path: Path
 ) -> None:
-    """Issue #362: the pid file is stale (its pid is dead) but a dashboard is
-    listening on the recorded port — `stop` finds it there."""
+    """Issue #362: the pid file is stale (its pid is dead) but a dashboard for
+    this repo is listening on the recorded port — `stop` finds it there."""
     port = _free_port()
-    proc = _serve(tmp_path / "site", port, marker=True)
+    proc = _serve(tmp_path / "site", port, marker=True, root=str(fixture_repo))
     try:
         path = _write_pidfile(fixture_repo, _dead_pid(), port)
         result = runner.invoke(app, ["dashboard", "stop", "--repo", str(fixture_repo)])
@@ -246,18 +280,23 @@ def test_listening_pid_finds_local_listener() -> None:
         probe.close()
 
 
-def test_is_jev_dashboard_marker(tmp_path: Path) -> None:
-    """The HTTP probe identifies the marker page and rejects anything else."""
+def test_dashboard_served_root(tmp_path: Path) -> None:
+    """The HTTP probe reads the repo a listener serves: the root string for
+    a dashboard page with the sidebar root, "" for a dashboard page without
+    one, None for anything else or nothing listening."""
     port = _free_port()
-    marker_proc = _serve(tmp_path / "marker", port, marker=True)
+    marker_proc = _serve(tmp_path / "marker", port, marker=True, root="/some/repo")
+    no_root_port = _free_port()
+    no_root_proc = _serve(tmp_path / "noroot", no_root_port, marker=True)
     other_port = _free_port()
     other_proc = _serve(tmp_path / "other", other_port, marker=False)
     try:
-        assert dashboard_cmd._is_jev_dashboard("127.0.0.1", port) is True
-        assert dashboard_cmd._is_jev_dashboard("127.0.0.1", other_port) is False
-        assert dashboard_cmd._is_jev_dashboard("127.0.0.1", _free_port()) is False
+        assert dashboard_cmd._dashboard_served_root("127.0.0.1", port) == "/some/repo"
+        assert dashboard_cmd._dashboard_served_root("127.0.0.1", no_root_port) == ""
+        assert dashboard_cmd._dashboard_served_root("127.0.0.1", other_port) is None
+        assert dashboard_cmd._dashboard_served_root("127.0.0.1", _free_port()) is None
     finally:
-        for proc in (marker_proc, other_proc):
+        for proc in (marker_proc, no_root_proc, other_proc):
             with contextlib.suppress(ProcessLookupError, PermissionError):
                 proc.terminate()
             _server_gone(proc)
