@@ -13,19 +13,32 @@ Port handling (issue #355): `stop` means stopped — after the process is gone, 
 (bounded) until the port is bindable again before reporting success, and the start probe
 binds the way uvicorn binds (SO_REUSEADDR), so a port left in TIME_WAIT by the previous
 server's closed connections does not read as busy.
+
+Port handling (issue #362): `stop` defaults to the current directory, so run from
+anywhere but the repo it finds no pid file while a dashboard is running — the cwd trap
+the #358 verifier hit from home. With no pid file `stop` says which directory it
+checked and what to do (run from the repo root, or pass `--repo`), and it probes the
+port (`--port`, default 8765) to report a running dashboard: the root page's
+`<title>Baton · ` marker plus the sidebar's `<div>{{ root }}</div>` name the repo that
+dashboard serves. This only finds and reports — stopping still goes through the pid
+file, so a dashboard whose pid file is gone is reported, not stopped.
 """
 
 from __future__ import annotations
 
 import contextlib
+import html
+import http.client
 import json
 import os
+import re
 import secrets
 import signal
 import socket
 import sys
 import threading
 import time
+import urllib.request
 import webbrowser
 from pathlib import Path
 from typing import Annotated, Any
@@ -199,6 +212,93 @@ def _probe_bind_error(host: str, port: int) -> OSError | None:
 def _port_bindable(host: str, port: int) -> bool:
     """True when a listener could bind `host:port` right now (uvicorn's terms)."""
     return _probe_bind_error(host, port) is None
+
+
+_DASHBOARD_MARKER = "<title>Baton · "  # the root page's title, e.g. `<title>Baton · Board`
+_IDENTIFY_TIMEOUT_S = 2.0  # how long `stop` waits on the HTTP probe below
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """A redirect handler that never follows: the probe must identify the
+    listener itself, not content served from wherever it redirects to."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # type: ignore[no-untyped-def]
+        return None
+
+
+def _dashboard_served_root(
+    host: str, port: int, timeout_s: float = _IDENTIFY_TIMEOUT_S
+) -> str | None:
+    """The repo root the listener on `host:port` serves, or None when it is
+    not a jev dashboard.
+
+    The root page always carries `<title>Baton · …`, and the sidebar renders the
+    served repo root as `<div>{{ root }}</div>` (both since 2026-10-13). A
+    dashboard bound off loopback with a token answers 401 plain text to an
+    unauthenticated probe, so this only identifies loopback (tokenless)
+    dashboards. Returns "" for a dashboard whose root could not be read.
+    A listener that speaks no HTTP at all (an SSH banner, a database) raises
+    `http.client.HTTPException` out of the probe, not `OSError` — it is caught
+    here and reads as "not a dashboard".
+    """
+    try:
+        opener = urllib.request.build_opener(_NoRedirect())
+        with opener.open(f"http://{host}:{port}/", timeout=timeout_s) as response:
+            if response.status != 200:
+                return None
+            body = response.read(65536)
+    except (OSError, ValueError, http.client.HTTPException):
+        return None
+    text = body.decode("utf-8", errors="ignore")
+    if _DASHBOARD_MARKER not in text:
+        return None
+    match = re.search(r"<div>([^<]+)</div>\s*</div>\s*</aside>", text)
+    if match is None:
+        return ""
+    return html.unescape(match.group(1).strip())
+
+
+def _report_no_pidfile(root: Path, port: int) -> None:
+    """Report a `stop` with no pid file for `root` (issue #362).
+
+    `stop` defaults to the current directory, so run from anywhere but the repo
+    it finds no pid file while a dashboard is running — the cwd trap. The
+    message says which directory was checked and what to do, and when a
+    dashboard is listening on the port it names the repo that dashboard serves
+    and the exact command to stop it. This only finds and reports: stopping
+    still goes through the pid file, so a dashboard whose pid file is gone is
+    reported, not stopped.
+    """
+    remedy = "run `jev dashboard stop` from the repo root, or pass `--repo <path>`"
+    if _port_bindable("127.0.0.1", port):
+        console.print(f"no dashboard recorded for {escape(str(root))} — {remedy}")
+        return
+    served = _dashboard_served_root("127.0.0.1", port)
+    if served is None:
+        console.print(
+            f"no dashboard recorded for {escape(str(root))} — {remedy} "
+            f"(port {port} is in use by another process)"
+        )
+        return
+    if not served:
+        console.print(
+            f"no dashboard recorded for {escape(str(root))} — a jev dashboard "
+            f"is running on port {port} but its repo could not be determined; "
+            "stop it from its own repo"
+        )
+        return
+    if Path(served).resolve() == Path(root).resolve():
+        console.print(
+            f"no dashboard recorded for {escape(str(root))} — but a dashboard "
+            f"for this repo is running on port {port}; there is no pid file, "
+            "so stop the process on that port by hand"
+        )
+        return
+    console.print(
+        f"no dashboard recorded for {escape(str(root))} — a dashboard for "
+        f"{escape(served)} is running on port {port}; stop it with "
+        f"`jev dashboard stop --repo {escape(served)}`"
+    )
 
 
 def _wait_port_free(host: str, port: int, timeout_s: float) -> bool:
@@ -437,6 +537,13 @@ def dashboard_stop(
         float,
         typer.Option("--timeout", min=1.0, help="Seconds to wait for a graceful stop."),
     ] = _STOP_WAIT_S,
+    port: Annotated[
+        int,
+        typer.Option(
+            "--port",
+            help="Port to check for a running dashboard when there is no pid file.",
+        ),
+    ] = 8765,
 ) -> None:
     """Stop the dashboard serving this repo (the one `jev dashboard` started)."""
     with cli_errors():
@@ -444,7 +551,7 @@ def dashboard_stop(
     path = dashboard_pid_path(root)
     info = read_dashboard_pid(root)
     if info is None:
-        console.print(f"no dashboard recorded for {escape(str(root))} (is one running?)")
+        _report_no_pidfile(root, port)
         return
     pid = info.get("pid")
     if not isinstance(pid, int) or pid <= 0:

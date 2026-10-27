@@ -1319,10 +1319,22 @@ def test_cli_generates_token_off_loopback(
     assert served == [{"host": "0.0.0.0", "port": 8799, "log_level": "warning"}]
 
     served.clear()
-    result = cli.invoke(cli_app, ["dashboard", "--no-open", "--repo", str(fixture_repo)])
+    # A genuinely free port, not the default 8765: the start pre-check binds
+    # it, so this test failed whenever another dashboard held 8765 (the
+    # dogfood Mac, this shared VM) — the same assumption the stop tests
+    # dropped in issue #362.
+    probe = socket.socket()
+    probe.bind(("127.0.0.1", 0))
+    port = int(probe.getsockname()[1])
+    probe.close()
+    result = cli.invoke(
+        cli_app,
+        ["dashboard", "--no-open", "--port", str(port), "--repo", str(fixture_repo)],
+    )
     assert result.exit_code == 0 and "?token=" not in result.output
-    assert "http://127.0.0.1:8765/" in result.output
+    assert f"http://127.0.0.1:{port}/" in result.output
     assert served[0]["host"] == "127.0.0.1"
+    assert served[0]["port"] == port
 
     result = cli.invoke(
         cli_app, ["dashboard", "--no-open", "--token", "short", "--repo", str(fixture_repo)]
