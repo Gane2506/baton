@@ -24,6 +24,7 @@ while the old thread still holds the model. The status page says so.
 
 from __future__ import annotations
 
+import logging
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -48,6 +49,8 @@ from jev_agent.code_orchestrator import (
 from jev_agent.code_orchestrator.grades import GateDecision, MergeAction
 from jev_agent.config.schema import CodeOrchestratorSettings
 from jev_agent.dashboard.errors import friendly_error as _friendly_error
+
+log = logging.getLogger(__name__)
 
 # The model is heavy (~842 MB checkpoint behind `laya` + torch) and not a
 # dependency of `jev`: installing it is `pip install
@@ -318,8 +321,11 @@ class CodeGradeRunner:
                         hint_given=bool(result.get("hint")),
                     )
                 )
-        except Exception:
-            pass
+        except Exception as exc:
+            # Best-effort by design (see the method docstring), but the
+            # failure is still recorded at debug level — a silently lost
+            # grade must leave a trace somewhere (P7).
+            log.debug("rating ledger write failed: %s: %s", type(exc).__name__, exc)
 
     def _work(
         self,

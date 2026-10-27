@@ -42,6 +42,7 @@ Rules the rest of the code must not break:
 from __future__ import annotations
 
 import json
+import logging
 from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -78,6 +79,8 @@ LEDGER_FILENAME = "cda-ratings.jsonl"
 # prefers. Three is deliberately small — grades are rare (1-3 min each on
 # CPU) — but it is a floor, not a claim of significance.
 MIN_GRADES_FOR_BEST_TIER = 3
+
+log = logging.getLogger(__name__)
 
 GradeKind = str  # "code_review" | "routing" | "trace" | "tool_call"
 GradeStatus = str  # "graded" | "unavailable" | "error"
@@ -388,7 +391,11 @@ class RatingLedger:
             with self.path.open("a", encoding="utf-8") as handle:
                 handle.write(json.dumps(entry.to_dict(), sort_keys=True) + "\n")
             return True
-        except Exception:
+        except Exception as exc:
+            # Best-effort by design (see the module docstring), but the
+            # failure is still recorded at debug level — a silently lost
+            # grade must leave a trace somewhere (P7).
+            log.debug("rating ledger write failed: %s: %s", type(exc).__name__, exc)
             return False
 
     def records(self) -> list[GradeRecord]:

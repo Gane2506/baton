@@ -14,6 +14,7 @@ merge, the task stops in NEEDS_HUMAN before any attempt is spent.
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import Callable
 from contextlib import suppress
 from dataclasses import dataclass, field
@@ -44,6 +45,8 @@ from jev_agent.quality.gate import latest_task_gate, run_gate
 from jev_agent.roles import ReviewResult
 from jev_agent.runlog import log_path
 from jev_agent.workers.base import WorkerOutput
+
+log = logging.getLogger(__name__)
 
 T = TypeVar("T")
 
@@ -178,7 +181,15 @@ class TaskRunner:
         """
         try:
             return enrich_hint(hint, await asyncio.to_thread(self._ledger().aggregate))
-        except Exception:
+        except Exception as exc:
+            # Best-effort (see the method docstring), but the failure is
+            # still recorded at debug level — a silently missing hint
+            # enrichment must leave a trace somewhere (P7).
+            log.debug(
+                "rating ledger read failed, D4 proceeds without it: %s: %s",
+                type(exc).__name__,
+                exc,
+            )
             return hint
 
     async def _record_routing(

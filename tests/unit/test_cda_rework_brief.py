@@ -7,6 +7,8 @@ instruction.
 
 from __future__ import annotations
 
+from typing import Any
+
 from jev_agent.code_orchestrator import compose_rework_brief
 from jev_agent.quality.models import CheckResult, Finding, GateResult
 from jev_agent.roles.schemas import QualityReview
@@ -15,7 +17,7 @@ from jev_agent.roles.schemas import QualityReview
 def _result(
     *,
     blocked: bool = True,
-    code_grade: dict | None = None,
+    code_grade: dict[str, Any] | None = None,
     checks: list[CheckResult] | None = None,
     review: QualityReview | None = None,
     review_status: str = "done",
@@ -35,8 +37,8 @@ def _result(
     )
 
 
-def _graded_grade(**overrides: object) -> dict:
-    grade: dict = {
+def _graded_grade(**overrides: object) -> dict[str, Any]:
+    grade: dict[str, Any] = {
         "status": "graded",
         "model": "S4MPL3BI4S/Coding_Decision_Agent",
         "code_quality": 3,

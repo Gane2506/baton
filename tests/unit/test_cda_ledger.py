@@ -357,6 +357,11 @@ async def test_gate_ledgers_unavailable_instead_of_a_score(
 
             raise CodeOrchestratorUnavailable("not installed")
 
+        def route_model(self, request: str) -> object:
+            from jev_agent.code_orchestrator import CodeOrchestratorUnavailable
+
+            raise CodeOrchestratorUnavailable("not installed")
+
     async def _fake_review(*args: Any, **kwargs: Any) -> ReviewOutcome:
         return ReviewOutcome("skipped", "no worker", None)
 

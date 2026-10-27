@@ -10,6 +10,7 @@ D5 or D6. Each gate is stored (`quality_reports`) and written to
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import Collection, Iterable
 from pathlib import Path
 from typing import cast
@@ -42,6 +43,8 @@ from jev_agent.quality.review import ai_review
 from jev_agent.quality.scoring import score_gate
 from jev_agent.quality.tools import QualitySettings, ToolRunner
 from jev_agent.runlog import log_path, redact
+
+log = logging.getLogger(__name__)
 
 QUALITY_DIRNAME = "quality"
 RUN_REVIEW_FILENAME = "review.md"
@@ -245,8 +248,11 @@ async def _record_gate_grade(
         else:
             return
         await asyncio.to_thread(RatingLedger(ledger_path(h.state_dir)).record, record)
-    except Exception:
-        pass
+    except Exception as exc:
+        # Best-effort by design (see the function docstring), but the
+        # failure is still recorded at debug level — a silently lost grade
+        # must leave a trace somewhere (P7).
+        log.debug("rating ledger write failed: %s: %s", type(exc).__name__, exc)
 
 
 def settings_for(config: JevConfig, level: QualityLevel) -> QualitySettings:
