@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import json
 import os
-import shutil
 from collections.abc import Collection
 from dataclasses import dataclass
 from datetime import datetime
@@ -18,6 +17,7 @@ from pathlib import Path
 
 from jev_agent.config.schema import JevConfig, JevSettings
 from jev_agent.config.servers_schema import ServerConfig
+from jev_agent.core.executables import resolve_executable
 from jev_agent.servers.audit import AuditEntry, AuditLog, audit_path
 from jev_agent.servers.ssh import (
     CONNECT_TIMEOUT_S,
@@ -272,7 +272,7 @@ def _refresh_servers(config: JevConfig, state_dir: Path, runner: SshRunner) -> s
     names = list(config.servers)
     if not names:
         return "no servers configured"
-    if shutil.which("ssh") is None:
+    if resolve_executable("ssh") is None:
         return "`ssh` not found on PATH; servers cannot be checked"
     states: dict[str, list[str]] = {"reachable": [], "unreachable": [], "unknown": []}
     for name in names:

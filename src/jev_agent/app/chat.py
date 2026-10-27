@@ -40,6 +40,7 @@ from jev_agent.core.chat import (
     render_system_prompt,
     with_design_system,
 )
+from jev_agent.core.executables import resolve_executable
 from jev_agent.core.learning import Learning
 from jev_agent.core.pipeline import PipelineError
 from jev_agent.core.queue import add_idea
@@ -61,7 +62,7 @@ def backend_readiness(config: JevConfig) -> dict[str, tuple[bool, str]]:
     api = config.workers.api
     claude = config.workers.claude_code
     api_ok = bool(os.environ.get(api.api_key_env))
-    claude_ok = shutil.which(claude.command) is not None
+    claude_ok = resolve_executable(claude.command) is not None
     return {
         "api": (api_ok, f"{api.api_key_env} is set" if api_ok else f"{api.api_key_env} is unset"),
         "claude_code": (
@@ -79,7 +80,7 @@ def build_backend(
         return EchoChatBackend(worker, model)
     if worker == "claude_code":
         claude = config.workers.claude_code
-        if shutil.which(claude.command) is None:
+        if resolve_executable(claude.command) is None:
             raise ChatError(
                 f"the {claude.command} CLI is not on PATH; install it or use the api backend"
             )

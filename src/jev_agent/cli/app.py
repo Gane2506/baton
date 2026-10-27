@@ -9,7 +9,7 @@ from jev_agent.cli.board_cmds import board
 from jev_agent.cli.cache_cmds import cache_app
 from jev_agent.cli.chat_cmds import chat
 from jev_agent.cli.code_cmds import code_app
-from jev_agent.cli.dashboard_cmd import dashboard
+from jev_agent.cli.dashboard_cmd import dashboard_app
 from jev_agent.cli.demo_cmds import demo_app
 from jev_agent.cli.design_cmds import design_app
 from jev_agent.cli.doctor_cmd import doctor
@@ -78,7 +78,7 @@ app.add_typer(demo_app, name="demo", rich_help_panel=PANEL_RUN)
 app.command("status", rich_help_panel=PANEL_OBSERVE)(status)
 app.command("log", rich_help_panel=PANEL_OBSERVE)(log)
 app.command("board", rich_help_panel=PANEL_OBSERVE)(board)
-app.command("dashboard", rich_help_panel=PANEL_OBSERVE)(dashboard)
+app.add_typer(dashboard_app, name="dashboard", rich_help_panel=PANEL_OBSERVE)
 app.command("kpi", rich_help_panel=PANEL_OBSERVE)(kpi)
 app.add_typer(capbench_app, name="capbench", rich_help_panel=PANEL_OBSERVE)
 app.add_typer(cache_app, name="cache", rich_help_panel=PANEL_OBSERVE)

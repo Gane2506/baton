@@ -8,12 +8,12 @@ from __future__ import annotations
 
 import json
 import os
-import shutil
 import subprocess
 from pathlib import Path
 from typing import Any
 
 from jev_agent.core import workspace
+from jev_agent.core.executables import resolve_executable
 from jev_agent.core.ship.errors import GhTimeoutError, ShipError
 from jev_agent.core.workspace import run_git, timeout_message
 from jev_agent.runlog.redact import redact
@@ -49,13 +49,17 @@ class Gh:
         self.timeout_s = timeout_s
 
     def path(self) -> str | None:
-        return shutil.which(self.executable)
+        """Where `gh` lives (PATH first, then the usual install locations)."""
+        return resolve_executable(self.executable)
 
     def run(self, *args: str) -> subprocess.CompletedProcess[str]:
         env = os.environ | {"GH_PROMPT_DISABLED": "1", "GH_NO_UPDATE_NOTIFIER": "1"}
+        # Run the resolved path, not the bare name: `gh` may live in a
+        # Homebrew/nvm dir that is not on this process's PATH (issue #333).
+        executable = self.path() or self.executable
         try:
             return subprocess.run(
-                [self.executable, *args],
+                [executable, *args],
                 cwd=self.cwd,
                 env=env,
                 capture_output=True,

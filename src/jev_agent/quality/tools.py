@@ -11,12 +11,12 @@ from __future__ import annotations
 
 import re
 import shlex
-import shutil
 from collections.abc import Callable, Collection
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from jev_agent.core.commands import CommandResult, CommandRunner
+from jev_agent.core.executables import resolve_executable
 from jev_agent.quality.levels import QualityLevel
 from jev_agent.quality.models import CheckResult
 from jev_agent.runlog import redact
@@ -24,7 +24,7 @@ from jev_agent.runlog import redact
 Which = Callable[[str], str | None]
 
 # Indirection so tests can fake PATH lookups (like `doctor_cmd.which`).
-which: Which = shutil.which
+which: Which = resolve_executable
 
 MAX_OUTPUT_CHARS = 200_000  # what a check may parse
 DETAIL_CHARS = 1_500  # output tail kept in a check's detail
@@ -61,7 +61,7 @@ class ToolRunner:
     scope: str = "task"  # "task" | "integration"
     diff: str = ""
     passed_commands: Collection[str] = ()  # commands that already passed in this step
-    which: Which = field(default=shutil.which)
+    which: Which = field(default=resolve_executable)
 
     def __post_init__(self) -> None:
         self.changed_files = changed_files(self.diff)

@@ -40,6 +40,11 @@ _ERROR_REWRITES: tuple[tuple[str, str], ...] = (
         "set a ship remote under Settings → Ship",
     ),
     (
+        "database has schema version",
+        "This state database was written by a newer jev — upgrade jev to open it. "
+        "Your runs, queue and history are safe; do not delete state.db.",
+    ),
+    (
         "needs shipping on: set `[ship] enabled = true` (see docs/ship.md)",
         "needs shipping turned on — enable it under Settings → Ship, then try again.",
     ),

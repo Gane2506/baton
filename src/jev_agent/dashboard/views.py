@@ -12,7 +12,6 @@ import math
 import os
 import re
 import shlex
-import shutil
 import sqlite3
 import statistics
 from collections import Counter
@@ -49,6 +48,7 @@ from jev_agent.core.cache import Cache, CacheStats
 from jev_agent.core.chat import ChatMeta, list_chats, read_transcript
 from jev_agent.core.events import Event
 from jev_agent.core.events import summarize as summarize_event
+from jev_agent.core.executables import resolve_executable
 from jev_agent.core.harness import DEFAULT_TIMEOUT_S
 from jev_agent.core.kpi import PrKpis, compute_run_kpis, load_pr_kpis
 from jev_agent.core.learning import (
@@ -1661,7 +1661,7 @@ def local_server_status(server: McpServerConfig) -> tuple[str, str]:
         first = shlex.split(command)[0] if command else ""
     except ValueError:
         return "error", "command could not be parsed"
-    found = shutil.which(first) if first else None
+    found = resolve_executable(first) if first else None
     if found:
         return "ready", f"command found: {found}"
     return "error", "command not found on PATH"

@@ -3,7 +3,6 @@ the saved-chat helpers (`list_chats`, `read_transcript`, `hold_chat`) and the ch
 
 from __future__ import annotations
 
-import fcntl
 import importlib
 import json
 import math
@@ -24,6 +23,7 @@ from jev_agent.core.chat_backends import BACKENDS, BackendName, Turn
 from jev_agent.core.chat_learning import ChatLearning
 from jev_agent.core.chat_prompts import BRIEF_REQUEST, extract_brief
 from jev_agent.core.design_system import DesignSystem, get_design_system, render_for_prompt
+from jev_agent.core.file_lock import try_lock_exclusive, unlock
 from jev_agent.core.learning import LearningError
 from jev_agent.runlog.redact import redact
 
@@ -267,16 +267,15 @@ class ChatInUse(ChatError):
 def hold_chat(root: Path, chat_id: str) -> Iterator[None]:
     """Hold the saved chat's lock for the block: one process at a time loads, changes and
     saves a chat, so a terminal and the dashboard never overwrite each other's `meta.json`.
-    An exclusive `flock` on `chat.lock`; the kernel drops it when the holder dies. Raises
-    `ChatInUse` at once when it is taken, and `ChatError` for an unknown chat."""
+    An exclusive file lock on `chat.lock` (`fcntl.flock` on POSIX, `msvcrt.locking` on
+    Windows); the kernel drops it when the holder dies. Raises `ChatInUse` at once when
+    it is taken, and `ChatError` for an unknown chat."""
     directory = chat_dir(root, chat_id)
     if not (directory / META_FILE).is_file():
         raise ChatError(f"no chat {chat_id!r}; `jev chat --list` shows saved chats")
     fd = os.open(directory / LOCK_FILE, os.O_RDWR | os.O_CREAT, 0o644)
     try:
-        try:
-            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError:
+        if not try_lock_exclusive(fd):
             raise ChatInUse(
                 f"chat {chat_id} is open elsewhere (a terminal `jev chat` or the dashboard); "
                 "try again when that is done"
@@ -284,7 +283,7 @@ def hold_chat(root: Path, chat_id: str) -> Iterator[None]:
         try:
             yield
         finally:
-            fcntl.flock(fd, fcntl.LOCK_UN)
+            unlock(fd)
     finally:
         os.close(fd)
 
