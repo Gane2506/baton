@@ -101,6 +101,15 @@ def _code_grade(result: GateResult) -> list[str]:
     ]
 
 
+def _rework_brief(result: GateResult) -> list[str]:
+    """The rework brief (issue #329, Phase 1), when the gate blocked and one
+    was composed: the grade's signals + the failed checks + the AI review,
+    so the next attempt's coder gets instructive correction."""
+    if not result.rework_brief:
+        return []
+    return ["## Rework brief", "", result.rework_brief, ""]
+
+
 def _code_grade_summary(gates: Sequence[GateResult]) -> list[str]:
     """The Coding Decision Agent's grade per gate (issue #267).
 
@@ -241,6 +250,7 @@ def render_gate(result: GateResult) -> str:
         "",
         *_score(result),
         *_code_grade(result),
+        *_rework_brief(result),
         "## Walkthrough",
         "",
         *_walkthrough(notes, with_gate=False),

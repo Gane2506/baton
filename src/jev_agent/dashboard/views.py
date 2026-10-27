@@ -35,6 +35,7 @@ from jev_agent.app.format import format_answers, learning_line, quality_line
 from jev_agent.app.models import ModelListing
 from jev_agent.app.quality import CheckRow, check_rows, review_text
 from jev_agent.app.queue import item_flags
+from jev_agent.code_orchestrator import LedgerRatings, RatingLedger, ledger_path
 from jev_agent.config import STATE_DIRNAME, JevConfig, load_config
 from jev_agent.config.schema import McpServerConfig, ShipConfig, planner_policy
 from jev_agent.core.benchmarks import DEFAULT_LAST, Summary, Trend, summarize, trends
@@ -702,6 +703,26 @@ class LearningView:
     shared_path: Path
     skills: list[Skill]  # the profile's learned skills
     proposed_skills: list[SkillProposal]  # skill proposals awaiting approval
+
+
+@dataclass(frozen=True)
+class RatingsView:
+    """The Ratings tab of the Learning page (issue #329, Phase 1): the
+    Coding Decision Agent's grades, aggregated per agent / tier / skill,
+    plus the most recent grades. Empty when the ledger has no records yet
+    (no grade has run, or the backend is not installed)."""
+
+    ratings: LedgerRatings
+    ledger_file: Path
+
+
+def ratings_view(repo: Repo) -> RatingsView:
+    """The ledger's aggregates for this repo, read best-effort: a missing
+    or corrupt ledger shows as empty ratings, never as a page error."""
+    return RatingsView(
+        RatingLedger(ledger_path(repo.state_dir)).aggregate(),
+        ledger_path(repo.state_dir),
+    )
 
 
 def _profile_skills(repo: Repo, selected: str) -> tuple[list[Skill], list[SkillProposal]]:

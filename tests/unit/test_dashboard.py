@@ -681,6 +681,52 @@ def test_learning_page_and_actions(client: TestClient, planned: tuple[Path, str]
     assert "learning is off for this repo" in client.get("/learning").text
 
 
+def test_learning_ratings_tab_shows_ledger_aggregates(
+    client: TestClient, planned: tuple[Path, str]
+) -> None:
+    """The Ratings tab (issue #329, Phase 1): per-agent/tier grades from the
+    ledger, browser-first — plus the empty state on a repo with no grades."""
+    repo, _ = planned
+    empty = client.get("/learning?tab=ratings").text
+    assert "Ratings — Coding Decision Agent" in empty
+    assert "No grades recorded yet" in empty
+    from jev_agent.code_orchestrator import (
+        CodeReviewGrade,
+        RatingLedger,
+        code_review_record,
+        ledger_path_for_repo,
+    )
+    from jev_agent.code_orchestrator.grades import GateOutcome
+
+    ledger = RatingLedger(ledger_path_for_repo(repo))
+    ledger.record(
+        code_review_record(
+            CodeReviewGrade(
+                code_quality=4,
+                instruction_followed=True,
+                likely_correct=True,
+                merge_action="accept",
+                answer_confidence={"merge_action": 0.9},
+            ),
+            gate=GateOutcome(
+                decision="accept",
+                reason="accept",
+                merge_action="accept",
+                confidence=0.9,
+            ),
+            agent="claude_code",
+            model="opus",
+            source="gate",
+        )
+    )
+    page = client.get("/learning?tab=ratings").text
+    assert "Ratings — Coding Decision Agent" in page
+    assert "claude_code" in page
+    assert "4.00" in page  # mean quality / 4 for the one graded diff
+    assert "100%" in page  # accept rate
+    assert "cda-ratings.jsonl" in page
+
+
 def test_learning_graph_link_and_unlink(client: TestClient, planned: tuple[Path, str]) -> None:
     """The Graph tab links and unlinks edges from the browser (issue #254): the link
     form, per-edge Remove buttons, and friendly flashes for every failure — no 500s."""

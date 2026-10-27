@@ -23,9 +23,15 @@ from jev_agent.code_orchestrator import (
     CodeOrchestrator,
     CodeOrchestratorError,
     CodeOrchestratorUnavailable,
+    RatingLedger,
+    code_review_record,
     gate_code_review,
     gate_trace,
+    ledger_path_for_repo,
     routing_hint,
+    routing_record,
+    trace_record,
+    unavailable_record,
 )
 
 console = Console()
@@ -126,6 +132,15 @@ def grade(
             # internally); the CLI just hands over the raw diff.
             result = orch.grade_code(task=task, diff=diff, tests=tests)
         except CodeOrchestratorUnavailable as exc:
+            # A grade that did not run still ledgers as unavailable, never
+            # as a score (issue #329, Phase 1).
+            RatingLedger(ledger_path_for_repo(ctx.root)).record(
+                unavailable_record(
+                    "code_review",
+                    detail=str(exc),
+                    source="cli",
+                )
+            )
             raise fail(str(exc)) from exc
         except CodeOrchestratorError as exc:
             raise fail(f"the Coding Decision Agent failed to grade: {exc}") from exc
@@ -134,6 +149,9 @@ def grade(
             # backend problem, not a traceback for the user.
             raise fail(f"the Coding Decision Agent returned an unusable grade: {exc}") from exc
         outcome = gate_code_review(result, threshold=settings.confidence_threshold)
+        RatingLedger(ledger_path_for_repo(ctx.root)).record(
+            code_review_record(result, gate=outcome, source="cli")
+        )
         table = Table(title="Code grade")
         table.add_column("Field")
         table.add_column("Value")
@@ -160,12 +178,18 @@ def route(
         try:
             result = orch.route(request)
         except CodeOrchestratorUnavailable as exc:
+            RatingLedger(ledger_path_for_repo(ctx.root)).record(
+                unavailable_record("routing", detail=str(exc), source="cli")
+            )
             raise fail(str(exc)) from exc
         except CodeOrchestratorError as exc:
             raise fail(f"the Coding Decision Agent failed to route: {exc}") from exc
         except ValueError as exc:
             raise fail(f"the Coding Decision Agent returned an unusable route: {exc}") from exc
         hint = routing_hint(result, threshold=settings.confidence_threshold)
+        RatingLedger(ledger_path_for_repo(ctx.root)).record(
+            routing_record(result, source="cli", hint_given=bool(hint))
+        )
         if not hint:
             raise fail(
                 "the Coding Decision Agent is not confident enough to route "
@@ -201,6 +225,9 @@ def trace(
         try:
             result = orch.grade_trace(trace_text)
         except CodeOrchestratorUnavailable as exc:
+            RatingLedger(ledger_path_for_repo(ctx.root)).record(
+                unavailable_record("trace", detail=str(exc), source="cli")
+            )
             raise fail(str(exc)) from exc
         except CodeOrchestratorError as exc:
             raise fail(f"the Coding Decision Agent failed to grade the trace: {exc}") from exc
@@ -209,6 +236,9 @@ def trace(
                 f"the Coding Decision Agent returned an unusable trace grade: {exc}"
             ) from exc
         outcome = gate_trace(result, threshold=settings.confidence_threshold)
+        RatingLedger(ledger_path_for_repo(ctx.root)).record(
+            trace_record(result, gate=outcome, source="cli")
+        )
         table = Table(title="Trace grade")
         table.add_column("Field")
         table.add_column("Value")
@@ -222,3 +252,50 @@ def trace(
         table.add_row("gate", outcome.decision)
         table.add_row("reason", outcome.reason)
         console.print(table)
+
+
+@code_app.command("ratings")
+def ratings(repo: RepoOption = Path(".")) -> None:
+    """Show the rating ledger: grades aggregated per agent, tier and skill."""
+    with repo_context(repo, create=False) as ctx:
+        path = ledger_path_for_repo(ctx.root)
+        ledger = RatingLedger(path)
+        ratings = ledger.aggregate()
+        console.print(f"Ledger: {path}", markup=False)
+        console.print(
+            f"{ratings.total} record(s) · {ratings.graded} graded diff(s) · "
+            f"{ratings.unavailable} unavailable (backend not installed, never scored)",
+            markup=False,
+        )
+        if ratings.total == 0:
+            console.print(
+                "No grades recorded yet. Grades land here when the Coding "
+                "Decision Agent runs — enable [code_orchestrator] and install "
+                "the backend (see docs/code-orchestrator.md).",
+                markup=False,
+            )
+            return
+        for title, groups in (
+            ("By agent", ratings.by_agent),
+            ("By model tier", ratings.by_tier),
+            ("By skill", ratings.by_skill),
+        ):
+            if not groups:
+                continue
+            table = Table(title=title)
+            table.add_column("Name")
+            table.add_column("Records", justify="right")
+            table.add_column("Graded", justify="right")
+            table.add_column("Mean quality / 4", justify="right")
+            table.add_column("Accept rate", justify="right")
+            table.add_column("Human-review rate", justify="right")
+            for name, agg in groups.items():
+                table.add_row(
+                    name,
+                    str(agg.n),
+                    str(agg.graded),
+                    f"{agg.mean_quality:.2f}" if agg.mean_quality is not None else "—",
+                    f"{agg.accept_rate:.0%}" if agg.accept_rate is not None else "—",
+                    (f"{agg.human_review_rate:.0%}" if agg.human_review_rate is not None else "—"),
+                )
+            console.print(table)

@@ -19,6 +19,8 @@ All notable changes to this project are documented here. The format is based on
 
 ### Added
 
+- **Coding Decision Agent Phase 1: rating ledger, rework briefs, dashboard ratings (issue #329).** The Coding Decision Agent becomes a coach in the `jev` workflow. Every grade — diff grades at the quality gate, routing grades at D4, CLI/dashboard grades — is appended to a rating ledger at `<repo>/.jev/cda-ratings.jsonl`, a separate file from `state.db` so it survives the state-database flush on version updates, and aggregated per agent, tier and skill (`jev code ratings`, and a **Ratings** tab on the dashboard's Learning page). A missing backend records as unavailable, never as a score. When a gate blocks, the result carries a **rework brief** composed from the grade's signals + the failed checks + the AI review (the model returns labels, never prose), rendered into the gate report and handed to the next attempt's coder through D5 feedback. D4 reads the ledger: the routing hint carries the ledger's evidence for its tier (`ledger_tier_grades`, `ledger_tier_mean_quality`, `ledger_best_tier`), so Jev can prefer tiers that grade well — still advisory, still gated at 0.7, never auto-merge. No new grading calls in the hot path; ledger writes are write-after-grade and best-effort. Threshold stays 0.7 (recalibration is Phase 4).
+
 - **Code Grade runs in the background (issue #267).** Grading a diff from `/code-grade`
   no longer holds the request for the minutes the model takes: the POST starts one
   background job and redirects to a **status page** (`/code-grade/status`) that polls the

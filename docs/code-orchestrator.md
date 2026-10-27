@@ -71,11 +71,16 @@ order, deliberately:
   picks worker/model/effort at D4 — the hint informs that decision, it does
   not replace it. A missing model, a failed inference, or a mis-shaped
   verdict never crashes D4: it proceeds without a hint, exactly as before
-  the feature (issue #203, C3).
+  the feature (issue #203, C3). Phase 1 (issue #329) also enriches the
+  hint with the rating ledger's evidence for its tier
+  (`ledger_tier_grades`, `ledger_tier_mean_quality`, `ledger_best_tier`),
+  and ledgers the routing grade itself — see "Phase 1: the coach" below.
 - **CLI.** `jev code status` (enabled? model? backend present?),
   `jev code grade --task "..." --diff-file change.diff [--tests-file ...]`
   (the same gate the quality gate applies, printed as a table), and
   `jev code route "Refactor …"` (tier + skill + suggested effort).
+  `jev code ratings` prints the rating ledger (below), aggregated per
+  agent, tier and skill. Every CLI grade/route also writes to the ledger.
 - **Dashboard.** The **Code Grade** page (`/code-grade`, issue #254) is the
   browser-first equivalent of `jev code grade` / `jev code route`: paste a
   diff (or upload a diff file), describe the task, and grade it with the
@@ -99,7 +104,83 @@ order, deliberately:
   (`jev quality show`, the dashboard's Quality review section) now lists
   each gate's code grade -- merge action, confidence, and human_review
   routing -- instead of showing a blocked gate with no trace of the grade
-  behind it.
+  behind it. Finished dashboard grades and routes are ledgered too
+  (below); a cancelled job's discarded result is not.
+
+## Phase 1: the coach (issue #329)
+
+The Coding Decision Agent becomes a coach in the `jev` workflow: grades
+stop sitting only on gate results and start teaching the pipeline which
+agents, tiers and skills do good work. Phase 1 adds no new grading calls
+in the hot path — it records the grades that already happen (gate + D4
+hint + CLI/dashboard) and puts them to work. The threshold stays 0.7;
+recalibration is Phase 4.
+
+### The rating ledger
+
+Every grade is appended to `<repo>/.jev/cda-ratings.jsonl`, one JSON
+object per line (`src/jev_agent/code_orchestrator/ledger.py`):
+a diff grade at the gate, a routing grade at D4, a trace grade from
+`jev code trace`, and CLI/dashboard grades. Each record carries the
+grade's labels (code_quality, instruction_followed, likely_correct,
+merge_action, calibrated confidence, gate decision) and the context that
+makes it aggregable: agent (worker), model, effort, tier, skill, run and
+task, source (`gate` | `d4` | `cli` | `dashboard`).
+
+**Location, decided deliberately.** The ledger is repo-level
+(the learning graph is per-repo) but a *separate file* from `state.db`
+inside `.jev/`. The Mac update rule flushes `state.db` on version
+updates; a ledger inside that database would be wiped with it, and a
+file next to it survives the flush. `.jev/` is gitignored, so the ledger
+never lands in the repo.
+
+**Rules.** A grade that did not run is never a score: a missing backend
+records `status="unavailable"` with no quality fields, and an inference
+failure records `status="error"`. Aggregates count graded diff grades
+only for quality/accept rates; unavailable/error records count in `n`
+and in their own counters. Writes are best-effort and never raise —
+a ledger failure must never break a run — and in the async pipeline
+they happen write-after-grade, in a thread. Reads tolerate corruption:
+a bad line is skipped, never fatal. `jev code ratings` and the
+dashboard's Learning page (Ratings tab) show the aggregates per agent,
+tier and skill, plus recent grades.
+
+**How it feeds learning.** The aggregates are read in two places: D4
+(the routing hint carries the ledger's evidence for its tier —
+`ledger_tier_grades`, `ledger_tier_mean_quality`, and `ledger_best_tier`
+when another tier grades better — and D4's instructions tell Jev to
+prefer tiers and skills with a strong ledger record), and the Learning
+page, where the Ratings tab sits next to the lesson graph. The ledger
+never decides anything on its own: the hint is still gated at 0.7, Jev
+still chooses among its allowed answers, and a tier needs at least 3
+graded diffs before it can be named the best tier.
+
+### Rework briefs
+
+When a gate blocks, the result carries `rework_brief`
+(`src/jev_agent/code_orchestrator/briefs.py`, rendered into the gate
+report under "Rework brief" and handed to the next attempt through D5's
+feedback, so the coder sees it in its prompt). The model returns labels,
+never prose, so the brief is composed from the three sources that do
+carry reasons: the grade's structured outputs (which signals fired —
+low code_quality, instruction_followed "no", likely_correct "no",
+`needs_tests`/`request_changes`/`reject`, low-confidence human_review),
+the gate's failed checks and findings, and the AI review's summary.
+Every line names its source, and a signal that did not fire produces no
+instruction.
+
+### Roadmap (issue #329)
+
+- **Phase 1 (this):** ledger + rework briefs + dashboard ratings + D4
+  reads the ledger.
+- **Phase 2:** async trace supervision — grade agent traces at stage
+  boundaries + sampled tool calls, asynchronously, with structured dict
+  states. `grade_trace`/`grade_tool_call` get their first pipeline
+  callers; trace grades feed the same ledger.
+- **Phase 3:** pre-flight plan critique at VALIDATING, before any code is
+  written.
+- **Phase 4:** recalibrate 0.7 once 50+ real grades exist in the ledger.
+  Until then the threshold stays 0.7 and nothing changes it.
 
 ## Install
 

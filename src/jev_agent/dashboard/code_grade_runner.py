@@ -28,15 +28,24 @@ import threading
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any
+from pathlib import Path
+from typing import Any, cast
 
 from jev_agent.code_orchestrator import (
     CodeOrchestrator,
     CodeOrchestratorError,
     CodeOrchestratorUnavailable,
+    GateOutcome,
+    RatingLedger,
+    code_review_record,
     gate_code_review,
+    normalise_code_review,
+    normalise_routing,
     routing_hint,
+    routing_record,
+    unavailable_record,
 )
+from jev_agent.code_orchestrator.grades import GateDecision, MergeAction
 from jev_agent.config.schema import CodeOrchestratorSettings
 from jev_agent.dashboard.errors import friendly_error as _friendly_error
 
@@ -146,8 +155,13 @@ class CodeGradeRunner:
     def __init__(
         self,
         executor: CodeGradeExecutor | None = None,
+        ledger_path: Path | None = None,
     ) -> None:
         self.executor = executor or _default_executor
+        # Where finished grades/routes are ledgered (issue #329, Phase 1):
+        # None in tests and in runners constructed without a repo, which
+        # simply do not record. Recording is best-effort, never fatal.
+        self._ledger_path = ledger_path
         self._guard = threading.Lock()
         self._thread: threading.Thread | None = None
         self._generation = 0
@@ -250,6 +264,63 @@ class CodeGradeRunner:
             self._finished_at = datetime.now(UTC)
             return True
 
+    def _record(self, kind: str, result: dict[str, Any] | None, unavailable: bool) -> None:
+        """Ledger one finished dashboard grade/route (issue #329, Phase 1).
+
+        Best-effort: a missing backend records as unavailable, never as a
+        score, and any failure here is swallowed — the status page already
+        has the outcome, and the ledger must never break it.
+        """
+        if self._ledger_path is None:
+            return
+        try:
+            ledger = RatingLedger(self._ledger_path)
+            if unavailable:
+                ledger.record(
+                    unavailable_record(
+                        "code_review" if kind == "grade" else "routing",
+                        detail="Coding Decision Agent backend not installed",
+                        source="dashboard",
+                    )
+                )
+                return
+            if result is None:
+                return
+            if kind == "grade":
+                gate_d = result.get("gate")
+                gate = gate_d if isinstance(gate_d, dict) else {}
+                ledger.record(
+                    code_review_record(
+                        normalise_code_review(result),
+                        gate=GateOutcome(
+                            decision=cast(
+                                GateDecision, str(gate.get("decision") or "human_review")
+                            ),
+                            reason=str(gate.get("reason") or ""),
+                            merge_action=cast(MergeAction, str(gate.get("merge_action") or "")),
+                            confidence=float(gate.get("confidence") or 0.0),
+                        ),
+                        source="dashboard",
+                    )
+                )
+            else:
+                ledger.record(
+                    routing_record(
+                        normalise_routing(
+                            {
+                                **result,
+                                "answer_confidence": {
+                                    "model_tier": result.get("confidence") or 0.0
+                                },
+                            }
+                        ),
+                        source="dashboard",
+                        hint_given=bool(result.get("hint")),
+                    )
+                )
+        except Exception:
+            pass
+
     def _work(
         self,
         generation: int,
@@ -257,12 +328,14 @@ class CodeGradeRunner:
         settings: CodeOrchestratorSettings,
         inputs: dict[str, str],
     ) -> None:
+        unavailable = False
         try:
             result = self.executor(kind, settings, inputs)
         except CodeOrchestratorUnavailable:
             # Missing backend: the page's install guidance, not a
             # traceback -- a grade that did not run must never look
             # like a grade, and never like a server error either.
+            unavailable = True
             outcome: tuple[str, dict[str, Any] | None, str | None, str] = (
                 "failed",
                 None,
@@ -292,6 +365,11 @@ class CodeGradeRunner:
             self._error = error
             self._message = message
             self._finished_at = datetime.now(UTC)
+            if state == "done" or unavailable:
+                # Ledger the grade (or its absence) for the current
+                # generation only: a cancelled job's discarded result
+                # is not recorded as signal.
+                self._record(kind, outcome_result, unavailable)
 
     def shutdown(self, timeout: float = 30.0) -> None:
         """Wait for a running grade (the lifespan calls this)."""

@@ -115,6 +115,11 @@ class GateResult(BaseModel):
     # the code orchestrator is disabled. `status` is "graded" or "unavailable":
     # a missing model never blocks the gate, it only records that no grade ran.
     code_grade: dict[str, Any] | None = None
+    # The rework brief for a blocked gate (issue #329, Phase 1): the grade's
+    # signals + the failed checks + the AI review, composed so the next
+    # attempt's coder gets instructive correction, not just a verdict. ""
+    # when the gate passed (nothing to correct).
+    rework_brief: str = ""
 
     @property
     def label(self) -> str:

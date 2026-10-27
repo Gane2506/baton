@@ -258,6 +258,80 @@ def test_code_route_unavailable_backend_is_a_clean_error(
     _assert_clean_error(result, "not installed")
 
 
+def test_code_grade_and_route_ledger_their_grades(
+    fixture_repo: Path, fake_orchestrator: None, tmp_path: Path
+) -> None:
+    """`jev code grade`/`route` feed the rating ledger (issue #329, Phase 1)."""
+    from jev_agent.code_orchestrator import RatingLedger, ledger_path_for_repo
+
+    diff = tmp_path / "change.diff"
+    diff.write_text("diff --git a/x.py b/x.py\\n+print(1)\\n", encoding="utf-8")
+    assert (
+        runner.invoke(
+            app,
+            [
+                "code",
+                "grade",
+                "--task",
+                "fix x",
+                "--diff-file",
+                str(diff),
+                "--repo",
+                str(fixture_repo),
+            ],
+        ).exit_code
+        == 0
+    )
+    assert (
+        runner.invoke(
+            app, ["code", "route", "Refactor billing", "--repo", str(fixture_repo)]
+        ).exit_code
+        == 0
+    )
+    records = RatingLedger(ledger_path_for_repo(fixture_repo)).records()
+    assert [(r.kind, r.status, r.source) for r in records] == [
+        ("code_review", "graded", "cli"),
+        ("routing", "graded", "cli"),
+    ]
+    assert records[0].code_quality == 3 and records[0].gate_decision == "accept"
+    assert records[1].tier == "frontier" and records[1].skill == "refactor"
+
+
+def test_code_ratings_shows_ledger_aggregates(fixture_repo: Path) -> None:
+    """`jev code ratings` reads the ledger; empty on a repo with no grades."""
+    from jev_agent.code_orchestrator import (
+        CodeReviewGrade,
+        RatingLedger,
+        code_review_record,
+        ledger_path_for_repo,
+    )
+    from jev_agent.code_orchestrator.grades import GateOutcome
+
+    result = runner.invoke(app, ["code", "ratings", "--repo", str(fixture_repo)])
+    assert result.exit_code == 0, result.output
+    assert "No grades recorded yet" in result.output
+    RatingLedger(ledger_path_for_repo(fixture_repo)).record(
+        code_review_record(
+            CodeReviewGrade(
+                code_quality=4,
+                instruction_followed=True,
+                likely_correct=True,
+                merge_action="accept",
+                answer_confidence={"merge_action": 0.9},
+            ),
+            gate=GateOutcome(
+                decision="accept", reason="accept", merge_action="accept", confidence=0.9
+            ),
+            agent="claude_code",
+            source="gate",
+        )
+    )
+    result = runner.invoke(app, ["code", "ratings", "--repo", str(fixture_repo)])
+    assert result.exit_code == 0, result.output
+    assert "claude_code" in result.output
+    assert "4.00" in result.output
+
+
 def test_dashboard_port_in_use_is_a_clean_error(
     fixture_repo: Path,
 ) -> None:

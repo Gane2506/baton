@@ -61,6 +61,7 @@ SHOTS = [
         "/learning?profile=graph-demo&tab=graph&lesson=S2",
         height=2200,
     ),
+    Shot("dashboard-learning-ratings.png", "/learning?tab=ratings", height=2200),
     Shot("dashboard-spend.png", "/spend", height=1580),
     Shot("dashboard-kpis.png", "/kpis", height=1700),
     Shot("dashboard-settings.png", "/settings", height=1400),
@@ -111,6 +112,38 @@ def seed(demo: Path, env: dict[str, str]) -> None:
     print(run([sys.executable, str(HERE / "seed_demo.py"), str(demo)], demo, env).strip())
     seed_library(demo, env)
     seed_graph_demo(demo, env)
+    seed_ratings_demo(demo, env)
+
+
+def seed_ratings_demo(demo: Path, env: dict[str, str]) -> None:
+    """A few ledger grades, so the Ratings tab shot shows real aggregates
+    per agent and tier instead of the empty state."""
+    snippet = (
+        "from dataclasses import replace\n"
+        "from pathlib import Path\n"
+        "from jev_agent.code_orchestrator import (\n"
+        "    CodeReviewGrade, RatingLedger, code_review_record, ledger_path_for_repo,\n"
+        ")\n"
+        "from jev_agent.code_orchestrator.grades import GateOutcome\n"
+        "ledger = RatingLedger(ledger_path_for_repo(Path('.')))\n"
+        "for quality, decision, agent in (\n"
+        "    (4, 'accept', 'claude_code'), (3, 'accept', 'claude_code'),\n"
+        "    (2, 'rework', 'claude_code'), (4, 'accept', 'codex'),\n"
+        "):\n"
+        "    record = code_review_record(\n"
+        "        CodeReviewGrade(code_quality=quality, instruction_followed=True,\n"
+        "            likely_correct=True, merge_action='accept'\n"
+        "            if decision == 'accept' else 'request_changes',\n"
+        "            answer_confidence={'merge_action': 0.9}),\n"
+        "        gate=GateOutcome(decision=decision, reason='demo',\n"
+        "            merge_action='accept', confidence=0.9),\n"
+        "        agent=agent, model='opus' if agent == 'claude_code' else 'gpt',\n"
+        "        source='gate',\n"
+        "    )\n"
+        "    ledger.record(replace(record, tier='frontier'\n"
+        "        if agent == 'claude_code' else 'mid'))\n"
+    )
+    run([sys.executable, "-c", snippet], demo, env)
 
 
 def seed_graph_demo(demo: Path, env: dict[str, str]) -> None:
