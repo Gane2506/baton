@@ -7,16 +7,27 @@ same port names the owner and points at `jev dashboard stop` instead of `lsof`.
 port is bindable again before reporting success, and the start probe binds the way
 uvicorn binds (SO_REUSEADDR), so TIME_WAIT left by the previous server does not read
 as a busy port.
+
+With no pid file `stop` is a cwd trap, not a product bug (issue #362): it defaults to
+the current directory, so run from anywhere but the repo it finds no pid file while a
+dashboard is running. The message says which directory was checked and what to do, and
+when a dashboard is listening on the port it names the repo that dashboard serves and
+the exact command to stop it. This only finds and reports — stopping still goes
+through the pid file.
 """
 
 import contextlib
+import http.server
 import json
 import os
 import signal
 import socket
+import socketserver
 import subprocess
+import sys
 import threading
 import time
+import urllib.request
 from pathlib import Path
 
 import pytest
@@ -111,10 +122,222 @@ def _write_pidfile(repo: Path, pid: int, port: int) -> Path:
     return path
 
 
-def test_stop_without_pidfile(fixture_repo: Path) -> None:
-    result = runner.invoke(app, ["dashboard", "stop", "--repo", str(fixture_repo)])
+def test_stop_without_pidfile_and_free_port(fixture_repo: Path) -> None:
+    """No pid file and nothing listening: the message names the directory
+    checked and what to do. The port is explicit: the default 8765 must not
+    be assumed free — another repo's dashboard may hold it, and the report
+    must not be judged on a port it does not own."""
+    result = runner.invoke(
+        app,
+        ["dashboard", "stop", "--repo", str(fixture_repo), "--port", str(_free_port())],
+    )
     assert result.exit_code == 0, result.output
-    assert "no dashboard recorded" in result.output
+    assert f"no dashboard recorded for {fixture_repo}" in result.output
+    assert "from the repo root" in result.output
+    assert "--repo" in result.output
+
+
+def _serve(
+    directory: Path, port: int, marker: bool, root: str | None = None
+) -> subprocess.Popen[str]:
+    """A `python -m http.server` on `port` whose index page does (or does not)
+    carry the dashboard's `<title>Baton · ` marker, and — when `root` is given —
+    the sidebar's `<div>{{ root }}</div>` naming the repo it serves. Its
+    process is a stand-in for a dashboard that never wrote a pid file."""
+    directory.mkdir(parents=True, exist_ok=True)
+    title = "Baton · Board" if marker else "Some other page"
+    aside = f"<aside><div>{root}</div></div></aside>" if root is not None else ""
+    (directory / "index.html").write_text(
+        f"<!doctype html><html><head><title>{title}</title></head><body>{aside}hi</body></html>",
+        encoding="utf-8",
+    )
+    proc = subprocess.Popen(
+        [
+            sys.executable,
+            "-m",
+            "http.server",
+            str(port),
+            "--bind",
+            "127.0.0.1",
+            "--directory",
+            str(directory),
+        ],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        text=True,
+    )
+    # Reap it like a shell parent would: a child killed by `stop` lingers as
+    # a zombie until reaped, and `pid_alive` (kill(pid, 0)) still sees a
+    # zombie — the same reason `test_stop_live_process` double-forks.
+    threading.Thread(target=proc.wait, daemon=True).start()
+    deadline = time.monotonic() + 10.0
+    while time.monotonic() < deadline:
+        try:
+            with urllib.request.urlopen(f"http://127.0.0.1:{port}/", timeout=1.0) as resp:
+                if resp.status == 200:
+                    return proc
+        except OSError:
+            time.sleep(0.1)
+    proc.terminate()
+    raise AssertionError(f"test server on {port} did not come up")
+
+
+def _server_gone(proc: subprocess.Popen[str], timeout_s: float = 10.0) -> bool:
+    """True when the test server's process is gone (a zombie reaped by the
+    daemon reaper thread counts as gone once `poll()` sees the exit)."""
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        if proc.poll() is not None:
+            return True
+        time.sleep(0.1)
+    return proc.poll() is not None
+
+
+def test_stop_without_pidfile_names_other_repos_dashboard(
+    fixture_repo: Path, tmp_path: Path
+) -> None:
+    """Issue #362, the cwd trap: no pid file for this repo, but a dashboard
+    for another repo is listening — `stop` names that repo and the exact
+    command to stop it, and leaves it alone. This only finds and reports."""
+    port = _free_port()
+    proc = _serve(tmp_path / "site", port, marker=True, root=str(tmp_path / "other-repo"))
+    try:
+        result = runner.invoke(
+            app,
+            ["dashboard", "stop", "--repo", str(fixture_repo), "--port", str(port)],
+        )
+        assert result.exit_code == 0, result.output
+        flat = " ".join(result.output.split())
+        assert f"no dashboard recorded for {fixture_repo}" in flat
+        assert str(tmp_path / "other-repo") in flat
+        assert f"jev dashboard stop --repo {tmp_path / 'other-repo'}" in flat
+        assert proc.poll() is None, "stop killed another repo's dashboard"
+    finally:
+        with contextlib.suppress(ProcessLookupError, PermissionError):
+            proc.terminate()
+        _server_gone(proc)
+
+
+def test_stop_without_pidfile_reports_same_repo_dashboard(
+    fixture_repo: Path, tmp_path: Path
+) -> None:
+    """Issue #362: no pid file, but a dashboard for THIS repo is listening —
+    `stop` reports it is running and that there is no pid file. It does not
+    stop it: stopping still goes through the pid file."""
+    port = _free_port()
+    proc = _serve(tmp_path / "site", port, marker=True, root=str(fixture_repo))
+    try:
+        result = runner.invoke(
+            app,
+            ["dashboard", "stop", "--repo", str(fixture_repo), "--port", str(port)],
+        )
+        assert result.exit_code == 0, result.output
+        assert f"no dashboard recorded for {fixture_repo}" in result.output
+        assert "for this repo is running" in result.output
+        assert "no pid file" in result.output
+        assert proc.poll() is None, "stop killed a dashboard without a pid file"
+    finally:
+        with contextlib.suppress(ProcessLookupError, PermissionError):
+            proc.terminate()
+        _server_gone(proc)
+
+
+class _GarbageHandler(socketserver.BaseRequestHandler):
+    """Speaks an SSH banner, not HTTP — the listener `stop` must report,
+    never crash on."""
+
+    def handle(self) -> None:
+        self.request.sendall(b"SSH-2.0-OpenSSH_8.9\r\n")
+        self.request.close()
+
+
+def _garbage_listener(port: int) -> socketserver.ThreadingTCPServer:
+    server = socketserver.ThreadingTCPServer(
+        ("127.0.0.1", port), _GarbageHandler, bind_and_activate=False
+    )
+    server.allow_reuse_address = True
+    server.server_bind()
+    server.server_activate()
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    return server
+
+
+def test_stop_without_pidfile_reports_garbage_speaking_listener(fixture_repo: Path) -> None:
+    """Issue #362: a listener that speaks no HTTP raises BadStatusLine out of
+    the probe (an HTTPException, not an OSError) — `stop` must report the
+    plain message, never crash, and leave it alone."""
+    port = _free_port()
+    server = _garbage_listener(port)
+    try:
+        assert dashboard_cmd._dashboard_served_root("127.0.0.1", port) is None
+        result = runner.invoke(
+            app,
+            ["dashboard", "stop", "--repo", str(fixture_repo), "--port", str(port)],
+        )
+        assert result.exit_code == 0, result.output
+        assert f"no dashboard recorded for {fixture_repo}" in result.output
+        # Still listening: the banner answers a fresh connection.
+        with socket.create_connection(("127.0.0.1", port), timeout=2.0) as conn:
+            assert conn.recv(64).startswith(b"SSH-2.0-")
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+class _RedirectHandler(http.server.BaseHTTPRequestHandler):
+    """Redirects `/` to a marker page: the probe must identify the listener
+    itself, not content served from wherever it redirects to."""
+
+    def do_GET(self) -> None:
+        if self.path == "/":
+            self.send_response(302)
+            self.send_header("Location", "/target")
+            self.end_headers()
+            return
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html")
+        self.end_headers()
+        self.wfile.write(
+            b"<!doctype html><html><head><title>Baton \xc2\xb7 Board</title></head>"
+            b"<body><aside><div>/some/repo</div></div></aside></body></html>"
+        )
+
+    def log_message(self, *args: object) -> None:
+        pass
+
+
+def test_dashboard_served_root(tmp_path: Path) -> None:
+    """The HTTP probe reads the repo a listener serves: the root string for
+    a dashboard page with the sidebar root, "" for a dashboard page without
+    one, None for anything else or nothing listening."""
+    port = _free_port()
+    marker_proc = _serve(tmp_path / "marker", port, marker=True, root="/some/repo")
+    no_root_port = _free_port()
+    no_root_proc = _serve(tmp_path / "noroot", no_root_port, marker=True)
+    other_port = _free_port()
+    other_proc = _serve(tmp_path / "other", other_port, marker=False)
+    try:
+        assert dashboard_cmd._dashboard_served_root("127.0.0.1", port) == "/some/repo"
+        assert dashboard_cmd._dashboard_served_root("127.0.0.1", no_root_port) == ""
+        assert dashboard_cmd._dashboard_served_root("127.0.0.1", other_port) is None
+        assert dashboard_cmd._dashboard_served_root("127.0.0.1", _free_port()) is None
+    finally:
+        for proc in (marker_proc, no_root_proc, other_proc):
+            with contextlib.suppress(ProcessLookupError, PermissionError):
+                proc.terminate()
+            _server_gone(proc)
+
+
+def test_dashboard_served_root_ignores_redirect() -> None:
+    """The probe does not follow redirects: a listener whose `/` redirects
+    to a dashboard page is not identified as one."""
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _RedirectHandler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        assert dashboard_cmd._dashboard_served_root("127.0.0.1", server.server_port) is None
+    finally:
+        server.shutdown()
+        server.server_close()
 
 
 def test_stop_with_stale_pidfile_removes_it(fixture_repo: Path) -> None:
@@ -130,7 +353,10 @@ def test_stop_with_unreadable_pidfile_removes_it(fixture_repo: Path) -> None:
     path = fixture_repo / ".jev" / "dashboard.pid"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("not json", encoding="utf-8")
-    result = runner.invoke(app, ["dashboard", "stop", "--repo", str(fixture_repo)])
+    result = runner.invoke(
+        app,
+        ["dashboard", "stop", "--repo", str(fixture_repo), "--port", str(_free_port())],
+    )
     assert result.exit_code == 0, result.output
     assert "no dashboard recorded" in result.output
 
@@ -254,14 +480,18 @@ def test_start_writes_pidfile_and_removes_it_on_exit(
         seen["port"] = kwargs.get("port")
 
     monkeypatch.setattr(uvicorn, "run", fake_run)
-    result = runner.invoke(app, ["dashboard", "--no-open", "--repo", str(fixture_repo)])
+    port = _free_port()
+    result = runner.invoke(
+        app,
+        ["dashboard", "--no-open", "--port", str(port), "--repo", str(fixture_repo)],
+    )
     assert result.exit_code == 0, result.output
     info = seen["pidfile"]
     assert isinstance(info, dict)
     assert info["pid"] == os.getpid()
-    assert info["port"] == 8765
+    assert info["port"] == port
     assert seen["host"] == "127.0.0.1"
-    assert seen["port"] == 8765
+    assert seen["port"] == port
     # A clean exit removes the pid file, so the next start does not see a stale one.
     assert not (fixture_repo / ".jev" / "dashboard.pid").exists()
 
