@@ -51,6 +51,8 @@ def _platform_search_dirs() -> list[Path]:
         candidates = [
             Path("/opt/homebrew/bin"),  # Apple Silicon Homebrew
             Path("/usr/local/bin"),  # Intel Homebrew
+            home / ".local" / "bin",  # pip --user, the claude installer
+            home / ".npm-global" / "bin",  # npm global prefix (codex)
         ]
         # macOS nvm: ~/.nvm/versions/node/vXX.YY.ZZ/bin (the version dirs were
         # missing here until issue #333: the bare root dir itself holds no binary).
@@ -75,6 +77,7 @@ def _platform_search_dirs() -> list[Path]:
         Path("/usr/local/bin"),
         Path("/opt/nodejs/bin"),
         home / ".local" / "bin",
+        home / ".npm-global" / "bin",  # npm global prefix
     ]
     # nvm version dirs: ~/.nvm/versions/node/vXX.YY.ZZ/bin
     return candidates + _nvm_bin_dirs(home / ".nvm" / "versions" / "node")
@@ -93,8 +96,9 @@ def resolve_executable(name: str) -> str | None:
     """Full path to `name`, or None when it cannot be found.
 
     Checks PATH first via `shutil.which`, then falls back to well-known
-    per-platform install locations (Homebrew + nvm on macOS, npm/nodejs/nvm
-    on Windows, /usr/local + nvm on Linux).
+    per-platform install locations (Homebrew + nvm + per-user ~/.local/bin
+    and ~/.npm-global/bin on macOS, npm/nodejs/nvm on Windows, /usr/local +
+    nvm + per-user ~/.local/bin and ~/.npm-global/bin on Linux).
     """
     found = shutil.which(name)
     if found:

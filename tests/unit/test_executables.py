@@ -104,6 +104,50 @@ def test_platform_search_dirs_darwin_enumerates_nvm(
     assert dirs.index(nvm / "v20.10.0" / "bin") < dirs.index(nvm / "v18.19.0" / "bin")
 
 
+def test_platform_search_dirs_darwin_includes_local_and_npm_global(
+    monkeypatch: pytest.MonkeyPatch, bare_env: Path
+) -> None:
+    """Issue #350: `claude` (~/.local/bin) and `codex` (~/.npm-global/bin)
+    were invisible under a bare env because darwin listed neither dir."""
+    monkeypatch.setattr(sys, "platform", "darwin")
+    home = bare_env / "home"
+    dirs = executables._platform_search_dirs()
+    assert home / ".local" / "bin" in dirs
+    assert home / ".npm-global" / "bin" in dirs
+    # After the Homebrew dirs, before the nvm version dirs.
+    assert dirs.index(home / ".local" / "bin") > dirs.index(Path("/usr/local/bin"))
+    assert dirs.index(home / ".npm-global" / "bin") > dirs.index(Path("/usr/local/bin"))
+
+
+def test_resolve_finds_claude_in_local_bin_darwin(
+    monkeypatch: pytest.MonkeyPatch, bare_env: Path
+) -> None:
+    """Issue #350, live shape: bare PATH, `claude` only in ~/.local/bin."""
+    monkeypatch.setattr(sys, "platform", "darwin")
+    claude = _make_executable(bare_env / "home" / ".local" / "bin" / "claude")
+    assert executables.resolve_executable("claude") == str(claude)
+
+
+def test_resolve_finds_codex_in_npm_global_bin_darwin(
+    monkeypatch: pytest.MonkeyPatch, bare_env: Path
+) -> None:
+    """Issue #350, live shape: bare PATH, `codex` only in ~/.npm-global/bin."""
+    monkeypatch.setattr(sys, "platform", "darwin")
+    codex = _make_executable(bare_env / "home" / ".npm-global" / "bin" / "codex")
+    assert executables.resolve_executable("codex") == str(codex)
+
+
+def test_platform_search_dirs_linux_includes_npm_global(
+    monkeypatch: pytest.MonkeyPatch, bare_env: Path
+) -> None:
+    """Issue #350: npm's global prefix is the same convention on Linux."""
+    monkeypatch.setattr(sys, "platform", "linux")
+    home = bare_env / "home"
+    dirs = executables._platform_search_dirs()
+    assert home / ".npm-global" / "bin" in dirs
+    assert home / ".local" / "bin" in dirs
+
+
 def test_platform_search_dirs_linux_enumerates_nvm(
     monkeypatch: pytest.MonkeyPatch, bare_env: Path
 ) -> None:
