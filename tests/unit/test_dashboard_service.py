@@ -401,18 +401,16 @@ def test_service_flags_before_a_subcommand_are_rejected(fixture_repo: Path) -> N
 
 
 def test_dashboard_help_lists_service_flags() -> None:
-    """The flags are registered on the `dashboard` command.
+    """The flags are listed by `jev dashboard --help`.
 
-    Asserted on the command structure, not the rendered help text: Rich
-    truncates long option names when the terminal is narrow (CI renders
-    `--open --no-…`), so the literal flag string is not always in `--help`.
+    The terminal width is forced wide: Rich truncates long option names when
+    it is narrow (CI renders `--open --no-…`), so the literal flag string is
+    not always in `--help` output.
     """
-    from typer.main import get_command
-
-    dashboard = get_command(app).commands["dashboard"]
-    opts = {opt for param in dashboard.params for opt in param.opts}
-    assert "--install-service" in opts
-    assert "--uninstall-service" in opts
+    result = runner.invoke(app, ["dashboard", "--help"], env={"COLUMNS": "200"})
+    assert result.exit_code == 0, result.output
+    assert "--install-service" in result.output
+    assert "--uninstall-service" in result.output
 
 
 def test_refuse_home_root_directly(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
