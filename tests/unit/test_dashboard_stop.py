@@ -15,10 +15,12 @@ another repo's dashboard on the same port is reported, never killed.
 """
 
 import contextlib
+import http.server
 import json
 import os
 import signal
 import socket
+import socketserver
 import subprocess
 import sys
 import threading
@@ -246,6 +248,82 @@ def test_stop_by_port_leaves_non_dashboard_alone(fixture_repo: Path, tmp_path: P
         with contextlib.suppress(ProcessLookupError, PermissionError):
             proc.terminate()
         _server_gone(proc)
+
+
+class _GarbageHandler(socketserver.BaseRequestHandler):
+    """Speaks an SSH banner, not HTTP — the listener `stop` must report,
+    never crash on."""
+
+    def handle(self) -> None:
+        self.request.sendall(b"SSH-2.0-OpenSSH_8.9\r\n")
+        self.request.close()
+
+
+def _garbage_listener(port: int) -> socketserver.ThreadingTCPServer:
+    server = socketserver.ThreadingTCPServer(
+        ("127.0.0.1", port), _GarbageHandler, bind_and_activate=False
+    )
+    server.allow_reuse_address = True
+    server.server_bind()
+    server.server_activate()
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    return server
+
+
+def test_stop_by_port_reports_garbage_speaking_listener(fixture_repo: Path) -> None:
+    """Issue #362: a listener that speaks no HTTP raises BadStatusLine out of
+    the probe (an HTTPException, not an OSError) — `stop` must report it,
+    never crash, and leave it alone."""
+    port = _free_port()
+    server = _garbage_listener(port)
+    try:
+        assert dashboard_cmd._dashboard_served_root("127.0.0.1", port) is None
+        result = runner.invoke(
+            app,
+            ["dashboard", "stop", "--repo", str(fixture_repo), "--port", str(port)],
+        )
+        assert result.exit_code == 0, result.output
+        assert "not a jev dashboard" in result.output
+        # Still listening: the banner answers a fresh connection.
+        with socket.create_connection(("127.0.0.1", port), timeout=2.0) as conn:
+            assert conn.recv(64).startswith(b"SSH-2.0-")
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+class _RedirectHandler(http.server.BaseHTTPRequestHandler):
+    """Redirects `/` to a marker page: the probe must identify the listener
+    itself, not content served from wherever it redirects to."""
+
+    def do_GET(self) -> None:
+        if self.path == "/":
+            self.send_response(302)
+            self.send_header("Location", "/target")
+            self.end_headers()
+            return
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html")
+        self.end_headers()
+        self.wfile.write(
+            b"<!doctype html><html><head><title>Baton \xc2\xb7 Board</title></head>"
+            b"<body><aside><div>/some/repo</div></div></aside></body></html>"
+        )
+
+    def log_message(self, *args: object) -> None:
+        pass
+
+
+def test_dashboard_served_root_ignores_redirect() -> None:
+    """The probe does not follow redirects: a listener whose `/` redirects
+    to a dashboard page is not identified as one."""
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _RedirectHandler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        assert dashboard_cmd._dashboard_served_root("127.0.0.1", server.server_port) is None
+    finally:
+        server.shutdown()
+        server.server_close()
 
 
 def test_stop_stale_pidfile_finds_live_dashboard_on_recorded_port(

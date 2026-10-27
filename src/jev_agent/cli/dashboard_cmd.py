@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import contextlib
 import html
+import http.client
 import json
 import os
 import re
@@ -61,7 +62,7 @@ TOKEN_ENV = "JEV_DASHBOARD_TOKEN"
 PID_FILENAME = "dashboard.pid"
 _STOP_WAIT_S = 10.0  # how long `stop` waits for a graceful shutdown before forcing it
 _PORT_FREE_WAIT_S = 5.0  # how long `stop` then waits for the port to be bindable again
-_DASHBOARD_MARKER = "<title>Baton"  # the root page of a jev dashboard, always
+_DASHBOARD_MARKER = "<title>Baton · "  # the root page's title, e.g. `<title>Baton · Board`
 _IDENTIFY_TIMEOUT_S = 2.0  # how long `stop` waits on the HTTP probe below
 RunFn = Callable[[list[str]], subprocess.CompletedProcess[str]]
 
@@ -238,27 +239,38 @@ def _wait_port_free(host: str, port: int, timeout_s: float) -> bool:
         time.sleep(0.1)
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """A redirect handler that never follows: the probe must identify the
+    listener itself, not content served from wherever it redirects to."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # type: ignore[no-untyped-def]
+        return None
+
+
 def _dashboard_served_root(
     host: str, port: int, timeout_s: float = _IDENTIFY_TIMEOUT_S
 ) -> str | None:
     """The repo root the listener on `host:port` serves, or None when it is
     not a jev dashboard.
 
-    The root page always carries `<title>Baton`, and the sidebar renders the
+    The root page always carries `<title>Baton · …`, and the sidebar renders the
     served repo root as `<div>{{ root }}</div>` (both since 2026-10-13, so
     every dashboard a pid file could be missing for serves them). A dashboard
     bound off loopback with a token answers 401 plain text to an
     unauthenticated probe, so this only identifies loopback (tokenless)
     dashboards. Returns "" for a dashboard whose root could not be read:
     identified, but not attributable to a repo — `stop` reports it instead
-    of killing it.
+    of killing it. A listener that speaks no HTTP at all (an SSH banner, a
+    database) raises `http.client.HTTPException` out of the probe, not
+    `OSError` — it is caught here and reads as "not a dashboard".
     """
     try:
-        with urllib.request.urlopen(f"http://{host}:{port}/", timeout=timeout_s) as response:
+        opener = urllib.request.build_opener(_NoRedirect())
+        with opener.open(f"http://{host}:{port}/", timeout=timeout_s) as response:
             if response.status != 200:
                 return None
             body = response.read(65536)
-    except (OSError, ValueError):
+    except (OSError, ValueError, http.client.HTTPException):
         return None
     text = body.decode("utf-8", errors="ignore")
     if _DASHBOARD_MARKER not in text:
@@ -375,7 +387,9 @@ def _listening_pid(port: int) -> int | None:
     return None
 
 
-def _stop_by_port(root: Path, host: str, port: int, timeout_s: float) -> bool:
+def _stop_by_port(
+    root: Path, host: str, port: int, timeout_s: float, *, stale_pidfile: bool = False
+) -> bool:
     """Stop the dashboard for `root` listening on `host:port`, with no pid file (issue #362).
 
     Returns True when the case was handled (something stopped, or a listener
@@ -421,10 +435,20 @@ def _stop_by_port(root: Path, host: str, port: int, timeout_s: float) -> bool:
             "its pid could not be determined; stop the process on that port by hand"
         )
         return True
+    # Re-check the pid still owns the port immediately before the kill: the
+    # probe, the lookup and the signal are not atomic, and a pid recycled
+    # between them must not be signalled.
+    if _listening_pid(port) != pid:
+        console.print(
+            f"the dashboard on port {port} changed while stopping it; nothing "
+            "was stopped — run `jev dashboard stop` again"
+        )
+        return True
     if _stop_pid(pid, timeout_s):
         _wait_port_free_after_stop(root, {"host": host, "port": port}, pid)
         _remove_dashboard_pid(root)
-        console.print(f"stopped the dashboard (pid {pid}) — no pid file, found on port {port}")
+        found = "stale pid file" if stale_pidfile else "no pid file"
+        console.print(f"stopped the dashboard (pid {pid}) — {found}, found on port {port}")
         return True
     raise fail(
         f"could not stop the dashboard (pid {pid}): it is still running "
@@ -690,7 +714,7 @@ def dashboard_stop(
         console.print(f"no dashboard running (pid {pid} is gone); removed the stale pid file")
         recorded_port = info.get("port")
         probe_port = recorded_port if isinstance(recorded_port, int) and recorded_port > 0 else port
-        _stop_by_port(root, "127.0.0.1", probe_port, timeout)
+        _stop_by_port(root, "127.0.0.1", probe_port, timeout, stale_pidfile=True)
         return
     if _stop_pid(pid, timeout):
         # The process being gone is not the same as the port being free:
