@@ -1753,7 +1753,9 @@ def test_select_chevron_rule_in_stylesheet(client: TestClient) -> None:
     assert "select, select:disabled {" in css
     assert "--select-chevron:" in css
     assert "appearance: none" in css
-    assert "padding-right: 34px" in css
+    # Chevron clearance via the spacing token (issue #332): --s7 is 32px,
+    # clearing the chevron layers positioned 22px/16px from the right edge.
+    assert "padding-right: var(--s7)" in css
     assert "linear-gradient(45deg" in css
     assert "linear-gradient(135deg" in css
 

@@ -53,8 +53,8 @@
   --ui-shadow-btn: none;
   --ui-h-spacing: 0;
   --ui-h-weight: 500;
-  --ui-pad: 20px 26px;
-  --ui-gap: 26px;
+  --ui-pad: var(--s5) var(--s6);
+  --ui-gap: var(--s6);
 }
 
 :root[data-ui-style="flat"] {
@@ -86,8 +86,8 @@
   --ui-border-w: 0;
   --ui-shadow: 9px 9px 18px rgba(0, 0, 0, 0.38), -9px -9px 18px rgba(255, 255, 255, 0.05);
   --ui-shadow-btn: 5px 5px 10px rgba(0, 0, 0, 0.38), -5px -5px 10px rgba(255, 255, 255, 0.05);
-  --ui-pad: 20px 22px;
-  --ui-gap: 22px;
+  --ui-pad: var(--s5) var(--s6);
+  --ui-gap: var(--s6);
 }
 
 :root[data-ui-style="glassmorphism"] {
@@ -113,8 +113,8 @@
   --ui-shadow-btn: inset 2px 2px 4px rgba(255, 255, 255, 0.14),
     inset -3px -3px 6px rgba(0, 0, 0, 0.25),
     5px 5px 12px rgba(0, 0, 0, 0.28);
-  --ui-pad: 20px 24px;
-  --ui-gap: 22px;
+  --ui-pad: var(--s5) var(--s6);
+  --ui-gap: var(--s6);
   --ui-h-weight: 700;
 }
 
@@ -133,8 +133,8 @@
   --ui-border-w: 1px;
   --ui-shadow: 0 14px 34px rgba(0, 0, 0, 0.35);
   --ui-shadow-btn: 0 6px 16px rgba(0, 0, 0, 0.30);
-  --ui-pad: 20px 22px;
-  --ui-gap: 24px;
+  --ui-pad: var(--s5) var(--s6);
+  --ui-gap: var(--s6);
   --ui-h-weight: 700;
 }
 
@@ -403,7 +403,7 @@ html[data-ui-style="split-screen"] .sidebar {
 }
 html[data-ui-style="split-screen"] .sidebar nav a {
   font-size: var(--text-base);
-  padding: 12px var(--s3);
+  padding: var(--s3) var(--s3);
 }
 html[data-ui-style="split-screen"] .sidebar nav a.active {
   box-shadow: inset 4px 0 0 var(--accent);
