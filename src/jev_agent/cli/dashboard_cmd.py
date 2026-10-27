@@ -30,6 +30,7 @@ from rich.console import Console
 from rich.markup import escape
 
 from jev_agent.app.errors import JevError
+from jev_agent.cli import service as service_mod
 from jev_agent.cli.repo import RepoOption
 from jev_agent.cli.wiring import cli_errors, fail, repo_config, repo_root
 from jev_agent.config.defaults import STATE_DIRNAME
@@ -132,6 +133,42 @@ def _refuse_home_root(root: Path) -> None:
         )
 
 
+def _install_service(root: Path, host: str, port: int) -> None:
+    """Install the dashboard as a login/reboot service for `root` (issue #341).
+
+    Records the absolute `jev` path and the worker CLIs found at install time,
+    so the service never depends on the service manager's minimal PATH.
+    """
+    with cli_errors():
+        platform = service_mod.current_platform()
+        spec = service_mod.ServiceSpec(
+            jev_path=service_mod.jev_executable_path(),
+            repo=root,
+            host=host,
+            port=port,
+            cli_path=service_mod.discover_cli_path(),
+        )
+        path = service_mod.install_service(spec, platform)
+    console.print(f"installed the dashboard as a {service_mod.describe_service(platform)}")
+    console.print(f"  definition: {escape(str(path))}")
+    console.print(f"  serves: {escape(str(root))} on {host}:{port}")
+    console.print(
+        "  it starts at login and restarts after a reboot. Remove it with "
+        "`jev dashboard --uninstall-service`."
+    )
+
+
+def _uninstall_service() -> None:
+    """Remove the service installed by `--install-service`."""
+    with cli_errors():
+        platform = service_mod.current_platform()
+        removed = service_mod.uninstall_service(platform)
+    if removed is None:
+        console.print(f"no dashboard service installed ({service_mod.describe_service(platform)})")
+    else:
+        console.print(f"removed the dashboard service ({escape(str(removed))})")
+
+
 def _check_port_free(host: str, port: int, root: Path) -> None:
     """Fail with an `error:` line when the dashboard cannot bind (issue #198).
 
@@ -187,6 +224,22 @@ def dashboard(
             show_default=False,
         ),
     ] = None,
+    install_service: Annotated[
+        bool,
+        typer.Option(
+            "--install-service",
+            help="Install the dashboard as a service that starts at login "
+            "(launchd on macOS, systemd on Linux, Scheduled Task on Windows), "
+            "then exit instead of serving.",
+        ),
+    ] = False,
+    uninstall_service: Annotated[
+        bool,
+        typer.Option(
+            "--uninstall-service",
+            help="Remove the service installed by --install-service, then exit.",
+        ),
+    ] = False,
     repo: RepoOption = Path("."),
 ) -> None:
     """Serve the web dashboard: board, runs, queue, learning, chats, spend and settings."""
@@ -198,11 +251,24 @@ def dashboard(
             or port != 8765
             or not open_browser
             or token is not None
+            or install_service
+            or uninstall_service
             or repo != Path(".")
         ):
             raise fail(
                 "options belong after the subcommand, e.g. `jev dashboard stop --repo <repo>`"
             )
+        return
+    if install_service or uninstall_service:
+        if install_service and uninstall_service:
+            raise fail("pass only one of --install-service and --uninstall-service")
+        with cli_errors():
+            root = repo_root(repo)
+            _refuse_home_root(root)
+        if install_service:
+            _install_service(root, host, port)
+        else:
+            _uninstall_service()
         return
     missing = missing_dependencies()
     if missing:
