@@ -233,6 +233,7 @@ deterministic. Everything else in this checklist is enforced by review.
 | 12 | `uv lock --check` — the lockfile matches `pyproject.toml`. |
 | 16 | `README.md` and `CONTRIBUTING.md` document `uv sync`, `pytest` and `ruff`. |
 | 10 | `tests/integration/` is non-empty; live tests stay opt-in behind `JEV_LIVE_TESTS`. |
+| — | Dashboard spacing (issue #332): no literal `gap`/`margin`/`padding` value in the dashboard stylesheets or templates — every value resolves to the `--s*` scale in `style.css` (`scripts/check_spacing_tokens.py`). |
 
 Review-only (need a human reading the diff): the rest of 1, 2, 3, 4, 5, 6, 7,
 8, 10, 11, 13, 14, 15, 16 — plus the judgment calls this checklist names

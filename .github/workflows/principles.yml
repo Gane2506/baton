@@ -228,3 +228,10 @@ jobs:
       # matches pyproject.toml.
       - name: Lockfile in sync
         run: uv lock --check
+
+      # Spacing tokens (issue #332): every gap/margin/padding value in the
+      # dashboard stylesheets must resolve to the single --s* scale defined
+      # in style.css — no literal spacing values. Stdlib only, like the
+      # structural checks above: no dependency sync, no network.
+      - name: Spacing tokens — no literal gap/margin/padding
+        run: python3 scripts/check_spacing_tokens.py
