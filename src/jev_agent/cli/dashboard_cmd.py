@@ -8,6 +8,11 @@ Port handling (issue #333): the running dashboard records its pid in
 `<repo>/.jev/dashboard.pid`, so a second start on the same port names the owner and points
 at `jev dashboard stop` instead of sending the user to `lsof` + kill. A pid file left by a
 crashed dashboard is stale (its pid is dead) and is overwritten, never trusted.
+
+Port handling (issue #355): `stop` means stopped — after the process is gone, `stop` waits
+(bounded) until the port is bindable again before reporting success, and the start probe
+binds the way uvicorn binds (SO_REUSEADDR), so a port left in TIME_WAIT by the previous
+server's closed connections does not read as busy.
 """
 
 from __future__ import annotations
@@ -42,6 +47,7 @@ console = Console()
 TOKEN_ENV = "JEV_DASHBOARD_TOKEN"
 PID_FILENAME = "dashboard.pid"
 _STOP_WAIT_S = 10.0  # how long `stop` waits for a graceful shutdown before forcing it
+_PORT_FREE_WAIT_S = 5.0  # how long `stop` then waits for the port to be bindable again
 
 dashboard_app = typer.Typer(
     name="dashboard",
@@ -169,33 +175,72 @@ def _uninstall_service() -> None:
         console.print(f"removed the dashboard service ({escape(str(removed))})")
 
 
+def _probe_bind_error(host: str, port: int) -> OSError | None:
+    """The error from binding `host:port`, or None when it binds.
+
+    Probed the way uvicorn binds (`uvicorn.config.Config.bind_socket` sets
+    SO_REUSEADDR), so a port left in TIME_WAIT by the previous server's closed
+    connections counts as free: a plain bind would wrongly call it busy
+    (issue #355), and uvicorn itself would have bound it fine.
+    """
+    try:
+        family, _, _, _, sockaddr = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)[0]
+        probe = socket.socket(family)
+        try:
+            probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            probe.bind(sockaddr)
+        finally:
+            probe.close()
+    except OSError as exc:
+        return exc
+    return None
+
+
+def _port_bindable(host: str, port: int) -> bool:
+    """True when a listener could bind `host:port` right now (uvicorn's terms)."""
+    return _probe_bind_error(host, port) is None
+
+
+def _wait_port_free(host: str, port: int, timeout_s: float) -> bool:
+    """Wait until `host:port` is bindable again, polling every 0.1 s.
+
+    True when the port freed inside `timeout_s`. The process being gone is not
+    the same as the port being free, so `stop` waits on the port, not just the
+    pid (issue #355).
+    """
+    deadline = time.monotonic() + timeout_s
+    while True:
+        if _port_bindable(host, port):
+            return True
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(0.1)
+
+
 def _check_port_free(host: str, port: int, root: Path) -> None:
     """Fail with an `error:` line when the dashboard cannot bind (issue #198).
 
     Uvicorn does not raise on a busy port: it logs `ERROR: ... address
     already in use` and exits 3, so without this pre-check the user's
     first-run path ends in a bare server log line, not the CLI's `error:`
-    line. The bind here is a probe only (closed at once); the residual race
-    with another process grabbing the port in between is caught below,
-    where `uvicorn.run`'s startup failure is also turned into `fail()`.
-    When the owner is this repo's own dashboard (pid file), the error names
-    it and points at `jev dashboard stop` (issue #333) instead of `lsof`.
+    line. The probe binds the way uvicorn binds (SO_REUSEADDR — see
+    `_probe_bind_error`), so the check answers "can uvicorn bind here?" and
+    the residual race with another process grabbing the port in between is
+    caught below, where `uvicorn.run`'s startup failure is also turned into
+    `fail()`. When the owner is this repo's own dashboard (pid file), the
+    error names it and points at `jev dashboard stop` (issue #333) instead
+    of `lsof`.
     """
-    try:
-        family, _, _, _, sockaddr = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)[0]
-        probe = socket.socket(family)
-        try:
-            probe.bind(sockaddr)
-        finally:
-            probe.close()
-    except OSError as exc:
-        owner = _busy_port_owner(root, port)
-        if owner is not None:
-            raise fail(f"could not start the dashboard on {host}:{port}: {exc}. {owner}") from exc
-        raise fail(
-            f"could not start the dashboard on {host}:{port}: {exc}. "
-            "Stop the process already using that port, or pass --port."
-        ) from exc
+    exc = _probe_bind_error(host, port)
+    if exc is None:
+        return
+    owner = _busy_port_owner(root, port)
+    if owner is not None:
+        raise fail(f"could not start the dashboard on {host}:{port}: {exc}. {owner}") from exc
+    raise fail(
+        f"could not start the dashboard on {host}:{port}: {exc}. "
+        "Stop the process already using that port, or pass --port."
+    ) from exc
 
 
 def dashboard_url(host: str, port: int, token: str | None) -> str:
@@ -365,6 +410,26 @@ def _stop_pid(pid: int, timeout_s: float = _STOP_WAIT_S) -> bool:
     return not pid_alive(pid)
 
 
+def _wait_port_free_after_stop(root: Path, info: dict[str, Any], pid: int) -> None:
+    """After the dashboard's pid is gone, wait (bounded) until its recorded port
+    is bindable again (issue #355). A missing or invalid host:port skips the
+    wait: there is nothing to wait on. On timeout the pid file is stale (the
+    pid is dead), so it goes — but the failure is reported, not a success."""
+    host = info.get("host")
+    port = info.get("port")
+    if not (isinstance(host, str) and isinstance(port, int) and port > 0):
+        return
+    if _wait_port_free(host, port, _PORT_FREE_WAIT_S):
+        return
+    _remove_dashboard_pid(root)
+    raise fail(
+        f"stopped the dashboard (pid {pid}), but its port is still busy "
+        f"({host}:{port}) after {_PORT_FREE_WAIT_S:g} s: something else "
+        "is holding it. If this dashboard runs as a service, the service "
+        "manager restarts it — stop the service instead (see docs/deploy.md)."
+    )
+
+
 @dashboard_app.command("stop")
 def dashboard_stop(
     repo: RepoOption = Path("."),
@@ -393,6 +458,9 @@ def dashboard_stop(
         console.print(f"no dashboard running (pid {pid} is gone); removed the stale pid file")
         return
     if _stop_pid(pid, timeout):
+        # The process being gone is not the same as the port being free:
+        # `stop` must mean a start right after it works first time (issue #355).
+        _wait_port_free_after_stop(root, info, pid)
         _remove_dashboard_pid(root)
         console.print(f"stopped the dashboard (pid {pid})")
     else:
