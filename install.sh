@@ -156,3 +156,38 @@ else
 fi
 
 log "Done. Next: cd into a git repo, run \`jev init\`, then \`jev --help\`."
+
+# --- autostart ---------------------------------------------------------------
+# Offer the reboot-survival step (`jev dashboard --install-service`) when this
+# directory is a git repo — with the user's yes, never silently (deploy Phase 3,
+# issue #341). In a piped install (`curl | bash`) stdin is the script, so the
+# prompt reads from the tty; without one, print the command to run later
+# instead of hanging. A service install failure never fails the install.
+if command -v git >/dev/null 2>&1 && REPO_DIR="$(git rev-parse --show-toplevel 2>/dev/null)"; then
+  if [ "$REPO_DIR" = "${HOME:-}" ]; then
+    log "Next: to start the dashboard at login, run \`jev dashboard --install-service --repo <your-repo>\` after \`jev init\` (it refuses to serve your home directory)."
+  elif ( : </dev/tty ) 2>/dev/null; then
+    # A tty exists and can be opened (the `curl | bash` case: stdin is the
+    # script, but the terminal is still there). The open is attempted in a
+    # subshell whose stderr is already /dev/null: /dev/tty exists as a
+    # device node even with no controlling terminal, where opening it fails,
+    # and a bare `</dev/tty` test would leak that error — `[ -e /dev/tty ]`
+    # would wrongly prompt there.
+    printf 'Install the dashboard as a service that starts at login for %s? [y/N] ' "$REPO_DIR" >&2
+    if read -r REPLY </dev/tty 2>/dev/null; then
+      case "$REPLY" in
+        [yY]|[yY][eE][sS])
+          if "$JEVBIN" dashboard --install-service --repo "$REPO_DIR"; then
+            log "OK: dashboard service installed."
+          else
+            log "Note: service install failed — run \`jev dashboard --install-service --repo $REPO_DIR\` by hand."
+          fi
+          ;;
+      esac
+    fi
+  else
+    log "Next: to start the dashboard at login, run \`jev dashboard --install-service --repo $REPO_DIR\`."
+  fi
+else
+  log "Next: to start the dashboard at login, run \`jev dashboard --install-service --repo <your-repo>\` after \`jev init\`."
+fi

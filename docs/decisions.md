@@ -2,6 +2,40 @@
 
 Deviations from [PLAN.md](../PLAN.md) and choices it left open. Newest first.
 
+## 2026-10-27: Deploy Phase 3 — `jev dashboard --install-service` (launchd, systemd, logon task) (#341)
+
+- **Flags on the dashboard command, not subcommands.** `--install-service` /
+  `--uninstall-service` are flags (`jev dashboard --install-service --repo X`) because they
+  take the serve options (`--host`, `--port`, `--repo`) that the service definition records;
+  a subcommand would have needed its own copies of those options, and the existing `stop`
+  subcommand's "options belong after the subcommand" guard already rejects flags before a
+  subcommand. The flags short-circuit before the dashboard-dependency check: installing a
+  service does not need uvicorn.
+- **Stop timeout 120 s on launchd/systemd; none expressible on Windows.** Dashboard shutdown
+  waits up to 30 s per job, so `ExitTimeOut` 120 and `TimeoutStopSec=120s` give several jobs
+  room to cancel cleanly. A Scheduled Task has no stop-timeout setting (`schtasks /end`
+  terminates), so Windows gets an honest comment in the task XML instead of a pretended
+  timeout; run state is durable and resumable, which bounds the damage.
+- **User scope on all three platforms.** A launchd agent, a systemd *user* unit and an
+  `InteractiveToken` logon task — never a system daemon or SYSTEM service — because the CSRF
+  secret and `secrets.env` live in `~/.jev`.
+- **PATH embedded at install time *and* repaired at dashboard startup.** The definition
+  embeds the absolute `jev` path and the discovered CLI dirs (launchd `EnvironmentVariables`,
+  systemd `Environment=PATH=`); Windows task XML cannot carry environment variables, so
+  there the Phase 1 startup repair (`augment_path_with_known_clis`) is the whole story.
+- **Windows is a logon task, not a service.** No service wrapper exists in the repo (no
+  NSSM/winsw/service host); a Scheduled Task is the mechanism the audit named, and it is
+  what the Windows CI job can prove.
+- **Mac live verification: install + login proven, physical reboot open.** The Tailscale
+  tunnel came back mid-session. Install → serves (200 on a test repo, launchd agent,
+  login simulated by unload/load) and the uninstall path are proven live on the Mac;
+  the physical reboot step is still open — the machine was in active use by another
+  verification, so no unannounced reboot (see issue #341 for the exact commands).
+  Live verification also caught two real bugs: the service recorded PATH's `jev`
+  (a Homebrew shim to the main venv) instead of the binary running the install, and
+  `--uninstall-service` failed from `$HOME` on the serve path's home-repo refusal —
+  both fixed with regression tests.
+
 ## 2026-10-27: Deploy Phase 1 — dashboard starts clean (PATH, port, Windows, state-DB) (#333)
 
 - **Port handling: pidfile + `jev dashboard stop`, not auto-pick-next-port.** The audit

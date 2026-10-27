@@ -43,6 +43,32 @@ Resume button). A Ship job cannot be cancelled mid-step; shutdown waits for it.
 it through `<repo>/.jev/dashboard.pid`); starting a second dashboard on the same port names
 the running one and points at `stop` instead of sending you to `lsof`.
 
+## Starting at login (reboot survival)
+
+`jev dashboard --install-service --repo <repo>` installs the dashboard as a service that
+starts at login and restarts after a reboot — no terminal step, no `nohup`, no PATH ritual:
+
+| Platform | Mechanism | Definition |
+| --- | --- | --- |
+| macOS | launchd agent (`RunAtLoad`, `KeepAlive`) | `~/Library/LaunchAgents/com.baton.jev-dashboard.plist` |
+| Linux | systemd user unit (`Restart=always`) | `~/.config/systemd/user/jev-dashboard.service` |
+| Windows | Scheduled Task at logon | definition kept at `~/.jev/jev-dashboard-task.xml` |
+
+The service runs `jev dashboard --no-open --repo <repo>` (plus `--host` / `--port` when you
+pass them to `--install-service`) with the absolute path to the `jev` binary found at install
+time, and the worker CLIs found then (`npx`, `claude`, `codex`, …) embedded as its PATH — the
+service manager's minimal PATH never comes into it. Installing twice rewrites the same
+definition (reinstall to point it at another repo or port).
+`jev dashboard --uninstall-service` removes it. `install.sh` / `install.ps1` offer the step at
+the end of an install, with your yes, when run inside a git repo.
+
+Two honest limits: the service gives the dashboard 120 s to stop (launchd `ExitTimeOut`,
+systemd `TimeoutStopSec`) because shutdown waits up to 30 s per job — a Windows Scheduled Task
+has no stop-timeout setting, so stopping the task ends the dashboard at once and running jobs
+lose their graceful shutdown (their state is saved and resumable). And the service runs as you,
+not as root or SYSTEM, because the CSRF secret and `secrets.env` live in `~/.jev` and must stay
+readable by the service user.
+
 ## Pages
 
 Press **Cmd+K** (or Ctrl+K) anywhere for the command palette: fuzzy search over every page,

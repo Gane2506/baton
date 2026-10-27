@@ -32,6 +32,18 @@ All notable changes to this project are documented here. The format is based on
 
 ### Added
 
+- **`jev dashboard --install-service` / `--uninstall-service` (deploy Phase 3, issue #341).**
+  Reboot survival on all three platforms: a launchd agent on macOS, a systemd user unit on
+  Linux, a Scheduled Task at logon on Windows. The definition records the absolute `jev` path
+  and the worker CLIs found at install time, so the service never depends on the service
+  manager's minimal PATH; the stop timeout is 120 s because dashboard shutdown waits up to
+  30 s per job. Install is idempotent; the service refuses to serve `~`. `install.sh` /
+  `install.ps1` offer the step at the end of an install (with the user's yes) when run inside
+  a git repo. Honest limit: a Windows task has no stop-timeout setting, so stopping it ends
+  the dashboard at once — run state is durable and resumable. Mac live verification
+  so far: install → serves (200 on a test repo, launchd agent, login simulated by
+  unload/load) is proven; the physical reboot step is still open.
+
 - **`jev dashboard stop` and a state-database check in `jev doctor` (deploy Phase 1, issue #333).**
   The running dashboard records `<repo>/.jev/dashboard.pid`, and `jev dashboard stop --repo <repo>`
   stops it (graceful SIGTERM, then force) — the replacement for the `lsof` + kill ritual.

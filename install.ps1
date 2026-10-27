@@ -146,3 +146,33 @@ if (Get-Command git -ErrorAction SilentlyContinue) {
 }
 
 Write-Host 'Done. Next: cd into a git repo, run `jev init`, then `jev --help`.'
+
+# --- autostart ---------------------------------------------------------------
+# Offer the reboot-survival step (`jev dashboard --install-service`) when this
+# directory is a git repo — with the user's yes, never silently (deploy Phase 3,
+# issue #341). A piped install cannot prompt, so without an interactive console
+# print the command to run later instead. A service install failure never fails
+# the install.
+$repoDir = $null
+if (Get-Command git -ErrorAction SilentlyContinue) {
+  $repoDir = (& git rev-parse --show-toplevel 2>$null)
+  if ($LASTEXITCODE -ne 0) { $repoDir = $null }
+}
+if ($repoDir -and $repoDir.Replace('/', '\') -ne $env:USERPROFILE) {
+  if (-not [Console]::IsInputRedirected) {
+    $answer = Read-Host "Install the dashboard as a service that starts at logon for $repoDir? [y/N]"
+    if ($answer -match '^[yY]([eE][sS])?$') {
+      try {
+        & $jevExe dashboard --install-service --repo $repoDir
+        if ($LASTEXITCODE -eq 0) { Write-Host 'OK: dashboard service installed.' }
+        else { Write-Host "Note: service install failed — run 'jev dashboard --install-service --repo $repoDir' by hand." }
+      } catch {
+        Write-Host "Note: service install failed — run 'jev dashboard --install-service --repo $repoDir' by hand."
+      }
+    }
+  } else {
+    Write-Host "Next: to start the dashboard at logon, run 'jev dashboard --install-service --repo $repoDir'."
+  }
+} else {
+  Write-Host "Next: to start the dashboard at logon, run 'jev dashboard --install-service --repo <your-repo>' after 'jev init'."
+}
