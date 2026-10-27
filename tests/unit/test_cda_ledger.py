@@ -127,6 +127,36 @@ def test_unavailable_records_never_score(tmp_path: Path) -> None:
     assert ratings.by_agent["claude_code"].mean_quality == pytest.approx(3.0)
 
 
+def test_unavailable_record_keeps_agent_attribution(tmp_path: Path) -> None:
+    """An unavailable grade at the gate still counts in its agent's `n`.
+
+    The gate knows which worker wrote the diff even when the backend is
+    missing, so the record carries the agent — otherwise a key with many
+    unavailable backends would look like a key with no history at all.
+    It never contributes a quality mean.
+    """
+    ledger = RatingLedger(tmp_path / ".jev" / "cda-ratings.jsonl")
+    _seed(ledger)
+    ledger.record(
+        unavailable_record(
+            "code_review",
+            detail="backend not installed",
+            run_id="r1",
+            task_id="T9",
+            source="gate",
+            agent="claude_code",
+            model="opus",
+        )
+    )
+    ratings = ledger.aggregate()
+    assert ratings.total == 5
+    assert ratings.unavailable == 1
+    assert ratings.by_agent["claude_code"].n == 4
+    assert ratings.by_agent["claude_code"].graded == 3
+    assert ratings.by_agent["claude_code"].unavailable == 1
+    assert ratings.by_agent["claude_code"].mean_quality == pytest.approx(3.0)
+
+
 def test_missing_file_is_empty_and_corrupt_lines_are_skipped(tmp_path: Path) -> None:
     path = tmp_path / ".jev" / "cda-ratings.jsonl"
     assert RatingLedger(path).aggregate().total == 0

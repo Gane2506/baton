@@ -280,9 +280,23 @@ def trace_record(
 
 
 def unavailable_record(
-    kind: GradeKind, *, detail: str, run_id: str = "", task_id: str = "", source: str
+    kind: GradeKind,
+    *,
+    detail: str,
+    run_id: str = "",
+    task_id: str = "",
+    source: str,
+    agent: str = "",
+    model: str = "",
+    effort: str = "",
 ) -> GradeRecord:
-    """A grade that did not run: missing backend, never a score (no quality fields)."""
+    """A grade that did not run: missing backend, never a score (no quality fields).
+
+    The agent/model/effort are still recorded when the caller knows them
+    (the gate does): an unavailable grade must count in that agent's `n`
+    so a key with many unavailable backends does not look like a key with
+    no history at all. It never contributes a quality mean.
+    """
     return GradeRecord(
         kind=kind,
         status="unavailable",
@@ -290,6 +304,9 @@ def unavailable_record(
         run_id=run_id,
         task_id=task_id,
         detail=detail,
+        agent=agent,
+        model=model,
+        effort=effort,
     )
 
 

@@ -232,6 +232,9 @@ async def _record_gate_grade(
                 run_id=run_id,
                 task_id=result.task_id or "",
                 source="gate",
+                agent=agent,
+                model=model,
+                effort=effort,
             )
         elif status == "error":
             record = GradeRecord(
