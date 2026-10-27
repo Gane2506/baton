@@ -129,9 +129,13 @@ task, source (`gate` | `d4` | `cli` | `dashboard`).
 
 **Location, decided deliberately.** The ledger is repo-level
 (the learning graph is per-repo) but a *separate file* from `state.db`
-inside `.jev/`. The Mac update rule flushes `state.db` on version
-updates; a ledger inside that database would be wiped with it, and a
-file next to it survives the flush. `.jev/` is gitignored, so the ledger
+inside `.jev/`. The Mac update rule used to flush `state.db` on version
+updates; a ledger inside that database would have been wiped with it, and a
+file next to it survived the flush. The flush is retired (deploy Phase 5,
+issue #347: the live Mac reproduction found no cause — the flush was curing
+a stale dashboard process, and `jev dashboard stop` + restart is the fix),
+but the separate file stays: a problem with the state database never takes
+the grades with it. `.jev/` is gitignored, so the ledger
 never lands in the repo.
 
 **Rules.** A grade that did not run is never a score: a missing backend

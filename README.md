@@ -210,36 +210,62 @@ You need at least one worker that can code (`claude_code` or `codex`). Without a
 
 ## Install
 
-Baton is not on PyPI yet. Install it from GitHub:
+One command per platform — pick yours. The full story (reboot survival,
+tokens, upgrade, uninstall) is in [docs/deploy.md](docs/deploy.md).
+
+### Linux server — Docker
 
 ```bash
-uv tool install git+https://github.com/Gane2506/baton
-jev --version
-```
-
-Once it is published, this will be:
-
-```bash
-uv tool install baton-agent-orchestrator
-```
-
-The package installs the command `jev` and a long alias, `baton-agent-orchestrator`.
-
-The web dashboard (`jev dashboard`) is an optional extra, so the CLI stays small:
-
-```bash
-uv tool install 'baton-agent-orchestrator[dashboard] @ git+https://github.com/Gane2506/baton'
-# once on PyPI: uv tool install 'baton-agent-orchestrator[dashboard]'
-```
-
-**Docker** — run the dashboard as a container (see [docs/packaging.md](docs/packaging.md#docker)). Requires Docker and an existing git repo to serve, writable by uid 1000 inside the container; the image is the dashboard only (no worker CLIs inside):
-
-```bash
-docker run -d --name jev --restart unless-stopped -p 127.0.0.1:8765:8765 -e JEV_DASHBOARD_TOKEN="$(openssl rand -hex 24)" -v /srv/myproject:/data ghcr.io/gane2506/baton:0.5.0
+docker run -d --name jev --restart unless-stopped \
+  -p 127.0.0.1:8765:8765 \
+  -e JEV_DASHBOARD_TOKEN="$(openssl rand -hex 24)" \
+  -v /srv/myproject:/data \
+  ghcr.io/gane2506/baton:0.5.0
 docker logs jev   # the dashboard URL and access token
 ```
 
-Or build it yourself: `docker build -t jev-dashboard .` (see [docs/packaging.md](docs/packaging.md)).
+Prerequisites: Docker Engine running, and a git repo to serve — run
+`jev init` in it first. The image is pinned to `:0.5.0`, never `:latest`
+(`:latest` can point at unreleased `main`). `--restart unless-stopped` is
+what survives a reboot. The port is published on loopback only; for remote
+access use `ssh -L 8765:127.0.0.1:8765 <host>`.
+
+**Docker is dashboard-only.** The image has no worker CLIs (`claude`,
+`codex`) and no Node/`npx` inside — it is the dashboard. Workers run wherever
+you point them: on SSH servers configured in `jev.toml`
+([docs/servers.md](docs/servers.md)), or extend the image with the CLIs you
+need. `jev doctor` inside the container reports what's available.
+
+### macOS — native
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Gane2506/baton/main/install.sh | bash
+cd ~/code/<your-repo> && jev init && jev dashboard
+```
+
+Prerequisites: Python 3.11+ on `PATH`, `pipx` or `pip`, `curl`, `git`.
+Node.js + `npx` and the `claude`/`codex` CLIs are needed by workers and by the
+browser install — the installer does not install them; the dashboard finds
+Homebrew and nvm locations on its own, without a login shell. For reboot
+survival, run once: `jev dashboard --install-service` (a launchd agent that
+starts the dashboard at login). The installer offers that step at the end
+when run inside a git repo.
+
+### Windows — native
+
+```powershell
+irm https://raw.githubusercontent.com/Gane2506/baton/main/install.ps1 | iex
+cd <your-repo>; jev init; jev dashboard
+```
+
+Prerequisites: Python 3.11+ findable as `py -3.11`, `py -3`, or `python`
+(PowerShell 5.1+), `pipx` or `pip`, `git`. Node.js + `npx` and the
+`claude`/`codex` CLIs are needed by workers — the installer does not install
+them. For reboot survival, run once: `jev dashboard --install-service`
+(a Scheduled Task at logon). The installer offers that step at the end when
+run inside a git repo. The Windows install + boot path is proven by CI
+(`windows-latest`); Docker Desktop is the alternate, with the same
+`docker run` command as Linux.
 
 **Upgrading to v0.2.0.** The project was renamed to Baton Agent Orchestrator: the PyPI name is
 now `baton-agent-orchestrator` and the long alias `jev-agent-orchestrator` is now

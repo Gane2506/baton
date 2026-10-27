@@ -61,9 +61,11 @@ Deviations from [PLAN.md](../PLAN.md) and choices it left open. Newest first.
   self-healing), so Phase 1 adds diagnosis instead of a flush: `jev doctor` reports the
   schema version vs this jev's plus integrity, read-only, and the dashboard rewrites the
   newer-schema error into "upgrade jev — do not delete state.db". No flush button was
-  added. The live Mac reproduction of what the old flush was curing is still open (the
-  Mac is unreachable); until it lands, the Mac update rule's flush step stays as-is and
-  the ritual is retired only by the repro's verdict, not by this change.
+  added. The live Mac reproduction landed in deploy Phase 5 (issue #347): the Mac's
+  `state.db` showed no anomaly (schema version 21, integrity ok, `jev doctor` ok)
+  and the pidfile + `jev dashboard stop` mechanism was proven live — verdict "no
+  cause found, ritual retired". The flush step is removed from the docs;
+  `state.db` is never deleted on update.
 
 ## 2026-10-25: Events, replay and capbench in the dashboard — what belongs in the browser (#254)
 

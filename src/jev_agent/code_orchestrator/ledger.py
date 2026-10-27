@@ -12,11 +12,14 @@ signal, not just gate output.
 Location (decided deliberately, see docs/code-orchestrator.md): the
 ledger is `<repo>/.jev/cda-ratings.jsonl`, one JSON object per line, in
 the repo's `.jev/` directory but a *separate file* from `state.db`. The
-Mac update rule flushes `state.db` on version updates; a ledger inside
-that database would be wiped with it. A file next to it survives the
-flush. Repo-level, not user-level: the learning graph is per-repo, and
-grades are about this repo's agents and tasks. `.jev/` is gitignored, so
-the ledger never lands in the repo.
+Mac update rule used to flush `state.db` on version updates (retired in
+deploy Phase 5, issue #347 — the live Mac reproduction found no cause: the
+flush was curing a stale dashboard process, and `jev dashboard stop` +
+restart is the fix); a ledger inside that database would have been wiped
+with it. A file next to it survives, and a problem with the state database
+still never takes the grades with it. Repo-level, not user-level: the
+learning graph is per-repo, and grades are about this repo's agents and
+tasks. `.jev/` is gitignored, so the ledger never lands in the repo.
 
 Rules the rest of the code must not break:
 
