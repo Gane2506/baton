@@ -61,12 +61,12 @@ PYBIN=""
 for candidate in python3 python; do
   if command -v "$candidate" >/dev/null 2>&1; then PYBIN="$candidate"; break; fi
 done
-[ -n "$PYBIN" ] || die "no python3 found on PATH. Install Python 3.12+ first: https://www.python.org/downloads/"
+[ -n "$PYBIN" ] || die "no python3 found on PATH. Install Python 3.11+ first: https://www.python.org/downloads/"
 
 PYVER="$("$PYBIN" -c 'import sys; print("%d.%d" % sys.version_info[:2])')"
 case "$PYVER" in
-  3.1[2-9]*|3.[2-9][0-9]*|[4-9].*) log "Python $PYVER ($PYBIN)" ;;
-  *) die "Python $PYVER found, but jev needs Python 3.12+. Install a newer Python: https://www.python.org/downloads/" ;;
+  3.1[1-9]*|3.[2-9][0-9]*|[4-9].*) log "Python $PYVER ($PYBIN)" ;;
+  *) die "Python $PYVER found, but jev needs Python 3.11+. Install a newer Python: https://www.python.org/downloads/" ;;
 esac
 
 INSTALLER=""
@@ -120,14 +120,23 @@ fi
 hash -r 2>/dev/null || true
 
 # --- verify ------------------------------------------------------------------
-if ! command -v jev >/dev/null 2>&1; then
+# `jev` may not be on PATH yet in this shell (pipx ensurepath only affects
+# future login shells). The install still counts as a success when the binary
+# is verifiable by absolute path — print the PATH line instead of failing.
+JEVBIN="$(command -v jev || true)"
+if [ -z "$JEVBIN" ]; then
   USERBIN="$("$PYBIN" -c 'import site, os; print(os.path.join(site.getuserbase(), "bin"))')"
-  err "installed, but \`jev\` is not on PATH yet."
-  err "Add this to your shell profile (~/.zshrc, ~/.bashrc) and restart your shell:"
-  err "  export PATH=\"$USERBIN:\$PATH\""
-  exit 1
+  if [ -x "$USERBIN/jev" ]; then
+    JEVBIN="$USERBIN/jev"
+    log "Note: installed, but \`jev\` is not on PATH yet in this shell."
+    log "Add this to your shell profile (~/.zshrc, ~/.bashrc) and restart your shell:"
+    log "  export PATH=\"$USERBIN:\$PATH\""
+  else
+    err "installed, but no \`jev\` binary found at $USERBIN/jev."
+    exit 1
+  fi
 fi
-log "OK: $(jev --version)"
+log "OK: $("$JEVBIN" --version)"
 
 # `jev doctor` checks the environment (workers, API keys, config). On a fresh
 # machine some checks fail until you configure a worker — that is expected and
@@ -136,7 +145,7 @@ if command -v git >/dev/null 2>&1; then
   DOCTOR_DIR="$(mktemp -d)"
   trap 'rm -rf "$DOCTOR_DIR"' EXIT
   git init -q "$DOCTOR_DIR"
-  if (cd "$DOCTOR_DIR" && jev doctor); then
+  if (cd "$DOCTOR_DIR" && "$JEVBIN" doctor); then
     log "OK: jev doctor passes."
   else
     log "Note: jev doctor reports setup still needed (worker CLIs, API keys)."

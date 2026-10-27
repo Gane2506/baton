@@ -1,16 +1,23 @@
-# Minimal example: jev dashboard for one repo, with persistent state.
+# Deploy path: jev dashboard for one repo, from the published image.
 #
 #   JEV_DASHBOARD_TOKEN="$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')" \
-#     docker compose up --build -d
+#     docker compose up -d
 #   docker logs jev-dashboard        # the URL (and the generated token, if unset)
 #
-# If your repo already has a .jev/ directory, drop the `jev-state` volume so the
-# bind-mounted state is used instead of an empty volume shadowing it.
+# The repo at ./my-project must already be a git repo (plain `git init` is
+# enough; `jev init` is optional). State lives in the repo's .jev/ directory
+# by default — the honest default for a server serving one repo.
+#
+# The optional jev-state volume below moves state OUT of the repo, but it
+# SHADOWS an existing .jev/ in the repo: a repo with real state silently gets
+# an empty state DB if that volume is enabled. Only enable it for a repo with
+# no .jev/ yet.
+#
+# Contributors building from a local checkout: use docker-compose.build.yml.
 
 services:
   jev:
-    build: .
-    image: jev-dashboard:latest
+    image: ghcr.io/gane2506/baton:0.5.0
     container_name: jev-dashboard
     # Published on loopback only: the dashboard speaks plain HTTP. For remote
     # access use `ssh -L 8765:127.0.0.1:8765 <host>` or a TLS reverse proxy.
@@ -20,9 +27,10 @@ services:
       JEV_PORT: "8765"
       # JEV_DASHBOARD_TOKEN: "replace-me-with-a-long-random-token"
     volumes:
-      - ./my-project:/data # the git repo jev serves (run `jev init` in it first)
-      - jev-state:/data/.jev # persistent state: runs, queue, learning
+      - ./my-project:/data # the git repo jev serves (plain `git init` is enough)
+      # - jev-state:/data/.jev # persistent state OUTSIDE the repo; see the
+      #   shadowing warning above — only for a repo with no .jev/ yet.
     restart: unless-stopped
 
-volumes:
-  jev-state:
+# volumes:
+#   jev-state:
