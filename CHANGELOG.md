@@ -9,6 +9,19 @@ All notable changes to this project are documented here. The format is based on
 
 ### Fixed
 
+- **Dashboard starts clean from a bare environment (deploy Phase 1, issue #333).**
+  The dashboard is often launched without a shell profile's PATH (launchd, systemd,
+  `nohup`), so Homebrew/nvm CLIs read as missing. Every CLI lookup now goes through
+  one seam (`core.executables.resolve_executable`: PATH first, then the well-known
+  per-platform install locations — including nvm version dirs on macOS and Windows,
+  which the old fallback missed), and dashboard startup prepends the discovered dirs
+  to the process env so spawned workers inherit them. A second start on a busy port
+  names the running dashboard (pid, start time, command) instead of sending you to
+  `lsof`. The unconditional `import fcntl` that crashed `jev` on Windows is guarded
+  (`core.file_lock`: `flock` on POSIX, `msvcrt.locking` on Windows), and the
+  `os.killpg` worker-kill paths use `taskkill` there. Windows is not claimed working
+  — the Windows CI job is what proves it.
+
 - **Bisect form above the event table (audit cycle 5, issue #266).** On the run
   page, "Find where it went bad" (`jev bisect`) sat below the whole event
   table, so on a run with a long log the answer was below the fold after
@@ -18,6 +31,15 @@ All notable changes to this project are documented here. The format is based on
   (`form.bisect` keeps each label whole and sizes its controls to content).
 
 ### Added
+
+- **`jev dashboard stop` and a state-database check in `jev doctor` (deploy Phase 1, issue #333).**
+  The running dashboard records `<repo>/.jev/dashboard.pid`, and `jev dashboard stop --repo <repo>`
+  stops it (graceful SIGTERM, then force) — the replacement for the `lsof` + kill ritual.
+  `jev doctor` reports the state database read-only: its schema version against this jev's, plus
+  an integrity check. A database written by a newer jev fails with "upgrade jev — do not delete
+  state.db", and the dashboard rewrites that error the same way; no flush button was added, and
+  no code path requires deleting `state.db`. (The live Mac reproduction of what the old flush
+  was curing is still open — the Mac is unreachable — see issue #333.)
 
 - **Coding Decision Agent Phase 1: rating ledger, rework briefs, dashboard ratings (issue #329).** The Coding Decision Agent becomes a coach in the `jev` workflow. Every grade — diff grades at the quality gate, routing grades at D4, CLI/dashboard grades — is appended to a rating ledger at `<repo>/.jev/cda-ratings.jsonl`, a separate file from `state.db` so it survives the state-database flush on version updates, and aggregated per agent, tier and skill (`jev code ratings`, and a **Ratings** tab on the dashboard's Learning page). A missing backend records as unavailable, never as a score. When a gate blocks, the result carries a **rework brief** composed from the grade's signals + the failed checks + the AI review (the model returns labels, never prose), rendered into the gate report and handed to the next attempt's coder through D5 feedback. D4 reads the ledger: the routing hint carries the ledger's evidence for its tier (`ledger_tier_grades`, `ledger_tier_mean_quality`, `ledger_best_tier`), so Jev can prefer tiers that grade well — still advisory, still gated at 0.7, never auto-merge. No new grading calls in the hot path; ledger writes are write-after-grade and best-effort. Threshold stays 0.7 (recalibration is Phase 4).
 

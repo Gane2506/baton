@@ -1556,7 +1556,10 @@ def test_job_shows_newer_state_db_error(planned: tuple[Path, str]) -> None:
     actions: list[RunAction] = ["approve", "ship"]
     for action in actions:
         message = _default_job(repo, run_id, action)
-        assert "database has schema version 999" in message
+        # Issue #333: the raw `SchemaVersionError` text is rewritten into the
+        # actionable dashboard message (upgrade jev; do not delete state.db).
+        assert "written by a newer jev" in message
+        assert "do not delete state.db" in message
 
 
 def test_job_message_includes_run_start_warnings(

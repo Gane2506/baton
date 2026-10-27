@@ -15,7 +15,6 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import os
-import signal
 import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -23,6 +22,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Protocol
 
+from jev_agent.core.platform import kill_process_group
 from jev_agent.runlog.redact import REDACTED
 from jev_agent.runlog.redact import redact as runlog_redact
 
@@ -197,11 +197,15 @@ async def _feed(proc: asyncio.subprocess.Process, text: str) -> None:
 
 
 async def _kill_group(proc: asyncio.subprocess.Process) -> None:
-    for sig, wait_s in ((signal.SIGTERM, KILL_GRACE_S), (signal.SIGKILL, KILL_GRACE_S)):
+    # TERM then KILL, with a grace wait after each (issue #333: `os.killpg` and
+    # `signal.SIGKILL` do not exist on Windows — `kill_process_group` is the
+    # one place that knows the platform difference; on Windows it runs
+    # `taskkill`, which blocks only briefly here).
+    for force in (False, True):
         with contextlib.suppress(ProcessLookupError, PermissionError):
-            os.killpg(proc.pid, sig)
+            kill_process_group(proc.pid, force=force)
         try:
-            async with asyncio.timeout(wait_s):
+            async with asyncio.timeout(KILL_GRACE_S):
                 await proc.wait()
             return
         except TimeoutError:

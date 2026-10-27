@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import fcntl
 import json
 import os
 import socket
@@ -27,6 +26,7 @@ from zoneinfo import ZoneInfo
 
 from jev_agent.config.defaults import STATE_DIRNAME
 from jev_agent.config.schema import ShipMode
+from jev_agent.core.file_lock import read_at, try_lock_exclusive, try_lock_shared, unlock, write_at
 from jev_agent.core.lease import pid_alive as _pid_alive
 from jev_agent.core.queue import effective_status, recover_note, run_states, status_for_run
 from jev_agent.core.recurrence import next_due, parse_schedule
@@ -68,12 +68,13 @@ class LockInfo:
 class SchedulerLock:
     """`.jev/scheduler.lock`: JSON with the holder's pid, host, start time and current item.
 
-    The holder keeps an exclusive `fcntl.flock` on the file for as long as it runs, so the
-    kernel releases it when the process dies, even on SIGKILL, and two starters can never both
-    take it. Such a lock carries `"flock": true`; without a holder it is stale, whatever its
-    pid. A lock without the marker (written by an older jev) keeps the old rules: it is stale
-    when its pid is not alive on this host or it cannot be parsed, and a lock from another host
-    is respected (jev cannot check that pid).
+    The holder keeps an exclusive file lock on the file for as long as it runs (`fcntl.flock`
+    on POSIX, `msvcrt.locking` on Windows), so the kernel releases it when the process dies,
+    even on SIGKILL, and two starters can never both take it. Such a lock carries
+    `"flock": true`; without a holder it is stale, whatever its pid. A lock without the marker
+    (written by an older jev) keeps the old rules: it is stale when its pid is not alive on
+    this host or it cannot be parsed, and a lock from another host is respected (jev cannot
+    check that pid).
     """
 
     def __init__(self, path: Path) -> None:
@@ -90,12 +91,12 @@ class SchedulerLock:
         except OSError:
             return None  # unreadable: treat as stale
         try:
-            try:
-                fcntl.flock(fd, fcntl.LOCK_SH | fcntl.LOCK_NB)
-            except BlockingIOError:
+            if not try_lock_shared(fd):
                 return self._held_info(fd)
-            fcntl.flock(fd, fcntl.LOCK_UN)
-            parsed = _parse(_read_fd(fd))
+            try:
+                parsed = _parse(_read_fd(fd))
+            finally:
+                unlock(fd)
         finally:
             os.close(fd)
         if parsed is None:
@@ -121,9 +122,7 @@ class SchedulerLock:
         )
         for _ in range(5):
             fd = os.open(self.path, os.O_RDWR | os.O_CREAT, 0o644)
-            try:
-                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            except BlockingIOError:
+            if not try_lock_exclusive(fd):
                 os.close(fd)
                 holder = self.read()
                 if holder is None:
@@ -158,13 +157,17 @@ class SchedulerLock:
         if self._fd is None or self._info is None:
             raise SchedulerLocked("scheduler lock is not held; cannot record the current item")
         data = json.dumps({**self._info.__dict__, "flock": True}).encode("utf-8")
-        os.pwrite(self._fd, data, 0)
+        write_at(self._fd, data, 0)
         os.ftruncate(self._fd, len(data))
 
     def release(self) -> None:
         if self._fd is None:
             return
-        with contextlib.suppress(FileNotFoundError):
+        # Windows cannot unlink an open file: the unlink is best-effort there
+        # (a stale file is harmless — the next acquire finds no holder and
+        # overwrites it), so PermissionError is suppressed alongside the
+        # already-handled missing file.
+        with contextlib.suppress(FileNotFoundError, PermissionError):
             self.path.unlink()  # still ours: we hold the flock on this inode
         os.close(self._fd)
         self._fd = None
@@ -172,7 +175,7 @@ class SchedulerLock:
 
 
 def _read_fd(fd: int) -> bytes:
-    return os.pread(fd, 65536, 0)
+    return read_at(fd, 65536, 0)
 
 
 def _parse(data: bytes) -> tuple[LockInfo, bool] | None:

@@ -26,6 +26,7 @@ from starlette.responses import (
 from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
+from jev_agent.core.executables import augment_path_with_known_clis
 from jev_agent.core.ship import check_gh, prepare_ship, sync_pr
 from jev_agent.dashboard.code_grade_runner import (
     CodeGradeExecutor,
@@ -286,6 +287,12 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(app: Starlette) -> AsyncIterator[None]:
+        # Issue #333: the dashboard is often launched from a bare environment
+        # (launchd, systemd, nohup) without the shell profile's PATH, so
+        # Homebrew/nvm CLIs would read as missing. Resolve them once now and
+        # prepend their dirs to this process's PATH: the dashboard's own
+        # lookups and every worker it spawns inherit the repaired PATH.
+        augment_path_with_known_clis()
         yield
         # The server is stopping (Ctrl-C, systemd): stop the jobs it started, so their agent
         # processes do not keep running and spending without anyone watching.

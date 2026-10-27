@@ -2,6 +2,35 @@
 
 Deviations from [PLAN.md](../PLAN.md) and choices it left open. Newest first.
 
+## 2026-10-27: Deploy Phase 1 — dashboard starts clean (PATH, port, Windows, state-DB) (#333)
+
+- **Port handling: pidfile + `jev dashboard stop`, not auto-pick-next-port.** The audit
+  offered either; a second dashboard on a new port would leave the stale one running and
+  holding the scheduler lock, so the new dashboard's queue would silently not run. The
+  pidfile (`<repo>/.jev/dashboard.pid`: pid, host, port, start time, argv) names the
+  owner in the busy-port error and `stop` ends it (graceful SIGTERM, then force). A stale
+  pid file (dead pid) is never trusted. Options before the subcommand
+  (`jev dashboard --repo X stop`) are rejected loudly — they would otherwise be silently
+  dropped, stopping the wrong repo.
+- **One CLI-resolution seam (`core.executables.resolve_executable`).** It lives in `core`,
+  not in `dashboard/browser_install.py` where it started, because `core/provider_auth.py`,
+  `app/doctor.py` and friends need it and core must not import the dashboard. Dashboard
+  startup resolves once and prepends the discovered dirs to the process env, so spawned
+  workers inherit them; `Gh.run` executes the resolved path, not the bare name.
+- **Windows locks: `msvcrt.locking`, not a new lock file format.** The scheduler and chat
+  locks keep their file format and interface; only the primitive changes (`flock` on
+  POSIX, `msvcrt.locking` on the first byte on Windows). A shared-lock probe on Windows
+  takes a brief exclusive lock — the callers only ask "is it held?". Windows is not
+  claimed working: the Windows CI job is what proves it.
+- **State-DB: diagnose, never delete.** No code path at `b754c97` requires deleting
+  `state.db` (migrations are forward-only; the scheduler lock and run leases are
+  self-healing), so Phase 1 adds diagnosis instead of a flush: `jev doctor` reports the
+  schema version vs this jev's plus integrity, read-only, and the dashboard rewrites the
+  newer-schema error into "upgrade jev — do not delete state.db". No flush button was
+  added. The live Mac reproduction of what the old flush was curing is still open (the
+  Mac is unreachable); until it lands, the Mac update rule's flush step stays as-is and
+  the ritual is retired only by the repro's verdict, not by this change.
+
 ## 2026-10-25: Events, replay and capbench in the dashboard — what belongs in the browser (#254)
 
 - **The event timeline and `jev bisect` now live on the run page; `jev replay` and

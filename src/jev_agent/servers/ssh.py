@@ -26,10 +26,8 @@ so tests never open a connection.
 from __future__ import annotations
 
 import contextlib
-import os
 import posixpath
 import shlex
-import signal
 import subprocess
 import time
 from collections.abc import Sequence
@@ -38,6 +36,7 @@ from pathlib import Path
 from typing import Protocol
 
 from jev_agent.config.servers_schema import ServerConfig
+from jev_agent.core.platform import kill_process_group
 
 CONNECT_TIMEOUT_S = 10
 CONTROL_PERSIST_S = 60
@@ -93,8 +92,10 @@ def run_process(argv: Sequence[str], *, stdin: bytes | None, timeout_s: float) -
     try:
         out, err = proc.communicate(stdin, timeout=timeout_s)
     except subprocess.TimeoutExpired:
+        # Issue #333: `os.killpg` does not exist on Windows; `kill_process_group`
+        # runs `taskkill /F /T` there instead.
         with contextlib.suppress(OSError):
-            os.killpg(proc.pid, signal.SIGKILL)
+            kill_process_group(proc.pid, force=True)
         out, err = proc.communicate()
         return SshResult(None, out, err, True, time.monotonic() - started)
     return SshResult(proc.returncode, out, err, False, time.monotonic() - started)

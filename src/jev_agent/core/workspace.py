@@ -22,15 +22,15 @@ from __future__ import annotations
 
 import contextlib
 import logging
-import os
 import re
 import shutil
-import signal
 import subprocess
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol
+
+from jev_agent.core.platform import kill_process_group
 
 log = logging.getLogger(__name__)
 
@@ -122,9 +122,12 @@ def run_git(
 
 
 def _kill_group(proc: subprocess.Popen[str]) -> None:
-    for sig in (signal.SIGTERM, signal.SIGKILL):
+    # TERM then KILL, with a grace wait after each (issue #333: `os.killpg` and
+    # `signal.SIGKILL` do not exist on Windows — `kill_process_group` is the
+    # one place that knows the platform difference).
+    for force in (False, True):
         with contextlib.suppress(ProcessLookupError, PermissionError):
-            os.killpg(proc.pid, sig)
+            kill_process_group(proc.pid, force=force)
         try:
             proc.communicate(timeout=_KILL_GRACE_S)  # also closes the pipes
             return

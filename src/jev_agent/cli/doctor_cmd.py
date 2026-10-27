@@ -8,7 +8,6 @@ patch on this module.
 
 from __future__ import annotations
 
-import shutil
 from collections.abc import Callable
 from pathlib import Path
 from typing import Annotated
@@ -22,6 +21,7 @@ from jev_agent.app.doctor import Check, Status, _resolve_host
 from jev_agent.app.doctor import run_checks as _run_checks
 from jev_agent.cli.repo import RepoOption
 from jev_agent.cli.wiring import cli_errors
+from jev_agent.core.executables import resolve_executable
 from jev_agent.servers.ssh import SshRunner, run_process
 
 __all__ = ["Check", "Status", "doctor", "resolve_host", "run_checks", "ssh_runner", "which"]
@@ -33,7 +33,7 @@ _STYLE: dict[Status, str] = {"ok": "green", "note": "cyan", "warn": "yellow", "f
 
 # Indirections so tests can fake PATH lookups without real CLIs installed, and never run ssh
 # or touch DNS. `run_checks` passes them into `app.doctor.run_checks`.
-which: Callable[[str], str | None] = shutil.which
+which: Callable[[str], str | None] = resolve_executable
 ssh_runner: SshRunner = run_process
 
 

@@ -34,7 +34,6 @@ import contextlib
 import json
 import os
 import re
-import shutil
 import subprocess
 import threading
 from collections.abc import Callable, Mapping
@@ -43,6 +42,7 @@ from pathlib import Path
 from typing import Any
 
 from jev_agent.app.errors import JevError
+from jev_agent.core.executables import resolve_executable
 
 __all__ = [
     "ANTHROPIC_API_KEY_ENV",
@@ -133,7 +133,7 @@ def claude_code_auth(
     bare: bool = False,
     env: Mapping[str, str] | None = None,
     home: Path | None = None,
-    which: Callable[[str], str | None] = shutil.which,
+    which: Callable[[str], str | None] = resolve_executable,
 ) -> ProviderAuth:
     """Which auth the `claude` CLI worker will use, in Claude Code's precedence."""
     environ: Mapping[str, str] = os.environ if env is None else env
@@ -181,7 +181,7 @@ def codex_auth(
     command: str = "codex",
     env: Mapping[str, str] | None = None,
     home: Path | None = None,
-    which: Callable[[str], str | None] = shutil.which,
+    which: Callable[[str], str | None] = resolve_executable,
 ) -> ProviderAuth:
     """Which auth the `codex` CLI worker will use."""
     environ: Mapping[str, str] = os.environ if env is None else env
@@ -323,7 +323,7 @@ class CodexDeviceFlow:
         with self._lock:
             if self._status.state in ("starting", "waiting"):
                 raise DeviceFlowBusy("a Codex sign-in is already in progress")
-            if shutil.which(command) is None:
+            if resolve_executable(command) is None:
                 raise DeviceFlowError(f"the `{command}` CLI is not on PATH; install it first")
             self._status = DeviceFlowStatus(state="starting")
             self._command = command
@@ -476,7 +476,7 @@ class ClaudeSetupTokenFlow:
         with self._lock:
             if self._status.state in ("starting", "waiting"):
                 raise DeviceFlowBusy("a Claude sign-in is already in progress")
-            if shutil.which(command) is None:
+            if resolve_executable(command) is None:
                 raise DeviceFlowError(f"the `{command}` CLI is not on PATH; install it first")
             self._status = ClaudeSetupTokenStatus(state="starting")
             self._command = command

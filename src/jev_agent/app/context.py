@@ -19,7 +19,6 @@ or exits, and problems are `JevError` with user-facing messages (issue #92).
 from __future__ import annotations
 
 import os
-import shutil
 import sqlite3
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
@@ -33,6 +32,7 @@ from jev_agent.app.errors import JevError
 from jev_agent.app.repo import LEGACY_MESSAGE, find_git_root, legacy_layout
 from jev_agent.config import STATE_DIRNAME, ConfigError, JevConfig, load_config
 from jev_agent.config.schema import JevSettings, role_can_use_free, role_uses_free
+from jev_agent.core.executables import resolve_executable
 from jev_agent.core.learning import Learning
 from jev_agent.core.models import Role
 from jev_agent.core.pipeline import Pipeline, PipelineSettings, build_pipeline
@@ -62,7 +62,9 @@ NO_WORKERS_MESSAGE = (
 catalog_transport: httpx.BaseTransport | None = None
 
 # Indirection so tests can fake PATH lookups without real CLIs installed.
-which: Callable[[str], str | None] = shutil.which
+# Default is the single CLI-resolution seam: PATH first, then the well-known
+# per-platform install locations (issue #333).
+which: Callable[[str], str | None] = resolve_executable
 
 
 @dataclass

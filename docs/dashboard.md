@@ -39,6 +39,9 @@ Ctrl-C stops the server. Before it exits, it cancels every approve or resume job
 and waits for it (up to 30 s per job): the job's agent process is stopped, like Ctrl-C on
 `jev approve`, and the run keeps its saved state; continue it with `jev resume <run>` (or the
 Resume button). A Ship job cannot be cancelled mid-step; shutdown waits for it.
+`jev dashboard stop --repo <repo>` stops a dashboard started in another terminal (it finds
+it through `<repo>/.jev/dashboard.pid`); starting a second dashboard on the same port names
+the running one and points at `stop` instead of sending you to `lsof`.
 
 ## Pages
 

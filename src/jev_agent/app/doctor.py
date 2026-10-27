@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import os
 import queue
-import shutil
 import socket
 import sqlite3
 import threading
@@ -33,7 +32,9 @@ from jev_agent.config.schema import (
     role_prefers_free,
     role_uses_free,
 )
+from jev_agent.core.executables import resolve_executable
 from jev_agent.core.learning import Learning, learning_status
+from jev_agent.core.migrations import SCHEMA_VERSION, SchemaVersionError, schema_version
 from jev_agent.core.store import Store, StoreError
 from jev_agent.roles import ROLE_SCHEMAS, PromptError, load_template
 from jev_agent.runlog.redact import redact
@@ -72,7 +73,7 @@ def run_checks(
     resolve: Callable[[str], bool] | None = None,
 ) -> list[Check]:
     """Check git state, config, workers, learning, quality, models, prompts, tools, servers."""
-    find = find or shutil.which
+    find = find or resolve_executable
     ssh = ssh or run_process
     resolve = resolve or _resolve_host
     checks: list[Check] = []
@@ -101,6 +102,13 @@ def run_checks(
     else:
         checks.append(Check(f"{STATE_DIRNAME}/", "warn", "missing; run `jev init`"))
 
+    # The state database, read-only (doctor never migrates or creates it): the
+    # schema version it was written with, against this jev's, plus an integrity
+    # check. This is the diagnosis for the old "delete state.db on update"
+    # ritual (issue #333): a database written by a newer jev fails here with
+    # its cause named, instead of being deleted to make the error go away.
+    checks.append(_state_db_check(state_dir))
+
     if config is not None:
         checks.append(_dispatcher_check(config))
         worker_checks = _worker_checks(config, ModelCatalog.load(cache_path(root)), find)
@@ -112,6 +120,55 @@ def run_checks(
         checks.extend(_tool_checks(config, root, find))
         checks.extend(_server_checks(config, state_dir, connect, find, ssh, resolve))
     return checks
+
+
+def _state_db_check(state_dir: Path) -> Check:
+    """The state database's schema version vs this jev's, plus integrity (issue #333).
+
+    Read-only: doctor never migrates or creates the database. A database written by
+    a newer jev is a `fail` naming the versions and telling the user to upgrade —
+    not to delete `state.db`, which holds runs, queue, lessons and spend history.
+    """
+    db_path = state_dir / "state.db"
+    if not db_path.is_file():
+        return Check("state database", "ok", "not created yet (created on first use)")
+    try:
+        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    except sqlite3.Error as exc:
+        return Check("state database", "fail", f"cannot be read: {exc}")
+    try:
+        version = schema_version(conn)
+        if version > SCHEMA_VERSION:
+            return Check(
+                "state database",
+                "fail",
+                f"schema version {version}, but this jev only knows up to "
+                f"{SCHEMA_VERSION}: upgrade jev to open it — do not delete "
+                "state.db (it holds runs, queue, lessons and spend history)",
+            )
+        if version < SCHEMA_VERSION:
+            return Check(
+                "state database",
+                "note",
+                f"schema version {version}; this jev knows up to {SCHEMA_VERSION} — "
+                "it will be migrated on first open",
+            )
+        problems = [
+            row[0] for row in conn.execute("PRAGMA integrity_check").fetchall() if row[0] != "ok"
+        ]
+    except sqlite3.Error as exc:
+        return Check("state database", "fail", f"cannot be read: {exc}")
+    finally:
+        conn.close()
+    if problems:
+        return Check(
+            "state database",
+            "fail",
+            f"schema version {version}, but the integrity check failed: "
+            f"{'; '.join(problems)} — restore it from a backup, or move it aside "
+            "and run `jev init` in a fresh clone",
+        )
+    return Check("state database", "ok", f"schema version {version}; integrity ok")
 
 
 # ---- servers, browser, profiles (docs/servers.md) -----------------------------------------
@@ -474,7 +531,10 @@ def _learning_check(config: JevConfig, state_dir: Path, worker_checks: list[Chec
                     learning.close()
         else:
             status, profile = learning_status(None, config), None
-    except (StoreError, sqlite3.Error) as exc:
+    except (StoreError, sqlite3.Error, SchemaVersionError) as exc:
+        # SchemaVersionError: the database was written by a newer jev — the state
+        # database check above already reports that as a fail; learning just
+        # cannot read its settings from it (issue #333).
         return Check("learning", "warn", f"cannot read learning settings: {exc}")
     if profile is None:
         about = f"profile {status.profile} (not created yet)"

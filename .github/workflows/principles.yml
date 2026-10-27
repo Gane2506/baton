@@ -170,10 +170,13 @@ jobs:
           #   core/scheduler.py   — injectable sleep; lock-file retry is 20 x 0.01 s
           #   core/migrations.py  — WAL setup retried against a monotonic deadline
           #   cli/board_cmds.py    — user-facing watch loop, interval-flagged, Ctrl-C ends it
+          #   cli/dashboard_cmd.py — `dashboard stop` polls pid death on a monotonic
+          #     deadline (10 s graceful + 5 s force), 0.2 s intervals (issue #333)
           SLEEP_OK = {
               "src/jev_agent/core/scheduler.py",
               "src/jev_agent/core/migrations.py",
               "src/jev_agent/cli/board_cmds.py",
+              "src/jev_agent/cli/dashboard_cmd.py",
           }
           for path, tree in trees():
               for node in ast.walk(tree):
