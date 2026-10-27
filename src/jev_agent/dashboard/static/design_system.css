@@ -16,8 +16,20 @@
   --ds-border-soft: #1e1e22;
   --ds-text: #f2f2f3;
   --ds-muted: #9a9aa2;
-  --ds-faint: #6b6b72;
+  /* Issue #359: the old faint (#6B6B72) read 3.65:1 on the page bg; the
+     replacement clears 4.6:1 on every dark surface it sits on. */
+  --ds-faint: #83838b;
   --ds-accent: #a3e635;
+  /* Text roles that must clear 4.5:1 in BOTH preview themes get their own
+     variables: the accent itself is a brand hue and never changes, but the
+     text drawn in it does. The ticker label uses --ds-accent-text; bars,
+     dots, and focus rings keep --ds-accent (decorative, 3:1 bar). Toast
+     strongs/borders use the semantic variants below — the dark preview
+     keeps the light semantics, the light preview the dark ones. */
+  --ds-accent-text: #a3e635;
+  --ds-toast-info: #60a5fa;
+  --ds-toast-success: #22c55e;
+  --ds-toast-error: #f87171;
 }
 /* Let the system page use the full content width: the reference is a
    wide, dense sheet, and the dashboard's centered max-width column left
@@ -160,8 +172,18 @@
   --ds-border-soft: #ececef;
   --ds-text: #141416;
   --ds-muted: #5b5b63;
-  --ds-faint: #8a8a92;
+  /* Issue #359: the old faint (#8A8A92) read 3.08:1 on the surface and
+     3.43:1 on white; the replacement clears 4.6:1 on both. */
+  --ds-faint: #67676f;
   --ds-accent: #65a30d;
+  /* Same per-theme text roles as the dark root above: the lime accent
+     itself (#65A30D, 3.09:1 on white) is the brand hue and stays; the text
+     drawn in it darkens to clear 4.6:1. Toast strongs match the readable
+     dark variants the overview badges already use. */
+  --ds-accent-text: #4c7b0a;
+  --ds-toast-info: #1e40af;
+  --ds-toast-success: #166534;
+  --ds-toast-error: #991b1b;
 }
 
 /* Preview toggle: a segmented Light/Dark control in the page head. */
@@ -326,7 +348,10 @@
   align-items: center;
   justify-content: center;
   font-size: 12px;
-  color: var(--ds-muted);
+  /* Issue #359: the motion-ease demo sits on the fixed --ds-surface-2 gray,
+     which cannot be a palette-gate input — so it takes the text role, which
+     clears 4.5:1 on every preview background, instead of the muted role. */
+  color: var(--ds-text);
   transition: transform 260ms ease;
 }
 .ds-ease-demo:hover { transform: translateX(24px); }
@@ -354,9 +379,20 @@
 .ds-btn-lg { padding: var(--s3) var(--s5); font-size: 14px; }
 .ds-btn-ghost { background: transparent; border-color: var(--ds-border); }
 .ds-btn-danger { background: #dc2626; color: #fff; }
+/* Issue #359: the page's own Delete button takes its color from the shell
+   --bad, but it sits on the preview background — where shell and preview
+   themes cross, the shell value fails (dark shell + light preview 3.35:1,
+   light shell + dark preview 3.56:1; no single red clears 4.5:1 on both
+   white and near-black). Each preview theme supplies its own red. */
+.ds-content.ds-preview-light .btn-danger { --bad: #cf222e; }
+.ds-content.ds-preview-dark .btn-danger { --bad: #f85149; }
 .ds-btn:disabled { opacity: 0.5; cursor: default; }
 .ds-field { display: grid; gap: var(--s1); max-width: 360px; }
-.ds-field label { font-size: 12px; font-weight: 600; }
+/* Issue #359: the field label sits on the preview background, but the
+   global label rule colors every <label> with the shell --muted — the
+   wrong theme's gray where shell and preview cross. The preview text role
+   clears 4.5:1 on both preview backgrounds. */
+.ds-field label { font-size: 12px; font-weight: 600; color: var(--ds-text); }
 .ds-field input, .ds-field textarea {
   background: var(--ds-surface-2);
   border: 1px solid var(--ds-border);
@@ -411,7 +447,13 @@
 .ds-avatar-lg { width: 56px; height: 56px; font-size: 19px; }
 .ds-table { border-collapse: collapse; width: 100%; max-width: 640px; font-size: 13px; }
 .ds-table th, .ds-table td { text-align: left; padding: var(--s2) var(--s3); border-bottom: 1px solid var(--ds-border-soft); }
-.ds-table th { font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--ds-faint); }
+/* Issue #359 (scan follow-up): the global `th` rule paints the header
+   background with the SHELL --surface while this rule paints the text
+   with the PREVIEW --ds-faint — where shell and preview cross, the
+   header reads 3.76:1 (dark preview + light shell) or 3.37:1 (light
+   preview + dark shell). The header background follows the preview
+   theme with the text, so both directions clear 4.6:1. */
+.ds-table th { font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--ds-faint); background: var(--ds-surface); }
 .ds-progress { height: 8px; border-radius: 999px; background: var(--ds-surface-2); overflow: hidden; width: 100%; max-width: 420px; }
 .ds-progress > span { display: block; height: 100%; border-radius: 999px; background: var(--ds-accent); }
 .ds-progress-row { display: grid; grid-template-columns: 120px minmax(0, 1fr) 48px; gap: var(--s3); align-items: center; font-size: 12px; color: var(--ds-muted); padding: var(--s1) 0; }
@@ -448,7 +490,7 @@
   font-weight: 700;
   white-space: nowrap;
 }
-.ds-ticker-label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--ds-accent); margin: var(--s3) 0 var(--s2); }
+.ds-ticker-label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--ds-accent-text); margin: var(--s3) 0 var(--s2); }
 .ds-ticker-label:first-child { margin-top: 0; }
 
 /* Toast demo. */
@@ -464,13 +506,13 @@
   padding: var(--s3) var(--s3);
   font-size: 13px;
 }
-.ds-toast-info { border-left-color: #60a5fa; }
-.ds-toast-success { border-left-color: #22c55e; }
-.ds-toast-error { border-left-color: #f87171; }
+.ds-toast-info { border-left-color: var(--ds-toast-info); }
+.ds-toast-success { border-left-color: var(--ds-toast-success); }
+.ds-toast-error { border-left-color: var(--ds-toast-error); }
 .ds-toast strong { margin-right: var(--s1); }
-.ds-toast-info strong { color: #60a5fa; }
-.ds-toast-success strong { color: #22c55e; }
-.ds-toast-error strong { color: #f87171; }
+.ds-toast-info strong { color: var(--ds-toast-info); }
+.ds-toast-success strong { color: var(--ds-toast-success); }
+.ds-toast-error strong { color: var(--ds-toast-error); }
 .ds-toast button {
   margin-left: auto;
   background: none;
@@ -584,6 +626,14 @@
 .ds-asset-tile figcaption { font-size: 11px; color: var(--ds-faint); }
 .ds-asset-tile.ds-light-tile { background: #fff; }
 .ds-asset-tile.ds-dark-tile { background: #111; }
+/* Issue #359 (scan follow-up): the dark tile is dark in BOTH preview
+   themes, so its caption always takes the dark faint (#83838B, 4.77:1 on
+   #111) — the preview faint reads 3.37:1 there in the light preview.
+   Mirror image for the light tile: white in both themes, so its caption
+   always takes the light faint (#67676F, 4.75:1 on white) — the preview
+   faint reads 3.76:1 there in the dark preview. */
+.ds-asset-tile.ds-dark-tile figcaption { color: #83838b; }
+.ds-asset-tile.ds-light-tile figcaption { color: #67676f; }
 .ds-asset-tile img { display: block; }
 .ds-logo-16 img { width: 16px; height: 16px; }
 .ds-logo-24 img { width: 24px; height: 24px; }
@@ -691,7 +741,12 @@
 }
 .ds-system-notes { font-size: 14px; line-height: 1.65; color: var(--ds-muted); }
 .ds-system-notes h1, .ds-system-notes h2, .ds-system-notes h3 { color: var(--ds-text); }
-.ds-system-notes code { color: var(--ds-text); }
+/* Issue #359: the global <code> rule paints every code chip with the shell
+   --code-bg while this rule paints the text with the preview --ds-text —
+   dark-on-dark in a dark shell + light preview, light-on-light the other
+   way (1.11:1 / 1.05:1 when Notes is opened). The chip background follows
+   the preview theme with the text, so both directions read. */
+.ds-system-notes code { color: var(--ds-text); background: var(--ds-surface-2); }
 
 /* Code page restyle: same dark, dense language. */
 .ds-code { background: var(--ds-bg); color: var(--ds-text); }

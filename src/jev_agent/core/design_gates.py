@@ -7,13 +7,18 @@ The gates encode the research report
 (`research_notes/design-best-practices-20261026-0604/report.md`):
 
 - `contrast_gate` — WCAG 2.2 AA contrast (§2.4, §9): body and muted text
-  >= 4.5:1 on background and surface, button text >= 3:1 on both primary
-  states, in BOTH light and dark themes. Issue #358 extends it to the
+  >= 4.5:1 on background, surface, and the raised surface badges render on
+  (`surface_raised`, derived the `design_codegen` way), button text >= 4.5:1
+  on both primary states, in BOTH light and dark themes. Issue #358 extends it to the
   pairs the #309 Mac scan found the gate passing: the primary hue as text
   (via the derived `primary_ink` role, never the raw primary), semantic
   text on its tinted background (`{role}_text` on `{role}_subtle`), and
   swatch hex labels (the `label_on_color` pick must read >= 4.5:1 on the
-  swatch). The light-mode-only check in
+  swatch). Issue #359/#360 raise the button-text bar from 3:1 to 4.5:1:
+  button labels are text, so the WCAG AA normal-text floor applies, and
+  the builders walk the primary lightness until a shared pick clears it —
+  the gate no longer passes readable text at 4.06-4.44:1. The
+  light-mode-only check in
   `design_skills.check_palette_contrast` (issue #299, parallel work) is the
   same shape with a narrower scope; this gate is the one that covers both
   themes, and it reuses `design_kit.contrast_ratio` rather than
@@ -70,12 +75,15 @@ from jev_agent.core.design_kit import (
     THEMES,
     _dark_variant,
     contrast_ratio,
+    derived_surface_raised,
     label_on_color,
 )
 
 # WCAG 2.2 AA minimums (report §9.2): normal text 4.5:1, UI components 3:1.
+# Button labels are text, not bare UI components, so the button-text bar is
+# the 4.5:1 normal-text floor too (issues #359/#360).
 BODY_TEXT_MIN = 4.5
-BUTTON_TEXT_MIN = 3.0
+BUTTON_TEXT_MIN = 4.5
 
 # The generic-detector threshold (report §10.4 item 10): two or more
 # AI-default markers and the system is still at the centroid.
@@ -162,7 +170,13 @@ def _check_palette(palette: dict[str, str], label: str) -> list[str]:
     measured ratio.
 
     - body/muted text >= 4.5:1 on background and surface;
-    - button text >= 3:1 on both primary states;
+    - muted text >= 4.5:1 on the raised surface too (`surface_raised`,
+      derived the `design_codegen` way — issue #359: eco muted reads
+      4.36:1 on the raised surface badges render on, while clearing 4.5:1
+      on background and surface);
+    - button text >= 4.5:1 on both primary states (issues #359/#360:
+      button labels are text, so the WCAG AA normal-text floor applies,
+      not the 3:1 UI-component minimum);
     - `primary_ink` (the primary hue adjusted to read as text) >= 4.5:1 on
       background and surface — the raw primary is never text (issue #358:
       health primary `#DB26AB` reads 4.31:1 on white, 3.88:1 on its surface,
@@ -192,6 +206,15 @@ def _check_palette(palette: dict[str, str], label: str) -> list[str]:
                 violations.append(
                     f"{label}: {role} on {base_name} is {ratio:.2f}:1 (minimum {BODY_TEXT_MIN}:1)"
                 )
+    raised = derived_surface_raised(palette)
+    muted = palette.get("text_muted")
+    if muted is not None and raised is not None:
+        ratio = contrast_ratio(muted, raised)
+        if ratio < BODY_TEXT_MIN:
+            violations.append(
+                f"{label}: text_muted on surface_raised is {ratio:.2f}:1 "
+                f"(minimum {BODY_TEXT_MIN}:1)"
+            )
     primary_text = palette.get("primary_text")
     if primary_text is not None:
         for state in ("primary", "primary_hover"):

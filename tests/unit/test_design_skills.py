@@ -440,43 +440,43 @@ def test_every_seeded_palette_passes_the_extended_gate_both_themes() -> None:
     # The gate the pipeline actually runs (`contrast_gate`, both themes)
     # now covers primary-as-text, semantic text on tint, and swatch
     # labels — every seeded palette must pass those checks, not just the
-    # light-only `check_palette_contrast` the previous test pins.
-    #
-    # The assertion is scoped to the new checks on purpose: one sampled
-    # palette (playful, seed 6) fails the *pre-existing* dark button-text
-    # check (`primary_text` on dark `primary_hover`, 2.85:1) — the dark
-    # hover is lightened past the shared-text limit. That is issue #360,
-    # not this issue; the pipeline re-rolls past it today.
+    # light-only `check_palette_contrast` the previous test pins. The
+    # sweep is the full #360 verifier sweep (30 seeds x the 11 vibe
+    # families) at the 4.5:1 bar; the old scoping that let playful seed 6
+    # fail the dark button-text check (2.85:1, issue #360) is gone — the
+    # dark hover is now derived so a shared text clears the bar.
     from jev_agent.core.design_gates import contrast_gate
 
-    _NEW = (
-        "primary_ink on ",
-        "success_text on ",
-        "warning_text on ",
-        "danger_text on ",
-        "info_text on ",
-        "swatch label ",
-    )
-    for keywords in ("restaurant", "fintech", "luxury", "playful", "", "eco garden"):
-        for seed in range(25):
+    for keywords in (
+        "fintech",
+        "playful",
+        "health",
+        "luxury",
+        "food",
+        "travel",
+        "music",
+        "education",
+        "eco",
+        "social",
+        "productivity",
+    ):
+        for seed in range(30):
             system = generate_seeded_system(seed, keywords=keywords, app_type=APP_TYPE)
-            violations = contrast_gate(system.palette)
-            assert [v for v in violations if any(f in v for f in _NEW)] == [], (
-                keywords,
-                seed,
-                violations,
-            )
+            assert contrast_gate(system.palette) == [], (keywords, seed, system.palette)
 
 
 def test_build_palette_carries_the_derived_text_roles() -> None:
     # The seeded builder emits the same text-safe roles the kit builder
     # does, derived from its own bases — and the primary itself is never
-    # moved to satisfy them.
+    # moved to satisfy them. The raw palette is not gate-clean by itself:
+    # `_ensure_contrast` is the enforcer that walks the primary until the
+    # shared button text clears 4.5:1 in both themes (issues #359/#360).
     from jev_agent.core.design_gates import contrast_gate
     from jev_agent.core.design_kit import contrast_ratio
+    from jev_agent.core.design_skills import _ensure_contrast
 
     strategy = COLOR_STRATEGIES[0]
-    palette, _hue, _sat, _light = build_palette(strategy, random.Random(1), anchor_hue=8.0)
+    palette, hue, _sat, _light = build_palette(strategy, random.Random(1), anchor_hue=8.0)
     for key in (
         "primary_ink",
         "success_subtle",
@@ -494,7 +494,7 @@ def test_build_palette_carries_the_derived_text_roles() -> None:
     assert contrast_ratio(palette["primary_ink"], palette["surface"]) >= 4.6
     for role in ("success", "warning", "danger", "info"):
         assert contrast_ratio(palette[f"{role}_text"], palette[f"{role}_subtle"]) >= 4.6, role
-    assert contrast_gate(palette) == []
+    assert contrast_gate(_ensure_contrast(palette, hue)) == []
 
 
 def test_rich_tokens_for_seeded_carries_text_roles_in_both_themes() -> None:

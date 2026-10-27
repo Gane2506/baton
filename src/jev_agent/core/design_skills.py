@@ -40,8 +40,14 @@ from jev_agent.core.design_kit import (
     SEMANTIC_LIGHT,
     SEMANTIC_ROLES,
     SEMANTIC_SUBTLE_LIGHT,
+    _adaptive_hover,
+    _dark_variant,
+    _muted_text,
+    _primary_text,
+    _walk_button_lightness,
     contrast_ratio,
     derive_text_roles,
+    derived_surface_raised,
     palette_for_vibe,
 )
 
@@ -83,14 +89,6 @@ def _hue_of(hex_color: str) -> float:
     r, g, b = _hex_to_rgb(hex_color)
     hue, _lightness, _saturation = colorsys.rgb_to_hls(r, g, b)
     return hue * 360.0
-
-
-def _on_color(bg: str) -> str:
-    """White or near-black, whichever reads better on `bg` (same rule as the
-    design kit: the pick always keeps at least 3:1 on the background)."""
-    white = contrast_ratio("#FFFFFF", bg)
-    dark = contrast_ratio("#101418", bg)
-    return "#FFFFFF" if white >= dark else "#101418"
 
 
 # ---------------------------------------------------------------------------
@@ -978,14 +976,22 @@ def build_palette(
         _accent_spec(hue, offset, saturation, lightness) for offset in strategy.accent_offsets
     ]
     accents = [_hsl(*spec) for spec in accent_specs]
+    surface = _hsl(hue, 0.35, 0.96)
+    text = _hsl(hue, 0.30, 0.10)
+    raised = derived_surface_raised({"surface": surface, "text": text})
     palette: dict[str, str] = {
         "primary": primary,
         "primary_hover": primary_hover,
-        "primary_text": _on_color(primary),
+        # Shared pick over both primary states (issues #359/#360): the old
+        # `_on_color(primary)` read the primary alone, so a text that won
+        # on the primary could fail on the hover.
+        "primary_text": _primary_text(primary, primary_hover),
         "background": "#FFFFFF",
-        "surface": _hsl(hue, 0.35, 0.96),
-        "text": _hsl(hue, 0.30, 0.10),
-        "text_muted": _hsl(hue, 0.15, 0.44),
+        "surface": surface,
+        "text": text,
+        # The kit derivation, not a fixed lightness: the old L=0.44 read
+        # 4.12:1 on the raised surface badges render on (issue #359).
+        "text_muted": _muted_text(hue, "#FFFFFF", surface, raised),
         "border": _hsl(hue, 0.20, 0.88),
         **{role: SEMANTIC_LIGHT[role] for role in SEMANTIC_ROLES},
         **{f"{role}_subtle": SEMANTIC_SUBTLE_LIGHT[role] for role in SEMANTIC_ROLES},
@@ -1004,9 +1010,13 @@ def check_palette_contrast(palette: dict[str, str]) -> list[str]:
     """WCAG AA violations in a light-mode palette (empty means it passes).
 
     The gate, not a variable: body text ≥ 4.5:1 on background and surface,
-    muted text ≥ 4.5:1 on background, button text ≥ 3:1 on both primary
-    states. Dark variants are derived from the light palette by the design
-    kit's `_dark_variant`, unchanged by this module.
+    muted text ≥ 4.5:1 on background, surface, and the raised surface
+    badges render on (issue #359), button text ≥ 4.5:1 on both primary
+    states (issues #359/#360: button labels are text, so the WCAG AA
+    normal-text floor applies, not the 3:1 UI-component minimum). Dark
+    variants are derived from the light palette by the design kit's
+    `_dark_variant`, unchanged by this module — `_ensure_contrast` checks
+    the dark pair separately, which is what caught issue #360.
     """
     violations: list[str] = []
     background = palette.get("background", "#FFFFFF")
@@ -1019,33 +1029,50 @@ def check_palette_contrast(palette: dict[str, str]) -> list[str]:
             violations.append(f"{role} on background is below 4.5:1")
         if contrast_ratio(color, surface) < 4.5:
             violations.append(f"{role} on surface is below 4.5:1")
+    raised = derived_surface_raised(palette)
+    muted = palette.get("text_muted")
+    if muted is not None and raised is not None and contrast_ratio(muted, raised) < 4.5:
+        violations.append("text_muted on surface_raised is below 4.5:1")
     primary_text = palette.get("primary_text")
     for state in ("primary", "primary_hover"):
         color = palette.get(state)
         if (
             primary_text is not None
             and color is not None
-            and contrast_ratio(primary_text, color) < 3.0
+            and contrast_ratio(primary_text, color) < 4.5
         ):
-            violations.append(f"primary_text on {state} is below 3:1")
+            violations.append(f"primary_text on {state} is below 4.5:1")
     return violations
 
 
 def _ensure_contrast(palette: dict[str, str], hue: float) -> dict[str, str]:
     """Nudge a palette until the contrast gate passes (deterministic).
 
-    Darkens muted text until it clears 4.5:1; if button text still falls
-    short on a primary state, the primary lightness is walked toward the
-    nearer extreme until the best available text color clears 3:1. The
-    construction already keeps these passing for the sampled ranges — this
-    is the gate's enforcement, not its hope. The derived text roles
-    (`primary_ink`, `{role}_text`) are recomputed from the final bases on
-    every exit: walking the primary moves its ink with it.
+    Darkens muted text until it clears 4.5:1 on background, surface, and
+    the raised surface; if button text still falls short on a primary state
+    — in either theme — the primary lightness is walked (kit helper) until
+    a shared pick clears 4.5:1 on both states in both themes. The old walk
+    only checked the light theme, so a dark-only failure (issue #360:
+    playful seed 6, dark hover 2.85:1) survived it; the dark pair is now
+    checked on every iteration. The construction already keeps these
+    passing for the sampled ranges — this is the gate's enforcement, not
+    its hope. The derived text roles (`primary_ink`, `{role}_text`) are
+    recomputed from the final bases on every exit: walking the primary
+    moves its ink with it.
     """
     fixed = dict(palette)
     for _ in range(12):
         violations = check_palette_contrast(fixed)
-        if not violations:
+        dark = _dark_variant(fixed)
+        dark_text = dark.get("primary_text")
+        dark_violations = [
+            state
+            for state in ("primary", "primary_hover")
+            if dark_text is not None
+            and dark.get(state) is not None
+            and contrast_ratio(dark_text, dark[state]) < 4.5
+        ]
+        if not violations and not dark_violations:
             fixed.update(derive_text_roles(fixed))
             return fixed
         muted = fixed.get("text_muted")
@@ -1054,17 +1081,22 @@ def _ensure_contrast(palette: dict[str, str], hue: float) -> dict[str, str]:
             _h, lightness, _s = colorsys.rgb_to_hls(_r, _g, _b)
             fixed["text_muted"] = _hsl(hue, 0.15, max(0.10, lightness - 0.04))
             continue
-        if any("primary_text" in v for v in violations):
+        if any("primary_text" in v for v in violations) or dark_violations:
             primary = fixed["primary"]
             _r, _g, _b = _hex_to_rgb(primary)
             _h, lightness, sat = colorsys.rgb_to_hls(_r, _g, _b)
-            # Walk lightness toward the nearer extreme: a lighter primary
-            # reads dark text better, a darker one reads white text better.
-            step = 0.05 if lightness >= 0.5 else -0.05
-            lightness = min(0.72, max(0.28, lightness + step))
-            fixed["primary"] = _hsl(hue, sat, lightness)
-            fixed["primary_hover"] = _hsl(hue, sat, max(0.28, lightness - 0.08))
-            fixed["primary_text"] = _on_color(fixed["primary"])
+            walked = _walk_button_lightness(
+                hue,
+                sat,
+                lightness,
+                hover_for=lambda candidate, candidate_lightness, saturation: [
+                    _hsl(hue, saturation, max(0.28, candidate_lightness - 0.08)),
+                    _adaptive_hover(candidate, 0.75, 0.62),
+                ],
+            )
+            fixed["primary"] = _hsl(hue, sat, walked)
+            fixed["primary_hover"] = _hsl(hue, sat, max(0.28, walked - 0.08))
+            fixed["primary_text"] = _primary_text(fixed["primary"], fixed["primary_hover"])
             continue
         break
     fixed.update(derive_text_roles(fixed))
@@ -1368,20 +1400,15 @@ def rich_tokens_for_seeded(
     )
     # Override the rich primary with the seeded palette's exact primary, so
     # the detail page's Colors section and the flat tokens agree. Only the
-    # primary roles are overridden — the dark palette keeps its own
-    # backgrounds, surfaces, and text.
-    dark_primary = _hsl(seeded.hue, min(1.0, seeded.saturation + 0.1), 0.62)
-    dark_hover = _hsl(seeded.hue, min(1.0, seeded.saturation + 0.1), 0.70)
-    dark_overrides = {
-        "primary": dark_primary,
-        "primary_hover": dark_hover,
-        "primary_text": _on_color(dark_primary),
-    }
+    # light roles are overridden — the dark palette comes from `rich_tokens`
+    # itself (walked from the seeded hue/saturation, so its button pair
+    # already clears 4.5:1); the old dark overrides re-asserted the fixed
+    # 0.62/0.70 pair and would undo that walk.
     colors = rich.get("colors")
     if isinstance(colors, dict):
         if theme == "dark":
-            colors.update(dark_overrides)
-            # The override moves the primary, so its ink moves with it.
+            # The dark section is already the seeded hue/saturation from
+            # `rich_tokens`; re-derive its text roles from its own bases.
             colors.update(derive_text_roles(colors))
         elif theme == "light":
             colors.update(seeded.palette)
@@ -1391,6 +1418,5 @@ def rich_tokens_for_seeded(
             if isinstance(light_section, dict):
                 light_section.update(seeded.palette)
             if isinstance(dark_section, dict):
-                dark_section.update(dark_overrides)
                 dark_section.update(derive_text_roles(dark_section))
     return rich

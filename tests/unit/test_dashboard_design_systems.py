@@ -827,7 +827,9 @@ def test_detail_preview_toggle(client: TestClient, home: Path) -> None:
     # class alone; if the rule is swallowed (see the comment-balance check
     # above), inputs stay dark-on-dark in light preview.
     assert "--ds-surface-2: #ececef" in css.text
-    assert "--ds-faint: #8a8a92" in css.text
+    # Issue #359: the light faint was #8a8a92 (3.08:1 on the surface) — the
+    # replacement clears 4.6:1 on every light preview background.
+    assert "--ds-faint: #67676f" in css.text
     assert "--ds-accent: #65a30d" in css.text
     # The inherited text color must flip too: elements with no explicit
     # color rule (specimens, card titles, token names) inherit the content

@@ -178,7 +178,10 @@ def _studio_landing_view() -> dict[str, Any]:
                 "updated": system.updated_at,
                 "swatches": swatches[:6],
                 "primary": primary,
-                "on_primary": _on_hex(primary),
+                # Same token rule as the detail view: the palette's own
+                # `primary_text`, with the luminance heuristic only as the
+                # fallback for legacy systems without that role.
+                "on_primary": _hex_color(light.get("primary_text")) or _on_hex(primary),
                 "background": background,
                 "text": text,
                 "tagline": tagline,
@@ -743,7 +746,11 @@ def _design_system_view(repo: views.Repo, name: str) -> dict[str, Any]:
         "business_proposed": proposed,
         "business_enabled": enabled,
         "primary": primary,
-        "on_primary": _on_hex(primary),
+        # The button text is the palette's own `primary_text` token (issues
+        # #359/#360: the token is walked until it clears 4.5:1 on both
+        # primary states); the luminance heuristic only survives as the
+        # fallback for legacy systems whose tokens carry no such role.
+        "on_primary": _hex_color(light_colors.get("primary_text")) or _on_hex(primary),
         "background": background,
         "text": text,
         "logo_data_uri": _logo_data_uri(system_path / "logo.svg"),
