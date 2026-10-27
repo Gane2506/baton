@@ -45,7 +45,9 @@ to the port itself — `--port`, default 8765 — identifying the listener over 
 stopping it only when it serves this repo, so a dashboard started before the pid file
 existed is still stoppable, and another repo's dashboard on the port is reported,
 never killed. A dashboard bound off loopback with a token answers the probe with
-401, so it is reported, not stopped — stop that one through its pid file. `stop` waits
+401, so it is reported, not stopped — stop that one through its pid file. Likewise,
+a dashboard bound only to a non-loopback address is not found by the port probe.
+`stop` waits
 until the port is free again before reporting success, so starting right after a stop
 works first time; starting a second dashboard on the same port names the running one
 and points at `stop` instead of sending you to `lsof`.

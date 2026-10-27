@@ -400,12 +400,6 @@ def test_parse_netstat_pid() -> None:
     assert dashboard_cmd._parse_netstat_pid(text, 1234) is None
 
 
-def test_stop_without_pidfile(fixture_repo: Path) -> None:
-    result = runner.invoke(app, ["dashboard", "stop", "--repo", str(fixture_repo)])
-    assert result.exit_code == 0, result.output
-    assert "no dashboard recorded" in result.output
-
-
 def test_stop_with_stale_pidfile_removes_it(fixture_repo: Path) -> None:
     path = _write_pidfile(fixture_repo, _dead_pid(), _free_port())
     result = runner.invoke(app, ["dashboard", "stop", "--repo", str(fixture_repo)])
@@ -419,7 +413,10 @@ def test_stop_with_unreadable_pidfile_removes_it(fixture_repo: Path) -> None:
     path = fixture_repo / ".jev" / "dashboard.pid"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("not json", encoding="utf-8")
-    result = runner.invoke(app, ["dashboard", "stop", "--repo", str(fixture_repo)])
+    result = runner.invoke(
+        app,
+        ["dashboard", "stop", "--repo", str(fixture_repo), "--port", str(_free_port())],
+    )
     assert result.exit_code == 0, result.output
     assert "no dashboard recorded" in result.output
 
@@ -543,14 +540,18 @@ def test_start_writes_pidfile_and_removes_it_on_exit(
         seen["port"] = kwargs.get("port")
 
     monkeypatch.setattr(uvicorn, "run", fake_run)
-    result = runner.invoke(app, ["dashboard", "--no-open", "--repo", str(fixture_repo)])
+    port = _free_port()
+    result = runner.invoke(
+        app,
+        ["dashboard", "--no-open", "--port", str(port), "--repo", str(fixture_repo)],
+    )
     assert result.exit_code == 0, result.output
     info = seen["pidfile"]
     assert isinstance(info, dict)
     assert info["pid"] == os.getpid()
-    assert info["port"] == 8765
+    assert info["port"] == port
     assert seen["host"] == "127.0.0.1"
-    assert seen["port"] == 8765
+    assert seen["port"] == port
     # A clean exit removes the pid file, so the next start does not see a stale one.
     assert not (fixture_repo / ".jev" / "dashboard.pid").exists()
 

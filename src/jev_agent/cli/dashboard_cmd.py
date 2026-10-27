@@ -419,13 +419,13 @@ def _stop_by_port(
             console.print(
                 f"port {port} is in use by a jev dashboard serving {served} — "
                 "not this repo's dashboard. Stop it from its own repo "
-                f"(`jev dashboard stop --repo {served}`) or with --port."
+                f"(`jev dashboard stop --repo {served}`)."
             )
         else:
             console.print(
                 f"port {port} is in use by a jev dashboard whose repo could not "
                 "be determined — not this repo's dashboard. Stop it from its "
-                "own repo or with --port."
+                "own repo, or stop the process on that port by hand."
             )
         return True
     pid = _listening_pid(port)
