@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import colorsys
 import hashlib
+from collections.abc import Callable
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -139,13 +140,117 @@ def _primary_text(primary: str, primary_hover: str) -> str:
 
     Picks whichever of white and near-black reads better on the *worse* of the
     primary and its hover state, so the button label never lands on the state
-    the text color was not chosen for. Mid-luminance brand hues
-    (reds/oranges/purples) admit no 4.5:1 text color on every state; the pick
-    always keeps at least 3:1 (WCAG AA for UI components).
+    the text color was not chosen for. The pick alone guarantees nothing —
+    the builders walk the primary lightness (`_walk_button_lightness`) until
+    the pick clears 4.5:1 on both states, and the gate enforces it.
     """
     white = min(contrast_ratio("#FFFFFF", primary), contrast_ratio("#FFFFFF", primary_hover))
     dark = min(contrast_ratio("#101418", primary), contrast_ratio("#101418", primary_hover))
     return "#FFFFFF" if white >= dark else "#101418"
+
+
+def _mix_hex(first: str, second: str, first_weight: float) -> str:
+    """Blend two `#RRGGBB` colors (same rule as `design_codegen._mix`)."""
+    r1, g1, b1 = _hex_to_rgb(first)
+    r2, g2, b2 = _hex_to_rgb(second)
+    return _rgb_to_hex(
+        r1 * first_weight + r2 * (1.0 - first_weight),
+        g1 * first_weight + g2 * (1.0 - first_weight),
+        b1 * first_weight + b2 * (1.0 - first_weight),
+    )
+
+
+def derived_surface_raised(palette: dict[str, str]) -> str | None:
+    """The raised surface badges render muted text on: 94% surface + 6%
+    text — the `design_codegen._derived_colors` derivation, canonical here
+    so the gate, the kit's muted-text rule, and codegen all derive the same
+    color (issue #359: the showcase's `surface_raised` is its neutral-100,
+    a touch lighter than this mix, so a muted text clearing 4.5:1 on the
+    mix clears it on the showcase value too). None when surface or text
+    is missing from the palette."""
+    surface = palette.get("surface")
+    text = palette.get("text")
+    if surface is None or text is None:
+        return None
+    return _mix_hex(surface, text, 0.94)
+
+
+def _adaptive_hover(primary: str, saturation: float, nominal: float, *, target: float = 4.6) -> str:
+    """A hover lightness for a dark-theme primary: start at `nominal` (0.62
+    in the kit's dark variant, primary + 0.08 in the showcase) and step
+    0.01 at a time — down while a white button text fails `target`, up
+    while a dark one fails — until the shared pick clears `target` on the
+    hover. Issue #360 at the 4.5 bar: the old unconditional 0.62 lighten
+    needs dark text at hue 240 (3.38:1), so the step goes up there, not
+    just down; and a dark primary needs the step down (playful seed 6:
+    white on the 0.62 hover is 2.85:1). The pick is computed once at the
+    nominal lightness and never flips: stepping down only helps white,
+    stepping up only helps dark.
+
+    The hue is read off the primary hex, never passed in: the gate
+    re-derives the dark variant from the stored hex (`_dark_variant`),
+    and a hue carried at full precision disagrees with the hex-rounded
+    one by enough to flip a near-tie (hue 289: the walk cleared 4.6 with
+    the exact hue while the gate measured 3.47 with the hex hue).
+    """
+    hue = _hue_of(primary)
+    lightness = nominal
+    hover = _hsl(hue, saturation, round(lightness, 2))
+    text = _primary_text(primary, hover)
+    if text == "#FFFFFF":
+        while lightness > 0.20 and contrast_ratio(text, hover) < target:
+            lightness = round(lightness - 0.01, 2)
+            hover = _hsl(hue, saturation, lightness)
+    else:
+        while lightness < 0.90 and contrast_ratio(text, hover) < target:
+            lightness = round(lightness + 0.01, 2)
+            hover = _hsl(hue, saturation, lightness)
+    return hover
+
+
+def _walk_button_lightness(
+    hue: float,
+    saturation: float,
+    lightness: float,
+    *,
+    hover_for: Callable[[str, float, float], list[str]],
+    target: float = 4.6,
+    lo: float = 0.28,
+    hi: float = 0.75,
+) -> float:
+    """The primary lightness closest to `lightness` whose shared button text
+    clears `target` on every hover `hover_for(primary, lightness,
+    saturation)` derives. Searches outward in 0.01 steps (lighter first on
+    ties — the nearer extreme for a mid primary, matching the old
+    `_ensure_contrast` direction). When no lightness in [lo, hi] clears,
+    returns the best candidate instead of raising, so a builder never
+    crashes on an unusual hue. The hue sweeps prove every hue clears within
+    0.11 of 0.50, so the fallback is unreachable for the builders' ranges.
+    """
+
+    def worst_ratio(candidate: float) -> float:
+        primary = _hsl(hue, saturation, round(candidate, 2))
+        worst = 21.0
+        for hover in hover_for(primary, round(candidate, 2), saturation):
+            text = _primary_text(primary, hover)
+            worst = min(worst, contrast_ratio(text, primary), contrast_ratio(text, hover))
+        return worst
+
+    start = round(min(max(lightness, lo), hi), 2)
+    best_lightness, best_ratio = start, worst_ratio(start)
+    if best_ratio >= target:
+        return start
+    steps = round((hi - lo) / 0.01)
+    for i in range(1, steps + 1):
+        for candidate in (round(start + i * 0.01, 2), round(start - i * 0.01, 2)):
+            if candidate < lo or candidate > hi:
+                continue
+            ratio = worst_ratio(candidate)
+            if ratio > best_ratio:
+                best_lightness, best_ratio = candidate, ratio
+            if ratio >= target:
+                return candidate
+    return best_lightness
 
 
 def _hsl(hue: float, saturation: float, lightness: float) -> str:
@@ -161,20 +266,23 @@ def _hue_of(hex_color: str) -> float:
     return hue * 360.0
 
 
-def _muted_text(hue: float, background: str, surface: str) -> str:
-    """Muted text dark enough to clear 4.5:1 on background and surface.
+def _muted_text(hue: float, background: str, surface: str, raised: str | None = None) -> str:
+    """Muted text dark enough to clear 4.5:1 on background, surface, and the
+    raised surface badges render on (issue #359: eco muted reads 4.36:1 on
+    `surface_raised`, which the old two-base rule never checked).
 
     Green/cyan hues carry most of their luminance in the green channel, so
     a fixed lightness of 0.44 is too light for them (health 4.32:1, eco
     4.36:1, travel-on-surface 4.18:1 — issue #309). Darken in 0.01 steps
-    until the ratio clears 4.6:1 on both bases; the 0.1 margin keeps hex
+    until the ratio clears 4.6:1 on every base; the 0.1 margin keeps hex
     rounding from dipping below the 4.5:1 floor. Hues that already pass
     keep their exact current color, so unaffected vibes do not move.
     """
+    bases = [background, surface] + ([raised] if raised is not None else [])
     lightness = 0.44
     while lightness > 0.10:
         color = _hsl(hue, 0.15, lightness)
-        if contrast_ratio(color, background) >= 4.6 and contrast_ratio(color, surface) >= 4.6:
+        if all(contrast_ratio(color, base) >= 4.6 for base in bases):
             return color
         lightness = round(lightness - 0.01, 2)
     return _hsl(hue, 0.15, 0.10)
@@ -270,19 +378,38 @@ def derive_text_roles(palette: dict[str, str]) -> dict[str, str]:
 
 
 def _palette_from_hue(hue: float) -> dict[str, str]:
-    """A full light-mode palette built around one hue."""
-    primary = _hsl(hue, 0.72, 0.50)
-    primary_hover = _hsl(hue, 0.72, 0.42)
+    """A full light-mode palette built around one hue.
+
+    The primary lightness is walked (`_walk_button_lightness`) until the
+    shared button text clears 4.6:1 on the light pair (primary, hover) and
+    the dark pair (primary, adaptive dark hover) — a fixed lightness of
+    0.50 admits no 4.5:1 pick for 68 of 360 hues, so the walk, not the
+    fixed value, is what makes the hue sweep pass.
+    """
+    lightness = _walk_button_lightness(
+        hue,
+        0.72,
+        0.50,
+        hover_for=lambda primary, candidate, saturation: [
+            _hsl(hue, saturation, round(max(0.28, candidate - 0.08), 2)),
+            _adaptive_hover(primary, 0.75, 0.62),
+        ],
+    )
+    primary = _hsl(hue, 0.72, lightness)
+    primary_hover = _hsl(hue, 0.72, round(max(0.28, lightness - 0.08), 2))
     background = "#FFFFFF"
     surface = _hsl(hue, 0.35, 0.96)
+    text = _hsl(hue, 0.30, 0.10)
     palette = {
         "primary": primary,
         "primary_hover": primary_hover,
         "primary_text": _primary_text(primary, primary_hover),
         "background": background,
         "surface": surface,
-        "text": _hsl(hue, 0.30, 0.10),
-        "text_muted": _muted_text(hue, background, surface),
+        "text": text,
+        "text_muted": _muted_text(
+            hue, background, surface, derived_surface_raised({"surface": surface, "text": text})
+        ),
         "border": _hsl(hue, 0.20, 0.88),
         **{role: SEMANTIC_LIGHT[role] for role in SEMANTIC_ROLES},
         **{f"{role}_subtle": SEMANTIC_SUBTLE_LIGHT[role] for role in SEMANTIC_ROLES},
@@ -292,10 +419,18 @@ def _palette_from_hue(hue: float) -> dict[str, str]:
 
 
 def _dark_variant(palette: dict[str, str]) -> dict[str, str]:
-    """A dark-mode palette derived from a light one (same primary hue)."""
+    """A dark-mode palette derived from a light one (same primary hue).
+
+    The dark hover is adaptive (`_adaptive_hover`): the old unconditional
+    lighten to 0.62 admits no shared button text at the 4.5 bar for a dark
+    primary (playful seed 6: white on the hover is 2.85:1 — issue #360)
+    and for blue primaries needing dark text (3.38:1 at hue 240), so the
+    hover steps down for white text and up for dark text until the shared
+    pick clears 4.6:1 on it.
+    """
     hue = _hue_of(palette["primary"])
     primary = palette["primary"]
-    primary_hover = _hsl(hue, 0.75, 0.62)
+    primary_hover = _adaptive_hover(primary, 0.75, 0.62)
     dark = {
         "primary": primary,
         "primary_hover": primary_hover,
@@ -734,8 +869,9 @@ def design_system_markdown(
     lines += [
         "- Text on primary buttons uses `primary_text`: whichever of white and "
         "near-black reads better on the worse of the primary and its hover state "
-        "(always at least 3:1, WCAG AA for UI components; 4.5:1 wherever white "
-        "qualifies).",
+        "(always at least 4.5:1, the WCAG AA normal-text floor, on both states "
+        "in both themes; the primary lightness is walked until a shared pick "
+        "clears it).",
         "- The stack sets token defaults and export targets only; no code was scaffolded.",
         "",
     ]

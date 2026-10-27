@@ -100,15 +100,16 @@ def test_contrast_gate_kit_muted_text_gap_fixed() -> None:
 
 
 def test_kit_muted_text_darkened_only_where_it_failed() -> None:
-    # Vibes that already passed keep their exact muted color — the fix
-    # moves only the hues that failed the gate.
-    assert palette_for_vibe("fintech")["text_muted"] == "#5F6C81"
-    assert palette_for_vibe("playful")["text_muted"] == "#81685F"
-    assert palette_for_vibe("music")["text_muted"] == "#705F81"
-    # The three that failed are darkened, not re-hued.
-    assert palette_for_vibe("health")["text_muted"] == "#577567"
-    assert palette_for_vibe("eco")["text_muted"] == "#57755C"
-    assert palette_for_vibe("travel")["text_muted"] == "#597378"
+    # The muted derivation now clears 4.6:1 on background, surface, AND
+    # the raised surface badges render on (issue #359) — the third base
+    # moves even vibes that passed on the first two, slightly, toward the
+    # hue's own dark. The hues that failed before move further.
+    assert palette_for_vibe("fintech")["text_muted"] == "#5B677B"
+    assert palette_for_vibe("playful")["text_muted"] == "#786159"
+    assert palette_for_vibe("music")["text_muted"] == "#6E5D7E"
+    assert palette_for_vibe("health")["text_muted"] == "#506D5F"
+    assert palette_for_vibe("eco")["text_muted"] == "#506D55"
+    assert palette_for_vibe("travel")["text_muted"] == "#526B6F"
 
 
 def test_kit_muted_text_passes_every_hue() -> None:
@@ -117,6 +118,46 @@ def test_kit_muted_text_passes_every_hue() -> None:
     for hue in range(360):
         palette = _palette_from_hue(float(hue))
         assert contrast_gate(palette) == [], f"hue {hue}"
+
+
+def test_seeded_playful_seed_6_passes_both_themes() -> None:
+    # Issue #360 regression: `generate_seeded_system(6, keywords='playful')`
+    # failed the gate — dark `primary_text` on dark `primary_hover` was
+    # 2.85:1, because the dark hover was lightened unconditionally to
+    # lightness 0.62, past the shared-text limit for its primary. The dark
+    # hover is now derived so a shared pick clears 4.5:1 on both states.
+    from jev_agent.core.design_skills import generate_seeded_system
+
+    system = generate_seeded_system(6, keywords="playful", app_type="website")
+    assert contrast_gate(system.palette) == []
+
+
+def test_dark_hover_walks_both_directions() -> None:
+    # The dark hover cannot only step down: for blue hues the shared pick
+    # needs the hover stepped UP (hue 240: dark-on-0.62 is 3.38:1, so the
+    # hover must lighten until dark text clears 4.6:1 on both states),
+    # while for the seed-6 brown it steps down. Both directions must pass
+    # the gate at the 4.5:1 bar.
+    from jev_agent.core.design_kit import _dark_variant, contrast_ratio
+
+    for hue in (240.0, 322.0):
+        palette = _palette_from_hue(hue)
+        dark = _dark_variant(palette)
+        text = dark["primary_text"]
+        assert contrast_ratio(text, dark["primary"]) >= 4.5, hue
+        assert contrast_ratio(text, dark["primary_hover"]) >= 4.5, hue
+
+
+def test_contrast_gate_muted_text_on_raised_surface() -> None:
+    # Issue #359: muted text that clears 4.5:1 on the background (5.41:1)
+    # and on the surface (4.87:1) but not on the slightly darker raised
+    # surface badges render on (4.33:1) still fails — the gate derives the
+    # raised surface the same way the builders do and checks muted on it.
+    palette = dict(_SCANNED_HEALTH, text_muted="#806174")
+    violations = contrast_gate(palette, theme="light")
+    assert _violations_matching(violations, "text_muted on surface_raised")
+    assert not _violations_matching(violations, "text_muted on background")
+    assert not _violations_matching(violations, "text_muted on surface is")
 
 
 def test_contrast_gate_fails_dark_only() -> None:
@@ -146,9 +187,11 @@ def test_contrast_gate_muted_text_on_surface() -> None:
     assert not _violations_matching(violations, "text_muted on background")
 
 
-def test_contrast_gate_button_text_below_3_to_1() -> None:
-    # Mid-grey primary with white button text: ~2.3:1, below the 3:1
-    # minimum for UI components.
+def test_contrast_gate_button_text_below_4_5_to_1() -> None:
+    # Mid-grey primary with white button text: ~2.3:1, below the 4.5:1
+    # floor button text now carries (issues #359/#360: button labels are
+    # text, so the WCAG AA normal-text floor applies, not the 3:1
+    # UI-component minimum).
     palette = dict(
         _PASSING_LIGHT,
         primary="#AAAAAA",
@@ -524,19 +567,21 @@ def test_ensure_passing_gates_rejects_zero_attempts() -> None:
 # tint, swatch labels
 # ---------------------------------------------------------------------------
 
-# The scanned health system (issue #309 verification report): primary
-# #DB26AB reads 4.31:1 on white and 3.88:1 on its surface, so the raw
-# primary must never be text — the derived ink reads 5.18:1 / 4.67:1.
+# The scanned health system (issue #309 verification report), after the
+# #359/#360 walk: the raw primary #DB26AB read 4.31:1 on white, so the
+# builder walks the primary to #BD1F83 (white 5.69:1, hover #9A196A 7.72:1)
+# and the muted text to #7B5B6F (5.89:1 on white, 4.71:1 on the raised
+# surface) — the derived ink is the walked primary itself, 5.69:1 / 5.13:1.
 _SCANNED_HEALTH: dict[str, str] = {
     **_PASSING_LIGHT,
-    "primary": "#DB26AB",
-    "primary_hover": "#B91F90",
+    "primary": "#BD1F83",
+    "primary_hover": "#9A196A",
     "primary_text": "#FFFFFF",
     "surface": "#F8F1F6",
     "text": "#21121D",
-    "text_muted": "#815F78",
+    "text_muted": "#7B5B6F",
     "border": "#E5D3E0",
-    "primary_ink": "#C52199",
+    "primary_ink": "#BD1F83",
     "success_subtle": "#DCFCE7",
     "success_text": "#117E39",
     "warning_subtle": "#FEF3C7",

@@ -304,18 +304,18 @@ def test_body_text_contrast_is_aa() -> None:
     for vibe in _vibe_samples():
         for palette in _palettes_for(vibe):
             assert contrast_ratio(palette["text"], palette["background"]) >= 4.5, vibe
-            assert contrast_ratio(palette["text_muted"], palette["background"]) >= 3.0, vibe
+            assert contrast_ratio(palette["text_muted"], palette["background"]) >= 4.5, vibe
 
 
 def test_primary_text_is_readable_on_primary_buttons() -> None:
     """`primary_text` must stay legible on the primary button and its hover
-    state: >= 3:1 (WCAG AA for UI components) always, 4.5:1 wherever white
-    qualifies."""
+    state: >= 4.5:1 (issues #359/#360: button labels are text, so the WCAG
+    AA normal-text floor applies, not the 3:1 UI-component minimum)."""
     for vibe in _vibe_samples():
         for palette in _palettes_for(vibe):
             on = palette["primary_text"]
-            assert contrast_ratio(on, palette["primary"]) >= 3.0, vibe
-            assert contrast_ratio(on, palette["primary_hover"]) >= 3.0, vibe
+            assert contrast_ratio(on, palette["primary"]) >= 4.5, vibe
+            assert contrast_ratio(on, palette["primary_hover"]) >= 4.5, vibe
 
 
 def test_primary_text_prefers_white_when_readable() -> None:

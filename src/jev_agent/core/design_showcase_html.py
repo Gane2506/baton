@@ -719,7 +719,7 @@ body{
 .btn-secondary:hover{border-color:var(--c-text-faint)}
 .btn-ghost{background:transparent;color:var(--c-primary-ink,var(--c-primary))}
 .btn-ghost:hover{background:var(--c-primary-subtle)}
-.btn-danger{background:var(--c-danger);color:#fff}
+.btn-danger{background:var(--c-danger);color:var(--c-on-danger,#fff)}
 .btn-danger:hover{filter:brightness(.94)}
 .btn:disabled{opacity:.45;cursor:not-allowed;transform:none!important;box-shadow:none!important}
 .btn-sm{font-size:13px;padding:8px 16px}

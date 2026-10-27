@@ -35,7 +35,10 @@ from jev_agent.core.design_business import (
 from jev_agent.core.design_kit import (
     SEMANTIC_DARK,
     SEMANTIC_LIGHT,
+    _primary_text,
     derive_text_roles,
+    derived_surface_raised,
+    label_on_color,
 )
 from jev_agent.core.design_motion3d import (
     build_motion_js,
@@ -198,20 +201,6 @@ def _mix(first: str, second: str, first_weight: float) -> str:
     return f"#{mixed[0]:02X}{mixed[1]:02X}{mixed[2]:02X}"
 
 
-def _on_color(bg: str) -> str:
-    """White or near-black, whichever reads better on `bg` (WCAG luminance)."""
-    rgb = _hex_rgb(bg)
-    if rgb is None:
-        return "#FFFFFF"
-
-    def lin(c: int) -> float:
-        v = c / 255.0
-        return v / 12.92 if v <= 0.03928 else ((v + 0.055) / 1.055) ** 2.4
-
-    luminance = 0.2126 * lin(rgb[0]) + 0.7152 * lin(rgb[1]) + 0.0722 * lin(rgb[2])
-    return "#FFFFFF" if (1.05 / (luminance + 0.05)) >= ((luminance + 0.05) / 0.05) else "#101418"
-
-
 def _derived_colors(palette: dict[str, str], *, dark: bool = False) -> dict[str, str]:
     """Fill every color role the component templates reference.
 
@@ -239,9 +228,13 @@ def _derived_colors(palette: dict[str, str], *, dark: bool = False) -> dict[str,
     out.setdefault("text", text)
     out.setdefault("primary", primary)
     out.setdefault("primary_hover", _mix(primary, hover_toward, 0.88))
-    out.setdefault("primary_text", _on_color(primary))
+    # Shared pick over both primary states (issues #359/#360): the old
+    # single-state pick could fail on the hover the button actually shows.
+    out.setdefault("primary_text", _primary_text(out["primary"], out["primary_hover"]))
     out.setdefault("primary_subtle", _mix(primary, bg, 0.12))
-    out.setdefault("surface_raised", _mix(surface, text, 0.94))
+    raised = derived_surface_raised(out)
+    if raised is not None:
+        out.setdefault("surface_raised", raised)
     out.setdefault("text_muted", _mix(text, bg, 0.55))
     out.setdefault("text_faint", _mix(text, bg, 0.35))
     out.setdefault("border", border)
@@ -249,6 +242,10 @@ def _derived_colors(palette: dict[str, str], *, dark: bool = False) -> dict[str,
     for role in ("success", "warning", "danger", "info"):
         out.setdefault(role, defaults[role])
         out.setdefault(f"{role}_subtle", _mix(out[role], bg, 0.12))
+    # Text on the danger button itself (issue #359 F): white on the light
+    # danger base, near-black on the dark one — the `{role}_text` roles are
+    # text on the tints, not on the bases.
+    out.setdefault("on_danger", label_on_color(out["danger"]))
     # Text-safe roles (issue #358): badge text, ghost-button text, and the
     # field error hint render in these, never in the raw semantic colors or
     # primary. Derived from the actual subtles above — the mixes, not the
@@ -405,7 +402,7 @@ _COMPONENTS_CSS_TEMPLATE = """\
 .btn-secondary:hover:not(:disabled) { border-color: var(--color-text-faint); }
 .btn-ghost { background: transparent; color: var(--color-primary-ink, var(--color-primary)); }
 .btn-ghost:hover:not(:disabled) { background: var(--color-primary-subtle); }
-.btn-danger { background: var(--color-danger); color: #fff; }
+.btn-danger { background: var(--color-danger); color: var(--color-on-danger, #fff); }
 .btn-danger:hover:not(:disabled) { filter: brightness(0.94); }
 .btn-sm { font-size: 13px; padding: 8px 16px; }
 .btn-lg { font-size: 16px; padding: 14px 28px; }

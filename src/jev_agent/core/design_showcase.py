@@ -31,7 +31,11 @@ from jev_agent.core.design_kit import (
     SEMANTIC_ROLES,
     SEMANTIC_SUBTLE_DARK,
     SEMANTIC_SUBTLE_LIGHT,
+    _adaptive_hover,
+    _primary_text,
+    _walk_button_lightness,
     derive_text_roles,
+    label_on_color,
 )
 
 # ---------------------------------------------------------------------------
@@ -66,29 +70,6 @@ def _hue_of(hex_color: str) -> float:
     r, g, b = _hex_to_rgb(hex_color)
     hue, _, _ = colorsys.rgb_to_hls(r, g, b)
     return hue * 360.0
-
-
-def _relative_luminance(hex_color: str) -> float:
-    r, g, b = _hex_to_rgb(hex_color)
-
-    def lin(c: float) -> float:
-        return c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4
-
-    return 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b)
-
-
-def contrast_ratio(first: str, second: str) -> float:
-    lighter, darker = sorted(
-        (_relative_luminance(first), _relative_luminance(second)), reverse=True
-    )
-    return (lighter + 0.05) / (darker + 0.05)
-
-
-def _on_color(bg: str) -> str:
-    """White or near-black, whichever reads better on `bg`."""
-    white = contrast_ratio("#FFFFFF", bg)
-    dark = contrast_ratio("#101418", bg)
-    return "#FFFFFF" if white >= dark else "#101418"
 
 
 # ---------------------------------------------------------------------------
@@ -495,8 +476,36 @@ def rich_tokens(
     dark_neutrals = _neutral_ramp(hue, vibe.neutral_warmth, dark=True)
     accent = _accent_ramp(hue, sat)
 
-    primary = accent["accent_500"]
-    primary_hover = accent["accent_700"]
+    # The button pair is walked, not fixed: a fixed accent_500 at lightness
+    # 0.50 admits no 4.5:1 shared button text for orange/magenta hues
+    # (worst 3.24:1 across hues at sat 0.8), and the dark primary at 0.62
+    # admits none for blue hues (worst 3.52:1). The walk moves the primary
+    # lightness minimally (closest first) until the shared pick clears
+    # 4.6:1 on both states; accent_500/700 follow the walked pair so the
+    # ramp and the primary token never disagree.
+    light_lightness = _walk_button_lightness(
+        hue,
+        sat,
+        0.50,
+        hover_for=lambda _primary, candidate, saturation: [
+            _hsl(hue, saturation, round(max(0.05, candidate - 0.14), 2))
+        ],
+    )
+    primary = _hsl(hue, sat, light_lightness)
+    primary_hover = _hsl(hue, sat, round(max(0.05, light_lightness - 0.14), 2))
+    accent = {**accent, "accent_500": primary, "accent_700": primary_hover}
+
+    dark_sat = min(1.0, sat + 0.1)
+    dark_lightness = _walk_button_lightness(
+        hue,
+        dark_sat,
+        0.62,
+        hover_for=lambda candidate, candidate_lightness, saturation: [
+            _adaptive_hover(candidate, saturation, round(candidate_lightness + 0.08, 2))
+        ],
+    )
+    dark_primary = _hsl(hue, dark_sat, dark_lightness)
+    dark_hover = _adaptive_hover(dark_primary, dark_sat, round(dark_lightness + 0.08, 2))
 
     # Light semantic colors (canonical tables in `design_kit`; the `*_text`
     # roles are derived below so badge text reads on the tints — issue #358).
@@ -505,7 +514,7 @@ def rich_tokens(
         **accent,
         "primary": primary,
         "primary_hover": primary_hover,
-        "primary_text": _on_color(primary),
+        "primary_text": _primary_text(primary, primary_hover),
         "primary_subtle": accent["accent_100"],
         "background": neutrals["neutral_50"],
         "surface": "#FFFFFF",
@@ -518,15 +527,18 @@ def rich_tokens(
         "border_strong": neutrals["neutral_300"],
         **{role: SEMANTIC_LIGHT[role] for role in SEMANTIC_ROLES},
         **{f"{role}_subtle": SEMANTIC_SUBTLE_LIGHT[role] for role in SEMANTIC_ROLES},
+        # Text on the danger button itself (issue #359 F): white on the
+        # light danger base, near-black on the dark one — the `*_text`
+        # roles are text on the tints, not on the bases.
+        "on_danger": label_on_color(SEMANTIC_LIGHT["danger"]),
     }
     light_colors.update(derive_text_roles(light_colors))
     # Dark semantic colors
-    dark_primary = _hsl(hue, min(1.0, sat + 0.1), 0.62)
     dark_colors: dict[str, str] = {
         **{f"neutral_{k.split('_')[1]}": v for k, v in dark_neutrals.items()},
         "primary": dark_primary,
-        "primary_hover": _hsl(hue, min(1.0, sat + 0.1), 0.70),
-        "primary_text": _on_color(dark_primary),
+        "primary_hover": dark_hover,
+        "primary_text": _primary_text(dark_primary, dark_hover),
         "primary_subtle": _hsl(hue, sat * 0.6, 0.18),
         "background": dark_neutrals["neutral_50"],
         "surface": dark_neutrals["neutral_100"],
@@ -539,6 +551,7 @@ def rich_tokens(
         "border_strong": dark_neutrals["neutral_300"],
         **{role: SEMANTIC_DARK[role] for role in SEMANTIC_ROLES},
         **{f"{role}_subtle": SEMANTIC_SUBTLE_DARK[role] for role in SEMANTIC_ROLES},
+        "on_danger": label_on_color(SEMANTIC_DARK["danger"]),
     }
     dark_colors.update(derive_text_roles(dark_colors))
 
