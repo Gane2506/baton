@@ -232,10 +232,10 @@ uv tool install 'baton-agent-orchestrator[dashboard] @ git+https://github.com/Ga
 # once on PyPI: uv tool install 'baton-agent-orchestrator[dashboard]'
 ```
 
-**Docker** — run the dashboard as a container (see [docs/packaging.md](docs/packaging.md#docker)):
+**Docker** — run the dashboard as a container (see [docs/packaging.md](docs/packaging.md#docker)). Requires Docker and an existing git repo to serve, writable by uid 1000 inside the container; the image is the dashboard only (no worker CLIs inside):
 
 ```bash
-docker run -d --name jev -p 127.0.0.1:8765:8765 -v jev-state:/data ghcr.io/gane2506/baton:latest
+docker run -d --name jev --restart unless-stopped -p 127.0.0.1:8765:8765 -e JEV_DASHBOARD_TOKEN="$(openssl rand -hex 24)" -v /srv/myproject:/data ghcr.io/gane2506/baton:0.5.0
 docker logs jev   # the dashboard URL and access token
 ```
 

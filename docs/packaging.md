@@ -23,7 +23,7 @@ irm https://raw.githubusercontent.com/Gane2506/baton/main/install.ps1 | iex
 
 What the scripts do:
 
-- Check prerequisites: **Python 3.12+** (hard requirement; the script names
+- Check prerequisites: **Python 3.11+** (hard requirement; the script names
   what's missing), plus `curl`/`git` on Unix.
 - Pick the source: **PyPI** when `baton-agent-orchestrator` is published there,
   otherwise **GitHub** (`Gane2506/baton`). You can pin with `--ref`:
@@ -75,14 +75,15 @@ The image serves `jev dashboard` for the repo mounted at `/data`.
 Published images live on GitHub Container Registry:
 
 ```bash
-docker pull ghcr.io/gane2506/baton:latest
-docker run --rm -p 127.0.0.1:8765:8765 -v ./my-project:/data ghcr.io/gane2506/baton:latest
+docker pull ghcr.io/gane2506/baton:0.5.0
+docker run --rm -p 127.0.0.1:8765:8765 -v ./my-project:/data ghcr.io/gane2506/baton:0.5.0
 ```
 
-Tags: `:latest` tracks the newest release; `:0.5.0`-style tags pin a version.
-Images are published automatically for every `v*` tag (see
-`.github/workflows/docker.yml`); you can also trigger a build manually from
-the Actions tab (workflow *Docker* → *Run workflow*).
+Tags: `:0.5.0`-style tags pin a version. `:latest` moves on every release —
+and also on a manual workflow dispatch, so it can point at unreleased `main`.
+Pin the version tag for a stable deploy. Images are published automatically
+for every `v*` tag (see `.github/workflows/docker.yml`); you can also trigger
+a build manually from the Actions tab (workflow *Docker* → *Run workflow*).
 
 To build it yourself instead:
 
@@ -91,11 +92,18 @@ docker build -t jev-dashboard .
 docker run --rm -p 127.0.0.1:8765:8765 -v ./my-project:/data jev-dashboard
 ```
 
-Or with compose (see `docker-compose.yml`):
+Or with compose (see `docker-compose.yml` — the deploy path, published image):
 
 ```bash
-docker compose up --build -d
+docker compose up -d
 docker logs jev-dashboard   # the URL, and the generated token if you didn't set one
+```
+
+Contributors building from a local checkout use `docker-compose.build.yml`
+instead:
+
+```bash
+docker compose -f docker-compose.build.yml up --build -d
 ```
 
 ### Configuration
@@ -108,10 +116,11 @@ docker logs jev-dashboard   # the URL, and the generated token if you didn't set
 
 The image is multi-stage (Python 3.12 slim), runs as the non-root user `jev`
 (uid 1000), exposes only the dashboard port, and ships a healthcheck. No
-secrets are baked in. State lives in the repo's `.jev/` directory — the
-compose example keeps it in a named volume (`jev-state`) so it survives
-container rebuilds; if your repo already has `.jev/`, drop that volume line
-so the bind-mounted state is used instead.
+secrets are baked in. State lives in the repo's `.jev/` directory by default.
+The compose file offers an optional named volume (`jev-state`) that moves
+state out of the repo — only enable it for a repo with no `.jev/` yet: it
+shadows an existing `.jev/`, so a repo with real state would silently get an
+empty state DB.
 
 ### Remote access
 
@@ -132,14 +141,11 @@ available.
 ### Upgrade / uninstall
 
 ```bash
-docker compose pull          # pulls ghcr.io/gane2506/baton:latest; or build locally:
-docker compose up --build -d
-docker compose down          # stop; keeps the jev-state volume
-docker compose down -v       # also removes the named state volume
+docker compose pull          # pulls ghcr.io/gane2506/baton:0.5.0; or build locally:
+docker compose -f docker-compose.build.yml up --build -d
+docker compose down          # stop; state stays in the repo's .jev/
+docker compose down -v       # also removes the named state volume, if enabled
 ```
-
-To use the published image with compose, set `image: ghcr.io/gane2506/baton:latest`
-in `docker-compose.yml` (or `docker compose pull` before `up`).
 
 ## Config
 

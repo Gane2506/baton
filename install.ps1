@@ -28,18 +28,18 @@ $Repo = 'Gane2506/baton'
 $Pkg = 'baton-agent-orchestrator'
 $PyPIUrl = "https://pypi.org/pypi/$Pkg/json"
 
-# Returns @{ Exe = 'py'; Args = @('-3.12') } for the first Python 3.12+ found,
+# Returns @{ Exe = 'py'; Args = @('-3.11') } for the first Python 3.11+ found,
 # or $null. Kept as Exe + Args so invocation is `& $Py.Exe @($Py.Args) ...`,
 # which is valid in Windows PowerShell 5.1 (bare `& @array` is not).
 function Find-Python {
-  $candidates = @(@('py', '-3.12'), @('py', '-3'), @('python', $null))
+  $candidates = @(@('py', '-3.11'), @('py', '-3'), @('python', $null))
   foreach ($c in $candidates) {
     $invokeArgs = @()
     if ($c[1]) { $invokeArgs = @($c[1]) }
     try {
       $out = & $c[0] @invokeArgs --version 2>&1
       if (($LASTEXITCODE -eq 0) -and ($out -match 'Python (\d+)\.(\d+)')) {
-        if (([int]$Matches[1] -eq 3) -and ([int]$Matches[2] -ge 12)) {
+        if ((([int]$Matches[1] -eq 3) -and ([int]$Matches[2] -ge 11)) -or ([int]$Matches[1] -ge 4)) {
           return @{ Exe = $c[0]; Args = $invokeArgs }
         }
       }
@@ -50,7 +50,7 @@ function Find-Python {
 
 $Py = Find-Python
 if (-not $Py) {
-  Write-Host 'error: no Python 3.12+ found. Install Python 3.12 or newer first: https://www.python.org/downloads/'
+  Write-Host 'error: no Python 3.11+ found. Install Python 3.11 or newer first: https://www.python.org/downloads/'
   exit 1
 }
 $pyVer = ((& $Py.Exe @($Py.Args) --version 2>&1) -replace 'Python ', '')
@@ -99,15 +99,29 @@ if ($Installer -eq 'pipx') {
   & $Py.Exe @pipArgs
 }
 
-# Verify.
-if (-not (Get-Command jev -ErrorAction SilentlyContinue)) {
+# Verify. `jev` may not be on PATH yet in this shell (pipx ensurepath only
+# affects future shells). The install still counts as a success when the
+# binary is verifiable by absolute path — print the PATH line instead of failing.
+$jevExe = $null
+$jevCmd = Get-Command jev -ErrorAction SilentlyContinue
+if ($jevCmd) { $jevExe = $jevCmd.Source }
+if (-not $jevExe) {
   $userScripts = (& $Py.Exe @($Py.Args) -c 'import site, os; print(os.path.join(site.getuserbase(), "Scripts"))')
-  Write-Host 'error: installed, but `jev` is not on PATH yet.'
+  $pipxBin = Join-Path $env:USERPROFILE '.local\bin'
+  foreach ($dir in @($userScripts, $pipxBin)) {
+    $candidate = Join-Path $dir 'jev.exe'
+    if (Test-Path $candidate) { $jevExe = $candidate; break }
+  }
+  if (-not $jevExe) {
+    Write-Host "error: installed, but no jev.exe found in $userScripts or $pipxBin."
+    exit 1
+  }
+  $jevDir = Split-Path $jevExe -Parent
+  Write-Host 'Note: installed, but `jev` is not on PATH yet in this shell.'
   Write-Host 'Add this directory to your PATH (Settings > System > About > Advanced system settings > Environment Variables) and restart PowerShell:'
-  Write-Host "  $userScripts"
-  exit 1
+  Write-Host "  $jevDir"
 }
-Write-Host "OK: $(jev --version)"
+Write-Host "OK: $(& $jevExe --version)"
 
 # `jev doctor` checks the environment (workers, API keys, config). On a fresh
 # machine some checks fail until you configure a worker — that is expected and
@@ -119,7 +133,7 @@ if (Get-Command git -ErrorAction SilentlyContinue) {
     Push-Location $doctorDir
     try {
       git init -q | Out-Null
-      & jev doctor
+      & $jevExe doctor
       if ($LASTEXITCODE -eq 0) { Write-Host 'OK: jev doctor passes.' }
       else {
         Write-Host 'Note: jev doctor reports setup still needed (worker CLIs, API keys).'
