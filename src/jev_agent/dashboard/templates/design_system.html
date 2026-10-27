@@ -308,7 +308,7 @@
           <pre class="ds-copy-source" id="copy-motion">{{ motion_json }}</pre>
           {% if durations %}
           {% for row in durations %}
-          <div class="ds-scale-row ds-copyable" data-copy-value="{{ row.value }}" tabindex="0" role="button" title="Click to copy {{ row.value }}"><span class="mono">{{ row.name }}</span><span class="mono">{{ row.value }}</span><span class="ds-duration-bar" data-px-width="{{ (row.value | replace('ms', '') | int) // 2 }}"></span></div>
+          <div class="ds-scale-row ds-copyable" data-copy-value="{{ row.value }}" tabindex="0" role="button" title="Click to copy {{ row.value }}"><span class="mono">{{ row.name }}</span><span class="mono">{{ row.value }}</span><span class="ds-duration-bar" data-bar-pct="{{ row.pct }}"></span></div>
           {% endfor %}
           {% else %}
           <p class="ds-note">No duration tokens stored for this system.</p>

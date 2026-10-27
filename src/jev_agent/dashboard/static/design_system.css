@@ -302,14 +302,19 @@
 /* Spacing / radii / shadow visuals. */
 .ds-scale-row { display: grid; grid-template-columns: 120px 90px minmax(0, 1fr); gap: var(--s3); align-items: center; padding: var(--s2) 0; border-bottom: 1px solid var(--ds-border-soft); font-size: 13px; }
 .ds-scale-row:last-child { border-bottom: none; }
-.ds-scale-row .mono { font-size: 12px; color: var(--ds-muted); }
+/* Token names are single unbreakable words (`duration_instant`); without
+   overflow-wrap they overflow a narrow track and paint over the value
+   (issue #344: `duration_instan90ms` at 390px). A name that still exceeds
+   its column wraps instead of colliding — same treatment as
+   .ds-token-row .mono below. */
+.ds-scale-row .mono { font-size: 12px; color: var(--ds-muted); overflow-wrap: anywhere; }
 .ds-space-bar { height: 12px; border-radius: 3px; background: var(--ds-accent); opacity: 0.85; max-width: 100%; }
 .ds-radius-chip { width: 72px; height: 48px; background: var(--ds-surface-2); border: 1px solid var(--ds-border); }
-.ds-shadow-chip { width: 160px; height: 56px; background: var(--ds-surface-2); border-radius: 10px; }
+.ds-shadow-chip { width: 160px; height: 56px; background: var(--ds-surface-2); border-radius: 10px; max-width: 100%; }
 .ds-shadow-val { font-size: 12px; color: var(--ds-muted); word-break: break-all; }
 
 /* Motion: duration bars + easing curves. */
-.ds-duration-bar { height: 10px; border-radius: 999px; background: var(--ds-accent); opacity: 0.85; }
+.ds-duration-bar { height: 10px; border-radius: 999px; background: var(--ds-accent); opacity: 0.85; max-width: 100%; }
 .ds-ease-demo {
   width: 120px;
   height: 34px;
@@ -733,7 +738,7 @@
   .ds-nav-list li a.active { background: var(--ds-surface-2); box-shadow: none; }
   .ds-token-row { grid-template-columns: minmax(0, 1fr) 92px 40px; gap: var(--s2); padding: var(--s2) var(--s3); }
   .ds-token-row .mono { overflow-wrap: anywhere; }
-  .ds-scale-row { grid-template-columns: 96px 76px minmax(0, 1fr); gap: var(--s2); }
+  .ds-scale-row { grid-template-columns: 120px 76px minmax(0, 1fr); gap: var(--s2); }
   .ds-font-row { grid-template-columns: minmax(0, 1fr); gap: var(--s0); }
   .ds-cover-wide { padding: var(--s4) var(--s5); }
   .ds-cover-headline { font-size: 26px; }
