@@ -198,7 +198,10 @@ repo — only enable it for a repo with no `.jev/` yet: it shadows an existing
   at `jev dashboard stop --repo <repo>` instead of sending you to `lsof`.
   `jev dashboard stop` finds the dashboard through
   `<repo>/.jev/dashboard.pid` and stops it; a stale pid file (crashed
-  dashboard) never names a dead process as the owner.
+  dashboard) never names a dead process as the owner. `stop` waits until the
+  port is bindable again before reporting success (bounded: 5 s), so a start
+  right after a stop works first time; if the port stays busy it fails with a
+  port-busy error instead of claiming success.
 - **A worker CLI is reported missing.** `jev doctor` names what it could not
   find. The dashboard resolves `npx`, `node`, `claude`, `codex`, `gh`, `ssh`
   and `git` through well-known install locations (Homebrew and nvm on macOS,
