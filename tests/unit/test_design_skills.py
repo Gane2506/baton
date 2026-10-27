@@ -431,3 +431,93 @@ def test_generate_unique_system_honours_force_on_reroll() -> None:
     assert second.color_strategy.key == "triadic"
     assert second.type_pairing.key == "bebas-roboto"
     assert second.fingerprint != first.fingerprint
+
+
+# ---- the extended contrast gate (issue #358) -------------------------------------
+
+
+def test_every_seeded_palette_passes_the_extended_gate_both_themes() -> None:
+    # The gate the pipeline actually runs (`contrast_gate`, both themes)
+    # now covers primary-as-text, semantic text on tint, and swatch
+    # labels — every seeded palette must pass those checks, not just the
+    # light-only `check_palette_contrast` the previous test pins.
+    #
+    # The assertion is scoped to the new checks on purpose: one sampled
+    # palette (playful, seed 6) fails the *pre-existing* dark button-text
+    # check (`primary_text` on dark `primary_hover`, 2.85:1) — the dark
+    # hover is lightened past the shared-text limit. That is issue #360,
+    # not this issue; the pipeline re-rolls past it today.
+    from jev_agent.core.design_gates import contrast_gate
+
+    _NEW = (
+        "primary_ink on ",
+        "success_text on ",
+        "warning_text on ",
+        "danger_text on ",
+        "info_text on ",
+        "swatch label ",
+    )
+    for keywords in ("restaurant", "fintech", "luxury", "playful", "", "eco garden"):
+        for seed in range(25):
+            system = generate_seeded_system(seed, keywords=keywords, app_type=APP_TYPE)
+            violations = contrast_gate(system.palette)
+            assert [v for v in violations if any(f in v for f in _NEW)] == [], (
+                keywords,
+                seed,
+                violations,
+            )
+
+
+def test_build_palette_carries_the_derived_text_roles() -> None:
+    # The seeded builder emits the same text-safe roles the kit builder
+    # does, derived from its own bases — and the primary itself is never
+    # moved to satisfy them.
+    from jev_agent.core.design_gates import contrast_gate
+    from jev_agent.core.design_kit import contrast_ratio
+
+    strategy = COLOR_STRATEGIES[0]
+    palette, _hue, _sat, _light = build_palette(strategy, random.Random(1), anchor_hue=8.0)
+    for key in (
+        "primary_ink",
+        "success_subtle",
+        "success_text",
+        "warning_subtle",
+        "warning_text",
+        "danger_subtle",
+        "danger_text",
+        "info",
+        "info_subtle",
+        "info_text",
+    ):
+        assert key in palette, key
+    assert contrast_ratio(palette["primary_ink"], palette["background"]) >= 4.6
+    assert contrast_ratio(palette["primary_ink"], palette["surface"]) >= 4.6
+    for role in ("success", "warning", "danger", "info"):
+        assert contrast_ratio(palette[f"{role}_text"], palette[f"{role}_subtle"]) >= 4.6, role
+    assert contrast_gate(palette) == []
+
+
+def test_rich_tokens_for_seeded_carries_text_roles_in_both_themes() -> None:
+    # The showcase tokens for a seeded system carry the derived roles in
+    # both themes — and the dark ink follows the dark primary override,
+    # not the rich profile's primary.
+    from jev_agent.core.design_kit import contrast_ratio
+
+    system = generate_seeded_system(9, keywords=KEYWORDS, app_type=APP_TYPE)
+    rich = rich_tokens_for_seeded(VIBE_PROFILES["minimal"], system, "both")
+    colors = rich["colors"]
+    assert isinstance(colors, dict)
+    for section_name in ("light", "dark"):
+        section = colors[section_name]
+        assert isinstance(section, dict)
+        assert (
+            section["primary_ink"] != section["primary"]
+            or contrast_ratio(section["primary"], section["background"]) >= 4.6
+        ), section_name
+        assert contrast_ratio(section["primary_ink"], section["background"]) >= 4.6
+        assert contrast_ratio(section["primary_ink"], section["surface"]) >= 4.6
+        for role in ("success", "warning", "danger", "info"):
+            assert contrast_ratio(section[f"{role}_text"], section[f"{role}_subtle"]) >= 4.6, (
+                section_name,
+                role,
+            )

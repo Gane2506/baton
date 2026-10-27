@@ -32,6 +32,11 @@ from jev_agent.core.design_business import (
     _data_dicts,
     _data_strs,
 )
+from jev_agent.core.design_kit import (
+    SEMANTIC_DARK,
+    SEMANTIC_LIGHT,
+    derive_text_roles,
+)
 from jev_agent.core.design_motion3d import (
     build_motion_js,
     build_motion_spec,
@@ -244,31 +249,31 @@ def _derived_colors(palette: dict[str, str], *, dark: bool = False) -> dict[str,
     for role in ("success", "warning", "danger", "info"):
         out.setdefault(role, defaults[role])
         out.setdefault(f"{role}_subtle", _mix(out[role], bg, 0.12))
+    # Text-safe roles (issue #358): badge text, ghost-button text, and the
+    # field error hint render in these, never in the raw semantic colors or
+    # primary. Derived from the actual subtles above — the mixes, not the
+    # fixed tints — so legacy palettes pass too.
+    out.update(derive_text_roles(out))
     return out
 
 
 # Fallback constants for roles with no derivable source, per theme. The light
 # set is the original hard-coded one; the dark set mirrors the dark semantic
-# colors `rich_tokens` generates (brightened semantics, dark neutrals).
+# colors `rich_tokens` generates (brightened semantics, dark neutrals). The
+# semantic bases come from the canonical tables in `design_kit` (issue #358).
 _LIGHT_ROLE_DEFAULTS: dict[str, str] = {
     "background": "#FFFFFF",
     "text": "#0F172A",
     "primary": "#2563EB",
     "border": "#E2E8F0",
-    "success": "#16A34A",
-    "warning": "#D97706",
-    "danger": "#DC2626",
-    "info": "#0284C7",
+    **SEMANTIC_LIGHT,
 }
 _DARK_ROLE_DEFAULTS: dict[str, str] = {
     "background": "#0F172A",
     "text": "#F8FAFC",
     "primary": "#60A5FA",
     "border": "#334155",
-    "success": "#22C55E",
-    "warning": "#F59E0B",
-    "danger": "#F87171",
-    "info": "#60A5FA",
+    **SEMANTIC_DARK,
 }
 
 
@@ -398,7 +403,7 @@ _COMPONENTS_CSS_TEMPLATE = """\
   border-color: var(--color-border-strong);
 }
 .btn-secondary:hover:not(:disabled) { border-color: var(--color-text-faint); }
-.btn-ghost { background: transparent; color: var(--color-primary); }
+.btn-ghost { background: transparent; color: var(--color-primary-ink, var(--color-primary)); }
 .btn-ghost:hover:not(:disabled) { background: var(--color-primary-subtle); }
 .btn-danger { background: var(--color-danger); color: #fff; }
 .btn-danger:hover:not(:disabled) { filter: brightness(0.94); }
@@ -438,7 +443,7 @@ _COMPONENTS_CSS_TEMPLATE = """\
 .field input::placeholder,
 .field textarea::placeholder { color: var(--color-text-faint); }
 .field .hint { font-size: 13px; font-weight: 400; color: var(--color-text-muted); }
-.field .hint.error { color: var(--color-danger); }
+.field .hint.error { color: var(--color-danger-text, var(--color-danger)); }
 .field input.invalid,
 .field textarea.invalid,
 .field select.invalid { border-color: var(--color-danger); }
@@ -456,17 +461,20 @@ _COMPONENTS_CSS_TEMPLATE = """\
 }
 .badge-success {
   background: var(--color-success-subtle);
-  color: var(--color-success);
+  color: var(--color-success-text, var(--color-success));
 }
 .badge-warning {
   background: var(--color-warning-subtle);
-  color: var(--color-warning);
+  color: var(--color-warning-text, var(--color-warning));
 }
 .badge-danger {
   background: var(--color-danger-subtle);
-  color: var(--color-danger);
+  color: var(--color-danger-text, var(--color-danger));
 }
-.badge-info { background: var(--color-info-subtle); color: var(--color-info); }
+.badge-info {
+  background: var(--color-info-subtle);
+  color: var(--color-info-text, var(--color-info));
+}
 .badge-muted {
   background: var(--color-surface-raised);
   color: var(--color-text-muted);

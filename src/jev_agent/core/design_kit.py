@@ -36,15 +36,61 @@ PALETTE_KEYS: tuple[str, ...] = (
     "primary",
     "primary_hover",
     "primary_text",
+    "primary_ink",
     "background",
     "surface",
     "text",
     "text_muted",
     "border",
     "success",
+    "success_subtle",
+    "success_text",
     "warning",
+    "warning_subtle",
+    "warning_text",
     "danger",
+    "danger_subtle",
+    "danger_text",
+    "info",
+    "info_subtle",
+    "info_text",
 )
+
+# Semantic colors (issue #358): the base hues are fixed in both themes and
+# duplicated across `design_system`, `design_codegen`, `design_showcase`,
+# and `design_skills` — this module is the canonical source, the others
+# import these tables. The `*_text` variants are the same hues adjusted to
+# read on their tinted backgrounds (see `derive_text_roles`); the subtles
+# are the tinted backgrounds badges/alerts render on.
+SEMANTIC_ROLES: tuple[str, ...] = ("success", "warning", "danger", "info")
+
+SEMANTIC_LIGHT: dict[str, str] = {
+    "success": "#16A34A",
+    "warning": "#D97706",
+    "danger": "#DC2626",
+    "info": "#2563EB",
+}
+
+SEMANTIC_DARK: dict[str, str] = {
+    "success": "#22C55E",
+    "warning": "#F59E0B",
+    "danger": "#F87171",
+    "info": "#60A5FA",
+}
+
+SEMANTIC_SUBTLE_LIGHT: dict[str, str] = {
+    "success": "#DCFCE7",
+    "warning": "#FEF3C7",
+    "danger": "#FEE2E2",
+    "info": "#DBEAFE",
+}
+
+SEMANTIC_SUBTLE_DARK: dict[str, str] = {
+    "success": "#14532D",
+    "warning": "#78350F",
+    "danger": "#7F1D1D",
+    "info": "#1E3A8A",
+}
 
 THEMES: tuple[str, ...] = ("light", "dark", "both")
 
@@ -134,13 +180,102 @@ def _muted_text(hue: float, background: str, surface: str) -> str:
     return _hsl(hue, 0.15, 0.10)
 
 
+def _hsl_parts(hex_color: str) -> tuple[float, float, float]:
+    """The (hue 0..360, saturation 0..1, lightness 0..1) of a `#RRGGBB` color."""
+    red, green, blue = _hex_to_rgb(hex_color)
+    hue, lightness, saturation = colorsys.rgb_to_hls(red, green, blue)
+    return hue * 360.0, saturation, lightness
+
+
+def _adjust_toward_contrast(color: str, bases: list[str], *, target: float = 4.6) -> str:
+    """`color` moved in lightness until it clears `target` on every base.
+
+    Same approach as `_muted_text` (issue #309): 0.01 lightness steps, 0.1
+    margin over the 4.5:1 floor, exact color kept when it already passes.
+    The direction is away from the bases' luminance — a color darker than
+    its bases darkens further, a lighter one lightens — so the same helper
+    darkens text on light backgrounds and lightens it on dark ones (the
+    luxury palette's near-black background lightens instead of darkening).
+    Steps are bounded to lightness 0.05..0.95; a color that cannot clear the
+    target on a mid-luminance base returns the closest reachable step. All
+    bases this module derives against (white/light subtles, near-black/dark
+    subtles) are reachable — the hue sweeps in `test_design_gates` prove it.
+    """
+    if all(contrast_ratio(color, base) >= target for base in bases):
+        return color
+    hue, saturation, lightness = _hsl_parts(color)
+    mean_luminance = sum(_relative_luminance(base) for base in bases) / len(bases)
+    step = -0.01 if _relative_luminance(color) < mean_luminance else 0.01
+    current = lightness
+    best = color
+    while True:
+        current = round(current + step, 2)
+        if current < 0.05 or current > 0.95:
+            return best
+        candidate = _hsl(hue, saturation, current)
+        if all(contrast_ratio(candidate, base) >= target for base in bases):
+            return candidate
+        best = candidate
+
+
+def label_on_color(bg: str) -> str:
+    """The label color for text sitting on a swatch of `bg`.
+
+    White or near-black, whichever reads better — except mid-luminance
+    colors, where neither clears 4.5:1 (issue #358: white on `#DB24AA`
+    4.33, near-black 4.27). Pure black is the fallback there: it is
+    visually indistinguishable from near-black at label sizes, and the
+    best of white/black always clears 4.58:1 for any background, so the
+    label always passes. The showcase's old `_is_dark` rule (white below a
+    0.35 luminance threshold) picked white for light pinks and mid-greens
+    at 2.68-3.57:1; this rule replaces it.
+    """
+    white = contrast_ratio("#FFFFFF", bg)
+    dark = contrast_ratio("#101418", bg)
+    if max(white, dark) >= 4.5:
+        return "#FFFFFF" if white >= dark else "#101418"
+    return "#000000"
+
+
+def derive_text_roles(palette: dict[str, str]) -> dict[str, str]:
+    """The text-safe roles for a palette (issue #358).
+
+    - `primary_ink`: the primary hue adjusted to read as text on
+      `background` and `surface` — the hero tagline, overlines, and ghost
+      buttons render in this, never in the raw primary (health primary
+      `#DB26AB` reads 4.31:1 on white, 3.88:1 on its surface).
+    - `{role}_text` for each semantic role: the semantic hue adjusted to
+      read on its `{role}_subtle` tint — badge text renders in this, never
+      in the raw semantic color (warning `#D97706` reads 2.86:1 on
+      `#FEF3C7`).
+
+    The primary itself is never touched, so brand/hue identity is unchanged.
+    Roles whose bases are missing from the palette are skipped, matching the
+    contrast gate's missing-role rule. Always recompute from the current
+    bases — never `setdefault` — so a palette whose primary moved (the
+    seeded `_ensure_contrast` walk) gets a fresh ink.
+    """
+    derived: dict[str, str] = {}
+    background = palette.get("background")
+    surface = palette.get("surface")
+    primary = palette.get("primary")
+    if primary is not None and background is not None and surface is not None:
+        derived["primary_ink"] = _adjust_toward_contrast(primary, [background, surface])
+    for role in SEMANTIC_ROLES:
+        base = palette.get(role)
+        subtle = palette.get(f"{role}_subtle")
+        if base is not None and subtle is not None:
+            derived[f"{role}_text"] = _adjust_toward_contrast(base, [subtle])
+    return derived
+
+
 def _palette_from_hue(hue: float) -> dict[str, str]:
     """A full light-mode palette built around one hue."""
     primary = _hsl(hue, 0.72, 0.50)
     primary_hover = _hsl(hue, 0.72, 0.42)
     background = "#FFFFFF"
     surface = _hsl(hue, 0.35, 0.96)
-    return {
+    palette = {
         "primary": primary,
         "primary_hover": primary_hover,
         "primary_text": _primary_text(primary, primary_hover),
@@ -149,10 +284,11 @@ def _palette_from_hue(hue: float) -> dict[str, str]:
         "text": _hsl(hue, 0.30, 0.10),
         "text_muted": _muted_text(hue, background, surface),
         "border": _hsl(hue, 0.20, 0.88),
-        "success": "#16A34A",
-        "warning": "#D97706",
-        "danger": "#DC2626",
+        **{role: SEMANTIC_LIGHT[role] for role in SEMANTIC_ROLES},
+        **{f"{role}_subtle": SEMANTIC_SUBTLE_LIGHT[role] for role in SEMANTIC_ROLES},
     }
+    palette.update(derive_text_roles(palette))
+    return palette
 
 
 def _dark_variant(palette: dict[str, str]) -> dict[str, str]:
@@ -160,7 +296,7 @@ def _dark_variant(palette: dict[str, str]) -> dict[str, str]:
     hue = _hue_of(palette["primary"])
     primary = palette["primary"]
     primary_hover = _hsl(hue, 0.75, 0.62)
-    return {
+    dark = {
         "primary": primary,
         "primary_hover": primary_hover,
         "primary_text": _primary_text(primary, primary_hover),
@@ -169,16 +305,17 @@ def _dark_variant(palette: dict[str, str]) -> dict[str, str]:
         "text": _hsl(hue, 0.20, 0.93),
         "text_muted": _hsl(hue, 0.15, 0.62),
         "border": _hsl(hue, 0.25, 0.20),
-        "success": "#22C55E",
-        "warning": "#F59E0B",
-        "danger": "#F87171",
+        **{role: SEMANTIC_DARK[role] for role in SEMANTIC_ROLES},
+        **{f"{role}_subtle": SEMANTIC_SUBTLE_DARK[role] for role in SEMANTIC_ROLES},
     }
+    dark.update(derive_text_roles(dark))
+    return dark
 
 
 def _luxury_palette() -> dict[str, str]:
     """Near-black + gold: the luxury vibe is inherently dark."""
     primary, primary_hover = "#C9A227", "#B08D1F"
-    return {
+    palette = {
         "primary": primary,
         "primary_hover": primary_hover,
         "primary_text": _primary_text(primary, primary_hover),
@@ -187,10 +324,11 @@ def _luxury_palette() -> dict[str, str]:
         "text": "#F5F0E4",
         "text_muted": "#A79B80",
         "border": "#2C2618",
-        "success": "#16A34A",
-        "warning": "#D97706",
-        "danger": "#DC2626",
+        **{role: SEMANTIC_LIGHT[role] for role in SEMANTIC_ROLES},
+        **{f"{role}_subtle": SEMANTIC_SUBTLE_LIGHT[role] for role in SEMANTIC_ROLES},
     }
+    palette.update(derive_text_roles(palette))
+    return palette
 
 
 # (family, base hue or None for a bespoke palette, matching keywords)

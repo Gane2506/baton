@@ -25,6 +25,15 @@ from __future__ import annotations
 import colorsys
 from dataclasses import dataclass
 
+from jev_agent.core.design_kit import (
+    SEMANTIC_DARK,
+    SEMANTIC_LIGHT,
+    SEMANTIC_ROLES,
+    SEMANTIC_SUBTLE_DARK,
+    SEMANTIC_SUBTLE_LIGHT,
+    derive_text_roles,
+)
+
 # ---------------------------------------------------------------------------
 # Color helpers (stdlib-only)
 # ---------------------------------------------------------------------------
@@ -489,7 +498,8 @@ def rich_tokens(
     primary = accent["accent_500"]
     primary_hover = accent["accent_700"]
 
-    # Light semantic colors
+    # Light semantic colors (canonical tables in `design_kit`; the `*_text`
+    # roles are derived below so badge text reads on the tints — issue #358).
     light_colors: dict[str, str] = {
         **{f"neutral_{k.split('_')[1]}": v for k, v in neutrals.items()},
         **accent,
@@ -506,15 +516,10 @@ def rich_tokens(
         "text_faint": neutrals["neutral_400"],
         "border": neutrals["neutral_200"],
         "border_strong": neutrals["neutral_300"],
-        "success": "#16A34A",
-        "success_subtle": "#DCFCE7",
-        "warning": "#D97706",
-        "warning_subtle": "#FEF3C7",
-        "danger": "#DC2626",
-        "danger_subtle": "#FEE2E2",
-        "info": "#2563EB",
-        "info_subtle": "#DBEAFE",
+        **{role: SEMANTIC_LIGHT[role] for role in SEMANTIC_ROLES},
+        **{f"{role}_subtle": SEMANTIC_SUBTLE_LIGHT[role] for role in SEMANTIC_ROLES},
     }
+    light_colors.update(derive_text_roles(light_colors))
     # Dark semantic colors
     dark_primary = _hsl(hue, min(1.0, sat + 0.1), 0.62)
     dark_colors: dict[str, str] = {
@@ -532,15 +537,10 @@ def rich_tokens(
         "text_faint": dark_neutrals["neutral_500"],
         "border": dark_neutrals["neutral_200"],
         "border_strong": dark_neutrals["neutral_300"],
-        "success": "#22C55E",
-        "success_subtle": "#14532D",
-        "warning": "#F59E0B",
-        "warning_subtle": "#78350F",
-        "danger": "#F87171",
-        "danger_subtle": "#7F1D1D",
-        "info": "#60A5FA",
-        "info_subtle": "#1E3A8A",
+        **{role: SEMANTIC_DARK[role] for role in SEMANTIC_ROLES},
+        **{f"{role}_subtle": SEMANTIC_SUBTLE_DARK[role] for role in SEMANTIC_ROLES},
     }
+    dark_colors.update(derive_text_roles(dark_colors))
 
     if theme == "dark":
         colors: object = dark_colors
