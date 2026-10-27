@@ -115,18 +115,39 @@ def _hue_of(hex_color: str) -> float:
     return hue * 360.0
 
 
+def _muted_text(hue: float, background: str, surface: str) -> str:
+    """Muted text dark enough to clear 4.5:1 on background and surface.
+
+    Green/cyan hues carry most of their luminance in the green channel, so
+    a fixed lightness of 0.44 is too light for them (health 4.32:1, eco
+    4.36:1, travel-on-surface 4.18:1 — issue #309). Darken in 0.01 steps
+    until the ratio clears 4.6:1 on both bases; the 0.1 margin keeps hex
+    rounding from dipping below the 4.5:1 floor. Hues that already pass
+    keep their exact current color, so unaffected vibes do not move.
+    """
+    lightness = 0.44
+    while lightness > 0.10:
+        color = _hsl(hue, 0.15, lightness)
+        if contrast_ratio(color, background) >= 4.6 and contrast_ratio(color, surface) >= 4.6:
+            return color
+        lightness = round(lightness - 0.01, 2)
+    return _hsl(hue, 0.15, 0.10)
+
+
 def _palette_from_hue(hue: float) -> dict[str, str]:
     """A full light-mode palette built around one hue."""
     primary = _hsl(hue, 0.72, 0.50)
     primary_hover = _hsl(hue, 0.72, 0.42)
+    background = "#FFFFFF"
+    surface = _hsl(hue, 0.35, 0.96)
     return {
         "primary": primary,
         "primary_hover": primary_hover,
         "primary_text": _primary_text(primary, primary_hover),
-        "background": "#FFFFFF",
-        "surface": _hsl(hue, 0.35, 0.96),
+        "background": background,
+        "surface": surface,
         "text": _hsl(hue, 0.30, 0.10),
-        "text_muted": _hsl(hue, 0.15, 0.44),
+        "text_muted": _muted_text(hue, background, surface),
         "border": _hsl(hue, 0.20, 0.88),
         "success": "#16A34A",
         "warning": "#D97706",
