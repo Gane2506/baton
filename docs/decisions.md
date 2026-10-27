@@ -26,9 +26,15 @@ Deviations from [PLAN.md](../PLAN.md) and choices it left open. Newest first.
 - **Windows is a logon task, not a service.** No service wrapper exists in the repo (no
   NSSM/winsw/service host); a Scheduled Task is the mechanism the audit named, and it is
   what the Windows CI job can prove.
-- **Mac live verification is open.** Install → reboot → serves, plus the uninstall path,
-  still needs the Mac; the Tailscale tunnel has been down for the whole session (see
-  issue #341).
+- **Mac live verification: install + login proven, physical reboot open.** The Tailscale
+  tunnel came back mid-session. Install → serves (200 on a test repo, launchd agent,
+  login simulated by unload/load) and the uninstall path are proven live on the Mac;
+  the physical reboot step is still open — the machine was in active use by another
+  verification, so no unannounced reboot (see issue #341 for the exact commands).
+  Live verification also caught two real bugs: the service recorded PATH's `jev`
+  (a Homebrew shim to the main venv) instead of the binary running the install, and
+  `--uninstall-service` failed from `$HOME` on the serve path's home-repo refusal —
+  both fixed with regression tests.
 
 ## 2026-10-27: Deploy Phase 1 — dashboard starts clean (PATH, port, Windows, state-DB) (#333)
 

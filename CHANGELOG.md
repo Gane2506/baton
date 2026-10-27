@@ -41,7 +41,8 @@ All notable changes to this project are documented here. The format is based on
   `install.ps1` offer the step at the end of an install (with the user's yes) when run inside
   a git repo. Honest limit: a Windows task has no stop-timeout setting, so stopping it ends
   the dashboard at once — run state is durable and resumable. Mac live verification
-  (install → reboot → serves) is still open: the Tailscale tunnel to the Mac is down.
+  so far: install → serves (200 on a test repo, launchd agent, login simulated by
+  unload/load) is proven; the physical reboot step is still open.
 
 - **`jev dashboard stop` and a state-database check in `jev doctor` (deploy Phase 1, issue #333).**
   The running dashboard records `<repo>/.jev/dashboard.pid`, and `jev dashboard stop --repo <repo>`
