@@ -137,6 +137,47 @@ def test_showcase_gets_scoped_csp_but_dashboard_pages_do_not(
     assert "unsafe-inline" not in board.headers["content-security-policy"]
 
 
+# Issue #345: the board page's "Show every done run" checkbox carried an
+# inline onchange="this.form.submit()". The dashboard CSP (script-src
+# 'self') blocks inline handlers, so the toggle was dead and every board
+# load logged a console error. The §2 checks above only covered inline
+# style="" and <script>, never on*= attributes — that is how this one
+# slipped through. The handler now lives in static/data-attrs.js, wired
+# by a data-submit-on-change attribute; these tests pin both halves and
+# sweep every template so the class cannot recur.
+_INLINE_HANDLER_RE = re.compile(r"\son[a-z]+\s*=")
+
+
+def test_board_has_no_inline_event_handler(client: TestClient) -> None:
+    page = client.get("/")
+    assert page.status_code == 200
+    assert not _INLINE_HANDLER_RE.search(page.text), (
+        "inline event handler survives on the board page; the CSP blocks it (see issue #345)"
+    )
+    assert "data-submit-on-change" in page.text
+    assert "/static/data-attrs.js" in page.text
+
+
+def test_board_show_all_toggle_target_works(client: TestClient) -> None:
+    # The checkbox submits a GET form to "/"; the ?all=1 target must render
+    # the board with the toggle checked (the handler only navigates there).
+    page = client.get("/?all=1")
+    assert page.status_code == 200
+    assert 'name="all" value="1" checked' in page.text
+    assert 'data-live="/fragments/board?all=1"' in page.text
+
+
+def test_no_template_has_inline_event_handler() -> None:
+    templates = Path(security_mod.__file__).parent / "templates"
+    assert templates.is_dir()
+    offenders = [
+        str(path.relative_to(templates))
+        for path in sorted(templates.rglob("*.html"))
+        if _INLINE_HANDLER_RE.search(path.read_text(encoding="utf-8"))
+    ]
+    assert not offenders, f"inline event handler in templates: {offenders}"
+
+
 # ---- 3. preview sessions pruned on polls -------------------------------------------------
 
 

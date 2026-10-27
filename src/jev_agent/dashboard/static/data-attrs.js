@@ -18,10 +18,25 @@
  * data-pattern (dots/grid/stripes, drawn from data-pattern-color on
  * data-pattern-bg) — the Design Studio system page's live token renderings
  * (issue #285) — and data-slider-output (the <output> id an axis slider
- * updates live, Design Studio direction step, issue #301).
+ * updates live, Design Studio direction step, issue #301), and
+ * data-submit-on-change (a checkbox/select that submits its form on change,
+ * issue #345: the board page's "Show every done run" checkbox used to carry
+ * an inline onchange="this.form.submit()", which the dashboard CSP
+ * (script-src 'self') blocks — the handler was dead and every board load
+ * logged a console error).
  */
 (function () {
   "use strict";
+
+  /* Board page (issue #345): "Show every done run" submits its GET form
+     when toggled. The form is a plain GET, so it still works with
+     JavaScript disabled — the toggle just stops auto-submitting. */
+  document.querySelectorAll("[data-submit-on-change]").forEach(function (el) {
+    el.addEventListener("change", function () {
+      var form = el.closest("form");
+      if (form) { form.submit(); }
+    });
+  });
 
   document.querySelectorAll("[data-bar-pct]").forEach(function (el) {
     var pct = parseFloat(el.getAttribute("data-bar-pct"));

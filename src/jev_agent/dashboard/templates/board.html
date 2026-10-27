@@ -9,7 +9,7 @@
   </div>
   <div class="actions">
     <form class="inline" method="get" action="/" title="The Done column shows the last {{ done_limit }} runs unless this is on.">
-      <label class="check"><input type="checkbox" name="all" value="1"{% if show_all %} checked{% endif %} onchange="this.form.submit()"> Show every done run</label>
+      <label class="check"><input type="checkbox" name="all" value="1"{% if show_all %} checked{% endif %} data-submit-on-change> Show every done run</label>
     </form>
     <details class="legend">
       <summary>States legend</summary>
