@@ -1,5 +1,9 @@
 # Packaging: install scripts and Docker
 
+The deploy story — one command per platform — is in
+[docs/deploy.md](deploy.md). This doc is the install-script and Docker
+detail behind it.
+
 Two supported ways to get Baton running:
 
 1. **One-command install scripts** — `jev` CLI on your own machine (macOS, Linux, Windows).
@@ -76,8 +80,12 @@ Published images live on GitHub Container Registry:
 
 ```bash
 docker pull ghcr.io/gane2506/baton:0.5.0
-docker run --rm -p 127.0.0.1:8765:8765 -v ./my-project:/data ghcr.io/gane2506/baton:0.5.0
+docker run --rm -p 127.0.0.1:8765:8765 -e JEV_DASHBOARD_TOKEN="$(openssl rand -hex 24)" -v ./my-project:/data ghcr.io/gane2506/baton:0.5.0
 ```
+
+This is the throwaway variant (`--rm`, no restart policy). The deploy
+command in [docs/deploy.md](deploy.md) adds `--restart unless-stopped` and
+the stable token; use that one for a server.
 
 Tags: `:0.5.0`-style tags pin a version. `:latest` moves on every release —
 and also on a manual workflow dispatch, so it can point at unreleased `main`.
