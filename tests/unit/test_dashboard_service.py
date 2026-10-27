@@ -376,6 +376,23 @@ def test_install_service_refuses_home(fixture_repo: Path, monkeypatch: pytest.Mo
     assert "refusing to serve your home directory" in " ".join(result.output.split())
 
 
+def test_uninstall_service_flag_needs_no_repo(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Uninstall removes the service by label: it must work from a directory
+    that is not a repo at all (running it from $HOME used to fail on the
+    serve path's home-repo refusal — issue #341)."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(service, "current_platform", lambda: "linux")
+    monkeypatch.setattr(
+        service, "uninstall_service", lambda platform=None, home=None, run=None: None
+    )
+    result = runner.invoke(app, ["dashboard", "--uninstall-service"])
+    assert result.exit_code == 0, result.output
+    assert "no dashboard service installed" in result.output
+
+
 def test_uninstall_service_flag_reports_removed(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

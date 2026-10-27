@@ -262,10 +262,13 @@ def dashboard(
     if install_service or uninstall_service:
         if install_service and uninstall_service:
             raise fail("pass only one of --install-service and --uninstall-service")
-        with cli_errors():
-            root = repo_root(repo)
-            _refuse_home_root(root)
         if install_service:
+            # Installing records the repo, so it resolves the repo and refuses
+            # `~` like the serve path does. Uninstalling needs no repo at all:
+            # it removes the service by label, from any directory.
+            with cli_errors():
+                root = repo_root(repo)
+                _refuse_home_root(root)
             _install_service(root, host, port)
         else:
             _uninstall_service()
