@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% from "macros.html" import csrf_input with context %}
+{% block title %}Confirm backend install{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div class="titles">
+    <h1>Install the Coding Decision Agent backend?</h1>
+    <p class="lede">This installs the backend into the dashboard's Python environment, in
+    the background. Read the size and persistence notes before confirming — the
+    download takes minutes, not seconds.</p>
+  </div>
+</div>
+
+<section class="panel" aria-label="Confirm backend install">
+  <h2>What will run</h2>
+  <p>Target: <span class="mono">{{ install_decision.interpreter }}</span>
+  ({{ "CPU torch" if install_decision.torch_path == "cpu" else "default torch" }} path).</p>
+  <pre class="mono">{% for step in install_steps %}{{ step | join(" ") }}
+{% endfor %}</pre>
+  <h2>Size</h2>
+  <ul>
+    <li>torch: about 2.5 GB (default wheel) or the smaller CPU wheel on the CPU path</li>
+    <li>laya plus transformers: about 0.5 GB</li>
+    <li>model checkpoint ({{ model_id }}): about 842 MB, warmed now so the first grade needs no download</li>
+    <li>temp staging during install and checkpoint reconstruction: at least 1 GB free</li>
+  </ul>
+  <h2>Persistence</h2>
+  <p>{{ install_decision.persistence }}</p>
+  {% if install_decision.docker %}
+  <p class="flash warn" role="note">On Docker, a container recreate wipes a container-side
+  install, and the button is offered again afterwards. No volume is added.</p>
+  {% endif %}
+  <p class="hint">Anyone on this machine can install the backend.</p>
+  <form method="post" action="/code-grade/install/start">
+    {{ csrf_input() }}
+    <button class="btn btn-primary" type="submit">Install backend</button>
+    <a class="btn btn-secondary" href="/code-grade">Cancel</a>
+  </form>
+</section>
+{% endblock %}

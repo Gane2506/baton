@@ -175,8 +175,16 @@ to paste. It is the fastest way to check whether a `jev` command has a dashboard
   the job and the result waits on the **status page** (`/code-grade/status`), which shows
   the loading stage and elapsed time, survives leaving the page or a dropped connection,
   and offers cancel. The result leads with the gate decision and its reason. Shows the
-  model's status and, when the backend is not installed, the install guidance instead of a
-  grade. Config lives under Settings → Code orchestrator. See [code-orchestrator.md](code-orchestrator.md).
+  model's status and, when the backend is not installed, the **Install backend** button
+  (confirm page first, naming the exact command, sizes and persistence note) instead of a
+  terminal command: the install runs in the background with its own status page
+  (`/code-grade/install`), warms the model checkpoint, and the panel then reads **warmed**
+  for that model (or **available — checkpoint downloads on first grade** for a model that
+  was not warmed). **Verify** re-runs the probe, **Repair** reinstalls a backend that
+  fails verification, **Uninstall** removes `laya` only, and when the backend is available
+  and gate grading is off the panel offers **Turn on gate grading** (back to this page).
+  While an install runs, grades are refused and nothing is recorded for them. Config lives
+  under Settings → Code orchestrator. See [code-orchestrator.md](code-orchestrator.md).
 - **Connections** (`/connections`): servers, the decision route and key health (as before),
   plus the **Browser** panel: the doctor's browser check and the **Install browser** button,
   which asks for confirmation naming the exact command, then runs the install in the

@@ -31,6 +31,7 @@ from jev_agent.core.ship import ShipError
 from jev_agent.core.store import NotFoundError
 from jev_agent.dashboard import ui_styles, views
 from jev_agent.dashboard.browser_install import BrowserInstallRunner
+from jev_agent.dashboard.cda_install_runner import CdaInstallRunner, temp_space_check
 from jev_agent.dashboard.code_grade_runner import CodeGradeExecutor, CodeGradeRunner
 from jev_agent.dashboard.design_reverse import ReverseExecutor, ReverseRunner
 from jev_agent.dashboard.design_studio import StudioWizard
@@ -72,6 +73,22 @@ class DashboardCore:
             executor=code_grade_executor,
             ledger_path=ledger_path_for_repo(settings.root),
         )
+        # The CDA install runner (issue #366): its durable job record is read
+        # on start (a "running" record becomes `interrupted`), and its watcher
+        # releases the install coordinator claim when the job finishes.
+        self.cda_install_runner = CdaInstallRunner(settings.root, on_finish=self.end_install)
+        # §6.4 coordinator: at most one mutating job (install/repair/uninstall)
+        # or grade at a time, decided here — above both runners, never inside
+        # either one. The install claim is short-lived (route check → runner
+        # start); once started, the runner's own busy state is the guard.
+        self._coord_lock = threading.Lock()
+        self._coord_install_claim = False
+        # Grade-time temp space (issue #366, §8): a dashboard started with a
+        # small tmpfs still fails first grades until restarted with a real-disk
+        # TMPDIR. Recorded at startup; the diagnostics page warns on it.
+        _tmp_free, _tmp_ok = temp_space_check()
+        self.temp_space_free_bytes = _tmp_free
+        self.temp_space_ok = _tmp_ok
         self.codex_flow = CodexDeviceFlow()
         self.claude_flow = ClaudeSetupTokenFlow()
         self.server_stats = ServerStatsCache()
@@ -107,6 +124,43 @@ class DashboardCore:
             del self._flash_seen[session]
             self._flashes.pop(session, None)
 
+    def try_begin_install(self) -> str | None:
+        """Claim an install/repair/uninstall start (§6.4). Returns the
+        blocking job's name ("grade" / "install") or None when claimed.
+
+        The blocked side is refused, not queued. The claim is released by
+        `end_install`, which the install runner calls when its job finishes
+        — and by the start route itself once the runner reports busy, so a
+        route that never started a job never holds the claim.
+        """
+        with self._coord_lock:
+            if self.code_grade_runner.busy():
+                return "grade"
+            if self.cda_install_runner.mutating_busy() or self._coord_install_claim:
+                return "install"
+            self._coord_install_claim = True
+            return None
+
+    def end_install(self) -> None:
+        """Release the install claim (idempotent)."""
+        with self._coord_lock:
+            self._coord_install_claim = False
+
+    def try_begin_grade(self) -> str | None:
+        """Check a grade/route start (§6.4). Returns "install" when a
+        mutating job runs, "grade" when a grade already runs or drains, else
+        None. No claim is held: the grade runner's own busy state is the
+        live guard once the grade starts."""
+        if self.cda_install_runner.mutating_busy() or self._coord_install_claim:
+            return "install"
+        if self.code_grade_runner.busy():
+            return "grade"
+        return None
+
+    def end_grade(self) -> None:
+        """Release a grade claim. No claim is held (see `try_begin_grade`),
+        so this is a no-op kept for API symmetry with `end_install`."""
+
     def shutdown_jobs(self, timeout: float) -> list[str]:
         """Cancel and join every background job (runs, chat turns and the dashboard's
         scheduler), for the lifespan."""
@@ -116,6 +170,12 @@ class DashboardCore:
         self.browser_installer.shutdown()
         self.reverse_runner.shutdown()
         self.code_grade_runner.shutdown()
+        # §6.11 position: after the grade runner, before the return. The
+        # install shutdown terminates the currently-running child (pip,
+        # probe or warm-up), joins the watcher up to the timeout, and marks
+        # the record `interrupted` — the grade thread's own join above is
+        # the only grade wait; shutdown never cancels or drains a grade.
+        self.cda_install_runner.shutdown(timeout)
         self.codex_flow.shutdown()
         self.claude_flow.shutdown()
         return [

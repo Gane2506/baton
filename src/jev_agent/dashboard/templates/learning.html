@@ -283,7 +283,7 @@
 <p class="lede">Grades from the Coding Decision Agent, aggregated per agent, tier and skill. D4 reads these ratings when it routes coding work, and the rework briefs behind them go to the next attempt's coder. Ledger: <span class="mono">{{ ratings.ledger_file }}</span> — a separate file next to <span class="mono">state.db</span>, so a problem with the state database never takes the grades with it.</p>
 <p class="small muted">{{ ratings.ratings.total }} record(s) · {{ ratings.ratings.graded }} graded diff(s) · {{ ratings.ratings.unavailable }} unavailable (backend not installed, never scored as 0).</p>
 {% if ratings.ratings.total == 0 %}
-<div class="empty"><div class="title">No grades recorded yet</div><p>Grades land here when the Coding Decision Agent runs: enable <span class="mono">[code_orchestrator]</span> and install the backend (<span class="mono">pip install "jev-agent[code-orchestrator]"</span>) — see <a href="/code-grade">Code grade</a> or docs/code-orchestrator.md. Until then the gate records grades as unavailable, not as scores.</p></div>
+<div class="empty"><div class="title">No grades recorded yet</div><p>Grades land here when the Coding Decision Agent runs: enable <span class="mono">[code_orchestrator]</span> and install the backend from <a href="/code-grade">Code grade</a> — see docs/code-orchestrator.md. Until then the gate records grades as unavailable, not as scores.</p></div>
 {% else %}
 {% if ratings.ratings.by_agent %}
 <h3 class="small">By agent</h3>
