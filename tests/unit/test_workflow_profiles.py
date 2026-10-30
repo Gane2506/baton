@@ -444,6 +444,31 @@ def test_queue_time_pinning(tmp_path: Path) -> None:
     )
 
 
+def test_pinned_recurring_ref_floor_refusal(tmp_path: Path) -> None:
+    # Partial coverage (issue #368 phases 0-2): the safety floor is enforced
+    # at run creation by the single resolver, so a scheduler-enqueued pinned
+    # reference refuses instead of running un-gated — never silently
+    # applied. The profile itself saves clean (quality none, ship_enabled
+    # absent so the repo value applies); the refusal triggers when the
+    # run's repo has shipping on, which resolves ship_enabled True.
+    store = ProfileStore(tmp_path, tmp_path / "user")
+    profile = base_profile(quality_level="none")
+    del profile["ship_enabled"]
+    store.save(profile)
+    pinned = pin_workflow_profile(ref="repo:fast", repo_root=tmp_path, user_root=tmp_path / "user")
+    assert pinned == "repo:fast@v1"
+    config = JevConfig()
+    config.ship.enabled = True
+    with pytest.raises(ProfileValidationError, match="Refused:"):
+        resolve_workflow_profile(
+            ref=pinned,
+            config=config,
+            repo_root=tmp_path,
+            user_root=tmp_path / "user",
+            flags={},
+        )
+
+
 def test_export_import_round_trip(tmp_path: Path) -> None:
     """Exported JSON imports cleanly into another store; invalid JSON is
     refused, never partially applied."""

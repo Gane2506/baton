@@ -39,7 +39,10 @@ def _no_sleep(seconds: float) -> None:
 
 
 def _scheduler(
-    store: Store, now_dt: datetime, logs: list[str] | None = None
+    store: Store,
+    now_dt: datetime,
+    logs: list[str] | None = None,
+    pin: Callable[[str], str] | None = None,
 ) -> tuple[Scheduler, dict[str, datetime]]:
     """A scheduler whose clock is fixed; the returned cell lets tests advance time."""
     now_cell = {"t": now_dt}
@@ -51,6 +54,7 @@ def _scheduler(
         sleep=_no_sleep,
         log=log,
         now=lambda: now_cell["t"],
+        pin_workflow_profile=pin,
     )
     return sched, now_cell
 
@@ -131,6 +135,73 @@ def test_pump_reenqueues_after_done_and_time_passes(store: Store) -> None:
     got = store.get_recurring_task(task_id)
     assert got.active_item_id == items[0].id
     assert got.next_due_at is not None and got.next_due_at > now_cell["t"]
+
+
+def test_pump_pins_current_version_at_each_creation(store: Store, tmp_path: Path) -> None:
+    # Partial coverage (issue #368 phases 0-2): a recurring task stores the
+    # raw reference; each creation pins the version current at its enqueue.
+    # Editing the profile between creations must move the next run to v2
+    # without touching the stored task reference.
+    from jev_agent.core.workflow_profiles import ProfileStore, pin_workflow_profile
+
+    profiles = ProfileStore(tmp_path, tmp_path / "user")
+    stages = ["INTAKE", "PLANNING", "VALIDATING", "DESIGNING", "EXECUTING", "INTEGRATING"]
+    gates = {
+        "PLANNING": "inherit",
+        "VALIDATING": "inherit",
+        "DESIGNING": "inherit",
+        "EXECUTING": "inherit",
+        "INTEGRATING": "inherit",
+    }
+    profiles.save(
+        {
+            "id": "repo:fast",
+            "display_name": "Fast",
+            "scope": "repo",
+            "stage_list": stages,
+            "gate_policies": gates,
+            "designing": "when_needed",
+            "ship_enabled": False,
+        }
+    )
+    now = datetime(2026, 1, 5, 12, 0, tzinfo=UTC)
+    sched, now_cell = _scheduler(
+        store,
+        now,
+        pin=lambda ref: pin_workflow_profile(
+            ref=ref, repo_root=tmp_path, user_root=tmp_path / "user"
+        ),
+    )
+    task = store.add_recurring_task(
+        "profiled check",
+        parse_schedule("hourly"),
+        "America/Toronto",
+        datetime(2026, 1, 5, 11, 0, tzinfo=UTC),
+        workflow_profile="repo:fast",
+    )
+    assert sched._pump_recurring() == 1
+    first = store.list_queue(["queued"])[0]
+    assert first.workflow_profile == "repo:fast@v1"
+    assert store.get_recurring_task(task.id).workflow_profile == "repo:fast"
+
+    profiles.save(
+        {
+            "id": "repo:fast",
+            "display_name": "Faster",
+            "scope": "repo",
+            "stage_list": stages,
+            "gate_policies": gates,
+            "designing": "when_needed",
+            "ship_enabled": False,
+        }
+    )
+    store.set_queue_status(first.id, "done")
+    now_cell["t"] = datetime(2026, 1, 5, 14, 0, tzinfo=UTC)  # past the new next_due_at
+    assert sched._pump_recurring() == 1
+    second = store.list_queue(["queued"])[0]
+    assert second.id != first.id
+    assert second.workflow_profile == "repo:fast@v2"
+    assert store.get_recurring_task(task.id).workflow_profile == "repo:fast"
 
 
 def test_pump_ignores_disabled_task(store: Store) -> None:
