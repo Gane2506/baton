@@ -428,6 +428,9 @@
   {% if cache_view.stats.entries == 0 %}
   <p class="hint">No entries yet — the cache fills as runs serve repeat decisions and role calls.</p>
   {% endif %}
+  {# Issue #375: bare consecutive forms stack with zero gap — Clear cache sat
+     directly on Run calibration. The stack gives them a token gap. #}
+  <div class="stack">
   <form method="post" action="/tools/cache/clear">
     {{ csrf_input() }}
     <div class="form-grid">
@@ -454,6 +457,7 @@
     reports how often same-similarity pairs gave the same answer, per threshold. Read-only —
     nothing is served or configured until you apply a threshold.</span>
   </form>
+  </div>
 </section>
 
 <h2 class="section" id="quality-checks">Quality checks</h2>

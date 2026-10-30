@@ -670,6 +670,13 @@ form.bisect input[type="text"]#bisect-mark { width: 5em; }
 form.key-add { align-items: center; gap: var(--s1); margin-left: var(--s2); vertical-align: middle; }
 form.key-add .key-input { width: 220px; height: var(--control-h-sm); font-size: var(--text-xs); }
 .actions { display: flex; flex-wrap: wrap; gap: var(--s2); align-items: center; }
+/* Stacked action groups (Code Grade verify/repair/uninstall, Tools cache
+   clear/calibrate, issue #375): each action is its own POST form, and bare
+   consecutive forms stack with zero gap, so identical buttons fuse into one
+   control. The stack gives each action a token gap; a button's hint stays
+   inside its action's group, under the button. Items stretch to the panel
+   width so full-width forms (Tools cache clear) keep their layout. */
+.stack { display: flex; flex-direction: column; gap: var(--s3); }
 /* Issue #297: the APIs table's actions cell held the Test form and the Remove
    form (scope select + button) in one flex row, and the global
    `select { width: 100% }` let the select shrink to "re ▾" in the narrow
