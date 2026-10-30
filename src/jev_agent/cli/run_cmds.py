@@ -94,6 +94,16 @@ ProfileOption = Annotated[
         help="Workspace profile (servers, browser, learning) for the run; `none` for none.",
     ),
 ]
+WorkflowProfileOption = Annotated[
+    str | None,
+    typer.Option(
+        "--workflow-profile",
+        metavar="REF",
+        help="Workflow profile for the run (repo:slug or user:slug), distinct from the "
+        "workspace --profile. Resolved by the single resolver at run creation: "
+        "an unresolvable reference or a safety-floor violation refuses the run.",
+    ),
+]
 
 
 def quality_level(value: str | None) -> QualityLevel | None:
@@ -215,6 +225,7 @@ def run(
     no_learning: NoLearningOption = False,
     quality: QualityOption = None,
     profile: ProfileOption = None,
+    workflow_profile: WorkflowProfileOption = None,
     auto_ship: AutoShipOption = False,
     ask_before_ship: AskBeforeShipOption = False,
     repo: RepoOption = Path("."),
@@ -252,6 +263,7 @@ def run(
                     quality=options.quality,
                     profile=profile,
                     ship_mode=mode,
+                    workflow_profile=workflow_profile,
                 )
             )
         except (LearningError, PipelineError, ProfileError, RunInUseError) as exc:
