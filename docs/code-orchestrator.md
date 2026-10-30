@@ -144,7 +144,10 @@ failure records `status="error"`. Aggregates count graded diff grades
 only for quality/accept rates; unavailable/error records count in `n`
 and in their own counters. Writes are best-effort and never raise —
 a ledger failure must never break a run — and in the async pipeline
-they happen write-after-grade, in a thread. Reads tolerate corruption:
+they happen write-after-grade, in a thread. Writes are locked (Phase 2):
+each append holds the sidecar `<ledger>.lock` file, so concurrent
+writers cannot interleave rows; a lock timeout fails the write, never
+a partial row. Reads tolerate corruption:
 a bad line is skipped, never fatal. `jev code ratings` and the
 dashboard's Learning page (Ratings tab) show the aggregates per agent,
 tier and skill, plus recent grades.
@@ -173,14 +176,91 @@ the gate's failed checks and findings, and the AI review's summary.
 Every line names its source, and a signal that did not fire produces no
 instruction.
 
+## Phase 2: trace supervision + ledger locking (issue #379)
+
+Phase 1 graded traces only when a human asked (`jev code trace`); the
+pipeline never watched a running agent. Phase 2 adds the watcher:
+`src/jev_agent/code_orchestrator/supervision.py` grades a running
+agent's trace through the backend, runs the grade through `gate_trace`,
+and returns a supervision decision the caller acts on:
+
+| Gate decision | Supervision action | Meaning |
+| --- | --- | --- |
+| `accept` | `continue` | Confident trace grade says keep going. |
+| `rework` | `observe` | Confident `observe` grade: keep going, watch the next step. |
+| `human_review` | `human_review` | The grade says so, or it is not confident enough to trust. |
+| `block` | `stop` | Confident trace grade says stop. |
+
+The mapping is fixed, not interpreted per call site: the gate already
+encodes the confidence rules (a low-confidence `continue` is not
+trusted, a `stop` is never downgraded), and the supervisor only
+translates its vocabulary into the loop's vocabulary. Two failure
+rules, both fail-closed: a missing backend observes blind — no grade
+ran, so there is nothing to act on yet, and the unavailable grade is
+still recorded with no quality fields, never a score; an inference
+failure, or a grade the gate cannot use, escalates to `human_review`.
+
+**Async, by construction.** Grading takes minutes on CPU, so the
+supervisor's async entry points (`supervise_trace_async`,
+`supervise_at_boundary_async`, `supervise_tool_call_async`) run the
+blocking model call in a thread, exactly like Phase 1's write-after-grade
+ledger writes. Supervision must never block a running system: a caller
+awaits it from a background task, never inline in the run's hot path.
+The sync entry points exist for the CLI, which has no loop to block.
+
+**Stage boundaries.** `supervise_at_boundary(stage, trace)` is the
+named entry point for stage-boundary callers (pipeline stage
+transitions, dashboard job checkpoints): the stage name rides in the
+decision and in the ledger record's detail (`stage=EXECUTING`), so a
+later reader knows where the trace was taken. The supervisor itself
+never acts: it does not halt runs, cancel tasks, or change
+assignments — the caller owns the act, and the decision carries the
+gate's reason so the act is auditable.
+
+**Tool calls are sampled, not gated.** A sampled tool call is graded,
+recorded to the ledger, and always returned as `observe` with its
+verdict in the reason. There is no gate function for tool calls because
+the family documents no closed label set for
+`should_call_tool`/`call_verdict` — `normalise_tool_call` validates
+shape only and refuses to invent labels to coerce into — so inventing
+one here would fake model semantics. The sample is watched; a human or
+a later trace grade acts on it if it matters.
+
+**First caller.** `jev code supervise --trace-file <file>` (or
+`--tool-call-file`, exactly one of the two; `--stage` names the
+boundary) runs supervision asynchronously and prints the decision, its
+reason, and whether the grade reached the ledger. Unlike `trace`, a
+missing backend does not fail the command: the supervisor observes
+blind and says so — observing is the honest answer when no grade ran.
+
+**What Phase 2 does not do.** No pipeline stage-boundary caller yet:
+the decision has no consumer in the loop today (no loop policy reads
+supervision decisions, no dashboard panel shows them), so wiring one
+now would burn minutes of CPU per stage for output nobody reads. When
+a consumer exists, it calls `supervise_at_boundary_async` from a
+background task — the supervisor is built for that call, and the CLI
+proves the path end to end. The threshold stays 0.7; supervision trusts
+a trace grade exactly as far as the gate trusts a diff grade.
+
+**Ledger locking.** Each ledger append now holds an exclusive lock on
+a sidecar `<ledger>.lock` file (flock on POSIX, msvcrt locking on
+Windows) for the single write, so concurrent writers — threads,
+processes, dashboard and CLI at once — cannot interleave or corrupt
+rows. A lock that cannot be acquired within 10 seconds fails the write
+(`record` returns False), never a partial row; a platform with neither
+locking API serializes in-process only, which `_FileLock` documents
+rather than papering over. The lock file lives next to the ledger
+inside `.jev/` and is never committed, like the ledger itself.
+
 ### Roadmap (issue #329)
 
 - **Phase 1 (this):** ledger + rework briefs + dashboard ratings + D4
   reads the ledger.
-- **Phase 2:** async trace supervision — grade agent traces at stage
-  boundaries + sampled tool calls, asynchronously, with structured dict
-  states. `grade_trace`/`grade_tool_call` get their first pipeline
-  callers; trace grades feed the same ledger.
+- **Phase 2 (built, issue #379):** async trace supervision — the
+  supervisor core, its async entry points, and `jev code supervise` as
+  its first caller; trace grades feed the same ledger; ledger writes
+  are file-locked. A pipeline stage-boundary caller waits on a consumer
+  for the decision (see Phase 2, above).
 - **Phase 3:** pre-flight plan critique at VALIDATING, before any code is
   written.
 - **Phase 4:** recalibrate 0.7 once 50+ real grades exist in the ledger.
@@ -470,11 +550,12 @@ decisions, not one bar with two values (issue #203, I7).
 
 - `tool_call` and `agent_trace` grading are wired through the live
   `laya` backend (`LayaBackend.grade_trace` / `grade_tool_call`,
-  `jev code trace`) with the trained question wording from the case
-  dataset. The caveat is the state shape, not the wording: the training
-  states are structured dicts, and Baton's callers pass free text, which
-  the model reads as given. A caller with a structured trace or tool call
-  should build the dict state instead of passing text.
+  `jev code trace`, `jev code supervise`) with the trained question
+  wording from the case dataset. The caveat is the state shape, not the
+  wording: the training states are structured dicts, and Baton's
+  callers pass free text, which the model reads as given. A caller with
+  a structured trace or tool call should build the dict state instead
+  of passing text.
 - The quality gate grades the diff against the task's title **plus
   description**, and passes its test outcome as the state's `notes`
   (issue #254): the tests check's status and detail, capped at 2000
