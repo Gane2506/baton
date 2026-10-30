@@ -478,6 +478,15 @@ path vary by machine, and nothing else varies.
 * **Branch-2 venv creation:** `[sys.executable, -m, venv,
   ~/.jev/cda-venv]`; the install sequence then runs under that
   venv's interpreter instead of `sys.executable`.
+* **Pip bootstrap (preflight only, never an install step):**
+  `[interpreter, -m, ensurepip]`, where `interpreter` is the target
+  interpreter from section 5.4 (the dashboard's own interpreter on
+  branch 1, the venv interpreter on branch 2). It runs only when the
+  section 6.1 pip-presence check fails. It installs pip from that
+  interpreter's own bundled wheel: no download, no network, and no
+  dependence on `uv` being on PATH. The actual install still runs
+  `interpreter -m pip ...` afterwards — the bootstrap never replaces
+  the install sequences above.
 * **Warm-up (option set A2 only):** `[sys.executable, -c, ...]`
   running `laya.load(model_id)` as in section 5.2, step 3 — not a
   pip command at all.
@@ -525,7 +534,11 @@ decision is shown to the user before any download starts (on the confirm page un
    command is `sys.executable -m pip`, never a `pip` found on PATH.
    If that interpreter's environment is writable by the dashboard
    process, install there. This is the normal case for a venv, an
-   editable checkout, and a uv tool environment.
+   editable checkout, and a uv tool environment. A uv tool
+   environment ships without pip: that is not a branch-3 case.
+   Preflight (section 6.1) bootstraps pip via ensurepip and
+   re-checks; only a bootstrap that still leaves pip missing falls
+   to the guide.
 2. **A dedicated venv owned by the dashboard**, when the own
    environment is not writable. Location (DECIDED): `~/.jev/cda-venv`
    — the same user-level directory that already holds
@@ -625,6 +638,17 @@ section 6.2, including when first learned at preflight under
 changed conditions. Branch 3 (section 5.4) is not a preflight
 outcome: it is decided at page render, before any click.
 
+* Pip present on the target interpreter, checked by running
+  `[interpreter, -m, pip, --version]` from the dashboard process —
+  never assumed, because uv tool environments ship without pip.
+  When pip is missing, preflight runs the fixed ensurepip bootstrap
+  from section 5.3a, then re-checks. When the bootstrap itself fails
+  (class `pip-bootstrap`) or pip is still missing after a successful
+  bootstrap (class `pip-missing`), preflight refuses with the guide
+  block: the button is swapped for the guide, because no install
+  sequence can run without pip. The bootstrap is bundled and
+  offline, so it needs no network check first, and it writes almost
+  nothing, so it runs before the disk check.
 * Free disk in the target environment's disk and in the temp
   directory. Thresholds (DECIDED, with the arithmetic shown, to be
   confirmed against a measured test install and amended if the
@@ -689,6 +713,8 @@ a marker that matches nothing in tests must not ship.
 | Temp directory full | "Ran out of space in the temp directory. Point TMPDIR at a disk with free space and retry." | Yes | Temp location or space |
 | Permission denied on target | "The dashboard cannot write to its Python environment." plus the branch-3 command | No (button becomes guide) | Permissions, or run the command shown |
 | PEP 668 refusal | "This Python refuses direct installs. Use a virtual environment." plus the branch-2/3 path | No (button becomes guide) | A venv, or run the command shown |
+| Pip bootstrap fails (preflight) | "Could not set up pip in this Python environment." | No (button becomes guide) | Install pip into the environment, or run the command shown |
+| Pip still missing after bootstrap (preflight) | "This Python environment has no pip, so the dashboard cannot install into it." | No (button becomes guide) | Install pip into the environment, or run the command shown |
 | No wheel for this Python / architecture | "No installable package for this Python version or machine." | No | A supported Python, or the docs path |
 | Hash mismatch / corrupt download | "The download did not match its expected checksum. Retry." | Yes | Nothing, unless it repeats, then network |
 | Process killed (out of memory, host shutdown) | "The install was interrupted. Retry." | Yes | Memory, or host stability |

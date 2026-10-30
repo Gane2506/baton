@@ -27,6 +27,8 @@ from jev_agent.dashboard.cda_install_runner import (
     EnvironmentDecision,
     build_pip_steps,
     classify_failure,
+    ensurepip_argv,
+    pip_version_argv,
     probe_argv,
     redact_text,
     uninstall_argv,
@@ -191,6 +193,8 @@ def test_argv_never_installs_jev_agent(torch_path: str) -> None:
         uninstall_argv(sys.executable),
         probe_argv(sys.executable, MODEL),
         warmup_argv(sys.executable, MODEL),
+        ensurepip_argv(sys.executable),
+        pip_version_argv(sys.executable),
     ]
     venv_decision = EnvironmentDecision(
         2, sys.executable, Path("/tmp/venv"), torch_path, "", "", False
@@ -338,6 +342,56 @@ def test_preflight_branch3_raises_guide_without_job(
     with pytest.raises(runner_module.CdaInstallGuide):
         runner.start("install", MODEL)
     assert runner.status().state == "idle"
+
+
+# ---- preflight pip bootstrap (§6.1: uv tool environments ship without pip) -----
+
+
+def test_preflight_pip_missing_bootstraps_then_installs(
+    tmp_path: Path, home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(runner_module, "_url_reachable", lambda url: True)
+    answers = iter([False, True])
+    monkeypatch.setattr(runner_module, "_pip_present", lambda interp: next(answers))
+    spawn = _FakeSpawn()
+    runner = CdaInstallRunner(tmp_path / "repo", home=home, spawn=spawn, decision=_decision())
+    runner.start("install", MODEL)
+    assert _wait_until(runner, {"done"}) == "done"
+    assert [sys.executable, "-m", "ensurepip"] in spawn.calls
+    pip_row = [row for row in runner.status().preflight if row[0] == "pip available"]
+    assert pip_row == [("pip available", True, "bootstrapped via ensurepip")]
+
+
+def test_preflight_ensurepip_failure_classifies_as_bootstrap_guide(
+    tmp_path: Path, home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(runner_module, "_url_reachable", lambda url: True)
+    monkeypatch.setattr(runner_module, "_pip_present", lambda interp: False)
+    spawn = _FakeSpawn(pip_code=1)
+    runner = CdaInstallRunner(tmp_path / "repo", home=home, spawn=spawn, decision=_decision())
+    with pytest.raises(runner_module.CdaInstallGuide):
+        runner.start("install", MODEL)
+    status = runner.status()
+    assert status.state == "failed"
+    assert status.failure_class == "pip-bootstrap"
+    assert status.guide is True
+    assert spawn.calls == [[sys.executable, "-m", "ensurepip"]]
+
+
+def test_preflight_pip_still_missing_after_bootstrap_refuses_with_guide(
+    tmp_path: Path, home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(runner_module, "_url_reachable", lambda url: True)
+    monkeypatch.setattr(runner_module, "_pip_present", lambda interp: False)
+    spawn = _FakeSpawn()
+    runner = CdaInstallRunner(tmp_path / "repo", home=home, spawn=spawn, decision=_decision())
+    with pytest.raises(runner_module.CdaInstallGuide):
+        runner.start("install", MODEL)
+    status = runner.status()
+    assert status.state == "failed"
+    assert status.failure_class == "pip-missing"
+    assert status.guide is True
+    assert spawn.calls == [[sys.executable, "-m", "ensurepip"]]
 
 
 # ---- happy path, stop-per-phase, restart --------------------------------------------

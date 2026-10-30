@@ -67,6 +67,8 @@ __all__ = [
     "build_pip_steps",
     "classify_failure",
     "decide_environment",
+    "ensurepip_argv",
+    "pip_version_argv",
     "probe_argv",
     "redact_text",
     "temp_space_check",
@@ -82,6 +84,8 @@ _TAIL_READ_BYTES = 65_536
 _MAX_LOG_BYTES = 262_144
 _PROBE_TIMEOUT_S = 300.0
 _NETWORK_TIMEOUT_S = 10.0
+_PIP_CHECK_TIMEOUT_S = 30.0
+_ENSUREPIP_TIMEOUT_S = 120.0
 _SHUTDOWN_TIMEOUT_S = 30.0
 _STAGING_BYTES = 1_073_741_824  # 1 GiB of temp staging, on top of the packages
 # ~5 GB: 2.5 GB torch + 0.5 GB laya + 0.842 GB ckpt + 1 GB staging
@@ -199,6 +203,34 @@ class CdaInstallStatus:
 
 def _pip(interpreter: str) -> list[str]:
     return [interpreter, "-m", "pip"]
+
+
+def pip_version_argv(interpreter: str) -> list[str]:
+    """The §6.1 pip-presence check: `--version` proves the module runs."""
+    return [interpreter, "-m", "pip", "--version"]
+
+
+def ensurepip_argv(interpreter: str) -> list[str]:
+    """The §6.1 pip bootstrap (preflight only, never an install step):
+    stdlib ensurepip installs pip from the interpreter's own bundled wheel —
+    no download, no network, and no dependence on `uv` being on PATH."""
+    return [interpreter, "-m", "ensurepip"]
+
+
+def _pip_present(interpreter: str) -> bool:
+    """Whether `interpreter -m pip` runs (§6.1). Presence is checked, never
+    assumed: uv tool environments ship without pip. Monkeypatchable in tests,
+    like `_url_reachable`."""
+    try:
+        proc = subprocess.run(
+            pip_version_argv(interpreter),
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=_PIP_CHECK_TIMEOUT_S,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return proc.returncode == 0
 
 
 def venv_argv(interpreter: str, venv_path: Path) -> list[str]:
@@ -938,6 +970,42 @@ class CdaInstallRunner:
             if refusal is None:
                 refusal, guide, failure_class = message, is_guide, klass
 
+        # Pip presence (§6.1, fix for uv tool environments): the target
+        # interpreter may ship without pip. Check, bootstrap via stdlib
+        # ensurepip when missing, re-check; a still-missing pip refuses
+        # with the guide — it never reaches the pip install steps.
+        interpreter = _venv_interpreter(decision)
+        if _pip_present(interpreter):
+            results.append(("pip available", True, interpreter))
+        else:
+            try:
+                code, _bootstrap_tail = self._run_step(
+                    ensurepip_argv(interpreter), timeout=_ENSUREPIP_TIMEOUT_S
+                )
+            except Exception as exc:
+                log.debug(
+                    "cda install ensurepip bootstrap failed to run: %s: %s",
+                    type(exc).__name__,
+                    exc,
+                )
+                code = None
+            if code != 0:
+                results.append(("pip available", False, "ensurepip bootstrap failed"))
+                fail(
+                    "Could not set up pip in this Python environment.",
+                    is_guide=True,
+                    klass="pip-bootstrap",
+                )
+            elif _pip_present(interpreter):
+                results.append(("pip available", True, "bootstrapped via ensurepip"))
+            else:
+                results.append(("pip available", False, "still missing after ensurepip bootstrap"))
+                fail(
+                    "This Python environment has no pip, so the dashboard cannot install into it.",
+                    is_guide=True,
+                    klass="pip-missing",
+                )
+
         # Writable target environment (branch decision, §5.4).
         if decision.branch == 1:
             writable = False
@@ -1065,6 +1133,17 @@ class CdaInstallRunner:
             )
         self._record_path = record_path
         self._log_path = self._log_for_record(record_path)
+        # The log file starts empty before preflight, so preflight output
+        # (the pip check, an ensurepip bootstrap) is retained for diagnosis
+        # instead of being wiped before the watcher starts.
+        assert self._log_path is not None
+        try:
+            self._log_path.parent.mkdir(parents=True, exist_ok=True)
+            os.chmod(self._log_path.parent, 0o700)
+            self._log_path.write_bytes(b"")
+            os.chmod(self._log_path, 0o600)
+        except OSError:
+            pass
         interpreter = _venv_interpreter(decision)
         if kind == "verify":
             results: list[tuple[str, bool, str]] = []
@@ -1103,14 +1182,6 @@ class CdaInstallRunner:
         with self._guard:
             self._state = "running"
             self._record_event("start", [], kind)
-        assert self._log_path is not None
-        try:
-            self._log_path.parent.mkdir(parents=True, exist_ok=True)
-            os.chmod(self._log_path.parent, 0o700)
-            self._log_path.write_bytes(b"")
-            os.chmod(self._log_path, 0o600)
-        except OSError:
-            pass
         self._write_record()
         job = _Job(kind=kind, model_id=model_id, decision=decision, job_id=self._job_id)
         thread = threading.Thread(
