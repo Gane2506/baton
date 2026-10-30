@@ -308,6 +308,10 @@ def create_app(
         # prepend their dirs to this process's PATH: the dashboard's own
         # lookups and every worker it spawns inherit the repaired PATH.
         augment_path_with_known_clis()
+        # Issue #368, phase 4: validate the shipped workflow presets against
+        # the repo's live configuration at startup, so a stale preset
+        # refuses here (log line + board warning) rather than at run time.
+        await run_in_threadpool(dash.validate_presets_at_startup)
         yield
         # The server is stopping (Ctrl-C, systemd): stop the jobs it started, so their agent
         # processes do not keep running and spending without anyone watching.

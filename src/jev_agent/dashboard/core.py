@@ -7,6 +7,7 @@ settings, template environment, background runners, flash messages and the
 
 from __future__ import annotations
 
+import logging
 import threading
 import time
 from collections.abc import Callable
@@ -29,6 +30,8 @@ from jev_agent.core.provider_auth import ClaudeSetupTokenFlow, CodexDeviceFlow
 from jev_agent.core.queue import QueueError
 from jev_agent.core.ship import ShipError
 from jev_agent.core.store import NotFoundError
+from jev_agent.core.workflow_profiles import validate_presets
+from jev_agent.core.workflow_profiles.resolver import build_validation_context
 from jev_agent.dashboard import ui_styles, views
 from jev_agent.dashboard.browser_install import BrowserInstallRunner
 from jev_agent.dashboard.cda_install_runner import CdaInstallRunner, temp_space_check
@@ -47,6 +50,8 @@ from jev_agent.dashboard.scheduler_runner import SchedulerRunner
 from jev_agent.dashboard.security import DashboardSettings, checked_form
 from jev_agent.demo import is_demo_repo
 from jev_agent.servers.stats import ServerStatsCache
+
+log = logging.getLogger(__name__)
 
 
 class DashboardCore:
@@ -110,10 +115,45 @@ class DashboardCore:
         self.figma_validation: tuple[str, str] | None = None  # Tools → Figma: last /v1/me
         self.started_at = datetime.now(UTC)  # the About panel's uptime
         self.env = _environment()
+        self.preset_startup_errors: list[str] = []  # phase 4: preset validation
+        # at dashboard startup (see `validate_presets_at_startup`); empty
+        # means every shipped preset validated against this repo's live
+        # configuration when the dashboard started.
         self._flash_lock = threading.Lock()
         self._flashes: dict[str, list[tuple[str, str]]] = {}
         self._flash_seen: dict[str, float] = {}  # session -> last flash (monotonic)
         self.studio_wizard = StudioWizard()  # the Design Studio's wizard answers
+
+    def validate_presets_at_startup(self) -> list[str]:
+        """Phase 4 (design section 15): validate the shipped presets against
+        this repo's live configuration at dashboard startup, and fail loudly
+        on a stale preset: a plain message naming the setting, plus a log
+        line. A stale preset refuses here — at startup, not at run time —
+        and again at creation if it is picked anyway; a startup failure
+        never bricks the dashboard, it is recorded here and shown on the
+        board, because the dashboard must stay usable for legacy runs.
+        A repo that cannot even be opened (a config error the dashboard
+        already renders as its own page) is not a preset failure: it logs
+        at debug and leaves the list empty."""
+        try:
+            with views.open_repo(self.settings.root) as repo:
+                context = build_validation_context(
+                    repo.config,
+                    learning_profiles={p.name for p in repo.learning.profiles()},
+                )
+                by_preset = validate_presets(context)
+        except Exception as exc:
+            log.debug("workflow preset startup validation skipped: %s: %s", type(exc).__name__, exc)
+            return []
+        errors = [
+            f"preset {name}: {message}"
+            for name, messages in by_preset.items()
+            for message in messages
+        ]
+        self.preset_startup_errors = errors
+        for error in errors:
+            log.error("workflow preset validation at startup failed: %s", error)
+        return errors
 
     def flash(self, request: Request, kind: str, text: str) -> None:
         with self._flash_lock:

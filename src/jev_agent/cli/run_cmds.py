@@ -99,9 +99,11 @@ WorkflowProfileOption = Annotated[
     typer.Option(
         "--workflow-profile",
         metavar="REF",
-        help="Workflow profile for the run (repo:slug or user:slug), distinct from the "
-        "workspace --profile. Resolved by the single resolver at run creation: "
-        "an unresolvable reference or a safety-floor violation refuses the run.",
+        help="Workflow profile for the run: `preset:efficiency`, `preset:accuracy`, "
+        "a stored `repo:slug` / `user:slug` profile, or `default` for no profile "
+        "(today's pipeline). Resolved by the single resolver at run creation: "
+        "an unresolvable reference or a safety-floor violation refuses the run "
+        "instead of falling back.",
     ),
 ]
 
@@ -211,6 +213,14 @@ def print_outcome(
         workspace = None
     if workspace is not None:
         console.print(f"  workspace profile: {escape(workspace.name)}")
+    if run.workflow_profile_id is not None:
+        if run.workflow_profile_version is not None:
+            version = f" v{run.workflow_profile_version}"
+        elif run.workflow_profile_release:
+            version = f" release {run.workflow_profile_release}"
+        else:
+            version = ""
+        console.print(f"  workflow profile: {escape(run.workflow_profile_id)}{version}")
     console.print(f"  spent ${run.spend_usd:.2f}; timeline: `jev log {run.id}`")
     if store is not None and config is not None:
         print_estimate(store, config, run)

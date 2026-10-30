@@ -8,12 +8,17 @@ assurance), `validator` (schema plus the live catalogue subset), and
 full catalogue to the validator, the store-wide re-check, the
 snapshot-aware executor lookup (pipeline, harness, gate), the
 `default`-preset parameter set (from the design text, no preset files),
-and the `[workflows]` configuration section.
+and the `[workflows]` configuration section. Phase 4 adds `presets`
+(the built-in `default`, `efficiency`, `accuracy` preset files in the
+profile format, identified by release, loaded with `importlib.resources`
+and validated by the shared validator at dashboard startup and again at
+creation) and preset resolution in the resolver (`preset:<name>` refs).
 """
 
 from __future__ import annotations
 
 from .assurance import assurance_label_text, compute_assurance
+from .presets import PRESET_NAMES, is_preset_ref, load_preset, validate_presets
 from .resolver import (
     ResolvedProfile,
     build_default_snapshot,
@@ -32,6 +37,7 @@ from .store import (
 from .validator import ProfileValidationError, ValidationContext, validate_profile
 
 __all__ = [
+    "PRESET_NAMES",
     "ProfileCorruptError",
     "ProfileRefusal",
     "ProfileStore",
@@ -44,8 +50,11 @@ __all__ = [
     "build_default_snapshot",
     "compute_assurance",
     "default_via_profile_enabled",
+    "is_preset_ref",
+    "load_preset",
     "pin_workflow_profile",
     "resolve_workflow_profile",
+    "validate_presets",
     "validate_profile",
     "workflows_enabled",
 ]

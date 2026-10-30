@@ -18,9 +18,10 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from .assurance import compute_assurance
+from .presets import PRESET_NAMES, is_preset_ref, load_preset, parse_preset_ref
 from .schema import parse_profile_ref
 from .store import ProfileStore, ProfileStoreError
 from .validator import (
@@ -313,6 +314,63 @@ def resolve_workflow_profile(
     with the setting named on any failure."""
     if ref is None or ref == DEFAULT_REF:
         return None
+    flags = flags or {}
+    if is_preset_ref(ref):
+        # Phase 4: a built-in preset (design sections 5, 9.1). Presets are
+        # data validated by the shared validator, identified by release, and
+        # resolved through the same precedence as a stored profile — with
+        # one preset-only rule: Accuracy's `production` quality is a floor,
+        # so a stricter repo level is kept (a preset never lowers it). A
+        # tier-1 flag still beats everything, because `pick` checks flags
+        # first. The run's goal stays None (no stated goal); the preset's
+        # goal label lands in `preset_goal`, display only (section 5).
+        name = parse_preset_ref(ref)
+        if name not in PRESET_NAMES:
+            raise ProfileStoreError(
+                f"unknown workflow preset {ref!r}: pick one of: "
+                + ", ".join(f"preset:{n}" for n in PRESET_NAMES)
+                + ", or a stored repo:/user: profile"
+            )
+        try:
+            preset = load_preset(name)
+        except ValueError as exc:
+            raise ProfileStoreError(str(exc)) from exc
+        context = build_validation_context(config, learning_profiles=learning_profiles)
+        errors = validate_profile(preset, context=context)
+        if errors:
+            raise ProfileValidationError(errors)
+        preset = normalize_profile(preset)
+        if preset.get("quality_level") is not None:
+            # The floor: the repo's effective level (a workspace value when
+            # the caller resolved one, else jev.toml) wins when stricter.
+            # The chat-driver Pipeline.start path passes no workspace
+            # quality, so there the floor is against the jev.toml level.
+            from jev_agent.quality.levels import QualityLevel, rank
+
+            repo_quality = cast(QualityLevel, flags.get("quality_repo_value", config.quality.level))
+            preset_quality = cast(QualityLevel, preset["quality_level"])
+            if rank(repo_quality) > rank(preset_quality):
+                preset = {**preset, "quality_level": repo_quality}
+        snapshot, assurance, absent = _build_snapshot(
+            profile=preset,
+            config=config,
+            flags=flags,
+            autonomy_mode=autonomy_mode,
+            plan_approval_required=plan_approval_required,
+            cda_available=cda_available,
+            profile_id=f"preset:{name}",
+            version=None,
+        )
+        return ResolvedProfile(
+            profile_id=f"preset:{name}",
+            version=None,
+            release=preset.get("release"),
+            snapshot=snapshot,
+            assurance=assurance,
+            assurance_absent=absent,
+            goal=None,
+            preset_goal=preset.get("goal"),
+        )
     parsed = parse_profile_ref(ref)
     if parsed is None:
         raise ProfileStoreError(
@@ -416,7 +474,19 @@ def build_default_snapshot(
 def pin_workflow_profile(*, ref: str, repo_root: Path | None, user_root: Path | None) -> str:
     """Resolve a creation field value to its pinned form
     `<scope>:<slug>@v<n>` at queue time: the queued run executes the version
-    it was queued with, even if the profile is edited before execution."""
+    it was queued with, even if the profile is edited before execution.
+
+    Presets are pinned by release, not by version, so a preset reference
+    passes through unchanged: the queued run resolves the preset release
+    shipped with the running Baton at creation time."""
+    if is_preset_ref(ref):
+        name = parse_preset_ref(ref)
+        if name not in PRESET_NAMES:
+            raise ProfileStoreError(
+                f"unknown workflow preset {ref!r}: pick one of: "
+                + ", ".join(f"preset:{n}" for n in PRESET_NAMES)
+            )
+        return ref
     parsed = parse_profile_ref(ref)
     if parsed is None:
         raise ProfileStoreError(

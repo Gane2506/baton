@@ -1,0 +1,1 @@
+{"designing":"when_needed","display_name":"Default","gate_policies":{"DESIGNING":"inherit","EXECUTING":"inherit","INTEGRATING":"inherit","PLANNING":"inherit","SHIPPING":"inherit","VALIDATING":"inherit"},"id":"preset:default","release":"0.5.0","scope":"preset","stage_list":["INTAKE","PLANNING","VALIDATING","DESIGNING","EXECUTING","INTEGRATING","SHIPPING"]}

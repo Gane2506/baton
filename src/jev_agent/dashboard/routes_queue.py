@@ -29,7 +29,13 @@ from jev_agent.core.recurrence import (
 )
 from jev_agent.core.scheduler import SchedulerLocked, spent_today
 from jev_agent.core.store import QUEUE_PRIORITIES
-from jev_agent.core.workflow_profiles import pin_workflow_profile
+from jev_agent.core.workflow_profiles import ProfileStore, pin_workflow_profile
+from jev_agent.core.workflow_profiles.presets import (
+    PRESET_NAMES,
+    is_preset_ref,
+    parse_preset_ref,
+)
+from jev_agent.core.workflow_profiles.schema import parse_profile_ref
 from jev_agent.dashboard import views
 from jev_agent.dashboard.core import DashboardCore
 from jev_agent.dashboard.errors import friendly_error as _friendly_error
@@ -41,6 +47,33 @@ from jev_agent.dashboard.security import (
     checked_form,
 )
 from jev_agent.quality.levels import LEVELS
+
+
+def _validate_recurring_profile(ref: str, repo_root: Path) -> str:
+    """A recurring task's workflow-profile reference, checked at add time
+    but deliberately NOT pinned: pinning happens at each enqueue (see
+    `Scheduler._enqueue_recurring`), so the stored reference stays the
+    unpinned form and each occurrence resolves the version current then.
+    A preset passes through unchanged (pinned by release); a stored
+    profile must exist now, or the task refuses with the reference named."""
+    if is_preset_ref(ref):
+        name = parse_preset_ref(ref)
+        if name not in PRESET_NAMES:
+            raise JevError(
+                f"unknown workflow preset {ref!r}: pick one of: "
+                + ", ".join(f"preset:{n}" for n in PRESET_NAMES)
+            )
+        return ref
+    parsed = parse_profile_ref(ref)
+    if parsed is None:
+        raise JevError(f"workflow profile {ref!r} no longer resolves: pick a current profile")
+    profile_id = f"{parsed[0]}:{parsed[1]}"
+    store = ProfileStore(repo_root, Path.home() / ".jev")
+    if not store.exists(profile_id):
+        raise JevError(
+            f"workflow profile {profile_id!r} no longer resolves: pick a current profile"
+        )
+    return ref
 
 
 class QueueRoutes(DashboardCore):
@@ -79,8 +112,12 @@ class QueueRoutes(DashboardCore):
             # before execution — so the reference is pinned here, at queue
             # time, and run creation resolves the pinned version. An
             # unresolvable reference refuses (ValueError flashes) instead
-            # of queueing a run that cannot start.
+            # of queueing a run that cannot start. Picker `default` means
+            # no profile (G1); a preset reference passes through pinning
+            # unchanged, because presets are pinned by release, not version.
             workflow_profile = _text(form, "workflow_profile") or None
+            if workflow_profile == "default":
+                workflow_profile = None
             if workflow_profile is not None:
                 workflow_profile = pin_workflow_profile(
                     ref=workflow_profile, repo_root=repo.root, user_root=Path.home() / ".jev"
@@ -143,13 +180,14 @@ class QueueRoutes(DashboardCore):
         raw reference: the scheduler pins it at each creation (see
         `Scheduler`, "Recurring snapshot timing"), so each scheduled run
         executes the version current at its enqueue, not the version from
-        when the task was created. The pin attempt here only proves the
-        reference resolves — an unresolvable reference refuses (ValueError
-        flashes) instead of queueing a task that can never start. The
-        safety floor itself is enforced at each run creation by the single
-        resolver (`create_run`), so a floor-violating profile is refused
-        there, never silently applied, and reductions travel with the
-        assurance label.
+        when the task was created. The check here only proves the
+        reference resolves — an unresolvable reference refuses instead of
+        queueing a task that can never start. The safety floor itself is
+        enforced at each run creation by the single resolver
+        (`create_run`), so a floor-violating profile is refused there,
+        never silently applied, and reductions travel with the assurance
+        label. Phase 4: preset references pass through unchanged (pinned
+        by release, not version), and `default` means no profile.
         """
 
         def add(repo: views.Repo, form: FormData) -> str:
@@ -161,12 +199,10 @@ class QueueRoutes(DashboardCore):
                 raise JevError(f"unknown priority {priority!r}")
             schedule = parse_schedule(_text(form, "schedule") or "")
             workflow_profile = _text(form, "workflow_profile") or None
+            if workflow_profile == "default":
+                workflow_profile = None
             if workflow_profile is not None:
-                # Existence check only: the pinned result is discarded so
-                # the stored reference stays raw for per-creation pinning.
-                pin_workflow_profile(
-                    ref=workflow_profile, repo_root=repo.root, user_root=Path.home() / ".jev"
-                )
+                workflow_profile = _validate_recurring_profile(workflow_profile, repo.root)
             tz_name = local_timezone_name()
             tz = ZoneInfo(tz_name)
             task = repo.store.add_recurring_task(
