@@ -33,6 +33,15 @@ Rules the rest of the code must not break:
   that broke a run would be worse than a missing grade. Callers in async
   code write via `asyncio.to_thread`; the append itself is one small
   write, so it never blocks the pipeline.
+- Writes are locked (issue #379, Phase 2): each append holds an
+  exclusive lock on a sidecar `<ledger>.lock` file (flock on POSIX,
+  msvcrt locking on Windows) for the single write, so concurrent
+  writers — threads, processes, dashboard and CLI at once — cannot
+  interleave or corrupt rows. A lock that cannot be acquired within
+  the timeout fails the write (False), never a partial row; a platform
+  with neither locking API serializes in-process only, documented in
+  `_FileLock`. The lock file lives next to the ledger inside `.jev/`
+  and is never committed, like the ledger itself.
 - Reads tolerate corruption: a bad line is skipped, never fatal. The
   ledger is append-only human-debuggable JSONL; a truncated last line
   (killed mid-write) must not lose the whole history.
@@ -46,11 +55,24 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+import threading
+import time
 from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
+from types import TracebackType
 from typing import Any
+
+try:
+    import fcntl as _fcntl
+except ImportError:  # pragma: no cover - non-POSIX platforms
+    _fcntl = None  # type: ignore[assignment]
+try:
+    import msvcrt as _msvcrt
+except ImportError:  # pragma: no cover - non-Windows platforms
+    _msvcrt = None  # type: ignore[assignment]
 
 from jev_agent.code_orchestrator.grades import (
     AgentTraceGrade,
@@ -58,6 +80,11 @@ from jev_agent.code_orchestrator.grades import (
     GateOutcome,
     RoutingGrade,
 )
+
+# Fallback serializer for platforms with neither flock nor msvcrt locking:
+# it serializes threads in this process only, and the cross-process
+# guarantee does not hold there (see `_FileLock`).
+_FALLBACK_LOCK = threading.Lock()
 
 __all__ = [
     "LEDGER_FILENAME",
@@ -265,8 +292,13 @@ def trace_record(
     run_id: str = "",
     task_id: str = "",
     source: str = "cli",
+    detail: str = "",
 ) -> GradeRecord:
-    """A trace grade as a ledger record (loop action + risk/urgency)."""
+    """A trace grade as a ledger record (loop action + risk/urgency).
+
+    `detail` carries supervision context the grade itself does not,
+    such as the stage boundary the trace was taken at (`stage=EXECUTING`).
+    """
     return GradeRecord(
         kind="trace",
         status="graded",
@@ -279,6 +311,7 @@ def trace_record(
         trace_outcome=grade.outcome,
         risk=grade.risk,
         urgency=grade.urgency,
+        detail=detail,
     )
 
 
@@ -395,21 +428,95 @@ class LedgerRatings:
         return candidates[0][0]
 
 
+class _FileLock:
+    """Exclusive lock on a sidecar file, held for one ledger append.
+
+    POSIX uses flock on a separately opened descriptor, so it serializes
+    threads and processes alike (a second open of the same file blocks,
+    it does not silently succeed). Windows uses msvcrt locking on one
+    byte, retried until the timeout. Platforms with neither API fall
+    back to a process-wide threading lock: threads in this process are
+    still serialized, but writers in other processes are not — the
+    cross-process guarantee needs a real file-locking API, and there is
+    no portable substitute worth faking one with. `__enter__` returns
+    False (never raises) when the lock cannot be acquired in time, so
+    the caller can fail the write instead of writing unlocked.
+    """
+
+    def __init__(self, path: Path, timeout_s: float) -> None:
+        self._path = path
+        self._timeout_s = timeout_s
+        self._fd: int | None = None
+        self._held_fallback = False
+
+    def __enter__(self) -> bool:
+        if _fcntl is None and _msvcrt is None:
+            self._held_fallback = _FALLBACK_LOCK.acquire(timeout=self._timeout_s)
+            return self._held_fallback
+        try:
+            self._fd = os.open(self._path, os.O_CREAT | os.O_RDWR, 0o666)
+        except OSError:
+            return False
+        deadline = time.monotonic() + self._timeout_s
+        while True:
+            try:
+                if _fcntl is not None:
+                    _fcntl.flock(self._fd, _fcntl.LOCK_EX | _fcntl.LOCK_NB)
+                else:
+                    assert _msvcrt is not None
+                    _msvcrt.locking(self._fd, _msvcrt.LK_NBLCK, 1)
+                return True
+            except OSError:
+                if time.monotonic() >= deadline:
+                    os.close(self._fd)
+                    self._fd = None
+                    return False
+                time.sleep(0.01)
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: TracebackType | None,
+    ) -> None:
+        if self._fd is not None:
+            try:
+                if _fcntl is not None:
+                    _fcntl.flock(self._fd, _fcntl.LOCK_UN)
+                elif _msvcrt is not None:
+                    _msvcrt.locking(self._fd, _msvcrt.LK_UNLCK, 1)
+            finally:
+                os.close(self._fd)
+                self._fd = None
+        elif self._held_fallback:
+            _FALLBACK_LOCK.release()
+            self._held_fallback = False
+
+
 class RatingLedger:
     """Append-only JSONL ledger at `path`. All reads tolerate a missing or
-    corrupt file; `record` never raises."""
+    corrupt file; `record` never raises. Each write holds the sidecar
+    lock (`<ledger>.lock`, see `_FileLock`) for the append."""
 
-    def __init__(self, path: Path) -> None:
+    def __init__(self, path: Path, *, lock_timeout_s: float = 10.0) -> None:
         self.path = Path(path)
+        self._lock_path = self.path.with_name(self.path.name + ".lock")
+        self._lock_timeout_s = lock_timeout_s
 
     def record(self, entry: GradeRecord) -> bool:
-        """Append one record. Returns False (never raises) when the ledger
-        cannot be written — a missing grade in the ledger is better than a
-        broken run."""
+        """Append one record under the sidecar lock. Returns False (never
+        raises) when the ledger cannot be written — including a lock
+        that could not be acquired in time. A missing grade in the
+        ledger is better than a broken run, and better than a corrupted
+        row: a timed-out lock never writes unlocked."""
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True)
-            with self.path.open("a", encoding="utf-8") as handle:
-                handle.write(json.dumps(entry.to_dict(), sort_keys=True) + "\n")
+            with _FileLock(self._lock_path, self._lock_timeout_s) as acquired:
+                if not acquired:
+                    log.debug("rating ledger lock timeout: %s", self.path)
+                    return False
+                with self.path.open("a", encoding="utf-8") as handle:
+                    handle.write(json.dumps(entry.to_dict(), sort_keys=True) + "\n")
             return True
         except Exception as exc:
             # Best-effort by design (see the module docstring), but the

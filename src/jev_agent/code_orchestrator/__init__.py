@@ -60,6 +60,10 @@ from jev_agent.code_orchestrator.ledger import (
     trace_record,
     unavailable_record,
 )
+from jev_agent.code_orchestrator.supervision import (
+    SupervisionDecision,
+    TraceSupervisor,
+)
 
 __all__ = [
     "AGENT_TRACE_QUESTIONS",
@@ -84,7 +88,9 @@ __all__ = [
     "LedgerRatings",
     "RatingLedger",
     "RoutingGrade",
+    "SupervisionDecision",
     "ToolCallGrade",
+    "TraceSupervisor",
     "build_code_review_state",
     "build_routing_state",
     "code_review_record",
