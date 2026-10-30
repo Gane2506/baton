@@ -258,9 +258,13 @@ class ReverseRunner:
                 self._message = outcome.message
                 self._finished_at = datetime.now(UTC)
         finally:
-            self._thread = None
+            # Cleanup BEFORE clearing the thread: shutdown() joins only
+            # while a thread is recorded, so clearing first would let it
+            # return while rmtree is still running (a caller could then
+            # reuse or delete the tmpdir out from under the cleanup).
             if tmpdir is not None:
                 shutil.rmtree(tmpdir, ignore_errors=True)
+            self._thread = None
 
     def shutdown(self, timeout: float = 30.0) -> None:
         """Wait for a running reverse (the lifespan calls this)."""
