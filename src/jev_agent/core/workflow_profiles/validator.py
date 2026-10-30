@@ -2,10 +2,11 @@
 
 One function validates profile-format JSON, shared by the editor (save time)
 and the executor (creation-time re-check): a save-time pass and a
-creation-time pass use the same rules. Phase 2 carries the schema plus the
-live catalogue subset — schema parse, unknown names against current
-configuration, duplicate stages, empty list — plus the safety-floor refusals
-(section 10.2, B1), which phase 2 owns. The full catalogue lands in phase 3.
+creation-time pass use the same rules. Phase 3 carries the full catalogue:
+every section 7.5 entry, including the drawn-cycle refusal (in the stage-list
+format a cycle can only appear as a stage revisited, so a repeated stage
+carries both the duplicate message and the cycle message) and the
+allowed-values list on every unknown-name refusal.
 
 Every failure is returned as a plain message naming the setting and stating
 the fix; a save that fails lists every error, not just the first.
@@ -146,8 +147,10 @@ def _validate_stage_list(data: dict[str, Any], errors: list[str]) -> None:
         )
         return
     seen: set[str] = set()
+    repeated = False
     for stage in stages:
         if stage in seen:
+            repeated = True
             errors.append(
                 f"Duplicate stage {pretty_stage(stage)!r}: each stage appears once. "
                 "Remove the duplicate."
@@ -158,6 +161,11 @@ def _validate_stage_list(data: dict[str, Any], errors: list[str]) -> None:
                 f"Unknown stage {stage!r}. The stages are {_STAGE_LIST_TEXT}. "
                 "Remove the unknown stage or spell it as shown."
             )
+    if repeated:
+        # A stage list has no edges to draw a cycle with: revisiting a stage
+        # is the list form of a drawn cycle (section 7.3), refused with the
+        # catalogue's cycle message rather than silently treated as a loop.
+        errors.append("Flows do not loop by drawing. Set the round limit on the step instead.")
     known = [s for s in stages if s in CANONICAL_ORDER]
     order = [CANONICAL_ORDER.index(s) for s in known]
     if order != sorted(order):
@@ -314,9 +322,12 @@ def _validate_settings(data: dict[str, Any], errors: list[str], ctx: ValidationC
         if not isinstance(learning, str) or not learning.strip():
             errors.append("learning_profile must be a non-empty string.")
         elif ctx.learning_profiles is not None and learning not in ctx.learning_profiles:
+            # Section 7.5: an unknown name is refused with the allowed values
+            # listed and the fix stated, like every other unknown-name refusal.
+            allowed_names = ", ".join(sorted(ctx.learning_profiles)) or "none exist yet"
             errors.append(
-                f"Unknown learning profile {learning!r}: create it first, or pick one "
-                "of the existing learning profiles."
+                f"Unknown learning profile {learning!r}. Pick one of: {allowed_names}. "
+                "Create the profile first if it does not exist yet."
             )
     goal = data.get("goal")
     if goal is not None and not _one_of(goal, GOALS):

@@ -133,6 +133,15 @@
 # checks_timeout_s = 3600          # how long to wait for checks to finish
 # checks_poll_s = 30
 
+# Workflow profiles (issue #368, docs/config.md "[workflows]"): named process
+# flows a run can follow instead of the hardcoded pipeline. Picker `default`
+# always means no profile.
+[workflows]
+# enabled = true                   # false: block picking a profile at creation (rollback)
+# default_via_profile = false      # true: no-profile runs execute via the profile path
+#                                  # with the default preset's parameters (only while the
+#                                  # conformance suite is green)
+
 # Free OpenRouter models (docs/config.md "Free models"): no cost, but rate-limited (OpenRouter
 # documents 20 requests/minute and 50/day, or 1000/day once you bought 10 credits), and free
 # providers may log or train on prompts (check https://openrouter.ai/settings/privacy). They

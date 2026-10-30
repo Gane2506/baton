@@ -37,10 +37,13 @@ DEFAULT_REF = "default"
 class ResolvedProfile:
     """A run's resolved workflow profile: the snapshot to store plus the
     queryable columns. `snapshot` is the complete resolved parameter set —
-    the executor reads only the snapshot, never the live profile."""
+    the executor reads only the snapshot, never the live profile.
+    `profile_id` is None for a `default`-preset snapshot on a no-profile run
+    (phase 3, `[workflows] default_via_profile`): the run has a snapshot but
+    no picked profile, so picker `default` still means no profile."""
 
-    profile_id: str
-    version: int
+    profile_id: str | None
+    version: int | None
     release: str | None
     snapshot: dict[str, Any]
     assurance: str
@@ -97,53 +100,40 @@ def _cda_available() -> bool:
     return True
 
 
-def resolve_workflow_profile(
-    *,
-    ref: str | None,
-    config: Any,
-    repo_root: Path | None,
-    user_root: Path | None,
-    flags: dict[str, Any] | None = None,
-    autonomy_mode: str = "standard",
-    plan_approval_required: bool = False,
-    learning_profiles: set[str] | None = None,
-    cda_available: bool | None = None,
-) -> ResolvedProfile | None:
-    """Resolve a creation field value to a snapshot, or None for the legacy
-    path. `ref` None or `"default"` means no profile (design section 13.1:
-    picker `default` always means no profile, not a preset that runs).
-    `flags` carries tier-1 per-run values (`quality_level`, `ship_mode`,
-    `learning_profile`) plus tier-3 source markers (`quality_source`,
-    `learning_source`: "workspace" when the value came from the workspace
-    profile, else "repo"). Raises ProfileStoreError / ProfileValidationError
-    with the setting named on any failure."""
-    if ref is None or ref == DEFAULT_REF:
-        return None
-    parsed = parse_profile_ref(ref)
-    if parsed is None:
-        raise ProfileStoreError(
-            f"workflow profile {ref!r} no longer resolves: pick a current profile"
-        )
-    scope, slug, version = parsed
-    profile_id = f"{scope}:{slug}"
-    store = ProfileStore(repo_root, user_root)
-    try:
-        profile = store.get(profile_id, version)
-    except ProfileStoreError as exc:
-        # Name the id and version, and tell the user to pick a current profile.
-        if version is not None:
-            raise ProfileStoreError(
-                f"workflow profile {profile_id!r} version {version} no longer resolves: "
-                "pick a current profile"
-            ) from exc
-        raise
-    context = build_validation_context(config, learning_profiles=learning_profiles)
-    errors = validate_profile(profile, context=context)
-    if errors:
-        raise ProfileValidationError(errors)
-    profile = normalize_profile(profile)
-    flags = flags or {}
+def workflows_enabled(config: Any) -> bool:
+    """The `[workflows] enabled` rollback switch (design section 17), default
+    true. `getattr` fallbacks keep callers safe on configs built before the
+    section existed: a missing section means selection stays enabled."""
+    enabled = getattr(getattr(config, "workflows", None), "enabled", None)
+    return True if enabled is None else bool(enabled)
 
+
+def default_via_profile_enabled(config: Any) -> bool:
+    """The `[workflows] default_via_profile` G1 migration trigger (design
+    section 8.2), default false. Distinct from `enabled`: `enabled` false
+    wins, so callers check `workflows_enabled` first."""
+    flag = getattr(getattr(config, "workflows", None), "default_via_profile", None)
+    return bool(flag) if flag is not None else False
+
+
+def _build_snapshot(
+    *,
+    profile: dict[str, Any],
+    config: Any,
+    flags: dict[str, Any],
+    autonomy_mode: str,
+    plan_approval_required: bool,
+    cda_available: bool | None,
+    profile_id: str | None,
+    version: int | None,
+    profile_source: str = "profile",
+) -> tuple[dict[str, Any], str, list[str]]:
+    """Apply section 9.2 precedence once to a normalized profile dict and
+    return (snapshot, assurance, assurance_absent). Shared by the stored
+    profile path and the `default`-preset path, so both resolve the same
+    way; the only difference is where the stage list, gate policies, and
+    designing come from (`profile_source`: "profile" for a stored version,
+    "default" for the built-in default parameter set)."""
     resolved: dict[str, Any] = {}
     sources: dict[str, str] = {}
 
@@ -155,7 +145,7 @@ def resolve_workflow_profile(
             sources[key] = "flag"
         elif profile_value is not None:
             resolved[key] = profile_value
-            sources[key] = "profile"
+            sources[key] = profile_source
         else:
             resolved[key] = repo_value
             sources[key] = repo_source
@@ -227,7 +217,7 @@ def resolve_workflow_profile(
     for name, _role_config in config.roles.items():
         if name in profile_roles:
             role_models[name] = profile_roles[name]
-            role_sources[name] = "profile"
+            role_sources[name] = profile_source
     resolved["role_models"] = role_models
     sources["role_models"] = role_sources  # type: ignore[assignment]
 
@@ -236,9 +226,9 @@ def resolve_workflow_profile(
     resolved["designing"] = profile.get("designing", "when_needed")
     resolved["goal"] = profile.get("goal")
     resolved["priority"] = profile.get("priority")
-    sources["stage_list"] = "profile"
-    sources["gate_policies"] = "profile"
-    sources["designing"] = "profile"
+    sources["stage_list"] = profile_source
+    sources["gate_policies"] = profile_source
+    sources["designing"] = profile_source
 
     # Safety floor, creation-time (B1 + section 7.2): refusals name the setting.
     ship_on = resolved["ship_enabled"] is True
@@ -290,19 +280,131 @@ def resolve_workflow_profile(
         plan_gate_present=plan_gate_present,
     )
 
-    version_resolved = int(profile["version"]) if profile.get("version") is not None else 1
     snapshot: dict[str, Any] = {
         **resolved,
         "resolved_from": sources,
         "workflow_profile_id": profile_id,
-        "workflow_profile_version": version_resolved,
+        "workflow_profile_version": version,
         "workflow_profile_release": profile.get("release"),
         "assurance_absent": absent,
     }
+    return snapshot, assurance, absent
+
+
+def resolve_workflow_profile(
+    *,
+    ref: str | None,
+    config: Any,
+    repo_root: Path | None,
+    user_root: Path | None,
+    flags: dict[str, Any] | None = None,
+    autonomy_mode: str = "standard",
+    plan_approval_required: bool = False,
+    learning_profiles: set[str] | None = None,
+    cda_available: bool | None = None,
+) -> ResolvedProfile | None:
+    """Resolve a creation field value to a snapshot, or None for the legacy
+    path. `ref` None or `"default"` means no profile (design section 13.1:
+    picker `default` always means no profile, not a preset that runs).
+    `flags` carries tier-1 per-run values (`quality_level`, `ship_mode`,
+    `learning_profile`) plus tier-3 source markers (`quality_source`,
+    `learning_source`: "workspace" when the value came from the workspace
+    profile, else "repo"). Raises ProfileStoreError / ProfileValidationError
+    with the setting named on any failure."""
+    if ref is None or ref == DEFAULT_REF:
+        return None
+    parsed = parse_profile_ref(ref)
+    if parsed is None:
+        raise ProfileStoreError(
+            f"workflow profile {ref!r} no longer resolves: pick a current profile"
+        )
+    scope, slug, version = parsed
+    profile_id = f"{scope}:{slug}"
+    store = ProfileStore(repo_root, user_root)
+    try:
+        profile = store.get(profile_id, version)
+    except ProfileStoreError as exc:
+        # Name the id and version, and tell the user to pick a current profile.
+        if version is not None:
+            raise ProfileStoreError(
+                f"workflow profile {profile_id!r} version {version} no longer resolves: "
+                "pick a current profile"
+            ) from exc
+        raise
+    context = build_validation_context(config, learning_profiles=learning_profiles)
+    errors = validate_profile(profile, context=context)
+    if errors:
+        raise ProfileValidationError(errors)
+    profile = normalize_profile(profile)
+    flags = flags or {}
+    version_resolved = int(profile["version"]) if profile.get("version") is not None else 1
+    snapshot, assurance, absent = _build_snapshot(
+        profile=profile,
+        config=config,
+        flags=flags,
+        autonomy_mode=autonomy_mode,
+        plan_approval_required=plan_approval_required,
+        cda_available=cda_available,
+        profile_id=profile_id,
+        version=version_resolved,
+    )
     return ResolvedProfile(
         profile_id=profile_id,
         version=version_resolved,
         release=profile.get("release"),
+        snapshot=snapshot,
+        assurance=assurance,
+        assurance_absent=absent,
+        goal=None,
+        preset_goal=None,
+    )
+
+
+def build_default_snapshot(
+    *,
+    config: Any,
+    flags: dict[str, Any] | None = None,
+    autonomy_mode: str = "standard",
+    plan_approval_required: bool = False,
+    cda_available: bool | None = None,
+) -> ResolvedProfile:
+    """The `default` preset's parameter set (design sections 8.2, 9.1),
+    resolved through the same precedence as a stored profile.
+
+    Phase 3 has no preset files (they land in phase 4), so the default is
+    built from the design text itself: the full canonical stage list,
+    `designing` `when_needed`, and `inherit` gate policies for every gated
+    step, with every other setting absent — which resolves it from the
+    repo configuration (or a tier-1 flag) exactly as today's legacy path
+    reads it. That is what "reproduces today's behaviour" means here: the
+    snapshot's round caps, quality level, score settings, ship settings,
+    cache mode, and role models are the repo's own values, not invented
+    ones. The returned profile has no id or version: a no-profile run
+    executing via this snapshot still records picker `default`, i.e. no
+    profile, and only its execution path changes (G1, `[workflows]
+    default_via_profile`)."""
+    from .schema import CANONICAL_ORDER
+
+    default_profile: dict[str, Any] = {
+        "stage_list": list(CANONICAL_ORDER),
+        "gate_policies": {stage: "inherit" for stage in CANONICAL_ORDER if stage != "INTAKE"},
+        "designing": "when_needed",
+    }
+    snapshot, assurance, absent = _build_snapshot(
+        profile=default_profile,
+        config=config,
+        flags=flags or {},
+        autonomy_mode=autonomy_mode,
+        plan_approval_required=plan_approval_required,
+        cda_available=cda_available,
+        profile_id=None,
+        version=None,
+        profile_source="default",
+    )
+    return ResolvedProfile(
+        profile_id=None,
+        version=None,
+        release=None,
         snapshot=snapshot,
         assurance=assurance,
         assurance_absent=absent,

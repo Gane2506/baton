@@ -18,6 +18,7 @@ from __future__ import annotations
 import json
 import os
 import secrets
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
 
@@ -34,6 +35,19 @@ PROFILE_DIRNAME = "workflow-profiles"
 
 class ProfileStoreError(ValueError):
     """A profile store failure, with a user-facing message."""
+
+
+@dataclass
+class RecheckFailure:
+    """One stored version that fails the full catalogue on re-check (design
+    section 15, phase 3): the profile id and version plus every error, each
+    naming its setting. `archived` marks versions of archived profiles —
+    archived versions are re-checked too, because their snapshots still run."""
+
+    profile_id: str
+    version: int
+    archived: bool
+    messages: list[str]
 
 
 class ProfileCorruptError(ProfileStoreError):
@@ -220,6 +234,54 @@ class ProfileStore:
                 except ProfileStoreError:
                     continue  # a corrupt profile is reported on direct read, not listed
         return out
+
+    def recheck_all(self, *, context: ValidationContext | None = None) -> list[RecheckFailure]:
+        """Phase-3 re-check (design sections 7.5, 15): every stored version in
+        both scopes, archived profiles included, against the full catalogue.
+        Stored files are read raw — not through `get`, which would raise on
+        the first failure — so one report covers the whole store, with each
+        failure naming its setting. An empty list means every artefact stored
+        under phase 2 still passes. This is the store-wide audit; the
+        creation-time re-check for the picked version lives in the resolver,
+        which validates the chosen version before resolving its snapshot."""
+        failures: list[RecheckFailure] = []
+        for scope in ("repo", "user"):
+            try:
+                base = self.scope_dir(scope)
+            except ProfileStoreError:
+                continue
+            if not base.exists():
+                continue
+            for directory in sorted(base.iterdir()):
+                if not directory.is_dir():
+                    continue
+                profile_id = profile_id_for(scope, directory.name)
+                archived = (directory / "archived.json").exists()
+                for path in sorted(directory.glob("v*.json")):
+                    stem = path.name[1:-5]
+                    if not stem.isdigit():
+                        continue
+                    version = int(stem)
+                    try:
+                        data = json.loads(path.read_text(encoding="utf-8"))
+                    except ValueError:
+                        failures.append(
+                            RecheckFailure(
+                                profile_id,
+                                version,
+                                archived,
+                                [
+                                    f"workflow profile {profile_id!r} version {version} "
+                                    "cannot be read: its file is not valid JSON; "
+                                    "save a new version"
+                                ],
+                            )
+                        )
+                        continue
+                    messages = validate_profile(data, context=context)
+                    if messages:
+                        failures.append(RecheckFailure(profile_id, version, archived, messages))
+        return failures
 
     # ---- archive / delete ---------------------------------------------------------
 

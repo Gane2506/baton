@@ -177,6 +177,13 @@ class SchedulerRunner:
         """
 
         async def start(item: QueueItem) -> RunRecord:
+            # Rollback (design section 17, step 3): while `[workflows]
+            # enabled` is false, a recurring item's profile pick is skipped
+            # and the run records `default` — the item itself is not failed
+            # by the creation-time refusal that blocks direct picks.
+            from jev_agent.core.workflow_profiles import workflows_enabled
+
+            workflow_profile = item.workflow_profile if workflows_enabled(ctx.config) else None
             run = create_run(
                 ctx,
                 item.idea,
@@ -186,7 +193,7 @@ class SchedulerRunner:
                 quality=item.quality,
                 profile=item.profile,
                 ship_mode=item.ship_mode,
-                workflow_profile=item.workflow_profile,
+                workflow_profile=workflow_profile,
             )
             if not self.launcher.start(run.id, "start"):
                 raise PipelineError(f"run {run.id} is already being worked on here")

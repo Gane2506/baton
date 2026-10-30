@@ -1457,6 +1457,32 @@ class DashboardConfig(_Strict):
     )
 
 
+class WorkflowsConfig(_Strict):
+    """`[workflows]` (issue #368, design sections 8.2, 17): the workflow-profile
+    feature's own switches. `enabled` (default true) is the rollback switch:
+    false blocks profile selection at creation, while in-flight snapshots
+    finish and recurring items create default runs. `default_via_profile`
+    (default false) is the G1 migration trigger: when true — and only while
+    the conformance suite is green — runs without a profile execute via the
+    profile path using the `default` preset's parameters. It changes the
+    execution path only: picker `default` always means no profile, and the
+    two flags are distinct — `enabled` false wins over `default_via_profile`
+    (a disabled feature runs the legacy path)."""
+
+    enabled: bool = Field(
+        default=True,
+        description="Whether workflow profiles may be picked at run creation.",
+    )
+    default_via_profile: bool = Field(
+        default=False,
+        description=(
+            "When true, runs without a profile execute through the profile path "
+            "with the default preset's parameters (only while the conformance "
+            "suite is green); picker `default` still means no profile."
+        ),
+    )
+
+
 class JevConfig(_Strict):
     dispatcher: DispatcherConfig = Field(
         default_factory=DispatcherConfig, description="Who makes the decisions."
@@ -1529,6 +1555,10 @@ class JevConfig(_Strict):
     code_orchestrator: CodeOrchestratorSettings = Field(
         default_factory=CodeOrchestratorSettings,
         description="The Coding Decision Agent as orchestrator for code work.",
+    )
+    workflows: WorkflowsConfig = Field(
+        default_factory=WorkflowsConfig,
+        description="Workflow profiles: selection switch and the default-path trigger.",
     )
 
     @property
