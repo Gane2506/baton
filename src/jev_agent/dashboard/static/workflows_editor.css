@@ -1,13 +1,14 @@
 /* Workflow profile editor layouts (issue #368, phase 5): canvas and list
  * are two layouts of the same form fields — the mode class on #wf-stages
- * is the only difference, so both modes submit identical profile JSON. */
-.wf-mode { margin-bottom: 12px; }
+ * is the only difference, so both modes submit identical profile JSON.
+ * Spacing uses the --s* scale from style.css (spacing-token guard). */
+.wf-mode { margin-bottom: var(--s3); }
 .wf-mode-btn.is-active { font-weight: 700; }
-.wf-stages { display: flex; gap: 12px; flex-wrap: wrap; align-items: stretch; }
+.wf-stages { display: flex; gap: var(--s3); flex-wrap: wrap; align-items: stretch; }
 .wf-stages.wf-mode-list { flex-direction: column; flex-wrap: nowrap; }
-.wf-stage { border: 1px solid var(--border, #ccc); border-radius: 8px; padding: 12px; min-width: 180px; flex: 1 1 180px; }
+.wf-stage { border: 1px solid var(--border, #ccc); border-radius: 8px; padding: var(--s3); min-width: 180px; flex: 1 1 180px; }
 .wf-stages.wf-mode-list .wf-stage { flex: none; }
 .wf-stage.wf-omitted { opacity: 0.55; }
-.wf-stage h3 { margin: 0 0 8px; }
+.wf-stage h3 { margin: 0 0 var(--s2); }
 .wf-stages.wf-mode-canvas .wf-stage:not(:last-child)::after { content: "→"; display: block; text-align: right; font-size: 20px; }
-#wf-reorder-refusal:not([hidden]) { border: 1px solid var(--border, #ccc); border-radius: 8px; padding: 10px 12px; }
+#wf-reorder-refusal:not([hidden]) { border: 1px solid var(--border, #ccc); border-radius: 8px; padding: var(--s2) var(--s3); }
