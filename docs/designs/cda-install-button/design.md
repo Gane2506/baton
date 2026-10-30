@@ -926,7 +926,7 @@ unpicked blocks implementation of the parts that depend on it.
   (Docker without a volume, read-only environment), the click runs
   preflight, which refuses with the environment-specific command.
   Mechanism: section 5.4 plus the guide fallback. Trade-off: the
-  issue's "same button everywhere" is kept literally, and every user
+  issue's "same button everywhere" is kept as written, and every user
   gets at least a correct command; but a button that refuses on
   some machines teaches users that the button may not work, and the
   Docker warning must be read to be useful. Fails when: users click
@@ -1107,7 +1107,7 @@ unpicked blocks implementation of the parts that depend on it.
   second click, so "one-click install" becomes "two-click install"
   with the first click being consent. Fails when: users treat the
   confirm page as friction and the acceptance test's "one click"
-  is read literally.
+  is read word for word.
 * **H2. Direct install with a preflight summary.** Clicking Install
   runs preflight immediately and shows its summary (environment,
   sizes, persistence) with the progress page; there is no separate
