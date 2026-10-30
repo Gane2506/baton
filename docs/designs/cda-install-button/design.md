@@ -537,6 +537,32 @@ decision is shown to the user before any download starts (on the confirm page un
    section 8 lists that override as required work for this branch,
    and if it cannot be added cleanly, this branch is unavailable
    and the design falls to branch 3.
+
+   AMENDED (2026-10-30, follow-up to issue #366): the override now
+   exists, so the "section 8 lists that override as required work"
+   sentence above is corrected, not just supplemented — section 8
+   never listed it, and now lists it as built work. The grade
+   runner accepts an interpreter override (`CodeGradeRunner`
+   `interpreter`; grades run under that interpreter via
+   `jev_agent.dashboard.code_grade_subprocess`), the branch-2 gate
+   flag is flipped, and branch 2 is selected for an unwritable own
+   environment. Branch-2 selection requirements, now all met:
+   (a) the venv is created with `--system-site-packages`, so its
+   interpreter imports the dashboard's own `jev_agent` while the
+   venv's own torch/laya take precedence (venv site-packages come
+   before base site-packages); (b) `DashboardCore` discovers the
+   venv interpreter at startup only when the dashboard process
+   itself cannot see `laya` and the venv python exists and is
+   executable; (c) the install panel trusts that interpreter's
+   probe record for availability while the override is configured,
+   and only then — the general rule (a probe verdict never
+   overrides a failed `available` check for the shared environment)
+   is unchanged; (d) `shutdown` terminates a still-running grade
+   child after its join timeout, so no orphan holds the model,
+   while cancel keeps in-process semantics (the child runs on and
+   its result is dropped). The branch-3 fallback remains for the
+   case the override cannot apply: no venv interpreter
+   discoverable at grade time.
 3. **Refusal with a command.** When neither branch works, the page
    renders the guide block in place of the button — the
 environment-specific command, a copy button, and a "Check again"
@@ -1255,6 +1281,28 @@ are relative to the repo root.
   (section 9, DECIDED subsection), so the implementer works from a
   decided spec, not from open options.
 
+Follow-up (2026-10-30, after the #366 implementation): the
+grade-runner interpreter override, which section 5.4 named as
+required work for branch 2 but section 8 omitted:
+
+* `src/jev_agent/dashboard/code_grade_subprocess.py` (new): the
+  child entry — stdin JSON in, one JSON line out, no tracebacks on
+  stdout, unavailable vs error kept distinct.
+* `src/jev_agent/dashboard/code_grade_runner.py` (modify): the
+  `interpreter` + `spawn` seam, `discover_grade_interpreter`,
+  subprocess grades, shutdown-terminate for a hanging child.
+* `src/jev_agent/dashboard/core.py` (modify): `DashboardCore`
+  discovers the override when no explicit executor is given.
+* `src/jev_agent/dashboard/routes_code.py` (modify): the scoped
+  panel-availability exception for the override interpreter's
+  probe record.
+* `src/jev_agent/dashboard/cda_install_runner.py` (modify): the
+  branch-2 gate flag flipped, `--system-site-packages` on venv
+  creation, module docstring corrected.
+* Tests: `tests/unit/test_code_grade_interpreter.py` (new),
+  panel tests in `tests/unit/test_cda_install_routes.py`,
+  matrix/runner tests updated to branch-2 selection.
+
 Out of the implementation phase, explicitly: no change to
 `.github/workflows/`, no change to lint/type/test config, no change
 to grading semantics, no change to the threshold, no change to the
@@ -1930,6 +1978,12 @@ human or the implementer must answer it in the implementation phase.
    override cannot be added cleanly, branch 2 is unavailable and
    the design falls to branch 3 — that fallback is decided, but
    the override work itself is still to be done.
+
+   ANSWERED (2026-10-30, follow-up to issue #366): the override
+   was added cleanly — see the amendment in section 5.4 and the
+   follow-up items in section 8. Branch 2 is selected, and the
+   branch-3 fallback now applies only when no venv interpreter is
+   discoverable at grade time.
 7. **`laya` version drift.** `laya>=0.4.15` is unpinned above. If a
   newer `laya` breaks the backend, the version policy in option set
   G must become a pin, and the design must be amended before

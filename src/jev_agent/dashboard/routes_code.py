@@ -75,12 +75,27 @@ def _install_panel(settings: CodeOrchestratorSettings, core: DashboardCore) -> d
     `probe_by_model` map — another repo's panel shows "available" for a
     shared environment, never "warmed" for a model id it did not warm. A
     probe verdict never overrides a failed `available` check into
-    "installed".
+    "installed" — with one scoped exception (design §5.4, branch 2):
+    while a grade-runner override interpreter is configured, the
+    dashboard process itself cannot see the backend, so the panel
+    trusts that interpreter's own probe record instead.
     """
     install = core.cda_install_runner.status()
     decision = decide_environment()
     available = _orchestrator(settings).available
     warmed_entry = install.probe_by_model.get(settings.model_id)
+    # Branch-2 override (see the docstring): grades run under the venv
+    # interpreter, so only that interpreter's probe record can say
+    # whether the backend is there. Without a constructible probe
+    # record the panel stays "not installed" and the install button
+    # (or guide) still shows.
+    if (
+        not available
+        and core.code_grade_runner.interpreter is not None
+        and warmed_entry is not None
+        and warmed_entry.constructible
+    ):
+        available = True
     warmed = available and warmed_entry is not None and warmed_entry.warmed
     if install.state == "running":
         label = "installing"
