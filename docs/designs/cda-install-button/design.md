@@ -3,8 +3,12 @@
 * **Author:** Hana (for Gane)
 * **Date:** 2026-10-30
 * **Tracking issue:** Gane2506/baton#366
-* **Status:** Design phase only. No implementation. Human approval of the
-  option sets in section 9 is required before any code is written.
+* **Status:** Design phase only. No implementation. Picks for the
+  option sets in section 9 were DECIDED 2026-10-30 by the
+  implementation coordinator under the user's never-stop directive
+  (work must never stop at approval gates); implementation proceeds
+  from this decided spec. Any pick the user later overrules gets
+  reworked; that is expected.
 * **How to read this design (added in resolution):** Sections 5–8 state
   mechanisms, not decisions, wherever a rule depends on an option set
   in section 9 — and each such rule names the option it depends on.
@@ -29,7 +33,7 @@ browser-first law: no feature is done until it works from the browser
 with zero terminal use.
 
 This design replaces that instruction with an Install button on the same
-page. One click installs the backend on the machine the dashboard runs
+page. One click plus confirm installs the backend on the machine the dashboard runs
 on, in the background, with progress shown in the browser and a check
 afterwards — plus a confirm click when option set H picks
 confirm-first. No package bytes flow through the browser: the page
@@ -349,7 +353,13 @@ there is no default. The panel must never show "installed" on layer
 succeeded. Under A3, the panel shows two lines: the Backend value
 from layers 1–2, and a checkpoint line that reads "downloaded" only
 when a warm-up success is recorded in the job record, otherwise
-"downloads on first grade". The panel's source of truth is:
+"downloads on first grade". DECIDED (2026-10-30, A2): the panel
+flips to "warmed" only for the warmed model id, using the section
+6.5 probe record's `warmed` flag plus its model id field. Another
+repo's dashboard flips to "available" (layers 1–2, shared
+environment) but NOT to "warmed" for its different model id. Panel
+logic must compare model ids; a warmed record for one model id
+never warms a different model id. The panel's source of truth is:
 `CodeOrchestrator.available` for presence, plus the recorded probe
 verdict (section 5.2) when a probe has run; a probe verdict never
 overrides a failed `available` check into "installed".
@@ -387,10 +397,12 @@ steps, in order:
    ("checkpoint could not be loaded", section 6.2).
 
 The probe never runs a grade and never writes to the grade ledger.
-Probe subprocess timeout: 5 minutes. A probe that exceeds it fails as
-"verification timed out"; pip itself and warm-up have no wall-clock
-timeout, because a multi-gigabyte download has no honest deadline —
-dashboard shutdown is their only exit (section 6.11).
+Probe subprocess timeout: 5 minutes, applying to probe steps 1–2
+only. A probe step 1–2 run that exceeds it fails as
+"verification timed out". The warm-up phase (step 3) has no wall-clock timeout, and
+dashboard shutdown is its only exit. Pip itself likewise has no
+wall-clock timeout, because a multi-gigabyte download has no honest
+deadline — dashboard shutdown is its only exit (section 6.11).
 Verification failure after a pip exit of 0 is its own failure class
 ("installed but not constructible", section 6.2). It surfaces the
 repair path (section 5.5), not a success state. The panel must not
@@ -526,6 +538,12 @@ environment-specific command, a copy button, and a "Check again"
    action — and no install job starts. The button is replaced, not
    disabled in place, so the user is never left staring at a dead
    button.
+
+   DECIDED (2026-10-30, C1 exception): branch 3 keeps guide
+   replacement — the button is replaced by the guide and no job
+   starts. C1's preflight-refusal applies only where a job can
+   start or a failure is learned at preflight; it never turns a
+   branch-3 guide into a button that refuses after the click.
 
 PEP 668 stance, decided here, not left to the implementer: the
 install never passes `--break-system-packages`. A system Python that
@@ -729,7 +747,18 @@ The install job record is durable, not in-memory only. Location
 user-level directory that already holds `~/.jev/design-systems/` —
 not a repo's `.jev/` directory, because the install is
 machine-wide (section 6.9) and must be visible to every dashboard
-process on the machine. Schema (DECIDED): `job_id` (uuid),
+process on the machine. Fallback (DECIDED 2026-10-30): when home is
+not writable, the record lives instead in the dashboard's state
+directory for that repo — `<repo>/.jev/cda-install-job.json`, where
+`<repo>/.jev/` is the repo state directory the dashboard already
+locates as `settings.root` plus the state directory name (the same
+directory that holds the repo's state database and the browser
+precedent's repo-scoped log). A fallback record is visible only to
+that repo's dashboard process, not to every dashboard process on
+the machine; the machine-wide visibility of section 6.9 holds only
+for the primary `~/.jev/` location. If no writable state directory
+exists either, preflight refuses (branch 3, section 5.4) and no
+install job starts. Schema (DECIDED): `job_id` (uuid),
 `argv` (the list from section 5.3a), `target` (branch 1/2/3 plus
 the interpreter path, and the venv path when branch 2),
 `torch_path` ("cpu" or "default"), `child_pid` (the pip or probe
@@ -749,10 +778,12 @@ again." A second install after an interruption truncates the old
 log only after copying it to the retained log, so the interruption
 evidence is not destroyed by the retry.
 
-If the implementer cannot provide a durable record, the fallback is
-stated here so it is a decision, not an accident: the page can only
-report "availability unknown — re-check and retry" after any restart,
-and the design's restart acceptance criterion (section 10) fails.
+If neither the home location nor a state-directory location is
+writable, preflight refuses (branch 3) and no install job exists to
+be interrupted, so the restart criterion of section 10 is vacuous
+there. Wherever a record location exists — primary or fallback —
+the section 10 restart criterion applies: a restart mid-install
+yields `interrupted` and a working retry.
 
 ### 6.6 Stop semantics and retry
 
@@ -770,7 +801,11 @@ names the phase and the state:
   "not installed" (verification has not run, so no half-installed
   package is reported as installed), the job record says
   "stopped", and retry re-runs preflight then pip, which
-  overwrites any partial unpack. If retry's probe still fails, the
+  overwrites any partial unpack. Retry is defined and can never
+  report a half-installed backend as installed; it does not promise
+  the next run succeeds without a cache purge — if the next run
+  surfaces a pip lock error, the section 6.2 remedy applies (clear
+  the pip cache, then retry). If retry's probe still fails, the
   state becomes "installed but not constructible" with the repair
   path, never "installed".
 * **Verifying:** stop cancels the probe; the panel still says "not
@@ -881,7 +916,12 @@ The design resolves that mismatch as follows:
   unless pre-warming is chosen, in which case pre-warming warms the
   current process's repo model only, and other repos' models still
   download on their first grade. The UI must say which model's
-  checkpoint was warmed, by model id.
+  checkpoint was warmed, by model id. DECIDED (2026-10-30, A2):
+  the panel flips to "warmed" only for the warmed model id (section
+  6.5 probe record, `warmed` plus model id); another repo's
+  dashboard flips to "available" (layers 1–2, shared environment)
+  but NOT to "warmed" for its different model id. Panel logic must
+  compare model ids.
 * A finished install flips every dashboard process's panel, because
   availability is a property of the shared environment, not of a
   repo.
@@ -1027,7 +1067,9 @@ are relative to the repo root.
   from section 6.7 in the app's route table and implement the
   handlers in the code-grade routes — start, status, live fragment,
   verify, repair, and (only when their option sets pick them) stop
-  and confirm. The grade/route handlers check the coordinator
+  and confirm. The Verify and Repair routes exist under G2 (minimal
+  lifecycle, decided 2026-10-30); the stop route exists only under
+  E1 and the confirm route only under H1. The grade/route handlers check the coordinator
   before calling `code_grade_runner.start` (section 6.4). Rationale:
   all install endpoints live with the code-grade routes, with POSTs
   under `checked_form` protection and GETs as reads.
@@ -1036,6 +1078,14 @@ are relative to the repo root.
   states, the Verify action (section 5.2), and the replacement of
   the pip instruction with a link to the install action. Rationale:
   this is the surface the issue names.
+* "Turn on gate grading" button (D3, decided 2026-10-30): after a
+  successful install, the status panel offers a second button,
+  "Turn on gate grading", which flips the setting through the
+  existing settings route, not through the install job (section 9,
+  D3). If settings-route reuse proves impossible during
+  implementation, it degrades to D1 with a link (panel states the
+  Settings path, per D1). Rationale: one page, two explicit steps;
+  the install job never becomes a config writer.
 * `src/jev_agent/dashboard/templates/code_grade_status.html`
   (modify): the install banner on the grade status page too, so a
   user watching a grade sees a running install. Rationale: the
@@ -1117,16 +1167,17 @@ are relative to the repo root.
   section 10. Rationale: the doc is the surface users read when the
   UI message is not enough.
 * `docs/deploy.md` (modify): the Docker persistence answer from
-  option set G, and the uv-tool reinstall caveat from section 5.4.
+  option set I (I2: documented rebuild plus reinstall, no deploy
+  change), and the uv-tool reinstall caveat from section 5.4.
   Rationale: deploy docs must not promise persistence the install
   does not have.
 * `docs/dashboard.md` (modify): the Code Grade page's install
   states, if that doc describes the page. Rationale: dashboard docs
   must match the shipped UI.
 * `docs/designs/cda-install-button/design.md` (this file, already
-  written): updated with the human's option-set decisions before
-  implementation starts, so the implementer works from a decided
-  spec, not from open options.
+  written): updated 2026-10-30 with the decided option-set picks
+  (section 9, DECIDED subsection), so the implementer works from a
+  decided spec, not from open options.
 
 Out of the implementation phase, explicitly: no change to
 `.github/workflows/`, no change to lint/type/test config, no change
@@ -1140,6 +1191,63 @@ marked as preferred, and none is pre-picked. Each option states its
 mechanism, its trade-offs, and the conditions under which it fails.
 The human picks one option per set before implementation. A set left
 unpicked blocks implementation of the parts that depend on it.
+
+### DECIDED (2026-10-30): the picks for all nine sets
+
+The picks below were decided 2026-10-30 by the implementation
+coordinator under the user's never-stop directive (work must never
+stop at approval gates). They are decided, not proposed: the
+implementation proceeds from this spec. Any pick the user later
+overrules gets reworked; that is expected. The option texts below
+are unchanged; this subsection records which option was picked and
+why.
+
+* **A — A2 (pip + probe + warmed checkpoint).** The panel promise
+  is complete: "installed" means fully ready, so there is no
+  first-grade download surprise. The upfront checkpoint cost
+  (~842 MB plus time) is disclosed on the H1 confirm page before
+  anything is spent. Warming is per model id (§5.1, §6.9).
+* **B — B2 (deliberate third copy).** The install runner's
+  machine-wide durable record, probe, and preflight fit no existing
+  runner without rework, and a separate runner risks no regression
+  to the working browser, grade, and reverse runners. The future
+  cost — lifecycle fixes ported across runners by hand — is
+  accepted and recorded.
+* **C — C1 (button everywhere, per-cell fallback).** This maximizes
+  browser-first. The false-promise risk is contained by the H1
+  confirm page and the branch-3 guide exception (section 5.4):
+  branch 3 keeps guide replacement and no job starts.
+* **D — D3 (enable button on the status page).** One page, two
+  explicit steps; the install job never becomes a config writer.
+  If settings-route reuse proves impossible during implementation,
+  it degrades to D1 with a link.
+* **E — E1 (terminate, like the browser install).** The user keeps
+  in-browser control during a multi-GB install, matching the only
+  existing install precedent. Partial state is handled by the
+  defined retry, which never reports a half-installed backend as
+  installed.
+* **F — F2 (forms live, failures link to install).** This preserves
+  current form behaviour. The §6.4 refused-job ledger guard already
+  fixes spurious "unavailable" records for grades refused because
+  an install is running. Accepted limitation: a grade submitted
+  while the backend is missing still fails and still ledgers
+  "unavailable" as today; the remedy if that becomes a complaint
+  is F1, not a patch to F2.
+* **G — G2 (minimal lifecycle: version display + repair +
+  laya-only uninstall).** This is the only option under which every
+  broken state except a broken torch is recoverable from the
+  browser. Uninstall removes laya only, never torch, never
+  jev-agent. Version floor laya>=0.4.15 is DECIDED and unchanged;
+  a pin replaces it only if testing finds a breaking laya version.
+* **H — H1 (confirm first, naming the exact command).** The
+  multi-GB download and the Docker ephemerality warning are read
+  before disk or time is spent, matching the browser-install
+  confirm precedent. "One click" becomes one click plus confirm.
+* **I — I2 (documented rebuild plus reinstall).** The Docker button
+  stays honest without changing the deploy contract or risking a
+  stale volume breaking a new image. A container recreate costs a
+  re-offered reinstall, still zero-terminal, with the persistence
+  warning shown before the click.
 
 ### A. What "installed" means
 
@@ -1211,6 +1319,11 @@ unpicked blocks implementation of the parts that depend on it.
   some machines teaches users that the button may not work, and the
   Docker warning must be read to be useful. Fails when: users click
   through the warning and then report the button as broken.
+
+  DECIDED (2026-10-30, C1 exception): branch 3 keeps guide
+  replacement (section 5.4) — the button is replaced by the guide
+  and no job starts. C1's preflight-refusal applies only where a
+  job can start or a failure is learned at preflight.
 * **C2. Narrowed button.** The button shows only where it can
   actually work (writable dashboard-owned environment, persistent
   deployment, preflight passed). Everywhere else the page shows the
@@ -1350,7 +1463,7 @@ unpicked blocks implementation of the parts that depend on it.
   `laya` (never torch alone, never `jev-agent`) and returns the
   panel to "not installed". No update action. Mechanism: two more
   routes reusing the runner. Trade-off: the user can recover from
-  every broken state from the browser; but uninstall must define
+  every broken state except a broken torch from the browser; but uninstall must define
   what happens to the checkpoint cache (kept, so reinstall is
   faster, and stated) and to other tools sharing torch. DECIDED
   rule for G2: uninstall removes `laya` only, never torch, so it
@@ -1497,6 +1610,13 @@ failure injection (network off) with retry.
   (with `<python>` meaning the detected environment's interpreter
   — the dashboard's own, or the branch-2 venv's):
   - Remove a broken backend: `<python> -m pip uninstall -y laya`.
+  - Recover from a broken torch: reinstall torch with the
+    documented platform sequence of section 5.3a (the CPU torch
+    wheel from the PyTorch CPU index on the CPU path, otherwise
+    the default torch wheel), then reinstall `laya` with the
+    section 5.3a install sequence. This is the documented manual
+    recovery, not a new runner feature: no new install path is
+    invented here.
   - Clear a corrupt pip cache: `<python> -m pip cache purge`.
   - Clear a corrupt checkpoint cache: remove the model directory
     under the Hugging Face cache (path shown from the detected
