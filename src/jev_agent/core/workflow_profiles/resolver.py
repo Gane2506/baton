@@ -15,6 +15,7 @@ source the existing intra-tier resolution actually resolved.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -69,6 +70,9 @@ def build_validation_context(
     )
 
 
+log = logging.getLogger(__name__)
+
+
 def _cda_available() -> bool:
     """Whether the Coding Decision Agent backend loads now (grading `on`
     with no backend refuses at creation; it does not run ungraded). The
@@ -79,13 +83,16 @@ def _cda_available() -> bool:
             CodeOrchestratorUnavailable,
             load_backend,
         )
-    except Exception:
+    except Exception as exc:
+        # A presence check, not a failure: record why the backend is absent.
+        log.debug("CDA backend unavailable at import: %s: %s", type(exc).__name__, exc)
         return False
     try:
         load_backend()
     except CodeOrchestratorUnavailable:
         return False
-    except Exception:
+    except Exception as exc:
+        log.debug("CDA backend unavailable at load: %s: %s", type(exc).__name__, exc)
         return False
     return True
 

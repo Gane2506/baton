@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -34,7 +35,7 @@ FULL_GATES = {
 }
 
 
-def base_profile(**overrides) -> dict:
+def base_profile(**overrides: Any) -> dict[str, Any]:
     profile = {
         "id": "repo:fast",
         "display_name": "Fast",
@@ -48,7 +49,7 @@ def base_profile(**overrides) -> dict:
     return profile
 
 
-def ship_profile(**overrides) -> dict:
+def ship_profile(**overrides: Any) -> dict[str, Any]:
     profile = base_profile(
         stage_list=[*FULL_STAGES, "SHIPPING"],
         gate_policies={**FULL_GATES, "SHIPPING": "inherit"},

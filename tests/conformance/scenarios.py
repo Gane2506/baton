@@ -18,6 +18,8 @@ Scenarios that vary the fixture record their own reduced label instead.
 
 from __future__ import annotations
 
+from typing import Any
+
 # Canonical work-state order (design section 7.1). Every stage sequence below
 # is a subsequence of this order; SHIPPING appears only when shipping is on.
 CANONICAL_ORDER = (
@@ -36,7 +38,7 @@ CANONICAL_ORDER = (
 # ``gate_parkings`` names the waiting states the run parks in, in order.
 # ``label_output`` is the assurance label text the run page, board row, and
 # PR body must all show for the scenario (design section 10.3).
-SCENARIOS: list[dict[str, object]] = [
+SCENARIOS: list[dict[str, Any]] = [
     {
         "id": "standard",
         "description": "Standard run, no UI work, shipping off: straight through to DONE.",

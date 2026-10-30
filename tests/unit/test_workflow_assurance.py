@@ -37,7 +37,9 @@ PROFILE = {
 }
 
 
-def _label(quality, score_skip=False, mode="standard", plan_gate=True):
+def _label(
+    quality: str, score_skip: bool = False, mode: str = "standard", plan_gate: bool = True
+) -> tuple[str, list[str], str]:
     assurance, absent = compute_assurance(
         quality_level=quality,
         score_skip_human=score_skip,

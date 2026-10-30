@@ -8,15 +8,16 @@ exact, not wall-clock races.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from jev_agent.config import JevConfig
 from jev_agent.core.models import Idea, RunState
-from jev_agent.core.pipeline import build_pipeline
-from jev_agent.core.store import Store
+from jev_agent.core.pipeline import Pipeline, build_pipeline
+from jev_agent.core.store import RunRecord, Store
 from jev_agent.dashboard.views import stage_token_summary
-from jev_agent.workers.fake import FakeStep, FakeWorker
+from jev_agent.workers.fake import FakeStep, FakeWorker, ScriptValue
 from jev_agent.workers.registry import WorkerRegistry
 
 
@@ -33,7 +34,9 @@ class FakeClock:
         self.now += timedelta(seconds=seconds)
 
 
-def _fake_pipeline(fixture_repo: Path, store: Store, script=None):
+def _fake_pipeline(
+    fixture_repo: Path, store: Store, script: Mapping[str, ScriptValue] | None = None
+) -> Pipeline:
     """Fake workers registered under real names: JevConfig validates role
     workers against the known set, so the fakes take the real workers'
     names and the rules dispatcher picks them."""
@@ -44,7 +47,9 @@ def _fake_pipeline(fixture_repo: Path, store: Store, script=None):
     )
 
 
-async def _parked_run(fixture_repo: Path, store: Store, clock: FakeClock):
+async def _parked_run(
+    fixture_repo: Path, store: Store, clock: FakeClock
+) -> tuple[Pipeline, RunRecord]:
     """A run parked at the plan gate: INTAKE, PLANNING, VALIDATING rows
     written, the VALIDATING row still open."""
     pipeline = _fake_pipeline(fixture_repo, store)
@@ -180,7 +185,7 @@ def test_null_tokens_never_displayed_as_zero() -> None:
     reported — the templates render 'unknown', never 0."""
     from jev_agent.core.store.records import StageRecord
 
-    def row(**kwargs) -> StageRecord:
+    def row(**kwargs: int | None) -> StageRecord:
         return StageRecord(
             id=1,
             run_id="r",

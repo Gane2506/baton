@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Any
 
 import pytest
 from scenarios import CANONICAL_ORDER, SCENARIOS
@@ -100,7 +101,7 @@ def test_conformance_skeleton_covers_the_section_17_row() -> None:
 
 
 @pytest.mark.parametrize("scenario", SCENARIOS, ids=[s["id"] for s in SCENARIOS])
-def test_scenario_baseline_is_valid_json_with_required_keys(scenario: dict) -> None:
+def test_scenario_baseline_is_valid_json_with_required_keys(scenario: dict[str, Any]) -> None:
     baseline = json.loads((BASELINE_DIR / f"{scenario['id']}.json").read_text())
     for key in ("scenario", "path", "stage_sequence", "gate_parkings", "outcome", "label_output"):
         assert key in baseline, f"{scenario['id']}: baseline missing {key!r}"
