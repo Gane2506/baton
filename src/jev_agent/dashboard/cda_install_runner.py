@@ -1194,23 +1194,22 @@ class CdaInstallRunner:
                 self._child_pid = None
         code: int | None = None
         try:
-            if timeout is not None and isinstance(proc, subprocess.Popen):
+            if isinstance(proc, subprocess.Popen):
+                # The runner owns the child's lifetime (P2, browser-runner
+                # precedent): communicate() reaps the process; its output
+                # already streams to the log file, so this is equivalent to
+                # wait() here. Injected test doubles only expose wait().
                 try:
-                    proc.wait(timeout=timeout)
+                    proc.communicate(timeout=timeout)
                 except subprocess.TimeoutExpired:
                     proc.terminate()
-                    proc.wait()
+                    proc.communicate()
                 code = proc.returncode
             else:
                 # Test doubles expose wait() only (browser-runner precedent):
                 # its return value is the exit code.
                 waited = proc.wait()
-                if isinstance(proc, subprocess.Popen):
-                    code = proc.returncode
-                elif isinstance(waited, int):
-                    code = waited
-                else:
-                    code = 0
+                code = waited if isinstance(waited, int) else 0
         except Exception as exc:
             log.debug("cda install child wait failed: %s: %s", type(exc).__name__, exc)
             code = None
