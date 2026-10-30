@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import sys
 import time
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -109,7 +110,7 @@ def _decision() -> EnvironmentDecision:
     )
 
 
-def _pip_sequence(results: list[bool]):
+def _pip_sequence(results: list[bool]) -> Callable[..., bool]:
     iterator = iter(results)
 
     def _fake(interpreter: str, *, timeout: float = 10.0) -> bool:
@@ -121,7 +122,7 @@ def _pip_sequence(results: list[bool]):
     return _fake
 
 
-def _always(value: bool):
+def _always(value: bool) -> Callable[..., bool]:
     def _fake(interpreter: str, *, timeout: float = 10.0) -> bool:
         return value
 
