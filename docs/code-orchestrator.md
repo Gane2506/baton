@@ -252,6 +252,55 @@ locking API serializes in-process only, which `_FileLock` documents
 rather than papering over. The lock file lives next to the ledger
 inside `.jev/` and is never committed, like the ledger itself.
 
+## Phase 3: plan critique + hint usage (issue #380)
+
+Phase 2 watched running agents; Phase 3 looks before execution and
+learns whether the advice it gave was any good.
+
+**Pre-flight plan critique.** At VALIDATING, after D2's validator and
+before D3's verdict, the pipeline routes a short plan request (summary
++ task titles, capped at 2000 characters — `route` does not compact)
+and turns the routing grade into critique notes appended to
+`validation.issues` (`src/jev_agent/code_orchestrator/critique.py`,
+`pipeline._critique_plan`). Routing is the only family that assesses a
+plan — difficulty, skill, tier confidence — where code review grades
+diffs that do not exist yet and trace grades agents that are not
+running yet. The critique is advisory only: D3's verdict logic is
+unchanged, and the notes inform D3 and, on revise, the revising planner
+(which already reads `validation.issues`). Below the 0.7 threshold
+there is no critique at all, not a hedged one — the same rule as
+`routing_hint` — and a missing backend means no critique either. When
+the grade is confident, notes come from the model signal (difficulty
+3: consider splitting into smaller tasks) and from structure (no tasks
+at all; tasks with an empty title or description, named as counts).
+Notes are prefixed `CDA plan critique: ` so they read apart from the
+validator's own issues. Critiques are NOT written to the ledger: they
+are not grades, and writing them would pollute the aggregates. Only
+hint usage feeds the ledger in Phase 3.
+
+**Hint-usage tracking.** D4 already records its routing grade; now it
+also records the hint itself. When a hint is given and D4 assigns, an
+offer record (`kind="hint_usage"`, `status="offered"`) lands in the
+ledger with the hint's tier/skill, the assigned effort, and whether the
+assignment followed the hint — `followed` is effort-match only, because
+D4 chooses worker/model/effort, not skill, so skill-following cannot be
+observed at D4. When the gate later grades that task's diff, it resolves
+the task's latest still-open offer with an outcome record
+(`status="outcome"`): `helped` is exactly gate-`accept`. Offers are
+immutable and append-only, so "still open" is replayed from order: an
+offer is open until an outcome written after it closes it. A gate
+without an offer writes nothing extra, and unavailable/error gates
+resolve nothing — helped is meaningless without a grade. Summaries
+(`summarize_hints`, `RatingLedger.hint_summary`,
+`LedgerRatings.hints`) count offers, follows, resolutions, and helps
+overall and per tier/skill, with rates that are None — unknown, not
+zero — when their denominator is zero. Hint records never join the
+agent/tier/skill aggregates (they are not grades; counting them would
+inflate tier `n`); `total` still counts every ledger line, hints
+included, because it counts lines. The dashboard's Recent grades table
+renders hint records generically and correctly (kind, tier, skill,
+status, detail); the aggregate tables stay grade-pure.
+
 ### Roadmap (issue #329)
 
 - **Phase 1 (this):** ledger + rework briefs + dashboard ratings + D4
@@ -261,6 +310,10 @@ inside `.jev/` and is never committed, like the ledger itself.
   its first caller; trace grades feed the same ledger; ledger writes
   are file-locked. A pipeline stage-boundary caller waits on a consumer
   for the decision (see Phase 2, above).
+- **Phase 3 (built, issue #380):** pre-flight plan critique at
+  VALIDATING (advisory notes in `validation.issues`, never ledgered)
+  plus hint-usage tracking (D4 offers, gate outcomes, separate summary;
+  hint records excluded from grade aggregates).
 - **Phase 3:** pre-flight plan critique at VALIDATING, before any code is
   written.
 - **Phase 4:** recalibrate 0.7 once 50+ real grades exist in the ledger.
