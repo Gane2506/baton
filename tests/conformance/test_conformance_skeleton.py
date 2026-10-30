@@ -15,11 +15,10 @@ import json
 from pathlib import Path
 
 import pytest
+from scenarios import CANONICAL_ORDER, SCENARIOS
 
 from jev_agent.core.models import Idea
 from jev_agent.core.store import Store
-
-from scenarios import CANONICAL_ORDER, SCENARIOS
 
 BASELINE_DIR = Path(__file__).parent / "baseline"
 
