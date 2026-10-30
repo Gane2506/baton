@@ -235,7 +235,8 @@ def _validate_gate_policies(data: dict[str, Any], errors: list[str]) -> None:
     for stage, policy in policies.items():
         if stage not in CANONICAL_ORDER:
             errors.append(
-                f"Unknown stage {stage!r} in gate policies. The stages are {_STAGE_LIST_TEXT}."
+                f"Unknown stage {stage!r} in gate policies. The stages are {_STAGE_LIST_TEXT}. "
+                "Remove the unknown stage from the gate policies, or spell it as shown."
             )
             continue
         if stage not in stage_set:
@@ -244,7 +245,12 @@ def _validate_gate_policies(data: dict[str, Any], errors: list[str]) -> None:
                 "Add the stage back, or remove its gate policy."
             )
         if stage == "INTAKE":
-            errors.append("Intake has no waiting state, so it cannot carry a gate policy.")
+            # Phase 5 catalogue audit (design section 7.5): this message
+            # previously stated the reason but no fix — now it states both.
+            errors.append(
+                "Intake has no waiting state, so it cannot carry a gate policy. "
+                "Remove the gate policy for intake."
+            )
         elif not _one_of(policy, GATE_POLICIES):
             errors.append(
                 f"Unknown gate policy {policy!r} for {pretty_stage(stage)}. "

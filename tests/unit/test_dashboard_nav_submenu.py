@@ -47,9 +47,18 @@ def test_nav_items_declare_children_declaratively() -> None:
         ("/chats", "All chats", "get"),
         ("/chats/new", "New chat", "post"),
     ]
+    # Phase 5 (issue #368) adopts the same submenu shape for Workflows, so
+    # /workflows/import is a nav entry instead of direct-URL only; the
+    # nav module documents submenus as adoptable by any section.
+    workflows = next(item for item in NAV if item.href == "/workflows")
+    assert [(c.href, c.label, c.method) for c in workflows.children] == [
+        ("/workflows", "All workflows", "get"),
+        ("/workflows/new", "New workflow", "get"),
+        ("/workflows/import", "Import profile", "get"),
+    ]
     # Every other entry is a plain link: no children, same shape as before.
     for item in NAV:
-        if item is chats:
+        if item is chats or item is workflows:
             continue
         assert item.children == ()
 

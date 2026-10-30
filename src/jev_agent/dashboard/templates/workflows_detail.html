@@ -1,0 +1,93 @@
+{% extends "base.html" %}
+{% block title %}{{ profile.display_name }} · Workflow profile{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div class="titles">
+    <h1>{{ profile.display_name }}</h1>
+    <p class="lede"><span class="mono">{{ profile.id }}</span> · scope {{ profile.scope }}{% if is_preset %} · built-in preset, release {{ profile.release }} — presets are never edited in place{% else %} · version {{ profile.version }}{% endif %}{% if profile.goal %} · goal {{ profile.goal }}{% endif %}{% if profile.priority %} · {{ profile.priority }}{% endif %}</p>
+  </div>
+  <div class="actions">
+    {% if is_preset %}
+    <a class="btn btn-primary" href="/workflows/new?preset={{ profile.id }}">Save as a copy</a>
+    {% else %}
+    <a class="btn btn-primary" href="/workflows/{{ profile.id }}/edit">Edit</a>
+    {% if profile.scope == "repo" %}
+    <a class="btn btn-secondary" href="/workflows/{{ profile.id }}/export">Export JSON</a>
+    {% endif %}
+    {% endif %}
+    <a class="btn btn-secondary" href="/workflows">All workflows</a>
+  </div>
+</div>
+
+<h2 class="section">Stage chain</h2>
+<p>{{ profile.stage_list | join(" → ") }}</p>
+<div class="table-wrap"><table>
+  <thead><tr><th>Stage</th><th>Gate policy</th></tr></thead>
+  <tbody>
+  {% for stage in profile.stage_list %}
+    <tr>
+      <td>{{ stage }}</td>
+      <td>{% if stage == "INTAKE" %}— (no waiting state){% else %}{{ (profile.gate_policies | default({}, true))[stage] | default("inherit", true) }}{% endif %}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table></div>
+
+<h2 class="section">Parameters</h2>
+<div class="table-wrap"><table>
+  <tbody>
+    <tr><th>Designing</th><td>{{ profile.designing | default("when_needed", true) }}</td></tr>
+    {% if profile.max_plan_rounds is defined %}<tr><th>Max plan rounds</th><td>{{ profile.max_plan_rounds }}</td></tr>{% endif %}
+    {% if profile.max_fix_rounds is defined %}<tr><th>Max fix rounds</th><td>{{ profile.max_fix_rounds }}</td></tr>{% endif %}
+    {% if profile.score_max_retries is defined %}<tr><th>Score max retries</th><td>{{ profile.score_max_retries }}</td></tr>{% endif %}
+    {% if profile.max_task_attempts is defined %}<tr><th>Max task attempts</th><td>{{ profile.max_task_attempts }}</td></tr>{% endif %}
+    {% if profile.quality_level is defined %}<tr><th>Quality level</th><td>{{ profile.quality_level }}</td></tr>{% endif %}
+    {% if profile.score_threshold is defined %}<tr><th>Score threshold</th><td>{{ profile.score_threshold }}</td></tr>{% endif %}
+    {% if profile.score_skip_human is defined %}<tr><th>Skip human score gate</th><td>{{ profile.score_skip_human }}</td></tr>{% endif %}
+    {% if profile.planner_policy is defined %}<tr><th>Planner policy</th><td>{{ profile.planner_policy }}</td></tr>{% endif %}
+    {% if profile.cache_mode is defined %}<tr><th>Cache mode</th><td>{{ profile.cache_mode }}</td></tr>{% endif %}
+    {% if profile.cda_grading is defined %}<tr><th>CDA grading</th><td>{{ profile.cda_grading }}</td></tr>{% endif %}
+    {% if profile.ship_enabled is defined %}<tr><th>Shipping enabled</th><td>{{ profile.ship_enabled }}</td></tr>{% endif %}
+    {% if profile.after_approval is defined %}<tr><th>After approval</th><td>{{ profile.after_approval }}</td></tr>{% endif %}
+    {% if profile.learning_profile is defined %}<tr><th>Learning profile</th><td>{{ profile.learning_profile }}</td></tr>{% endif %}
+    {% if profile.goal is defined %}<tr><th>Goal</th><td>{{ profile.goal }}</td></tr>{% endif %}
+    {% if profile.priority is defined %}<tr><th>Priority</th><td>{{ profile.priority }}</td></tr>{% endif %}
+    {% if profile.role_models is defined %}<tr><th>Role models</th><td>{{ profile.role_models }}</td></tr>{% endif %}
+    {% if profile.origin is defined %}<tr><th>Origin</th><td>{{ profile.origin }}</td></tr>{% endif %}
+  </tbody>
+</table></div>
+
+{% if not is_preset %}
+<h2 class="section">Version history</h2>
+{% if versions %}
+<p class="hint">Editing creates a new version; a version is never modified afterwards. Runs keep the version they were created with.</p>
+<ul>
+  {% for version in versions %}
+  <li>Version {{ version }}{% if version == profile.version %} (current){% endif %}</li>
+  {% endfor %}
+</ul>
+{% else %}
+<div class="empty"><div class="title">No versions recorded</div></div>
+{% endif %}
+
+<h2 class="section">Runs that used this profile</h2>
+{% if runs %}
+<div class="table-wrap"><table>
+  <thead><tr><th>Run</th><th class="num">Profile version</th><th>Assurance</th></tr></thead>
+  <tbody>
+  {% for run in runs %}
+    <tr>
+      <td><a href="/runs/{{ run.id }}">{{ run.id }}</a></td>
+      <td class="num">{{ run.workflow_profile_version }}</td>
+      <td>{{ run.assurance | default("—", true) }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table></div>
+{% else %}
+<div class="empty"><div class="title">No runs yet</div><p>Pick this profile on the run-creation form; the run then snapshots this version.</p></div>
+{% endif %}
+{% endif %}
+
+<p class="hint">Suggestion records for this profile land in phase 6; this page deliberately has no suggestion request or approve/discard action yet.</p>
+{% endblock %}

@@ -172,10 +172,19 @@ def create_app(
         Route("/chats/{chat_id}/work", dash.chat_work),
         Route("/chats/{chat_id}/work/{tab}", dash.chat_work_tab),
         Route("/spend", dash.spend_page),
-        # Workflow profiles, phase 2 slice (issue #368): export/import only.
-        # The /workflows list and editor pages land in phase 5.
+        # Workflow profiles (issue #368): phase 2 export/import plus the
+        # phase 5 list, editor and detail pages. Specific paths come before
+        # the {profile_id} captures so "new"/"import"/"validate" are never
+        # read as a profile id. Suggestion routes are phase 6, not here.
+        Route("/workflows", dash.workflows_list_page),
+        Route("/workflows/new", dash.workflows_new_page),
+        Route("/workflows/new", dash.workflows_create, methods=["POST"]),
+        Route("/workflows/validate", dash.workflows_validate, methods=["POST"]),
         Route("/workflows/import", dash.workflows_import_page),
         Route("/workflows/import", dash.workflows_import, methods=["POST"]),
+        Route("/workflows/{profile_id}", dash.workflows_detail_page),
+        Route("/workflows/{profile_id}/edit", dash.workflows_edit_page),
+        Route("/workflows/{profile_id}/edit", dash.workflows_save_edit, methods=["POST"]),
         Route("/workflows/{profile_id}/export", dash.workflows_export),
         Route("/kpis", dash.kpis_page),
         Route("/kpis/sync", dash.kpis_sync, methods=["POST"]),

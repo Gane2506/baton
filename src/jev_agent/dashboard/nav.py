@@ -67,6 +67,15 @@ class NavItem:
 NAV: tuple[NavItem, ...] = (
     NavItem("/", "Board"),
     NavItem("/queue", "Queue"),
+    NavItem(
+        "/workflows",
+        "Workflows",
+        children=(
+            NavChild("/workflows", "All workflows"),
+            NavChild("/workflows/new", "New workflow"),
+            NavChild("/workflows/import", "Import profile"),
+        ),
+    ),
     NavItem("/artifacts", "Artifacts"),
     NavItem("/agents", "Agents"),
     NavItem("/fleet", "Fleet"),
