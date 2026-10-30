@@ -496,6 +496,54 @@ def test_runner_single_flight(tmp_path: Path) -> None:
     assert status.outcome is not None and status.outcome.name == "acme"
 
 
+def test_shutdown_waits_for_tmpdir_cleanup(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """shutdown() must not return before the tmpdir cleanup finishes.
+
+    Regression for the old `finally` ordering (thread cleared before
+    rmtree): shutdown joins only while a thread is recorded, so on the
+    old ordering it returned immediately while rmtree was still running.
+    The fake rmtree blocks inside cleanup; shutdown must still be
+    waiting at that point, and the tmpdir must be gone only after the
+    block is released.
+    """
+    import threading
+
+    tmpdir = tmp_path / "upload-tmp"
+    tmpdir.mkdir()
+    (tmpdir / "shot.png").write_bytes(_png_bytes())
+
+    entered = threading.Event()
+    release = threading.Event()
+    real_rmtree = shutil.rmtree
+
+    def _slow_rmtree(path: object, ignore_errors: bool = False, **kwargs: object) -> None:
+        if Path(str(path)) == tmpdir:
+            entered.set()
+            assert release.wait(timeout=10)
+        real_rmtree(path, ignore_errors=ignore_errors, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr("shutil.rmtree", _slow_rmtree)
+
+    runner = ReverseRunner(tmp_path, executor=_ok_executor)
+    runner.start(url=None, screenshots=(), name="acme", tmpdir=tmpdir, target="shot.png")
+    assert entered.wait(timeout=10), "worker never reached tmpdir cleanup"
+
+    done = threading.Event()
+
+    def _shutdown() -> None:
+        runner.shutdown(timeout=10)
+        done.set()
+
+    waiter = threading.Thread(target=_shutdown)
+    waiter.start()
+    assert not done.wait(timeout=1), "shutdown returned while cleanup was still blocked"
+    release.set()
+    waiter.join(timeout=10)
+    assert done.is_set()
+    assert not tmpdir.exists()
+    assert runner.status().state == "done"
+
+
 def test_runner_records_failure_and_cleans_tmpdir(tmp_path: Path) -> None:
     tmpdir = tmp_path / "upload-tmp"
     tmpdir.mkdir()

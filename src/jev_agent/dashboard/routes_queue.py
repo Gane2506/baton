@@ -174,14 +174,20 @@ class QueueRoutes(DashboardCore):
         parser's message (it already lists the valid formats) instead of a 500.
 
         Learning/profile/quality/ship options stay CLI-only for recurring
-        tasks; this form covers brief, schedule, priority, plan-only, and
-        (phase 4, issue #368) the workflow profile. The profile reference
-        is stored unpinned: the scheduler pins it at each enqueue (the
-        existing queue pin-at-queue-time timing), so every occurrence runs
-        the version current at that enqueue, not the version current when
-        the task was made. A reference that does not resolve now (an
-        unknown preset, a missing stored profile) refuses at add time
-        instead of queueing a task that can never run.
+        tasks; this form covers brief, schedule, priority, plan-only and the
+        workflow profile. Unlike the one-shot queue form, which pins at queue
+        time and stores the pinned reference, a recurring task stores the
+        raw reference: the scheduler pins it at each creation (see
+        `Scheduler`, "Recurring snapshot timing"), so each scheduled run
+        executes the version current at its enqueue, not the version from
+        when the task was created. The check here only proves the
+        reference resolves — an unresolvable reference refuses instead of
+        queueing a task that can never start. The safety floor itself is
+        enforced at each run creation by the single resolver
+        (`create_run`), so a floor-violating profile is refused there,
+        never silently applied, and reductions travel with the assurance
+        label. Phase 4: preset references pass through unchanged (pinned
+        by release, not version), and `default` means no profile.
         """
 
         def add(repo: views.Repo, form: FormData) -> str:

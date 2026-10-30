@@ -79,6 +79,10 @@ class _FakeHarness:
             budget=SimpleNamespace(max_plan_rounds=3),
             roles=SimpleNamespace(validator=SimpleNamespace(prefer_different_vendor_than=None)),
             plan_approval_required=False,
+            # Phase 3 (issue #380): `_validate` now critiques the plan
+            # when the code orchestrator is enabled; these tests run
+            # with it off (the default), so the critique passes through.
+            code_orchestrator=SimpleNamespace(enabled=False),
         )
         self.decide_calls = 0
         self.captured_prompt: tuple[str, dict[str, Any]] | None = None

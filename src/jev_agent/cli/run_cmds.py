@@ -101,8 +101,8 @@ WorkflowProfileOption = Annotated[
         metavar="REF",
         help="Workflow profile for the run: `preset:efficiency`, `preset:accuracy`, "
         "a stored `repo:slug` / `user:slug` profile, or `default` for no profile "
-        "(today's pipeline). Resolved through the same run-creation funnel as "
-        "the dashboard picker; a reference that cannot resolve refuses "
+        "(today's pipeline). Resolved by the single resolver at run creation: "
+        "an unresolvable reference or a safety-floor violation refuses the run "
         "instead of falling back.",
     ),
 ]

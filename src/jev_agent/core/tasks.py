@@ -27,6 +27,7 @@ from jev_agent.code_orchestrator import (
     RatingLedger,
     RoutingGrade,
     enrich_hint,
+    hint_offer_record,
     ledger_path,
     routing_hint,
     routing_record,
@@ -124,6 +125,7 @@ class TaskRunner:
         options = self.h.require_options("coder")
         run = self.h.store.get_run(run_id)
         req = d4_task(task.card, options, run.spend_usd, self.h.budget.per_run_usd)
+        offer_hint: dict[str, str] | None = None
         if self.h.config.code_orchestrator.enabled:
             # The code orchestrator routes the coding task; Jev still decides
             # at D4, but with this hint in the request state instead of
@@ -153,6 +155,10 @@ class TaskRunner:
                         # still gated at 0.7, never an override.
                         hint = await self._ledger_enriched_hint(hint)
                         req.state["code_routing"] = hint
+                        # Phase 3 (issue #380): keep the hint so the
+                        # offer can be ledgered after the assignment,
+                        # with whether D4 followed it.
+                        offer_hint = hint
                     await self._record_routing(run_id, task, grade, bool(hint))
                 else:
                     # A missing backend at D4 records as unavailable, never
@@ -165,6 +171,12 @@ class TaskRunner:
         self.h.store.set_task_assignment(
             run_id, task.id, TaskState.DISPATCHED, a.worker, a.model, a.effort
         )
+        if offer_hint is not None:
+            # Phase 3 (issue #380): the hint offer is ledgered with
+            # whether D4's assignment followed it, so the gate can later
+            # judge whether it helped. Best-effort, like every D4 ledger
+            # write: a failed write never blocks the assignment.
+            await self._record_hint_offer(run_id, task, offer_hint, a.effort or "")
 
     def _ledger(self) -> RatingLedger:
         """The repo's rating ledger (issue #329, Phase 1)."""
@@ -218,6 +230,34 @@ class TaskRunner:
                     detail="Coding Decision Agent backend not installed",
                     run_id=run_id,
                     task_id=task.id,
+                    source="d4",
+                ),
+            )
+
+    async def _record_hint_offer(
+        self,
+        run_id: str,
+        task: TaskRecord,
+        hint: dict[str, str],
+        assigned_effort: str,
+    ) -> None:
+        """Ledger a D4 hint offer (issue #380, Phase 3).
+
+        `followed` is effort-match only: D4 chooses worker/model/effort,
+        not skill, so skill-following cannot be observed at D4. The
+        offer's `hint_helped` stays None until the gate grades the run
+        — unknown, not failure.
+        """
+        with suppress(Exception):
+            await asyncio.to_thread(
+                self._ledger().record,
+                hint_offer_record(
+                    run_id=run_id,
+                    task_id=task.id,
+                    tier=hint.get("model_tier", ""),
+                    skill=hint.get("skill", ""),
+                    suggested_effort=hint.get("suggested_effort", ""),
+                    assigned_effort=assigned_effort,
                     source="d4",
                 ),
             )

@@ -2,14 +2,20 @@
 
 `grade` scores a diff the way the quality gate does (same gate, same
 threshold), `route` shows which model tier and skill a coding task needs,
-`trace` grades an agent trace through the trace gate, and `status` reports
-whether the model is installed and the feature enabled.
+`trace` grades an agent trace through the trace gate, `supervise` returns
+the supervision decision for a running trace (`continue`/`observe`/
+`human_review`/`stop`), and `status` reports whether the model is
+installed and the feature enabled.
 All three refuse clearly when the model package is missing instead of
 pretending to grade: a grade that did not run must never look like a grade.
+`supervise` is the exception that proves it: a blind supervisor observes
+and says so, rather than failing — observing is the honest answer when
+no grade ran.
 """
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from typing import Annotated
 
@@ -24,6 +30,7 @@ from jev_agent.code_orchestrator import (
     CodeOrchestratorError,
     CodeOrchestratorUnavailable,
     RatingLedger,
+    TraceSupervisor,
     code_review_record,
     gate_code_review,
     gate_trace,
@@ -251,6 +258,85 @@ def trace(
             table.add_row(f"confidence[{question}]", f"{confidence:.2f}")
         table.add_row("gate", outcome.decision)
         table.add_row("reason", outcome.reason)
+        console.print(table)
+
+
+@code_app.command("supervise")
+def supervise(
+    trace_file: Annotated[
+        Path | None,
+        typer.Option("--trace-file", help="File holding the agent trace to supervise."),
+    ] = None,
+    tool_call_file: Annotated[
+        Path | None,
+        typer.Option(
+            "--tool-call-file",
+            help="File holding a tool call to sample-supervise (observed, never gated).",
+        ),
+    ] = None,
+    stage: Annotated[
+        str,
+        typer.Option(
+            "--stage", help="Stage-boundary name, e.g. EXECUTING, recorded with the grade."
+        ),
+    ] = "",
+    repo: RepoOption = Path("."),
+) -> None:
+    """Supervise a running agent trace: grade it and show the supervision decision.
+
+    Exactly one of --trace-file or --tool-call-file is required. A trace
+    supervision returns continue / observe / human_review / stop through
+    the trace gate; a sampled tool call is always observed, never gated
+    (the tool-call family documents no closed label set to gate on).
+    Unlike `trace`, a missing backend does not fail the command: the
+    supervisor observes blind and says so, and the unavailable grade is
+    still recorded to the ledger with no quality fields.
+    """
+    if (trace_file is None) == (tool_call_file is None):
+        raise fail("give exactly one of --trace-file or --tool-call-file")
+    if trace_file is not None:
+        text = trace_file.read_text(encoding="utf-8")
+        supervised = "trace"
+    else:
+        assert tool_call_file is not None
+        text = tool_call_file.read_text(encoding="utf-8")
+        supervised = "tool_call"
+    with repo_context(repo, create=False) as ctx:
+        settings = ctx.config.code_orchestrator
+        orch = _orchestrator(ctx.config)
+        supervisor = TraceSupervisor(
+            orch,
+            ledger=RatingLedger(ledger_path_for_repo(ctx.root)),
+            threshold=settings.confidence_threshold,
+        )
+        if supervised == "trace":
+            decision = asyncio.run(
+                supervisor.supervise_trace_async(text, stage=stage, source="cli")
+            )
+        else:
+            decision = asyncio.run(
+                supervisor.supervise_tool_call_async(text, stage=stage, source="cli")
+            )
+        table = Table(title="Supervision decision")
+        table.add_column("Field")
+        table.add_column("Value")
+        table.add_row("action", decision.action)
+        table.add_row("reason", decision.reason)
+        if decision.gate_decision:
+            table.add_row("gate", decision.gate_decision)
+        if decision.confidence:
+            table.add_row("confidence", f"{decision.confidence:.2f}")
+        if decision.trace_action:
+            table.add_row("trace_action", decision.trace_action)
+        if decision.risk is not None:
+            table.add_row("risk", f"{decision.risk}/3")
+        if decision.urgency is not None:
+            table.add_row("urgency", f"{decision.urgency}/3")
+        if decision.tool_verdict:
+            table.add_row("tool_verdict", decision.tool_verdict)
+        if decision.stage:
+            table.add_row("stage", decision.stage)
+        table.add_row("ledgered", "yes" if decision.recorded else "no")
         console.print(table)
 
 
