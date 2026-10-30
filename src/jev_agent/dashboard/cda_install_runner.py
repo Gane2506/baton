@@ -64,9 +64,12 @@ __all__ = [
     "CdaInstallStatus",
     "EnvironmentDecision",
     "ProbeOutcome",
+    "bootstrap_guide_command",
     "build_pip_steps",
     "classify_failure",
     "decide_environment",
+    "ensurepip_argv",
+    "pip_available",
     "probe_argv",
     "redact_text",
     "temp_space_check",
@@ -201,6 +204,34 @@ def _pip(interpreter: str) -> list[str]:
     return [interpreter, "-m", "pip"]
 
 
+def ensurepip_argv(interpreter: str) -> list[str]:
+    """Bootstrap pip into an environment that lacks it (issue #372).
+
+    A stdlib-only argv like every other sequence here: interpreter plus a
+    module, never a package, flag or index URL from a request.
+    """
+    return [interpreter, "-m", "ensurepip"]
+
+
+def pip_available(interpreter: str, *, timeout: float = 10.0) -> bool:
+    """True when `interpreter -m pip --version` exits 0 (issue #372).
+
+    A stock uv-tool environment has no pip module at all, so this is the
+    check preflight was missing: without it the job sailed through preflight
+    and died 46 ms into the first pip step.
+    """
+    try:
+        proc = subprocess.run(
+            [interpreter, "-m", "pip", "--version"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=timeout,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return proc.returncode == 0
+
+
 def venv_argv(interpreter: str, venv_path: Path) -> list[str]:
     """Branch-2 venv creation (reserved: see the module docstring)."""
     return [interpreter, "-m", "venv", str(venv_path)]
@@ -326,6 +357,14 @@ _MARKER_TABLE: tuple[tuple[str, str, str, bool, bool], ...] = (
         True,
         False,
     ),
+    (
+        "No module named pip",
+        "pip-missing",
+        "pip is missing from this Python environment. "
+        "Retry to bootstrap it, or use the guide command.",
+        True,
+        False,
+    ),
 )
 
 
@@ -421,6 +460,14 @@ def _guide_command(interpreter: str, torch_path: str) -> str:
             f"{interpreter} -m pip install {_LAYA_SPEC!r}"
         )
     return f"{interpreter} -m pip install {_LAYA_SPEC!r}"
+
+
+def bootstrap_guide_command(decision: EnvironmentDecision) -> str:
+    """The terminal fallback when pip cannot be bootstrapped (issue #372):
+    ensurepip first, then the normal pip install commands for the effective
+    interpreter. The guide block renders this verbatim."""
+    interpreter = _venv_interpreter(decision)
+    return f"{interpreter} -m ensurepip\n{_guide_command(interpreter, decision.torch_path)}"
 
 
 def _persistence_text(docker: bool, branch: int) -> str:
@@ -581,6 +628,7 @@ class CdaInstallRunner:
         self._events: list[dict[str, Any]] = []
         self._record_path: Path | None = None
         self._log_path: Path | None = None
+        self._pip_bootstrap_needed = False
         self._child_pid: int | None = None
         self._job_id = ""
         self._stop_requested = False
@@ -973,6 +1021,28 @@ class CdaInstallRunner:
                 klass="permission",
             )
 
+        # pip presence (issue #372): a stock uv-tool environment has no pip
+        # module, and without this check the job passed preflight and died
+        # 46 ms into the first pip step. A missing pip is NOT a refusal:
+        # the watcher bootstraps it with ensurepip first (browser-first),
+        # and only falls to the guide when bootstrapping fails. Branch 2
+        # is exempt: its venv does not exist yet at preflight time, and
+        # venv creation is what provides its pip.
+        self._pip_bootstrap_needed = False
+        if decision.branch == 1:
+            pip_interpreter = _venv_interpreter(decision)
+            pip_ok = pip_available(pip_interpreter)
+            self._pip_bootstrap_needed = not pip_ok
+            results.append(
+                (
+                    "pip available",
+                    pip_ok,
+                    pip_interpreter
+                    if pip_ok
+                    else f"{pip_interpreter} — pip missing, will bootstrap with ensurepip",
+                )
+            )
+
         # Disk: target disk and temp directory, against the §6.1 thresholds.
         if kind != "uninstall":
             need = _CPU_DISK_BYTES if decision.torch_path == "cpu" else _DEFAULT_DISK_BYTES
@@ -1241,6 +1311,48 @@ class CdaInstallRunner:
                 )
         return None
 
+    def _bootstrap_pip_if_needed(
+        self, interpreter: str, decision: EnvironmentDecision
+    ) -> tuple[tuple[str, str, bool, bool] | None, int | None]:
+        """Run ensurepip first when preflight found no pip (issue #372).
+
+        Returns (failure, exit_code): failure None when pip was already
+        present or bootstrapping succeeded. A bootstrap failure is
+        non-retryable from the browser (guide=True) with the ensurepip-first
+        guide command; a stop/shutdown mid-bootstrap keeps that state
+        instead of becoming a failure. On success the preflight pip row is
+        corrected to pass, so the running panel stops reporting a failure
+        the job already fixed.
+        """
+        if not self._pip_bootstrap_needed:
+            return None, None
+        self._record_event("phase", ensurepip_argv(interpreter), "bootstrapping pip")
+        code, _tail = self._run_step(ensurepip_argv(interpreter))
+        with self._guard:
+            running = self._state == "running"
+        if not running:
+            return None, code
+        if code == 0 and pip_available(interpreter):
+            with self._guard:
+                self._preflight_results = [
+                    (name, True, interpreter) if name == "pip available" else (name, passed, detail)
+                    for name, passed, detail in self._preflight_results
+                ]
+            self._write_record()
+            return None, code
+        with self._guard:
+            self._guide_command = bootstrap_guide_command(decision)
+        return (
+            (
+                "pip-bootstrap",
+                "pip is missing from this Python environment and could not be "
+                "installed automatically. Run the command below, then retry.",
+                False,
+                True,
+            ),
+            code,
+        )
+
     def _watch(self, job: _Job) -> None:
         """Phased execution (§6.3): installing → verifying → warming up.
         Named phases only, never an invented percentage."""
@@ -1251,23 +1363,30 @@ class CdaInstallRunner:
         try:
             if job.kind in ("install", "repair"):
                 self._set_phase("installing")
-                steps = build_pip_steps(decision, repair=job.kind == "repair")
-                for argv in steps:
-                    # A stop/shutdown between steps must reach the finish
-                    # block below (cap, record, claim release) — never return
-                    # early out of the watcher.
-                    with self._guard:
-                        if self._state != "running":
+                bootstrap_failure, bootstrap_code = self._bootstrap_pip_if_needed(
+                    interpreter, decision
+                )
+                if bootstrap_failure is not None:
+                    failure = bootstrap_failure
+                    exit_code = bootstrap_code
+                else:
+                    steps = build_pip_steps(decision, repair=job.kind == "repair")
+                    for argv in steps:
+                        # A stop/shutdown between steps must reach the finish
+                        # block below (cap, record, claim release) — never return
+                        # early out of the watcher.
+                        with self._guard:
+                            if self._state != "running":
+                                break
+                        self._record_event("phase", argv, "installing")
+                        code, tail = self._run_step(argv)
+                        exit_code = code
+                        with self._guard:
+                            if self._state != "running":
+                                break
+                        if code != 0:
+                            failure = classify_failure(tail, code, tmpdir=str(self._tmpdir()))
                             break
-                    self._record_event("phase", argv, "installing")
-                    code, tail = self._run_step(argv)
-                    exit_code = code
-                    with self._guard:
-                        if self._state != "running":
-                            break
-                    if code != 0:
-                        failure = classify_failure(tail, code, tmpdir=str(self._tmpdir()))
-                        break
                 with self._guard:
                     still_running = self._state == "running"
                 if failure is None and still_running:
@@ -1312,26 +1431,33 @@ class CdaInstallRunner:
                             self._probe_by_model_set(job.model_id, warmed_probe)
             elif job.kind == "uninstall":
                 self._set_phase("installing")
-                code, tail = self._run_step(uninstall_argv(interpreter))
-                exit_code = code
-                with self._guard:
-                    still_running = self._state == "running"
-                if not still_running:
-                    pass  # stopped/shut down mid-uninstall: keep that state
-                elif code != 0:
-                    failure = classify_failure(tail, code, tmpdir=str(self._tmpdir()))
+                bootstrap_failure, bootstrap_code = self._bootstrap_pip_if_needed(
+                    interpreter, decision
+                )
+                if bootstrap_failure is not None:
+                    failure = bootstrap_failure
+                    exit_code = bootstrap_code
                 else:
+                    code, tail = self._run_step(uninstall_argv(interpreter))
+                    exit_code = code
                     with self._guard:
-                        self._probe_by_model.pop(job.model_id, None)
-                        if self._probe is not None and self._probe.model_id == job.model_id:
-                            self._probe = ProbeOutcome(
-                                laya_version=self._probe.laya_version,
-                                torch_version=self._probe.torch_version,
-                                torch_build=self._probe.torch_build,
-                                constructible=False,
-                                warmed=False,
-                                model_id=job.model_id,
-                            )
+                        still_running = self._state == "running"
+                    if not still_running:
+                        pass  # stopped/shut down mid-uninstall: keep that state
+                    elif code != 0:
+                        failure = classify_failure(tail, code, tmpdir=str(self._tmpdir()))
+                    else:
+                        with self._guard:
+                            self._probe_by_model.pop(job.model_id, None)
+                            if self._probe is not None and self._probe.model_id == job.model_id:
+                                self._probe = ProbeOutcome(
+                                    laya_version=self._probe.laya_version,
+                                    torch_version=self._probe.torch_version,
+                                    torch_build=self._probe.torch_build,
+                                    constructible=False,
+                                    warmed=False,
+                                    model_id=job.model_id,
+                                )
             elif job.kind == "verify":
                 self._set_phase("verifying")
                 probe = self._run_probe(job.model_id, interpreter)
