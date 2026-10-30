@@ -140,6 +140,15 @@ def home(tmp_path: Path) -> Path:
     return tmp_path / "home"
 
 
+@pytest.fixture(autouse=True)
+def _pip_present(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Every test in this file premises a working environment (like the
+    # _url_reachable stub): pip present. Tests construct runners directly
+    # as well as through the fixture below, so the stub is file-wide. The
+    # pip-missing path is covered by test_cda_install_pip_bootstrap.py.
+    monkeypatch.setattr(runner_module, "pip_available", lambda interpreter, *, timeout=10.0: True)
+
+
 @pytest.fixture
 def runner(
     tmp_path: Path, home: Path, monkeypatch: pytest.MonkeyPatch

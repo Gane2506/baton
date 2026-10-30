@@ -149,6 +149,9 @@ def client(
 ) -> Iterator[TestClient]:
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setattr(install_module, "_url_reachable", lambda url: True)
+    # Same premise as the runner tests: a working environment, pip present.
+    # The pip-missing path is covered by test_cda_install_pip_bootstrap.py.
+    monkeypatch.setattr(install_module, "pip_available", lambda interpreter, *, timeout=10.0: True)
     app = create_app(
         DashboardSettings(root=fixture_repo, allowed_hosts=frozenset({"testserver"})),
     )
