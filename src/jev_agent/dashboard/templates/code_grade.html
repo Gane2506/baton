@@ -52,11 +52,15 @@
   background — no terminal needed. {{ install_decision.persistence }} Anyone on this
   machine can install the backend. Nothing here guesses a grade while the model is missing.</p>
   {% endif %}
+  {# Issue #377: .flash is display:flex, so a bare sentence becomes separate
+     flex items — the link and its trailing period each dangle on their own.
+     One span keeps the sentence in normal inline flow, and nowrap keeps the
+     short link text together, so the link and its period never dangle. #}
   {% if install.state == "running" %}
-  <p class="flash" role="status">A backend {{ install.kind }} is {{ install.phase or "running" }} — <a href="/code-grade/install">watch its progress</a>.
-  You can leave this page; the result waits on the install status page.</p>
+  <p class="flash" role="status"><span>A backend {{ install.kind }} is {{ install.phase or "running" }} — <a class="nowrap" href="/code-grade/install">watch its progress</a>.
+  You can leave this page; the result waits on the install status page.</span></p>
   {% elif install.state in ("done", "failed", "stopped", "interrupted") and install.kind %}
-  <p class="flash" role="status">The last backend {{ install.kind }} {{ install.state }}{% if install.message %}: {{ install.message }}{% endif %} — <a href="/code-grade/install">see the result</a>.</p>
+  <p class="flash" role="status"><span>The last backend {{ install.kind }} {{ install.state }}{% if install.message %}: {{ install.message }}{% endif %} — <a class="nowrap" href="/code-grade/install">see the result</a>.</span></p>
   {% endif %}
   {% if show_verify or show_repair or show_uninstall %}
   {# Issue #375: these actions are separate POST forms, and bare consecutive
@@ -93,10 +97,10 @@
   </div>
   {% endif %}
   {% if job.state == "running" %}
-  <p class="flash" role="status">A {{ job.kind }} is running — <a href="/code-grade/status">watch its progress</a>.
-  You can leave this page; the result waits on the status page.</p>
+  <p class="flash" role="status"><span>A {{ job.kind }} is running — <a class="nowrap" href="/code-grade/status">watch its progress</a>.
+  You can leave this page; the result waits on the status page.</span></p>
   {% elif job.state in ("done", "failed", "cancelled") %}
-  <p class="flash" role="status">The last {{ job.kind }} {{ job.state }} — <a href="/code-grade/status">see the result</a>.</p>
+  <p class="flash" role="status"><span>The last {{ job.kind }} {{ job.state }} — <a class="nowrap" href="/code-grade/status">see the result</a>.</span></p>
   {% endif %}
 </section>
 

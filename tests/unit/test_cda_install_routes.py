@@ -510,3 +510,28 @@ def test_retired_ratings_empty_state_links_to_code_grade(
     assert response.status_code == 200
     assert "jev-agent[code-orchestrator]" not in response.text
     assert "No grades recorded yet" in response.text
+
+
+# ---- flash link wrap (issue #377) -------------------------------------------------
+
+
+def test_done_install_flash_keeps_link_and_period_together(
+    client: TestClient, fixture_repo: Path, tmp_path: Path
+) -> None:
+    """Issue #377: .flash is display:flex, so a bare sentence became separate
+    flex items and the trailing period dangled on its own at 390px. The
+    sentence now lives in one span and the link is nowrap, so the link text
+    and its period stay together on both pages that render the flash."""
+    spawn = _FakeSpawn()
+    runner = _inject_runner(client, fixture_repo, tmp_path / "home", spawn)
+    response = _post(client, "/code-grade/install/start", {})
+    assert response.status_code == 303
+    assert _wait_state(runner, {"done"}) == "done"
+    for url in ("/code-grade", "/code-grade/status"):
+        page = client.get(url)
+        assert page.status_code == 200, url
+        assert (
+            '<a class="nowrap" href="/code-grade/install">see the result</a>.</span>' in page.text
+        ), url
+        # The old broken shape: period outside any span, its own flex item.
+        assert "see the result</a>.</p>" not in page.text, url
