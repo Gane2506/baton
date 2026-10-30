@@ -1813,6 +1813,7 @@ def test_no_handler_is_defined_in_two_route_mixins() -> None:
     from jev_agent.dashboard.routes_queue import QueueRoutes
     from jev_agent.dashboard.routes_settings import SettingsRoutes
     from jev_agent.dashboard.routes_studio import StudioRoutes
+    from jev_agent.dashboard.routes_workflows import WorkflowRoutes
 
     mixins = [
         BoardRoutes,
@@ -1825,6 +1826,7 @@ def test_no_handler_is_defined_in_two_route_mixins() -> None:
         SettingsRoutes,
         PreviewRoutes,
         CodeRoutes,
+        WorkflowRoutes,
     ]
     assert list(Dashboard.__mro__[1:]) == [
         *mixins,

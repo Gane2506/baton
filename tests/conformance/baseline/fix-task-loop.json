@@ -1,0 +1,25 @@
+{
+  "scenario": "fix-task-loop",
+  "description": "D6 adds one fix task for failing integration tests, then ships.",
+  "path": "legacy",
+  "fixture": {
+    "quality_level": "medium",
+    "require_plan_approval": true,
+    "ship_enabled": false,
+    "autonomy_mode": "standard"
+  },
+  "stage_sequence": [
+    "INTAKE",
+    "PLANNING",
+    "VALIDATING",
+    "EXECUTING",
+    "INTEGRATING",
+    "EXECUTING",
+    "INTEGRATING"
+  ],
+  "gate_parkings": [
+    "AWAITING_APPROVAL"
+  ],
+  "outcome": "DONE",
+  "label_output": "Full checks"
+}

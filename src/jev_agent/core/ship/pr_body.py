@@ -5,6 +5,7 @@ from __future__ import annotations
 from jev_agent.core.kpi import RunKpis
 from jev_agent.core.ship.urls import FOOTER
 from jev_agent.core.store import Store
+from jev_agent.core.workflow_profiles import assurance_label_text
 from jev_agent.quality.report import cell, latest_per_gate
 from jev_agent.roles.schemas import SEVERITIES
 from jev_agent.runlog.redact import redact
@@ -100,6 +101,18 @@ def render_pr_body(store: Store, run_id: str, kpis: RunKpis) -> str:
             f"- Non-blocking findings: {sum(nonblocking.values())} ({found})",
             "",
             f"The full review stays in the local repo: `jev quality show {run_id}`.",
+        ]
+    # Assurance label (issue #368, design 10.3): the same text as the run
+    # page and the board row, written by this one writer for both the
+    # dashboard and CLI ship paths — including a hand-shipped reduced run,
+    # whose label travels and whose ship proceeds with no extra step.
+    if run.assurance is not None:
+        lines += [
+            "",
+            "## Assurance",
+            "",
+            assurance_label_text(run.assurance, run.assurance_absent),
+            "",
         ]
     lines += ["", "## KPIs", "", "| KPI | Value |", "| --- | --- |"]
     lines += [f"| {cell(name)} | {cell(value)} |" for name, value in kpi_rows(kpis)]

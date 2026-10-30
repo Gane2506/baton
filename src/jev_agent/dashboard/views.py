@@ -91,9 +91,11 @@ from jev_agent.core.store import (
     RecurringTask,
     RunRecord,
     ShippedPrRecord,
+    StageRecord,
     Store,
     TaskRecord,
 )
+from jev_agent.core.workflow_profiles import assurance_label_text
 from jev_agent.core.workspace import result_branch
 from jev_agent.dashboard.render import render_markdown
 from jev_agent.quality.report import latest_per_gate
@@ -156,6 +158,9 @@ class BoardCard:
     run_id: str | None  # None for queue items
     quality: str  # short gate status ("basic: passed"), or ""
     item_id: int | None = None  # the queue item's id, for the board's Remove button
+    # The assurance label for a reduced run (issue #368, design 10.3); "" for
+    # full runs and for runs that predate assurance (no label is shown then).
+    assurance_label: str = ""
 
 
 def _latest_by_task(reports: list[QualityReportRecord]) -> dict[str, QualityReportRecord]:
@@ -196,7 +201,17 @@ def _board_card(
     run = runs.get(card.ref)
     if run is None:
         return BoardCard(card, None, "", queue_ids.get(card.ref))
-    return BoardCard(card, run.id, quality_badge(run, repo.store.list_quality_reports(run.id)))
+    label = (
+        assurance_label_text(run.assurance, run.assurance_absent)
+        if run.assurance == "reduced"
+        else ""
+    )
+    return BoardCard(
+        card,
+        run.id,
+        quality_badge(run, repo.store.list_quality_reports(run.id)),
+        assurance_label=label,
+    )
 
 
 # ---- run detail --------------------------------------------------------------------------
@@ -284,6 +299,10 @@ class RunView:
     # (`run_live_view`) never loads them: the timeline is history, not live state.
     events: list[EventRow] = field(default_factory=list)
     events_enabled: bool = True
+    # Per-stage measurement rows (issue #368, design section 11) and the
+    # assurance label (section 10.3); "" when the run predates assurance.
+    stage_rows: list[StageRecord] = field(default_factory=list)
+    assurance_label: str = ""
 
 
 def run_dir(repo: Repo, run_id: str) -> Path:
@@ -535,6 +554,12 @@ def _run_view(repo: Repo, run_id: str, *, light: bool = False) -> RunView:
         approve_confirm=approve_confirm,
         events=[] if light or not events_enabled else _event_rows(store, run_id),
         events_enabled=events_enabled,
+        stage_rows=store.list_stage_rows(run_id),
+        assurance_label=(
+            assurance_label_text(run.assurance, run.assurance_absent)
+            if run.assurance is not None
+            else ""
+        ),
         **ship_state(repo, run, reports),
     )
 
@@ -1362,6 +1387,32 @@ def spend_by_day(
     return sorted(totals.items())
 
 
+def stage_token_summary(
+    rows: list[StageRecord],
+) -> tuple[int | None, int | None, bool]:
+    """Per-run stage-token totals (design section 11.3): the sum of reported
+    tokens, or None when any row reports none; `complete` is True only when
+    every row reported tokens. An incomplete total is quoted as "at least",
+    never as exact — and a None total is never displayed as zero."""
+    if not rows:
+        return None, None, False
+    if any(r.tokens_in is None or r.tokens_out is None for r in rows):
+        # Lower bound over reported rows only; None when nothing reported —
+        # "at least 0" would dress unknown up as a number.
+        reported_in = [r.tokens_in for r in rows if r.tokens_in is not None]
+        reported_out = [r.tokens_out for r in rows if r.tokens_out is not None]
+        return (
+            sum(reported_in) if reported_in else None,
+            sum(reported_out) if reported_out else None,
+            False,
+        )
+    return (
+        sum(r.tokens_in or 0 for r in rows),
+        sum(r.tokens_out or 0 for r in rows),
+        True,
+    )
+
+
 @dataclass
 class SpendView:
     runs: list[RunRecord]
@@ -1374,6 +1425,10 @@ class SpendView:
     days: int
     saved_usd: float = 0.0  # dollars the decision/role cache saved (issue #10)
     saved_by_run: dict[str, float] = field(default_factory=dict)
+    # Stage rows per run (issue #368) and their per-run aggregates: tokens
+    # (None when unknown), completeness, work and gate-wait seconds.
+    stage_rows_by_run: dict[str, list[StageRecord]] = field(default_factory=dict)
+    stage_summary: dict[str, dict[str, object]] = field(default_factory=dict)
 
     @property
     def has_spend(self) -> bool:
@@ -1391,6 +1446,7 @@ def spend_view(
         top_runs=top_runs,
         today=today,
         saved_by_run=saved_by_run,
+        stage_rows_by_run={r.id: repo.store.list_stage_rows(r.id) for r in runs},
     )
 
 
@@ -1401,6 +1457,7 @@ def spend_view_for_runs(
     top_runs: int = 25,
     today: date | None = None,
     saved_by_run: dict[str, float] | None = None,
+    stage_rows_by_run: dict[str, list[StageRecord]] | None = None,
 ) -> SpendView:
     """The spend page's numbers from a run list (pure; `spend_view` reads the store).
 
@@ -1413,6 +1470,18 @@ def spend_view_for_runs(
     total = sum(r.spend_usd for r in runs)
     costly = sorted(runs, key=lambda r: r.spend_usd, reverse=True)[:top_runs]
     saved = saved_by_run or {}
+    stage_rows = stage_rows_by_run or {}
+    summary: dict[str, dict[str, object]] = {}
+    for run_id, rows in stage_rows.items():
+        tokens_in, tokens_out, complete = stage_token_summary(rows)
+        summary[run_id] = {
+            "stages": len(rows),
+            "tokens_in": tokens_in,
+            "tokens_out": tokens_out,
+            "complete": complete,
+            "work_seconds": sum(r.work_seconds or 0.0 for r in rows),
+            "gate_wait_seconds": sum(r.gate_wait_seconds for r in rows),
+        }
     return SpendView(
         runs=runs,
         total=total,
@@ -1424,6 +1493,8 @@ def spend_view_for_runs(
         days=days,
         saved_usd=sum(saved.values()),
         saved_by_run=saved,
+        stage_rows_by_run=stage_rows,
+        stage_summary=summary,
     )
 
 

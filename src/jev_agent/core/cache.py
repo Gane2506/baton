@@ -633,8 +633,17 @@ class Cache:
         hits.sort(key=lambda pair: pair[1], reverse=True)
         return hits
 
-    def log_shadow(self, key_hash: str, kind: str, agreed: bool, agreement: float) -> None:
-        self.store.cache_shadow_log(key_hash, kind, agreed, agreement)
+    def log_shadow(
+        self,
+        key_hash: str,
+        kind: str,
+        agreed: bool,
+        agreement: float,
+        *,
+        stage: str | None = None,
+        run_id: str | None = None,
+    ) -> None:
+        self.store.cache_shadow_log(key_hash, kind, agreed, agreement, stage=stage, run_id=run_id)
 
 
 # ---- calibration (phase-3 gate, issue #10 §2.2) ---------------------------------------

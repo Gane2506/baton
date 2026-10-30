@@ -1,0 +1,23 @@
+{
+  "scenario": "ship-off",
+  "description": "Shipping off: a ship vote ends the run at DONE without SHIPPING.",
+  "path": "legacy",
+  "fixture": {
+    "quality_level": "medium",
+    "require_plan_approval": true,
+    "ship_enabled": false,
+    "autonomy_mode": "standard"
+  },
+  "stage_sequence": [
+    "INTAKE",
+    "PLANNING",
+    "VALIDATING",
+    "EXECUTING",
+    "INTEGRATING"
+  ],
+  "gate_parkings": [
+    "AWAITING_APPROVAL"
+  ],
+  "outcome": "DONE",
+  "label_output": "Full checks"
+}

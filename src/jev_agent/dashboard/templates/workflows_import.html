@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% from "macros.html" import csrf_input with context %}
+{% block title %}Import workflow profile{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div class="titles">
+    <h1>Import workflow profile</h1>
+    <p class="lede">Repo-scope profiles do not travel via git (<code>.jev/</code> is ignored) — share them by exporting JSON here and importing it on another machine. Import validates with the same rules as saving, and refuses with the setting named instead of partially applying.</p>
+  </div>
+</div>
+
+<section class="panel">
+  <form method="post" action="/workflows/import" enctype="multipart/form-data">
+    {{ csrf_input() }}
+    <div>
+      <label for="profile_file">Profile JSON file</label>
+      <input type="file" id="profile_file" name="profile_file" accept=".json,application/json">
+    </div>
+    <div>
+      <label for="profile_json">Or paste profile JSON</label>
+      <textarea id="profile_json" name="profile_json" rows="12" placeholder='{"id": "repo:fast", ...}'></textarea>
+    </div>
+    <p class="hint">Imported profiles land in repo scope as a new version of the same slug.</p>
+    <button class="btn" type="submit">Import</button>
+  </form>
+</section>
+
+<h2 class="section">Repo-scope profiles</h2>
+{% if profiles %}
+<div class="table-wrap"><table>
+  <thead><tr><th>Profile</th><th class="num">Version</th><th>Stages</th><th></th></tr></thead>
+  <tbody>
+  {% for p in profiles %}
+    <tr>
+      <td class="mono">{{ p.id }}</td>
+      <td class="num">{{ p.version }}</td>
+      <td>{{ p.stage_list | join(" → ") }}</td>
+      <td><a href="/workflows/{{ p.id }}/export">Export JSON</a></td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table></div>
+{% else %}
+<div class="empty"><div class="title">No repo-scope profiles yet</div><p>Profiles are created by the editor in phase 5; until then, import one above.</p></div>
+{% endif %}
+{% endblock %}

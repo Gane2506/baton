@@ -71,6 +71,31 @@
 <div class="empty"><div class="title">No runs yet</div><p>Start one from the <a href="/">Board</a> or <a href="/queue">Queue</a> page, and its cost shows up here.</p></div>
 {% endif %}
 
+<h2 class="section">Stage totals per run</h2>
+{% if s.stage_summary %}
+<div class="table-wrap"><table>
+  <thead><tr><th>Run</th><th class="num">Stages</th><th class="num">Work</th><th class="num">Gate wait</th><th class="num">Tokens in</th><th class="num">Tokens out</th></tr></thead>
+  <tbody>
+  {% for r in s.runs %}
+    {% set agg = s.stage_summary.get(r.id) %}
+    {% if agg %}
+    <tr>
+      <td class="mono nowrap"><a href="/runs/{{ r.id }}">{{ r.id }}</a></td>
+      <td class="num">{{ agg.stages }}</td>
+      <td class="num">{{ agg.work_seconds | round(1) }} s</td>
+      <td class="num">{{ agg.gate_wait_seconds | round(1) }} s</td>
+      <td class="num">{% if agg.tokens_in is none %}<span class="muted">unknown</span>{% elif not agg.complete %}at least {{ agg.tokens_in }}{% else %}{{ agg.tokens_in }}{% endif %}</td>
+      <td class="num">{% if agg.tokens_out is none %}<span class="muted">unknown</span>{% elif not agg.complete %}at least {{ agg.tokens_out }}{% else %}{{ agg.tokens_out }}{% endif %}</td>
+    </tr>
+    {% endif %}
+  {% endfor %}
+  </tbody>
+</table></div>
+<p class="hint">Full rows sum exactly; partial rows sum to "at least" the recorded totals. A token count of "unknown" means a worker did not report tokens — it is never zero.</p>
+{% else %}
+<div class="empty"><div class="title">No stage rows yet</div><p>Stages are recorded as runs move; runs created before stage measurement have none.</p></div>
+{% endif %}
+
 <h2 class="section">Every run</h2>
 {% if s.runs %}
 <div class="table-wrap"><table>

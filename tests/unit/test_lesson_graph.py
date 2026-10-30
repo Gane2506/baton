@@ -130,7 +130,7 @@ def test_repo_migration_21_adds_graph_tables_and_backfills(tmp_path: Path) -> No
         db = LessonDB(conn, "repo")
         assert not db.graph_ready()
         apply_migrations(conn)
-        assert db.conn.execute("PRAGMA user_version").fetchone()[0] == 21
+        assert db.conn.execute("PRAGMA user_version").fetchone()[0] == 22
         assert db.graph_ready()
         # Backfilled: the old lesson is searchable and carries its `applies-to` edge.
         assert [lesson.id for lesson in db.graph_query("p", "batch api")] == ["L1"]

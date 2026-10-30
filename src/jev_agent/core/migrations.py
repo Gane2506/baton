@@ -553,6 +553,74 @@ MIGRATIONS: list[str] = [
     # False; the backfill derives FTS rows and `applies-to` edges from existing
     # lessons' path-looking tags, and no user data is touched.
     LESSON_GRAPH_V1,
+    # 22: workflow profiles, phases 0-2 (issue #368): per-stage measurement rows
+    # (design section 11), run-record snapshot columns (section 6.4), the queue
+    # item's `workflow_profile` field (distinct from the workspace-profile
+    # `profile` field), and stage tags on attempts, decisions and shadow rows.
+    # Legacy runs read back with NULL profile columns and no stage rows; nothing
+    # backfills invented history.
+    """
+    ALTER TABLE runs ADD COLUMN workflow_profile_id TEXT;
+    ALTER TABLE runs ADD COLUMN workflow_profile_version INTEGER;
+    ALTER TABLE runs ADD COLUMN workflow_profile_release TEXT;
+    ALTER TABLE runs ADD COLUMN goal TEXT;
+    ALTER TABLE runs ADD COLUMN preset_goal TEXT;
+    ALTER TABLE runs ADD COLUMN assurance TEXT;
+    ALTER TABLE runs ADD COLUMN assurance_absent TEXT;
+    ALTER TABLE runs ADD COLUMN flow_snapshot TEXT;
+    ALTER TABLE queue ADD COLUMN workflow_profile TEXT;
+    ALTER TABLE recurring_tasks ADD COLUMN workflow_profile TEXT;
+    ALTER TABLE attempts ADD COLUMN stage TEXT;
+    ALTER TABLE decisions ADD COLUMN stage TEXT;
+    ALTER TABLE cache_shadow ADD COLUMN stage TEXT;
+    ALTER TABLE cache_shadow ADD COLUMN run_id TEXT;
+
+    -- One row per stage execution of a run (a retried stage writes one row per
+    -- attempt, linked by attempt number). tokens_in/tokens_out are NULL when
+    -- any attempt in the row reports no tokens: NULL means unknown, never zero.
+    -- gate_wait_seconds is time parked in the step's waiting state, attributed
+    -- by parked_step (design section 11.2); work_seconds excludes it.
+    CREATE TABLE stage_records (
+        id                       INTEGER PRIMARY KEY,
+        run_id                   TEXT NOT NULL REFERENCES runs (id),
+        stage                    TEXT NOT NULL,
+        attempt                  INTEGER NOT NULL,
+        workflow_profile_id      TEXT,
+        workflow_profile_version INTEGER,
+        workflow_profile_release TEXT,
+        goal                     TEXT,
+        preset_goal              TEXT,
+        started_at               TEXT NOT NULL,
+        ended_at                 TEXT,
+        work_seconds             REAL,
+        gate_wait_seconds        REAL NOT NULL DEFAULT 0,
+        tokens_in                INTEGER,
+        tokens_out               INTEGER,
+        cost_usd                 REAL,
+        cost_reason              TEXT,
+        cache_hits               INTEGER NOT NULL DEFAULT 0,
+        cache_served             INTEGER NOT NULL DEFAULT 0,
+        semantic_shadow_hits     INTEGER NOT NULL DEFAULT 0,
+        outcome                  TEXT,
+        halt_reason              TEXT,
+        defects_caught           INTEGER NOT NULL DEFAULT 0,
+        effective_model          TEXT,
+        effective_level          TEXT,
+        completeness             TEXT
+    );
+
+    CREATE INDEX stage_records_run ON stage_records (run_id, stage, attempt);
+
+    -- Gate waits recorded by `approve` for a step whose stage row does not
+    -- exist yet (the gate parks before the step runs). The wrapper consumes
+    -- the pending wait when it opens that step's row.
+    CREATE TABLE pending_gate_waits (
+        run_id  TEXT NOT NULL,
+        stage   TEXT NOT NULL,
+        seconds REAL NOT NULL,
+        PRIMARY KEY (run_id, stage)
+    );
+    """,
 ]
 
 SCHEMA_VERSION = len(MIGRATIONS)
