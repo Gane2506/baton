@@ -58,6 +58,11 @@ SHOTS = [
     Shot("dashboard-workflows.png", "/workflows"),
     Shot("dashboard-workflows-editor.png", "/workflows/new"),
     Shot("dashboard-workflows-detail.png", "/workflows/repo:demo-flow"),
+    Shot("dashboard-workflows-suggest.png", "/workflows/repo:demo-flow/suggest"),
+    Shot(
+        "dashboard-workflows-suggest-result.png",
+        "/workflows/repo:demo-flow/suggestions/demo-suggestion",
+    ),
     Shot("dashboard-workflows-import.png", "/workflows/import"),
     Shot("dashboard-learning.png", "/learning"),
     Shot(
@@ -124,12 +129,16 @@ def seed_workflows_demo(demo: Path, env: dict[str, str]) -> None:
     """One repo-scope workflow profile, so the Workflows list/detail shots
     show a stored profile instead of only the empty state (issue #368,
     phase 5). Saved through the real store, with no validation context —
-    the demo repo's defaults accept this profile."""
+    the demo repo's defaults accept this profile. Phase 6 also seeds one
+    preset-only suggestion record: the demo repo has no runs, so the
+    engine runs in preset-only mode, and the result shot shows the
+    labelled proposal, not a measured one."""
     snippet = (
         "from pathlib import Path\n"
         "from jev_agent.core.workflow_profiles import ProfileStore\n"
+        "from jev_agent.core.suggestions import Evidence, SuggestionStore, request_suggestion\n"
         "store = ProfileStore(Path('.'), Path.home() / '.jev')\n"
-        "store.save({\n"
+        "profile = store.save({\n"
         "    'id': 'repo:demo-flow', 'display_name': 'Demo flow',\n"
         "    'scope': 'repo',\n"
         "    'stage_list': ['INTAKE', 'PLANNING', 'VALIDATING',\n"
@@ -140,6 +149,9 @@ def seed_workflows_demo(demo: Path, env: dict[str, str]) -> None:
         "    'designing': 'never', 'goal': 'custom',\n"
         "    'ship_enabled': True, 'after_approval': 'ask',\n"
         "})\n"
+        "outcome = request_suggestion(profile, 'efficiency', Evidence())\n"
+        "SuggestionStore(store.profile_dir('repo', 'demo-flow')).create(\n"
+        "    outcome, record_id='demo-suggestion')\n"
     )
     run([sys.executable, "-c", snippet], demo, env)
 

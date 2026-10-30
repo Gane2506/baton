@@ -15,6 +15,9 @@
     <a class="btn btn-secondary" href="/workflows/{{ profile.id }}/export">Export JSON</a>
     {% endif %}
     {% endif %}
+    {% if not is_preset %}
+    <a class="btn btn-secondary" href="/workflows/{{ profile.id }}/suggest">Ask for a suggestion</a>
+    {% endif %}
     <a class="btn btn-secondary" href="/workflows">All workflows</a>
   </div>
 </div>
@@ -89,5 +92,26 @@
 {% endif %}
 {% endif %}
 
-<p class="hint">Suggestion records for this profile land in phase 6; this page deliberately has no suggestion request or approve/discard action yet.</p>
+{% if not is_preset %}
+<h2 class="section">Suggestion history</h2>
+<p class="hint">Suggestions are drafts, not runnable flows: only an approved suggestion becomes a profile version. A discarded suggestion stays visible here and is not re-offered unless new evidence arrives — a threshold crossed by new runs, or a new lesson in the window.</p>
+{% if suggestions %}
+<div class="table-wrap"><table>
+  <thead><tr><th>Suggestion</th><th>Goal</th><th>Mode</th><th>Status</th><th></th></tr></thead>
+  <tbody>
+  {% for suggestion in suggestions %}
+    <tr>
+      <td><a href="/workflows/{{ profile.id }}/suggestions/{{ suggestion.id }}">{{ suggestion.id }}</a>{% if suggestion.cross_repo %} <span class="hint">cross-repo</span>{% endif %}</td>
+      <td>{{ suggestion.goal }}</td>
+      <td>{{ suggestion.mode }}</td>
+      <td>{{ suggestion.status }}{% if suggestion.approved_version %} (version {{ suggestion.approved_version }}){% endif %}</td>
+      <td><a href="/workflows/{{ profile.id }}/suggestions/{{ suggestion.id }}">View</a></td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table></div>
+{% else %}
+<div class="empty"><div class="title">No suggestions yet</div><p><a href="/workflows/{{ profile.id }}/suggest">Ask for a suggestion</a> for a stated goal.</p></div>
+{% endif %}
+{% endif %}
 {% endblock %}

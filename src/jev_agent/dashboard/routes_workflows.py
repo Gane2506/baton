@@ -1,11 +1,14 @@
-"""Workflow profile routes (issue #368, phases 2 and 5).
+"""Workflow profile routes (issue #368, phases 2, 5, and 6).
 
 Phase 2 slice: export/import for repo-scope sharing (repo profiles do not
 travel via git — `.jev/` is gitignored — so sharing is dashboard export
 (download JSON) and import (upload JSON) here). Phase 5 adds the list,
 editor (canvas plus list mode, one form, one server-side validator) and
-detail pages. Suggestion request/result and approve/discard routes are
-phase 6 work and deliberately do NOT exist here yet.
+detail pages. Phase 6 adds the suggestion request/result pages and the
+approve/discard actions (design sections 12.4, 13.3): a suggestion is a
+stored draft record, never a runnable flow, until the user approves it —
+an unapproved suggestion appears in no picker and changes no run, and a
+discard changes only the record's status.
 
 Import validates with the same validator before saving, and refuses with
 the setting named on failure — never partially applied. The editor does
@@ -23,6 +26,7 @@ from __future__ import annotations
 import json
 import logging
 from collections.abc import Mapping
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -33,6 +37,17 @@ from starlette.responses import JSONResponse, Response
 
 from jev_agent.app.errors import JevError
 from jev_agent.core.store import NotFoundError
+from jev_agent.core.suggestions import (
+    Evidence,
+    RunEvidence,
+    StageRowEvidence,
+    SuggestionStore,
+    dedup_key,
+    diff_changes,
+    measure_volume,
+    recheck_for_approval,
+    request_suggestion,
+)
 from jev_agent.core.workflow_profiles import ProfileStore, ProfileValidationError
 from jev_agent.core.workflow_profiles.presets import (
     PRESET_NAMES,
@@ -218,6 +233,129 @@ def _load_profile_or_preset(
         raise NotFoundError(f"no workflow profile {profile_id!r}") from exc
 
 
+class _PresetSuggestRedirect(Exception):
+    """Internal control flow for POST suggestion handlers: a preset id
+    cannot hold suggestion records, so the handler redirects to saving a
+    copy first instead of storing anything."""
+
+    def __init__(self, profile_id: str) -> None:
+        super().__init__(profile_id)
+        self.profile_id = profile_id
+
+
+def _suggestion_store(repo: views.Repo, profile_id: str) -> SuggestionStore:
+    """The suggestion records for one stored profile: under the profile's
+    own directory, `suggestions/<id>.json` (design section 6.6)."""
+    parsed = parse_profile_id(profile_id)
+    if parsed is None:
+        raise NotFoundError(f"no workflow profile {profile_id!r}")
+    return SuggestionStore(_store(repo).profile_dir(*parsed))
+
+
+def _aware(moment: datetime) -> datetime:
+    """A stored timestamp as an aware datetime (stored timestamps are UTC;
+    a naive value is read as UTC so window math never mixes naive and
+    aware values)."""
+    if moment.tzinfo is None:
+        return moment.replace(tzinfo=UTC)
+    return moment
+
+
+def _build_evidence(
+    repo: views.Repo,
+    profile: dict[str, Any],
+    goal: str,
+    *,
+    cross_repo: bool,
+    now: datetime,
+) -> Evidence:
+    """Section 12.1 evidence for one request, from this repo's store only:
+    every run's stage rows, its user-stated goal, and its end time, plus
+    the lesson count for the profile's learning profile (a new lesson
+    arriving changes the re-offer fingerprint). The dashboard sees one
+    repo, so a cross-repo request aggregates this repo's evidence and
+    labels the result cross-repo with its contributing repos named —
+    the engine-level cross-repo aggregation across several repos is
+    covered by fixture tests, and the result page never claims repos
+    that did not contribute."""
+    runs: list[RunEvidence] = []
+    for run in repo.store.list_runs():
+        rows = repo.store.list_stage_rows(run.id)
+        runs.append(
+            RunEvidence(
+                run_id=run.id,
+                repo_label=str(repo.root),
+                state=str(run.state),
+                goal=run.goal,
+                ended_at=_aware(run.updated_at),
+                stage_rows=tuple(
+                    StageRowEvidence(
+                        stage=row.stage,
+                        outcome=row.outcome,
+                        work_seconds=row.work_seconds,
+                        completeness=row.completeness,
+                        defects_caught=row.defects_caught,
+                    )
+                    for row in rows
+                ),
+                profile_id=run.workflow_profile_id,
+                quality_level=run.quality_level,
+            )
+        )
+    lesson_count = 0
+    learning_profile = profile.get("learning_profile")
+    if isinstance(learning_profile, str) and learning_profile:
+        try:
+            lesson_count = len(repo.learning.lessons(learning_profile))
+        except Exception:
+            # Lessons are evidence, not a gate: an unreadable lesson
+            # database must not block the suggestion request (and a
+            # zero count still changes if lessons later arrive).
+            lesson_count = 0
+    scope = str(profile.get("scope", "repo"))
+    return Evidence(
+        runs=tuple(runs),
+        scope=scope,
+        cross_repo=cross_repo,
+        repos=(str(repo.root),),
+        lesson_count=lesson_count,
+    )
+
+
+def _assurance_note(from_profile: dict[str, Any], draft: dict[str, Any]) -> str:
+    """The assurance change of a draft, in plain words (design section
+    13.3). Neither engine change is a floor drop: omitting design never
+    reduces assurance (section 7.3), and shipping off is the legitimate
+    unshipped end state (section 10.1 item 4) — so the note says
+    "unchanged" with the reason, never invents a reduced label, and any
+    other quality/ship change is named rather than smoothed over."""
+    notes: list[str] = []
+    before_stages = list(from_profile.get("stage_list") or [])
+    after_stages = list(draft.get("stage_list") or [])
+    if "DESIGNING" in before_stages and "DESIGNING" not in after_stages:
+        notes.append(
+            "Dropping design does not reduce assurance: design is not a "
+            "safety behaviour, so omitting it never reduces assurance."
+        )
+    if "SHIPPING" in before_stages and "SHIPPING" not in after_stages:
+        notes.append(
+            "Dropping shipping ends the run at DONE unshipped instead of "
+            "shipping it; that is the legitimate unshipped end state, not a "
+            "reduced-assurance run."
+        )
+    if from_profile.get("quality_level") != draft.get("quality_level") and (
+        "quality_level" in draft or "quality_level" in from_profile
+    ):
+        notes.append(
+            f"Quality level changes from {from_profile.get('quality_level')} "
+            f"to {draft.get('quality_level')}: the run's assurance is "
+            "recomputed at creation from the new snapshot."
+        )
+    if not notes:
+        notes.append("Assurance unchanged by this suggestion.")
+    return " ".join(notes)
+
+
 class WorkflowRoutes(DashboardCore):
     # ---- list ---------------------------------------------------------------
 
@@ -397,21 +535,315 @@ class WorkflowRoutes(DashboardCore):
 
     def workflows_detail_page(self, request: Request) -> Response:
         """Detail page (design section 13.1): stage list as a chain,
-        parameters, version history, and runs that snapshotted each
-        version. Suggestion records land here in phase 6."""
+        parameters, version history, runs that snapshotted each version,
+        and suggestion history (phase 6, section 13.3: including
+        discarded records, with the re-offer rule stated on the page)."""
 
         def build(repo: views.Repo) -> dict[str, Any]:
             profile_id: str = request.path_params["profile_id"]
             profile, is_preset, versions = _load_profile_or_preset(repo, profile_id)
             runs = [run for run in repo.store.list_runs() if run.workflow_profile_id == profile_id]
+            suggestions: list[dict[str, Any]] = []
+            if not is_preset:
+                suggestions = _suggestion_store(repo, profile_id).list_records()
             return {
                 "profile": profile,
                 "is_preset": is_preset,
                 "versions": versions,
                 "runs": runs,
+                "suggestions": suggestions,
             }
 
         return self.page(request, "workflows_detail.html", build)
+
+    # ---- suggestions (phase 6, design sections 12.4, 13.3) ------------------------
+
+    def workflows_suggest_page(self, request: Request) -> Response:
+        """Suggestion request page (design section 13.3): pick a stated
+        goal, and — for a user-scope profile only — ask for a cross-repo
+        suggestion. The page shows the labelled-run volume per goal in
+        plain numbers, so a below-threshold request is never a surprise.
+        Presets have no profile directory to store a record under, so a
+        preset id redirects to saving a copy first."""
+
+        profile_id: str = request.path_params["profile_id"]
+        # Pre-check outside page(): page() turns any build exception into
+        # a 500 page, so the preset redirect cannot be raised from build.
+        # An unknown id renders the same 404 page() would, not a 500.
+        try:
+            with views.open_repo(self.settings.root) as repo:
+                _profile, is_preset, _versions = _load_profile_or_preset(repo, profile_id)
+        except NotFoundError as exc:
+            return self.render(request, "error.html", 404, title="Not found", message=str(exc))
+        if is_preset:
+            self.flash(
+                request,
+                "error",
+                f"preset {profile_id!r} cannot hold suggestions — "
+                "save it as a copy first, then ask for a suggestion",
+            )
+            return self.back(f"/workflows/new?preset={profile_id}")
+
+        def build(repo: views.Repo) -> dict[str, Any]:
+            profile, _is_preset, _versions = _load_profile_or_preset(repo, profile_id)
+            now = datetime.now(UTC)
+            volumes = {
+                goal: measure_volume(
+                    _build_evidence(repo, profile, goal, cross_repo=False, now=now),
+                    goal,
+                    now,
+                )
+                for goal in ("efficiency", "accuracy", "custom")
+            }
+            return {
+                "profile": profile,
+                "volumes": volumes,
+                "errors": [],
+            }
+
+        return self.page(request, "workflows_suggest.html", build)
+
+    async def workflows_suggest(self, request: Request) -> Response:
+        """Run the suggestion engine for a stated goal and store the
+        record (design section 12.4 step 2). The draft is stored as a
+        suggestion record, not as a profile version, and appears nowhere
+        as a runnable flow until approved. A discarded record with the
+        same dedup key and unchanged evidence is returned as-is (the
+        re-offer rule), not replaced by a fresh suggestion. A no-change
+        outcome stores nothing — there is nothing to approve — and its
+        message renders directly."""
+        profile_id: str = request.path_params["profile_id"]
+        form: FormData = await checked_form(request)
+        goal = _form_text(form, "goal") or ""
+        cross_repo = form.get("cross_repo") is not None
+
+        def work() -> dict[str, Any]:
+            with views.open_repo(self.settings.root) as repo:
+                profile, is_preset, _versions = _load_profile_or_preset(repo, profile_id)
+                if is_preset:
+                    raise _PresetSuggestRedirect(profile_id)
+                now = datetime.now(UTC)
+                evidence = _build_evidence(repo, profile, goal, cross_repo=cross_repo, now=now)
+                outcome = request_suggestion(profile, goal, evidence, now=now)
+                if outcome.mode == "no-change" or outcome.draft is None:
+                    return {"outcome": outcome, "record": None, "profile": profile}
+                store = _suggestion_store(repo, profile_id)
+                existing = store.find_discarded_match(
+                    dedup_key(
+                        outcome.from_profile_id,
+                        outcome.from_profile_version,
+                        outcome.changes,
+                    ),
+                    outcome.evidence_fingerprint,
+                )
+                if existing is not None:
+                    return {
+                        "outcome": None,
+                        "record": existing,
+                        "profile": profile,
+                        "re_offered": True,
+                    }
+                errors = validate_profile(outcome.draft, context=_context(repo))
+                if errors:
+                    raise JevError(
+                        "the suggested flow does not validate against this repo: "
+                        + "; ".join(errors)
+                    )
+                return {
+                    "outcome": outcome,
+                    "record": store.create(outcome),
+                    "profile": profile,
+                }
+
+        try:
+            result = await run_in_threadpool(work)
+        except _PresetSuggestRedirect as exc:
+            self.flash(
+                request,
+                "error",
+                f"preset {exc.profile_id!r} cannot hold suggestions — "
+                "save it as a copy first, then ask for a suggestion",
+            )
+            return self.back(f"/workflows/new?preset={exc.profile_id}")
+        except (ValueError, JevError, NotFoundError) as exc:
+            self.flash(request, "error", str(exc))
+            return self.back(f"/workflows/{profile_id}/suggest")
+        if result.get("re_offered"):
+            self.flash(
+                request,
+                "error",
+                "this suggestion was discarded before and the evidence has not "
+                "changed, so it is not re-offered as a fresh suggestion — "
+                "the discarded record is shown instead",
+            )
+            return self.back(f"/workflows/{profile_id}/suggestions/{result['record']['id']}")
+        if result["record"] is None:
+            # No-change outcome: render the result page with the message
+            # and the numbers, and no approve/discard actions.
+            return self.render(
+                request,
+                "workflows_suggest_result.html",
+                profile=result["profile"],
+                record=None,
+                outcome=result["outcome"],
+                changes=[],
+                from_profile=result["profile"],
+                assurance_note="",
+                re_offered=False,
+            )
+        return self.back(f"/workflows/{profile_id}/suggestions/{result['record']['id']}")
+
+    def workflows_suggestion_page(self, request: Request) -> Response:
+        """Suggestion result page (design section 13.3): the draft as a
+        stage chain with changes highlighted against the profile it was
+        suggested from, the reasoning record line by line, the evidence
+        thresholds met or unmet, the assurance change if any, and —
+        only while pending — approve and discard."""
+
+        profile_id: str = request.path_params["profile_id"]
+        record_id: str = request.path_params["suggestion_id"]
+        try:
+            with views.open_repo(self.settings.root) as repo:
+                _profile, is_preset, _versions = _load_profile_or_preset(repo, profile_id)
+                if not is_preset:
+                    _suggestion_store(repo, profile_id).get(record_id)
+        except NotFoundError as exc:
+            return self.render(request, "error.html", 404, title="Not found", message=str(exc))
+        except ValueError as exc:
+            return self.render(request, "error.html", 404, title="Not found", message=str(exc))
+        if is_preset:
+            self.flash(request, "error", f"preset {profile_id!r} cannot hold suggestions")
+            return self.back(f"/workflows/{profile_id}")
+
+        def build(repo: views.Repo) -> dict[str, Any]:
+            profile, _is_preset, _versions = _load_profile_or_preset(repo, profile_id)
+            record = _suggestion_store(repo, profile_id).get(record_id)
+            from_version = record.get("from_workflow_profile_version")
+            try:
+                from_profile = (
+                    _store(repo).get(profile_id, version=from_version)
+                    if isinstance(from_version, int)
+                    else profile
+                )
+            except ValueError:
+                from_profile = profile
+            changes = diff_changes(from_profile, record.get("draft") or {})
+            return {
+                "profile": profile,
+                "record": record,
+                "from_profile": from_profile,
+                "changes": [
+                    {"field": c.field, "before": c.before, "after": c.after} for c in changes
+                ],
+                "assurance_note": _assurance_note(from_profile, record.get("draft") or {}),
+                "re_offered": record.get("status") == "discarded",
+            }
+
+        return self.page(request, "workflows_suggest_result.html", build)
+
+    async def workflows_suggestion_approve(self, request: Request) -> Response:
+        """Approve a suggestion (design section 12.4 step 3): the draft is
+        re-checked against the current evidence window before saving
+        (staleness refuses with the change named), then saved as a new
+        profile version with `origin: suggested` — or, when the draft is
+        identical to the current version, approval of the existing
+        version is recorded and no new version is created. Approval
+        covers that version only: it changes no existing run and no
+        default."""
+        profile_id: str = request.path_params["profile_id"]
+        record_id: str = request.path_params["suggestion_id"]
+        await checked_form(request)
+
+        def work() -> str:
+            with views.open_repo(self.settings.root) as repo:
+                store = _store(repo)
+                profile, is_preset, _versions = _load_profile_or_preset(repo, profile_id)
+                if is_preset:
+                    raise _PresetSuggestRedirect(profile_id)
+                suggestions = _suggestion_store(repo, profile_id)
+                record = suggestions.get(record_id)
+                if record.get("status") != "pending":
+                    raise JevError(
+                        f"suggestion {record_id!r} is {record.get('status')}, "
+                        "not pending, so it cannot be approved"
+                    )
+                draft = dict(record.get("draft") or {})
+                now = datetime.now(UTC)
+                evidence = _build_evidence(
+                    repo,
+                    profile,
+                    str(record.get("goal", "")),
+                    cross_repo=bool(record.get("cross_repo")),
+                    now=now,
+                )
+                fresh = request_suggestion(profile, str(record.get("goal", "")), evidence, now=now)
+                ok, message = recheck_for_approval(record, fresh, profile)
+                if not ok:
+                    raise JevError(message)
+                errors = validate_profile(draft, context=_context(repo))
+                if errors:
+                    raise JevError(
+                        "the suggested flow no longer validates against this repo: "
+                        + "; ".join(errors)
+                    )
+                if not diff_changes(profile, draft):
+                    suggestions.set_status(
+                        record_id, "approved", approved_version=profile.get("version")
+                    )
+                    return (
+                        f"approved suggestion {record_id!r}: the draft matches "
+                        f"version {profile.get('version')} already, so no new "
+                        "version was created"
+                    )
+                draft["origin"] = "suggested"
+                stored = store.save(draft, context=_context(repo))
+                suggestions.set_status(record_id, "approved", approved_version=stored["version"])
+                return (
+                    f"approved suggestion {record_id!r} as version "
+                    f"{stored['version']} of {profile_id}"
+                )
+
+        try:
+            message = await run_in_threadpool(work)
+        except _PresetSuggestRedirect as exc:
+            self.flash(request, "error", f"preset {exc.profile_id!r} cannot hold suggestions")
+            return self.back(f"/workflows/{exc.profile_id}")
+        except (ValueError, JevError, NotFoundError) as exc:
+            self.flash(request, "error", str(exc))
+            return self.back(f"/workflows/{profile_id}/suggestions/{record_id}")
+        self.flash(request, "ok", message)
+        return self.back(f"/workflows/{profile_id}")
+
+    async def workflows_suggestion_discard(self, request: Request) -> Response:
+        """Discard a suggestion (design section 12.4 step 3): only the
+        record's status changes — no new version, no picker entry, no
+        run change. The record stays visible in the profile's suggestion
+        history as discarded."""
+        profile_id: str = request.path_params["profile_id"]
+        record_id: str = request.path_params["suggestion_id"]
+        await checked_form(request)
+
+        def work() -> None:
+            with views.open_repo(self.settings.root) as repo:
+                _profile, is_preset, _versions = _load_profile_or_preset(repo, profile_id)
+                if is_preset:
+                    raise _PresetSuggestRedirect(profile_id)
+                suggestions = _suggestion_store(repo, profile_id)
+                record = suggestions.get(record_id)
+                if record.get("status") == "discarded":
+                    return
+                suggestions.set_status(record_id, "discarded")
+
+        try:
+            await run_in_threadpool(work)
+        except _PresetSuggestRedirect as exc:
+            self.flash(request, "error", f"preset {exc.profile_id!r} cannot hold suggestions")
+            return self.back(f"/workflows/{exc.profile_id}")
+        except (ValueError, JevError, NotFoundError) as exc:
+            self.flash(request, "error", str(exc))
+            return self.back(f"/workflows/{profile_id}/suggestions/{record_id}")
+        self.flash(request, "ok", f"discarded suggestion {record_id!r}")
+        return self.back(f"/workflows/{profile_id}")
 
     # ---- import / export (phase 2, reused by the editor) ------------------------
 

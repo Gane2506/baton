@@ -164,14 +164,11 @@ def test_unknown_profile_detail_is_404(client: TestClient) -> None:
     assert client.get("/workflows/repo:nope").status_code == 404
 
 
-def test_no_suggestion_routes_in_phase_5(client: TestClient) -> None:
-    """Phase 6 owns suggestions: no suggest/approve/discard route exists."""
-    assert client.get("/workflows/repo:fast/suggest").status_code in (404, 405)
-    assert client.post(
-        "/workflows/repo:fast/suggest",
-        data={"csrf_token": _csrf(client)},
-        follow_redirects=False,
-    ).status_code in (404, 405)
+def test_suggestion_routes_exist_since_phase_6(client: TestClient) -> None:
+    """Superseded by phase 6 (see test_workflow_phase6.py): the suggest
+    route now exists. An unknown profile still 404s instead of serving
+    a suggestion form for nothing."""
+    assert client.get("/workflows/repo:nope/suggest").status_code == 404
 
 
 # ---- create / edit / save failures ----------------------------------------------
