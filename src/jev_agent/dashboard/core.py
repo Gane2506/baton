@@ -32,7 +32,11 @@ from jev_agent.core.store import NotFoundError
 from jev_agent.dashboard import ui_styles, views
 from jev_agent.dashboard.browser_install import BrowserInstallRunner
 from jev_agent.dashboard.cda_install_runner import CdaInstallRunner, temp_space_check
-from jev_agent.dashboard.code_grade_runner import CodeGradeExecutor, CodeGradeRunner
+from jev_agent.dashboard.code_grade_runner import (
+    CodeGradeExecutor,
+    CodeGradeRunner,
+    discover_grade_interpreter,
+)
 from jev_agent.dashboard.design_reverse import ReverseExecutor, ReverseRunner
 from jev_agent.dashboard.design_studio import StudioWizard
 from jev_agent.dashboard.errors import friendly_error as _friendly_error
@@ -58,6 +62,7 @@ class DashboardCore:
         launcher: RunLauncher,
         reverse_executor: ReverseExecutor | None = None,
         code_grade_executor: CodeGradeExecutor | None = None,
+        grade_interpreter: str | None = None,
     ) -> None:
         self.settings = settings
         self.launcher = launcher
@@ -69,9 +74,18 @@ class DashboardCore:
             if reverse_executor is not None
             else ReverseRunner(settings.root)
         )
+        # The grade-runner interpreter override (design §5.4, branch 2):
+        # with no explicit executor (production), discover a dedicated
+        # venv interpreter when the dashboard process itself cannot see
+        # the backend; tests pass a fake executor and never discover
+        # one, so their in-process behaviour is unchanged.
+        interpreter = grade_interpreter
+        if interpreter is None and code_grade_executor is None:
+            interpreter = discover_grade_interpreter()
         self.code_grade_runner = CodeGradeRunner(
             executor=code_grade_executor,
             ledger_path=ledger_path_for_repo(settings.root),
+            interpreter=interpreter,
         )
         # The CDA install runner (issue #366): its durable job record is read
         # on start (a "running" record becomes `interrupted`), and its watcher

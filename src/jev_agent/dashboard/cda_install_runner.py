@@ -22,13 +22,14 @@ warmed model id, from the `probe_by_model` map in the job record. Another
 repo's panel shows "available" for a shared environment, never "warmed" for
 a model id it did not warm.
 
-Branch 2 note (design §5.4): the decision tree reserves the dedicated venv
-at `~/.jev/cda-venv` and the argv builder builds its sequences, but the
-branch is NOT selected today: later grades run in the dashboard process, so
-a venv-only install would be invisible to grading until the grade runner
-gains an interpreter override, which §8 does not list and §12 Q6 leaves open.
-Per §5.4's own fallback, an unwritable own environment therefore falls to
-branch 3 (guide) instead of promising a venv install grading cannot use.
+Branch 2 note (design §5.4, amended 2026-10-30): the grade runner now
+has the interpreter override (`code_grade_runner.interpreter`, grades
+run under the venv interpreter via `code_grade_subprocess`), so the
+branch IS selected for an unwritable own environment. The install panel
+trusts that interpreter's probe record for availability while the
+override is configured. The branch-3 fallback remains for the case the
+override cannot apply: no venv interpreter discoverable at grade time
+(the venv was never installed, or its python is not executable).
 """
 
 from __future__ import annotations
@@ -99,9 +100,9 @@ _HF_HOST = "https://huggingface.co"
 _VENV_DIRNAME = "cda-venv"
 _PROBE_MARKER = "CDA_PROBE_JSON "
 _WARM_MARKER = "CDA_WARM_OK "
-# The dedicated-venv branch (§5.4) stays unselected until the grade runner
-# gains an interpreter override (see the module docstring); see decide_environment.
-_VENV_GRADE_OVERRIDE_AVAILABLE = False
+# The dedicated-venv branch (§5.4) is selected now that the grade runner
+# has the interpreter override (see the module docstring); see decide_environment.
+_VENV_GRADE_OVERRIDE_AVAILABLE = True
 
 
 class CdaInstallBusy(RuntimeError):
@@ -233,8 +234,15 @@ def pip_available(interpreter: str, *, timeout: float = 10.0) -> bool:
 
 
 def venv_argv(interpreter: str, venv_path: Path) -> list[str]:
-    """Branch-2 venv creation (reserved: see the module docstring)."""
-    return [interpreter, "-m", "venv", str(venv_path)]
+    """Branch-2 venv creation.
+
+    `--system-site-packages`: the venv interpreter must import the
+    dashboard's own `jev_agent` (the grade subprocess runs
+    `jev_agent.dashboard.code_grade_subprocess`, which is not installed
+    into the venv), while the venv's own torch/laya take precedence —
+    venv site-packages come before base site-packages on sys.path.
+    """
+    return [interpreter, "-m", "venv", "--system-site-packages", str(venv_path)]
 
 
 def uninstall_argv(interpreter: str) -> list[str]:
@@ -521,8 +529,9 @@ def decide_environment(
             guide_command=_guide_command(interpreter, torch_path),
             docker=is_docker,
         )
-    # Branch 2 (dedicated venv) is reserved until the grade runner gains an
-    # interpreter override (module docstring); §5.4 falls through to branch 3.
+    # Branch 2 (dedicated venv): selected now that the grade runner has
+    # the interpreter override (module docstring); without it §5.4 would
+    # fall through to branch 3.
     if _VENV_GRADE_OVERRIDE_AVAILABLE:
         venv_path = home / ".jev" / _VENV_DIRNAME
         venv_python = (

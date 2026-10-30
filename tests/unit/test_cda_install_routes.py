@@ -16,6 +16,7 @@ import threading
 import time
 from collections.abc import Iterator
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, cast
 
 import httpx
@@ -32,6 +33,7 @@ from jev_agent.dashboard import cda_install_runner as install_module
 from jev_agent.dashboard import code_grade_runner, routes_code
 from jev_agent.dashboard.app import create_app
 from jev_agent.dashboard.cda_install_runner import CdaInstallRunner, EnvironmentDecision
+from jev_agent.dashboard.core import DashboardCore
 from jev_agent.dashboard.security import DashboardSettings
 
 MODEL = "S4MPL3BI4S/Coding_Decision_Agent"
@@ -535,3 +537,75 @@ def test_done_install_flash_keeps_link_and_period_together(
         ), url
         # The old broken shape: period outside any span, its own flex item.
         assert "see the result</a>.</p>" not in page.text, url
+
+
+# ---- install panel availability under the grade-runner override (design §5.4) ----
+
+
+def _panel_core(interpreter: str | None, constructible: bool) -> SimpleNamespace:
+    from jev_agent.dashboard.cda_install_runner import ProbeOutcome
+
+    probe = ProbeOutcome(
+        laya_version="0.4.17",
+        torch_version="2.15.0",
+        torch_build="cpu",
+        constructible=constructible,
+        warmed=False,
+        model_id=MODEL,
+    )
+    install = SimpleNamespace(
+        state="idle",
+        phase="",
+        kind="",
+        message="",
+        failure_class="",
+        guide=False,
+        probe_by_model={MODEL: probe},
+    )
+    return SimpleNamespace(
+        cda_install_runner=SimpleNamespace(status=lambda: install),
+        code_grade_runner=SimpleNamespace(interpreter=interpreter),
+    )
+
+
+def _panel(monkeypatch: pytest.MonkeyPatch, core: SimpleNamespace) -> dict[str, Any]:
+    from jev_agent.config.schema import CodeOrchestratorSettings
+
+    monkeypatch.setattr(routes_code, "_orchestrator", lambda settings: _NoBackend())
+    monkeypatch.setattr(
+        routes_code,
+        "decide_environment",
+        lambda: EnvironmentDecision(1, sys.executable, None, "cpu", "", "", False),
+    )
+    # The panel only touches the install runner and the grade runner's
+    # interpreter, so a namespace stub is the honest fixture here.
+    return routes_code._install_panel(CodeOrchestratorSettings(), cast(DashboardCore, core))
+
+
+def test_panel_trusts_override_probe_record(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Branch 2: the dashboard process cannot see the backend, but the
+    override interpreter's constructible probe record means "available"
+    — the install button hides and Verify shows."""
+    panel = _panel(monkeypatch, _panel_core("/fake/python", constructible=True))
+    assert panel["backend_label"] == "available"
+    assert panel["show_install"] is False
+    assert panel["show_verify"] is True
+
+
+def test_panel_without_override_ignores_probe_record(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The general rule is unchanged: without an override interpreter,
+    a probe verdict never overrides a failed `available` check."""
+    panel = _panel(monkeypatch, _panel_core(None, constructible=True))
+    assert panel["backend_label"] == "not installed"
+    assert panel["show_install"] is True
+    assert panel["show_verify"] is False
+
+
+def test_panel_override_without_constructible_probe_stays_not_installed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    panel = _panel(monkeypatch, _panel_core("/fake/python", constructible=False))
+    assert panel["backend_label"] == "not installed"
+    assert panel["show_install"] is True

@@ -24,7 +24,11 @@ while the old thread still holds the model. The status page says so.
 
 from __future__ import annotations
 
+import importlib.util
+import json
 import logging
+import os
+import subprocess
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -114,6 +118,47 @@ def route(settings: CodeOrchestratorSettings, request_text: str) -> dict[str, An
 CodeGradeExecutor = Callable[[str, CodeOrchestratorSettings, dict[str, str]], dict[str, Any]]
 
 
+# (argv) -> a Popen-like object: communicate(input: bytes) -> (stdout, stderr),
+# terminate(), poll(). The default is subprocess.Popen; tests pass a stub.
+CodeGradeSpawn = Callable[[list[str]], Any]
+
+
+def _default_spawn(argv: list[str]) -> subprocess.Popen[bytes]:
+    return subprocess.Popen(
+        argv,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+
+
+def discover_grade_interpreter(home: Path | None = None) -> str | None:
+    """The dedicated-venv interpreter for grades, or None for in-process.
+
+    Returns the branch-2 venv interpreter (design §5.4) only when the
+    dashboard's own process cannot see `laya` but that venv exists and
+    is executable. Branch 1 keeps grading in-process, and a venv that
+    was never installed changes nothing. Deliberately cheap — no probe
+    subprocess runs at dashboard start (a probe has a 5-minute timeout);
+    a venv whose backend is actually missing still reports unavailable
+    when a grade runs under it, and the install panel trusts only the
+    probe record, never this discovery alone.
+    """
+    try:
+        if importlib.util.find_spec("laya") is not None:
+            return None
+    except Exception:
+        # A broken import system must not break dashboard startup; the
+        # in-process path reports the real error when a grade runs.
+        return None
+    root = home if home is not None else Path.home()
+    venv = root / ".jev" / "cda-venv"
+    interpreter = venv / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
+    if interpreter.is_file() and os.access(interpreter, os.X_OK):
+        return str(interpreter)
+    return None
+
+
 def _default_executor(
     kind: str, settings: CodeOrchestratorSettings, inputs: dict[str, str]
 ) -> dict[str, Any]:
@@ -149,20 +194,37 @@ class CodeGradeRunner:
     first for CPU and memory. A stale thread finishing after a cancel (or
     after a newer job somehow started) is ignored via the generation
     counter: only the current generation may write the outcome.
+
+    With `interpreter` set (the design §5.4 branch-2 override), the
+    thread does not grade in-process: it spawns that interpreter with
+    `jev_agent.dashboard.code_grade_subprocess` and the grade's inputs
+    as JSON on stdin, and reads one JSON line back on stdout. Cancel
+    keeps today's semantics — the child keeps running to completion
+    and its result is dropped by the generation check — while
+    `shutdown` terminates a child whose thread is still alive after
+    its join timeout, so no orphan keeps holding the model after the
+    dashboard stops (a thread, unlike a child, dies with the process).
     """
 
     def __init__(
         self,
         executor: CodeGradeExecutor | None = None,
         ledger_path: Path | None = None,
+        interpreter: str | None = None,
+        spawn: CodeGradeSpawn | None = None,
     ) -> None:
         self.executor = executor or _default_executor
+        # The override interpreter for subprocess grades (design §5.4,
+        # branch 2); None grades in-process exactly as before.
+        self.interpreter = interpreter
+        self._spawn = spawn or _default_spawn
         # Where finished grades/routes are ledgered (issue #329, Phase 1):
         # None in tests and in runners constructed without a repo, which
         # simply do not record. Recording is best-effort, never fatal.
         self._ledger_path = ledger_path
         self._guard = threading.Lock()
         self._thread: threading.Thread | None = None
+        self._child: Any = None  # the running grade subprocess, if any
         self._generation = 0
         self._state = "idle"
         self._kind = ""
@@ -323,6 +385,87 @@ class CodeGradeRunner:
             # grade must leave a trace somewhere (P7).
             log.debug("rating ledger write failed: %s: %s", type(exc).__name__, exc)
 
+    def _run_subprocess(
+        self,
+        kind: str,
+        settings: CodeOrchestratorSettings,
+        inputs: dict[str, str],
+    ) -> tuple[str, dict[str, Any] | None, str | None, str, bool]:
+        """One grade/route under the override interpreter.
+
+        Returns (state, result, error, message, unavailable) in the
+        same shape `_work` builds for the in-process path. The argv is
+        a server-side constant built from the override interpreter
+        only — never from a request — and the child protocol (see
+        `code_grade_subprocess`) carries no tracebacks: a child crash
+        degrades to a failed grade with a plain message.
+        """
+        assert self.interpreter is not None
+        request: dict[str, Any] = {
+            "kind": kind,
+            "model_id": settings.model_id,
+            "max_diff_chars": settings.max_diff_chars,
+            "confidence_threshold": settings.confidence_threshold,
+            **inputs,
+        }
+        proc = self._spawn([self.interpreter, "-m", "jev_agent.dashboard.code_grade_subprocess"])
+        with self._guard:
+            self._child = proc
+        try:
+            out, err = proc.communicate(input=json.dumps(request).encode())
+        finally:
+            with self._guard:
+                self._child = None
+        try:
+            payload = json.loads(out.decode())
+        except (ValueError, UnicodeDecodeError):
+            log.debug(
+                "grade subprocess returned unparsable output: %r (stderr: %r)",
+                out[:200],
+                err[:500],
+            )
+            return (
+                "failed",
+                None,
+                "the grade could not run under the configured interpreter",
+                "",
+                False,
+            )
+        if not isinstance(payload, dict):
+            return (
+                "failed",
+                None,
+                "the grade could not run under the configured interpreter",
+                "",
+                False,
+            )
+        if payload.get("ok"):
+            result = payload.get("result")
+            if not isinstance(result, dict):
+                return (
+                    "failed",
+                    None,
+                    "the grade could not run under the configured interpreter",
+                    "",
+                    False,
+                )
+            return ("done", result, "", "graded" if kind == "grade" else "routed", False)
+        if payload.get("unavailable"):
+            return (
+                "failed",
+                None,
+                str(payload.get("message") or unavailable_message()),
+                "",
+                True,
+            )
+        return (
+            "failed",
+            None,
+            str(payload.get("error") or "the grade could not run under the configured interpreter"),
+            "",
+            False,
+        )
+
     def _work(
         self,
         generation: int,
@@ -332,13 +475,30 @@ class CodeGradeRunner:
     ) -> None:
         unavailable = False
         try:
-            result = self.executor(kind, settings, inputs)
+            if self.interpreter is not None:
+                state, result, error, message, unavailable = self._run_subprocess(
+                    kind, settings, inputs
+                )
+                outcome: tuple[str, dict[str, Any] | None, str | None, str] = (
+                    state,
+                    result,
+                    error,
+                    message,
+                )
+            else:
+                result = self.executor(kind, settings, inputs)
+                outcome = (
+                    "done",
+                    result,
+                    "",
+                    "graded" if kind == "grade" else "routed",
+                )
         except CodeOrchestratorUnavailable:
             # Missing backend: the page's install guidance, not a
             # traceback -- a grade that did not run must never look
             # like a grade, and never like a server error either.
             unavailable = True
-            outcome: tuple[str, dict[str, Any] | None, str | None, str] = (
+            outcome = (
                 "failed",
                 None,
                 unavailable_message(),
@@ -348,13 +508,6 @@ class CodeGradeRunner:
             outcome = ("failed", None, _friendly_error(exc), "")
         except Exception as exc:  # issue #200: never a bare 500 from a job
             outcome = ("failed", None, _friendly_error(exc), "")
-        else:
-            outcome = (
-                "done",
-                result,
-                "",
-                "graded" if kind == "grade" else "routed",
-            )
         with self._guard:
             self._thread = None
             if generation != self._generation:
@@ -374,8 +527,24 @@ class CodeGradeRunner:
                 self._record(kind, outcome_result, unavailable)
 
     def shutdown(self, timeout: float = 30.0) -> None:
-        """Wait for a running grade (the lifespan calls this)."""
+        """Wait for a running grade (the lifespan calls this).
+
+        A subprocess grade is terminated if its thread is still alive
+        after the join timeout: unlike a thread, a child process would
+        otherwise outlive the dashboard and keep holding the model.
+        An in-process grade keeps today's behaviour — the join simply
+        times out and the thread finishes on its own.
+        """
         with self._guard:
             thread = self._thread
         if thread is not None:
             thread.join(timeout)
+            if thread.is_alive():
+                with self._guard:
+                    child = self._child
+                if child is not None:
+                    try:
+                        child.terminate()
+                    except Exception:
+                        log.debug("grade subprocess terminate failed", exc_info=True)
+                    thread.join(timeout)

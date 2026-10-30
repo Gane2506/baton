@@ -244,7 +244,13 @@ def test_argv_uninstall_removes_laya_only() -> None:
 def test_argv_venv_branch_uses_venv_interpreter() -> None:
     decision = EnvironmentDecision(2, sys.executable, Path("/tmp/cda-venv"), "cpu", "", "", False)
     steps = build_pip_steps(decision)
-    assert steps[0] == [sys.executable, "-m", "venv", "/tmp/cda-venv"]
+    assert steps[0] == [
+        sys.executable,
+        "-m",
+        "venv",
+        "--system-site-packages",
+        "/tmp/cda-venv",
+    ]
     assert steps[1][0].endswith("/tmp/cda-venv/bin/python") or steps[1][0].endswith(
         "/tmp/cda-venv/Scripts/python.exe"
     )
