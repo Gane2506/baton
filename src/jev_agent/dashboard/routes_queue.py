@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any, cast
 from zoneinfo import ZoneInfo
 
@@ -28,6 +29,7 @@ from jev_agent.core.recurrence import (
 )
 from jev_agent.core.scheduler import SchedulerLocked, spent_today
 from jev_agent.core.store import QUEUE_PRIORITIES
+from jev_agent.core.workflow_profiles import pin_workflow_profile
 from jev_agent.dashboard import views
 from jev_agent.dashboard.core import DashboardCore
 from jev_agent.dashboard.errors import friendly_error as _friendly_error
@@ -72,6 +74,17 @@ class QueueRoutes(DashboardCore):
                     repo.config, cast(ShipMode | None, _text(form, "ship_mode") or None)
                 ),
             )
+            # Queue-time snapshot (issue #368): a queued run executes the
+            # version it was queued with, even if the profile is edited
+            # before execution — so the reference is pinned here, at queue
+            # time, and run creation resolves the pinned version. An
+            # unresolvable reference refuses (ValueError flashes) instead
+            # of queueing a run that cannot start.
+            workflow_profile = _text(form, "workflow_profile") or None
+            if workflow_profile is not None:
+                workflow_profile = pin_workflow_profile(
+                    ref=workflow_profile, repo_root=repo.root, user_root=Path.home() / ".jev"
+                )
             item = add_idea(
                 repo.store,
                 repo.learning,
@@ -83,6 +96,7 @@ class QueueRoutes(DashboardCore):
                 profile=options.profile,
                 quality=options.quality,
                 ship_mode=options.ship_mode,
+                workflow_profile=workflow_profile,
             )
             return f"queued item {item.id} ({item.priority})"
 

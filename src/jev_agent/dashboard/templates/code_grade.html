@@ -16,19 +16,68 @@
     <dt>Enabled</dt><dd>{{ "yes" if settings.enabled else "no" }}</dd>
     <dt>Model</dt><dd class="mono">{{ settings.model_id }}</dd>
     <dt>Confidence threshold</dt><dd>{{ "%.2f" | format(settings.confidence_threshold) }}</dd>
-    <dt>Backend</dt><dd>{{ badge("available", "ok") if available else badge("not installed", "warn") }}</dd>
+    <dt>Backend</dt><dd>{% if backend_label == "warmed" %}{{ badge("warmed", "ok") }}{% elif backend_label == "available" %}{{ badge("available", "ok") }}{% elif backend_label == "installing" %}{{ badge("installing", "warn") }}{% elif backend_label == "not loadable" %}{{ badge("installed but not loadable", "fail") }}{% elif backend_label in ("failed", "stopped", "interrupted") %}{{ badge(backend_label, "warn") }}{% else %}{{ badge("not installed", "warn") }}{% endif %}{% if install.probe and install.probe.laya_version %} <span class="mono small">laya {{ install.probe.laya_version }}, torch {{ install.probe.torch_version }}{% if install.probe.torch_build %} ({{ install.probe.torch_build }}){% endif %}</span>{% endif %}</dd>
   </dl>
-  {% if not settings.enabled %}
+  {% if backend_label == "warmed" %}
+  <p class="hint">Backend warmed{% if warmed_model %} for <span class="mono">{{ warmed_model }}</span>{% endif %} — the next grade needs no download.</p>
+  {% elif backend_label == "available" %}
+  <p class="hint">Backend available — checkpoint downloads on first grade.</p>
+  {% endif %}
+  {% if show_enable %}
+  <p class="hint">Backend ready. Grading from this page works on demand; the quality
+  gate does not grade every diff yet.</p>
+  <form method="post" action="/settings/set">
+    {{ csrf_input() }}
+    <input type="hidden" name="path" value="code_orchestrator.enabled">
+    <input type="hidden" name="kind" value="bool">
+    <input type="hidden" name="value" value="true">
+    <input type="hidden" name="target" value="repo">
+    <input type="hidden" name="next" value="/code-grade">
+    <button class="btn btn-secondary" type="submit">Turn on gate grading</button>
+  </form>
+  {% elif not settings.enabled %}
   <p class="hint">Grading is off: the quality gate will not grade diffs. Grading from this
   page still works on demand. To have the gate grade every diff, turn it on under
   <a href="/settings">Settings → Code orchestrator</a>.</p>
   {% endif %}
-  {% if not available %}
-  <p class="flash warn" role="note">The Coding Decision Agent model is not installed on this
-  machine, so grading is unavailable. Install it with
-  <code>pip install "jev-agent[code-orchestrator]"</code> — the first grade downloads the
-  ~842 MB model checkpoint into the Hugging Face cache. See
-  <code>docs/code-orchestrator.md</code>. Nothing here guesses a grade while the model is missing.</p>
+  {% if show_guide %}
+  <div class="flash warn" role="note">The dashboard cannot install the backend into its
+  Python environment from here. Run this in a terminal instead, then come back —
+  <a href="/code-grade">check again</a>:
+  <pre class="mono">{{ install_decision.guide_command }}</pre></div>
+  {% elif show_install %}
+  <p><a class="btn btn-primary" href="/code-grade/install/confirm">Install backend</a></p>
+  <p class="hint">Installs the Coding Decision Agent backend (laya plus torch, then the
+  ~842 MB model checkpoint) into the dashboard's Python environment, in the
+  background — no terminal needed. {{ install_decision.persistence }} Anyone on this
+  machine can install the backend. Nothing here guesses a grade while the model is missing.</p>
+  {% endif %}
+  {% if install.state == "running" %}
+  <p class="flash" role="status">A backend {{ install.kind }} is {{ install.phase or "running" }} — <a href="/code-grade/install">watch its progress</a>.
+  You can leave this page; the result waits on the install status page.</p>
+  {% elif install.state in ("done", "failed", "stopped", "interrupted") and install.kind %}
+  <p class="flash" role="status">The last backend {{ install.kind }} {{ install.state }}{% if install.message %}: {{ install.message }}{% endif %} — <a href="/code-grade/install">see the result</a>.</p>
+  {% endif %}
+  {% if show_verify %}
+  <form method="post" action="/code-grade/install/verify">
+    {{ csrf_input() }}
+    <button class="btn btn-secondary" type="submit">Verify backend</button>
+  </form>
+  {% endif %}
+  {% if show_repair %}
+  <form method="post" action="/code-grade/install/repair">
+    {{ csrf_input() }}
+    <button class="btn btn-secondary" type="submit">Repair backend</button>
+  </form>
+  <p class="hint">Repair removes laya and reinstalls it, then verifies again.</p>
+  {% endif %}
+  {% if show_uninstall %}
+  <form method="post" action="/code-grade/install/uninstall">
+    {{ csrf_input() }}
+    <button class="btn btn-secondary" type="submit">Uninstall backend</button>
+  </form>
+  <p class="hint">Uninstall removes laya only — never torch, never jev-agent — and the
+  checkpoint cache is kept, so reinstalling is faster.</p>
   {% endif %}
   {% if job.state == "running" %}
   <p class="flash" role="status">A {{ job.kind }} is running — <a href="/code-grade/status">watch its progress</a>.

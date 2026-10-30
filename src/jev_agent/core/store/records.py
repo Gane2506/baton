@@ -83,6 +83,52 @@ class RunRecord:
     # The chat's design-system choice, for runs launched from a chat (migration 19):
     # "library:<name>", "repo", or None (the repo default, as before).
     design_system: str | None = None
+    # Workflow profile snapshot columns (issue #368, migration 22; design
+    # section 6.4). None for legacy runs: no profile was picked, no snapshot
+    # stored, and execution behaviour is unchanged.
+    workflow_profile_id: str | None = None
+    workflow_profile_version: int | None = None
+    workflow_profile_release: str | None = None
+    goal: str | None = None  # the user-stated goal; None: none was stated
+    preset_goal: str | None = None  # the picked preset's goal label, display only
+    assurance: str | None = None  # "full" | "reduced" (None: not computed)
+    assurance_absent: tuple[str, ...] = ()  # absent behaviours, in plain words
+    flow_snapshot: dict[str, object] | None = None  # resolved parameter set
+
+
+@dataclass(frozen=True)
+class StageRecord:
+    """One stage execution of a run (design section 11.1): one row per handler
+    call, one row per attempt of a retried stage. Token/cost fields are None
+    when unknown — never zero — and `completeness` is "partial" when any
+    attempt in the row reported no tokens."""
+
+    id: int
+    run_id: str
+    stage: str  # a RunState work state, e.g. "PLANNING"
+    attempt: int  # 1-based, continuing across Halt/resume, never restarting
+    workflow_profile_id: str | None
+    workflow_profile_version: int | None
+    workflow_profile_release: str | None
+    goal: str | None
+    preset_goal: str | None
+    started_at: datetime
+    ended_at: datetime | None
+    work_seconds: float | None  # ended minus started minus gate-wait seconds
+    gate_wait_seconds: float
+    tokens_in: int | None
+    tokens_out: int | None
+    cost_usd: float | None
+    cost_reason: str | None
+    cache_hits: int
+    cache_served: bool
+    semantic_shadow_hits: int
+    outcome: str | None  # "success" | "halted" | "failed" | "skipped"
+    halt_reason: str | None
+    defects_caught: int
+    effective_model: str | None
+    effective_level: str | None
+    completeness: str | None  # "full" | "partial"
 
 
 @dataclass(frozen=True)
@@ -128,6 +174,7 @@ class AttemptRecord:
     finished_at: datetime | None
     result: WorkerResult | None  # None until finish_attempt is called
     lesson_ids: tuple[str, ...] = ()  # lessons injected into this attempt's prompt
+    stage: str | None = None  # pipeline stage active at the attempt write, if any
 
 
 @dataclass(frozen=True)
@@ -151,6 +198,7 @@ class DecisionRecord:
     decision: Decision
     fallback_reason: str | None  # why the rules dispatcher was used instead, if it was
     created_at: datetime
+    stage: str | None = None  # pipeline stage active at the decision write, if any
 
 
 PrState = Literal["open", "closed", "merged"]
@@ -221,6 +269,10 @@ class QueueItem:
     updated_at: datetime
     quality: QualityLevel | None = None  # `--quality LEVEL`; None: the config's level
     ship_mode: ShipMode | None = None  # `--auto-ship` / `--ask-before-ship`; None: the config's
+    # Workflow profile pick (issue #368): "repo:slug" (current version) or
+    # "repo:slug@v<n>" (pinned version, as queued). Distinct from `profile`
+    # (the workspace profile name) above.
+    workflow_profile: str | None = None
 
 
 @dataclass(frozen=True)
@@ -249,3 +301,4 @@ class RecurringTask:
     quality: str | None
     ship_mode: str | None
     created_at: datetime
+    workflow_profile: str | None = None

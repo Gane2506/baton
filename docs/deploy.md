@@ -191,6 +191,19 @@ offers an optional named volume (`jev-state`) that moves state out of the
 repo — only enable it for a repo with no `.jev/` yet: it shadows an existing
 `.jev/`, so a repo with real state would silently get an empty state DB.
 
+**Coding Decision Agent backend on Docker:** installing it from the Code
+Grade page's Install button works inside the container, but no volume is
+added for it, so a container recreate wipes a container-side install and
+the button is offered again afterwards (documented rebuild plus
+reinstall — the deploy contract does not change). The button states this
+before you click; a recreate costs another install, still zero-terminal.
+
+**Coding Decision Agent backend with a uv tool install:** the button
+installs into the dashboard's tool environment, which survives dashboard
+restarts — but a `uv tool install --force` reinstall recreates that
+environment and wipes the extra, so the button is offered again
+afterwards.
+
 ## Troubleshooting
 
 - **Port already in use.** Starting a second dashboard on the same port

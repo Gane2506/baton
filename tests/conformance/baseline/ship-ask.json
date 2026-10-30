@@ -1,0 +1,25 @@
+{
+  "scenario": "ship-ask",
+  "description": "Shipping on, after_approval ask: parks in AWAITING_SHIP, then SHIPPING.",
+  "path": "legacy",
+  "fixture": {
+    "quality_level": "medium",
+    "require_plan_approval": true,
+    "ship_enabled": false,
+    "autonomy_mode": "standard"
+  },
+  "stage_sequence": [
+    "INTAKE",
+    "PLANNING",
+    "VALIDATING",
+    "EXECUTING",
+    "INTEGRATING",
+    "SHIPPING"
+  ],
+  "gate_parkings": [
+    "AWAITING_APPROVAL",
+    "AWAITING_SHIP"
+  ],
+  "outcome": "DONE",
+  "label_output": "Full checks"
+}

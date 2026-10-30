@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import tempfile
 from collections.abc import Callable
 from typing import Any
 
@@ -17,6 +18,7 @@ from starlette.responses import (
 
 from jev_agent import __version__
 from jev_agent.app import settings
+from jev_agent.app.doctor import Check
 from jev_agent.app.errors import JevError
 from jev_agent.app.models import fetch_catalog
 from jev_agent.config import ConfigError
@@ -271,6 +273,28 @@ class SettingsRoutes(DashboardCore):
 
         def build(repo: views.Repo) -> dict[str, Any]:
             checks = views.doctor_checks(repo.root)
+            # Issue #366, §8: grade-time temp space, recorded at dashboard
+            # startup. A dashboard started with a small tmpfs still fails
+            # first grades until restarted with a real-disk TMPDIR.
+            tmpdir = tempfile.gettempdir()
+            if self.temp_space_ok:
+                checks.append(
+                    Check(
+                        "temp space",
+                        "ok",
+                        f"{tmpdir}: {self.temp_space_free_bytes // 1_073_741_824} GB free",
+                    )
+                )
+            else:
+                checks.append(
+                    Check(
+                        "temp space",
+                        "warn",
+                        f"{tmpdir}: only {self.temp_space_free_bytes // 1_073_741_824} GB "
+                        "free — checkpoint reconstruction needs 1 GB of temp staging; "
+                        "restart the dashboard with TMPDIR on a real disk",
+                    )
+                )
             failed = sum(1 for c in checks if c.status == "fail")
             return {"checks": checks, "failed": failed}
 
@@ -581,6 +605,16 @@ class SettingsRoutes(DashboardCore):
             return self.back("/settings")
         values = {key: value for key, value in form.items() if isinstance(value, str)}
         to = "/" + settings.page_of(path) + "#" + settings.anchor_of(path)
+        # D3 return-to (issue #366): a posting page may name the page to land
+        # on after the write, as a same-site path only — never an absolute or
+        # protocol-relative URL. Forms that do not send `next` are unchanged.
+        next_target = _text(form, "next") or ""
+        if (
+            next_target.startswith("/")
+            and not next_target.startswith("//")
+            and "\\" not in next_target
+        ):
+            to = next_target
         if path == "models.planner_policy" and not unset:
             # The picker is four radios, not free text: refuse anything else here
             # (the schema Literal would refuse it too, but only after the sync below

@@ -51,6 +51,7 @@ from jev_agent.dashboard.routes_preview import PreviewRoutes
 from jev_agent.dashboard.routes_queue import QueueRoutes
 from jev_agent.dashboard.routes_settings import SettingsRoutes
 from jev_agent.dashboard.routes_studio import StudioRoutes
+from jev_agent.dashboard.routes_workflows import WorkflowRoutes
 from jev_agent.dashboard.runner import (
     Executor,
     RunLauncher,
@@ -90,6 +91,7 @@ class Dashboard(
     SettingsRoutes,
     PreviewRoutes,
     CodeRoutes,
+    WorkflowRoutes,
 ):
     """The dashboard app: route handlers grouped by area (routes_*.py mixins),
     over DashboardCore (state, render/page/back/act)."""
@@ -170,6 +172,11 @@ def create_app(
         Route("/chats/{chat_id}/work", dash.chat_work),
         Route("/chats/{chat_id}/work/{tab}", dash.chat_work_tab),
         Route("/spend", dash.spend_page),
+        # Workflow profiles, phase 2 slice (issue #368): export/import only.
+        # The /workflows list and editor pages land in phase 5.
+        Route("/workflows/import", dash.workflows_import_page),
+        Route("/workflows/import", dash.workflows_import, methods=["POST"]),
+        Route("/workflows/{profile_id}/export", dash.workflows_export),
         Route("/kpis", dash.kpis_page),
         Route("/kpis/sync", dash.kpis_sync, methods=["POST"]),
         Route("/agents", dash.agents_page),
@@ -213,6 +220,14 @@ def create_app(
         Route("/code-grade/status", dash.code_grade_status),
         Route("/code-grade/live", dash.code_grade_live),
         Route("/code-grade/cancel", dash.code_grade_cancel, methods=["POST"]),
+        Route("/code-grade/install", dash.cda_install_page),
+        Route("/code-grade/install/live", dash.cda_install_live),
+        Route("/code-grade/install/confirm", dash.cda_install_confirm),
+        Route("/code-grade/install/start", dash.cda_install_start, methods=["POST"]),
+        Route("/code-grade/install/stop", dash.cda_install_stop, methods=["POST"]),
+        Route("/code-grade/install/verify", dash.cda_install_verify, methods=["POST"]),
+        Route("/code-grade/install/repair", dash.cda_install_repair, methods=["POST"]),
+        Route("/code-grade/install/uninstall", dash.cda_install_uninstall, methods=["POST"]),
         Route("/connections", dash.connections_page),
         Route("/connections/live", dash.connections_live),
         Route("/connections/refresh", dash.connections_refresh, methods=["POST"]),

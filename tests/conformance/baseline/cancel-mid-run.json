@@ -1,0 +1,22 @@
+{
+  "scenario": "cancel-mid-run",
+  "description": "Cancelled mid-run: the run stops CANCELLED, open stage rows close.",
+  "path": "legacy",
+  "fixture": {
+    "quality_level": "medium",
+    "require_plan_approval": true,
+    "ship_enabled": false,
+    "autonomy_mode": "standard"
+  },
+  "stage_sequence": [
+    "INTAKE",
+    "PLANNING",
+    "VALIDATING",
+    "EXECUTING"
+  ],
+  "gate_parkings": [
+    "AWAITING_APPROVAL"
+  ],
+  "outcome": "CANCELLED",
+  "label_output": "Full checks"
+}

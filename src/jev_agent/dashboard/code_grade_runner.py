@@ -52,21 +52,17 @@ from jev_agent.dashboard.errors import friendly_error as _friendly_error
 
 log = logging.getLogger(__name__)
 
+
 # The model is heavy (~842 MB checkpoint behind `laya` + torch) and not a
-# dependency of `jev`: installing it is `pip install
-# "jev-agent[code-orchestrator]"` (see docs/code-orchestrator.md). The page
-# shows this wherever grading is unavailable, so the user is never left
-# guessing what to install.
-_INSTALL_GUIDANCE = (
-    'install it with `pip install "jev-agent[code-orchestrator]"` — the first '
-    "grade downloads the ~842 MB model checkpoint into the Hugging Face cache "
-    "(see docs/code-orchestrator.md)"
-)
-
-
+# dependency of `jev`. The page no longer prints a pip command for it (issue
+# #366): the Code Grade page offers the install button instead, so the user
+# is never left guessing what to install — or sent to a terminal for it.
 def unavailable_message() -> str:
     """The install guidance shown when the backend is missing, not a grade."""
-    return f"the Coding Decision Agent is not installed — {_INSTALL_GUIDANCE}"
+    return (
+        "the Coding Decision Agent is not installed — install it from the "
+        "Code Grade page (/code-grade/install/confirm)"
+    )
 
 
 class CodeGradeBusy(RuntimeError):

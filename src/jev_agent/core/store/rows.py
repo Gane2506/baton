@@ -32,6 +32,7 @@ from .records import (
     RunLease,
     RunRecord,
     ShippedPrRecord,
+    StageRecord,
     TaskRecord,
 )
 
@@ -156,6 +157,47 @@ def _run_record(row: sqlite3.Row) -> RunRecord:
         medium_folder=row["medium_folder"],
         design=None if design_json is None else DesignDoc.model_validate_json(design_json),
         design_system=row["design_system"],
+        workflow_profile_id=row["workflow_profile_id"],
+        workflow_profile_version=row["workflow_profile_version"],
+        workflow_profile_release=row["workflow_profile_release"],
+        goal=row["goal"],
+        preset_goal=row["preset_goal"],
+        assurance=row["assurance"],
+        assurance_absent=tuple(
+            json.loads(row["assurance_absent"]) if row["assurance_absent"] else []
+        ),
+        flow_snapshot=None if row["flow_snapshot"] is None else json.loads(row["flow_snapshot"]),
+    )
+
+
+def _stage_record(row: sqlite3.Row) -> StageRecord:
+    return StageRecord(
+        id=row["id"],
+        run_id=row["run_id"],
+        stage=row["stage"],
+        attempt=row["attempt"],
+        workflow_profile_id=row["workflow_profile_id"],
+        workflow_profile_version=row["workflow_profile_version"],
+        workflow_profile_release=row["workflow_profile_release"],
+        goal=row["goal"],
+        preset_goal=row["preset_goal"],
+        started_at=_aware_time(row["started_at"]),
+        ended_at=_time(row["ended_at"]),
+        work_seconds=row["work_seconds"],
+        gate_wait_seconds=row["gate_wait_seconds"],
+        tokens_in=row["tokens_in"],
+        tokens_out=row["tokens_out"],
+        cost_usd=row["cost_usd"],
+        cost_reason=row["cost_reason"],
+        cache_hits=row["cache_hits"],
+        cache_served=bool(row["cache_served"]),
+        semantic_shadow_hits=row["semantic_shadow_hits"],
+        outcome=row["outcome"],
+        halt_reason=row["halt_reason"],
+        defects_caught=row["defects_caught"],
+        effective_model=row["effective_model"],
+        effective_level=row["effective_level"],
+        completeness=row["completeness"],
     )
 
 
@@ -192,6 +234,7 @@ def _attempt_record(row: sqlite3.Row) -> AttemptRecord:
         finished_at=_time(row["finished_at"]),
         result=None if result_json is None else WorkerResult.model_validate_json(result_json),
         lesson_ids=tuple(json.loads(row["lesson_ids"])) if row["lesson_ids"] else (),
+        stage=row["stage"],
     )
 
 
@@ -204,6 +247,7 @@ def _decision_record(row: sqlite3.Row) -> DecisionRecord:
         decision=Decision.model_validate_json(row["decision_json"]),
         fallback_reason=row["fallback_reason"],
         created_at=_aware_time(row["created_at"]),
+        stage=row["stage"],
     )
 
 
@@ -233,6 +277,7 @@ def _queue_item(row: sqlite3.Row) -> QueueItem:
         note=row["note"],
         quality=row["quality"],
         ship_mode=row["ship_mode"],
+        workflow_profile=row["workflow_profile"],
         created_at=_aware_time(row["created_at"]),
         updated_at=_aware_time(row["updated_at"]),
     )
@@ -256,5 +301,6 @@ def _recurring_task(row: sqlite3.Row) -> RecurringTask:
         profile=row["profile"],
         quality=row["quality"],
         ship_mode=row["ship_mode"],
+        workflow_profile=row["workflow_profile"],
         created_at=_aware_time(row["created_at"]),
     )

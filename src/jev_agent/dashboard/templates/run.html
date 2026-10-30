@@ -39,6 +39,8 @@
     {% endif %}
     <dt>Learning</dt><dd>{{ v.learning }}</dd>
     <dt>Quality</dt><dd>{{ v.quality }}</dd>
+    {% if v.assurance_label %}<dt>Assurance</dt><dd>{{ v.assurance_label }}{% if run.assurance_absent %} (absent: {{ run.assurance_absent | join("; ") }}){% endif %}</dd>{% endif %}
+    {% if run.workflow_profile_id %}<dt>Workflow profile</dt><dd>{{ run.workflow_profile_id }}{% if run.workflow_profile_version is not none %} v{{ run.workflow_profile_version }}{% elif run.workflow_profile_release %} release {{ run.workflow_profile_release }}{% endif %} (snapshot at creation)</dd>{% endif %}
     <dt>Result branch</dt><dd>{% if v.branch %}<code>{{ v.branch }}</code>{{ copy_button(v.branch, "Copy branch name") }}{% else %}<span class="muted">none yet (made at integration)</span>{% endif %}</dd>
     <dt>Created</dt><dd>{{ run.created_at | time }}</dd>
   </dl>
@@ -47,6 +49,31 @@
 <div id="run-live" data-live="/runs/{{ run.id }}/live" data-live-every="{{ refresh_ms }}">
 {% include "_run_live.html" %}
 </div>
+
+<h2 class="section">Stages</h2>
+{% if v.stage_rows %}
+<div class="table-wrap table-scroll"><table>
+  <thead><tr><th>Stage</th><th class="num">Attempt</th><th class="num">Work</th><th class="num">Gate wait</th><th class="num">Tokens in</th><th class="num">Tokens out</th><th class="num">Cost</th><th class="num">Cache hits</th><th>Outcome</th></tr></thead>
+  <tbody>
+  {% for row in v.stage_rows %}
+    <tr>
+      <td>{{ row.stage }}</td>
+      <td class="num">{{ row.attempt }}</td>
+      <td class="num">{% if row.work_seconds is not none %}{{ row.work_seconds | round(1) }} s{% else %}<span class="muted">running</span>{% endif %}</td>
+      <td class="num">{{ row.gate_wait_seconds | round(1) }} s</td>
+      <td class="num">{% if row.tokens_in is none %}<span class="muted">unknown</span>{% else %}{{ row.tokens_in }}{% endif %}</td>
+      <td class="num">{% if row.tokens_out is none %}<span class="muted">unknown</span>{% else %}{{ row.tokens_out }}{% endif %}</td>
+      <td class="num">{% if row.cost_usd is none %}<span class="muted">unknown</span>{% else %}{{ row.cost_usd | usd }}{% endif %}</td>
+      <td class="num">{{ row.cache_hits }}{% if row.cache_served %} (served){% endif %}{% if row.semantic_shadow_hits %} · {{ row.semantic_shadow_hits }} shadow{% endif %}</td>
+      <td>{{ row.outcome or "running" }}{% if row.completeness == "partial" %} <span class="muted">(partial)</span>{% endif %}{% if row.halt_reason %} <span class="muted">{{ row.halt_reason }}</span>{% endif %}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table></div>
+<p class="hint">Gate-wait seconds are time parked in a gate, never mixed into work seconds. A token count of "unknown" means a worker did not report tokens — it is never zero.</p>
+{% else %}
+<div class="empty"><div class="title">No stage rows yet</div><p>Stages are recorded as the run moves; runs created before stage measurement have none.</p></div>
+{% endif %}
 
 <h2 class="section">Decisions</h2>
 {% if v.decisions %}

@@ -8,6 +8,7 @@ prints or exits. Errors are `JevError` (context wiring) or domain exceptions
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 
 from jev_agent.app.context import AppContext, RepoContext
 from jev_agent.app.errors import JevError
@@ -23,6 +24,12 @@ from jev_agent.config.servers_schema import NO_PROFILE as NO_PROFILE
 from jev_agent.core.learning import Learning, LearningError, check_profile_name, resolve_learning
 from jev_agent.core.models import AutonomyMode, Idea
 from jev_agent.core.store import RunRecord
+from jev_agent.core.workflow_profiles import (
+    ProfileStoreError,
+    ProfileValidationError,
+    compute_assurance,
+    resolve_workflow_profile,
+)
 from jev_agent.quality.levels import QualityLevel, parse_level
 
 
@@ -102,6 +109,7 @@ def create_run(
     profile: str | None = None,
     ship_mode: ShipMode | None = None,
     design_system: str | None = None,
+    workflow_profile: str | None = None,
 ) -> RunRecord:
     """Create the run and record its flags, without advancing it (the front half of `jev run`;
     `Pipeline.advance` continues it from its first state). Same errors as `start_run`.
@@ -109,33 +117,113 @@ def create_run(
     Front ends that must show the run id at once (the dashboard, the chat) create a run this
     way and advance it in the background. `design_system` is the launching chat's
     design-system choice ("library:<name>", "repo", or None for the repo default).
+
+    `workflow_profile` is the workflow-profile pick (issue #368): None or
+    `"default"` keeps the legacy path (the resolver is skipped, no snapshot
+    stored, execution behaviour unchanged). Any other value resolves through
+    the one resolver function — a path that cannot resolve a profile refuses
+    with the setting named (`JevError`), never silently falling back.
     """
     workspace = effective_name(ctx.config, profile, ctx.root / STATE_DIRNAME)
+    # Keep the per-run flag and the workspace value apart: precedence (F1)
+    # is flag > profile > workspace/config, so the resolver needs both.
+    workspace_quality: str | None = None
+    workspace_learning: str | None = None
+    no_learning_eff = no_learning
+    learning_in = learning
     if workspace is not None:
         settings = get_profile(ctx.config, workspace)
         if learning is None and not no_learning and settings.learning is not None:
             if settings.learning is False:
-                no_learning = True
+                no_learning_eff = True
             else:
-                learning = settings.learning
+                workspace_learning = settings.learning
+                learning_in = settings.learning
         if quality is None and settings.quality is not None:
-            quality = settings.quality
-    level = ctx.config.quality.level if quality is None else parse_level(quality)
+            workspace_quality = settings.quality
+    legacy_level = (
+        ctx.config.quality.level
+        if quality is None and workspace_quality is None
+        else parse_level(quality if quality is not None else workspace_quality)  # type: ignore[arg-type]
+    )
     learning_profile = resolve_learning(
-        ctx.store, _learning(ctx), ctx.config, learning, no_learning
+        ctx.store, _learning(ctx), ctx.config, learning_in, no_learning_eff
     )
     copy = None if workspace is None else snapshot(ctx.config, workspace)
     autonomy_mode, autonomous_opt_in, medium_folder = _autonomy_for_new_run(ctx)
+    resolved = None
+    if workflow_profile is not None and workflow_profile != "default":
+        learning_obj = ctx.learning
+        try:
+            resolved = resolve_workflow_profile(
+                ref=workflow_profile,
+                config=ctx.config,
+                repo_root=ctx.root,
+                user_root=Path.home() / ".jev",
+                flags={
+                    "quality_level": parse_level(quality) if quality is not None else None,
+                    "quality_repo_value": (
+                        parse_level(workspace_quality)
+                        if workspace_quality is not None
+                        else ctx.config.quality.level
+                    ),
+                    "quality_source": "workspace" if workspace_quality is not None else "repo",
+                    "ship_mode": ship_mode,
+                    "learning_profile": learning_profile,
+                    "learning_profile_is_flag": learning is not None,
+                    "learning_source": ("workspace" if workspace_learning is not None else "repo"),
+                },
+                autonomy_mode=autonomy_mode,
+                plan_approval_required=ctx.config.plan_approval_required,
+                learning_profiles=(
+                    {p.name for p in learning_obj.profiles()} if learning_obj else None
+                ),
+            )
+        except (ProfileStoreError, ProfileValidationError) as exc:
+            raise JevError(str(exc)) from exc
+    # Phase 2 records the resolved quality level and ship mode on the run's
+    # existing fields (the gate and the ship decision already read them);
+    # full snapshot-driven execution — gates, caps, models — is phase 3.
+    # Learning enablement is never changed by a profile (design 7.4).
+    # Assurance is computed at creation for every run: from the snapshot for
+    # a profiled run, from the run's effective settings for a legacy run
+    # (design 10.3) — so a legacy run using a configuration bypass carries
+    # the same reduced label a profiled run would.
+    level = resolved.snapshot["quality_level"] if resolved else legacy_level
+    run_ship_mode = resolved.snapshot["after_approval"] if resolved else ship_mode
+    if resolved is None:
+        if autonomy_mode == "autonomous":
+            legacy_plan_gate = False
+        elif autonomy_mode == "ask_every_step":
+            legacy_plan_gate = True
+        else:
+            legacy_plan_gate = ctx.config.plan_approval_required
+        legacy_assurance, legacy_absent = compute_assurance(
+            quality_level=legacy_level,
+            score_skip_human=ctx.config.quality.score_skip_human,
+            autonomy_mode=autonomy_mode,
+            plan_gate_present=legacy_plan_gate,
+        )
+    else:
+        legacy_assurance, legacy_absent = resolved.assurance, resolved.assurance_absent
     run = ctx.store.create_run(
         Idea(text=idea, repo_path=ctx.root),
         learning_profile,
         level,
         plan_only=plan_only,
-        ship_mode=ship_mode,
+        ship_mode=run_ship_mode,
         autonomy_mode=autonomy_mode,
         autonomous_opt_in=autonomous_opt_in,
         medium_folder=medium_folder,
         design_system=design_system,
+        workflow_profile_id=resolved.profile_id if resolved else None,
+        workflow_profile_version=resolved.version if resolved else None,
+        workflow_profile_release=resolved.release if resolved else None,
+        goal=resolved.goal if resolved else None,
+        preset_goal=resolved.preset_goal if resolved else None,
+        assurance=legacy_assurance,
+        assurance_absent=legacy_absent,
+        flow_snapshot=resolved.snapshot if resolved else None,
     )
     write_run_profile(ctx.root / STATE_DIRNAME, run.id, copy)
     return run
@@ -152,6 +240,7 @@ async def start_run(
     profile: str | None = None,
     ship_mode: ShipMode | None = None,
     design_system: str | None = None,
+    workflow_profile: str | None = None,
 ) -> RunRecord:
     """Start a run for `idea` and advance it as far as it goes (the body of `jev run`).
 
@@ -177,6 +266,7 @@ async def start_run(
         profile=profile,
         ship_mode=ship_mode,
         design_system=design_system,
+        workflow_profile=workflow_profile,
     )
     return await ctx.pipeline.advance(run.id)
 

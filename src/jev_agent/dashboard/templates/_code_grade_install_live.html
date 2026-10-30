@@ -1,0 +1,81 @@
+{# The install status fragment, polled by live.js into #code-grade-install-live. #}
+{% from "macros.html" import csrf_input with context %}
+{% if install.state == "running" %}
+<section class="panel" aria-label="Install in progress">
+  <div class="panel-head"><h2>Installing the backend&hellip;</h2></div>
+  <p>Phase: {{ install.phase or install.kind }}</p>
+  {% if elapsed_s is not none and elapsed_s < 60 %}
+  <p role="status">Running for {{ elapsed_s }} s. Installing takes minutes, not seconds.</p>
+  {% elif elapsed_s is not none %}
+  <p role="status">Running for {{ elapsed_s // 60 }} min {{ elapsed_s % 60 }} s. Installing takes minutes, not seconds.</p>
+  {% endif %}
+  {% if install.preflight %}
+  <h3>Preflight</h3>
+  <ul>
+    {% for name, passed, detail in install.preflight %}
+    <li>{{ name }}: {{ "pass" if passed else "fail" }} — {{ detail }}</li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+  {% if install.log_tail %}
+  <h3>Log</h3>
+  <pre class="mono">{% for line in install.log_tail %}{{ line }}
+{% endfor %}</pre>
+  {% endif %}
+  <p class="small muted">Started {{ install.started_at | time }}. You can leave this
+  page — the install keeps running and the result waits here.</p>
+  <form method="post" action="/code-grade/install/stop">
+    {{ csrf_input() }}
+    <button class="btn btn-secondary" type="submit">Stop install</button>
+  </form>
+  <p class="hint">Stopping terminates the install; retry starts again from preflight, and a
+  half-installed backend is never reported as installed.</p>
+</section>
+{% elif install.state == "done" %}
+<section class="panel" aria-label="Install finished">
+  <div class="panel-head"><h2>Backend {{ install.kind }} finished</h2></div>
+  <p>{{ install.message }}</p>
+  {% if install.probe and install.probe.laya_version %}
+  <p class="mono small">laya {{ install.probe.laya_version }}, torch {{ install.probe.torch_version }}{% if install.probe.torch_build %} ({{ install.probe.torch_build }}){% endif %}</p>
+  {% endif %}
+  {% if install.log_tail %}
+  <h3>Log</h3>
+  <pre class="mono">{% for line in install.log_tail %}{{ line }}
+{% endfor %}</pre>
+  {% endif %}
+  <div class="actions">
+    <a class="btn btn-primary" href="/code-grade">Back to Code Grade</a>
+  </div>
+</section>
+{% elif install.state in ("failed", "stopped", "interrupted") %}
+<section class="panel" aria-label="Install did not finish">
+  <div class="panel-head"><h2>Backend {{ install.kind }} {{ install.state }}</h2></div>
+  <p class="flash error" role="alert">{{ install.message }}</p>
+  {% if install.guide %}
+  <p>Run this in a terminal instead, then come back and
+  <a href="/code-grade">check again</a>:</p>
+  <pre class="mono">{{ install.guide_command }}</pre>
+  {% endif %}
+  {% if install.log_tail %}
+  <h3>Log</h3>
+  <pre class="mono">{% for line in install.log_tail %}{{ line }}
+{% endfor %}</pre>
+  {% endif %}
+  <div class="actions">
+    <a class="btn btn-primary" href="/code-grade/install/confirm">Retry install</a>
+    {% if install.failure_class in ("not-constructible", "checkpoint") %}
+    <form method="post" action="/code-grade/install/repair" style="display:inline">
+      {{ csrf_input() }}
+      <button class="btn btn-secondary" type="submit">Repair backend</button>
+    </form>
+    {% endif %}
+    <a class="btn btn-secondary" href="/code-grade">Back to Code Grade</a>
+  </div>
+</section>
+{% else %}
+<div class="empty">
+  <div class="title">No backend install has run yet</div>
+  <p>Install the backend from the
+  <a href="/code-grade">Code Grade page</a> — progress waits here.</p>
+</div>
+{% endif %}

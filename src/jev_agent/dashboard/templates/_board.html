@@ -12,6 +12,7 @@
           {% if c.card.spend_usd is not none %}<span>{{ c.card.spend_usd | usd }}</span>{% endif %}
           <span>{{ c.card.age }}</span>
           {% if c.quality %}<span>quality {{ c.quality }}</span>{% endif %}
+          {% if c.assurance_label %}<span>{{ c.assurance_label }}</span>{% endif %}
         </div>
         {% if not c.run_id and c.item_id %}
         <div class="card-actions">
