@@ -1,0 +1,24 @@
+{
+  "scenario": "halt-resume",
+  "description": "Halt mid-run (NEEDS_HUMAN with resume_state), then resume to DONE.",
+  "path": "legacy",
+  "fixture": {
+    "quality_level": "medium",
+    "require_plan_approval": true,
+    "ship_enabled": false,
+    "autonomy_mode": "standard"
+  },
+  "stage_sequence": [
+    "INTAKE",
+    "PLANNING",
+    "VALIDATING",
+    "EXECUTING",
+    "EXECUTING",
+    "INTEGRATING"
+  ],
+  "gate_parkings": [
+    "AWAITING_APPROVAL"
+  ],
+  "outcome": "DONE",
+  "label_output": "Full checks"
+}

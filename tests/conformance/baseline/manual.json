@@ -1,0 +1,17 @@
+{
+  "scenario": "manual",
+  "description": "MANUAL: the run waits in INTAKE for an explicit instruction.",
+  "path": "legacy",
+  "fixture": {
+    "quality_level": "medium",
+    "require_plan_approval": true,
+    "ship_enabled": false,
+    "autonomy_mode": "standard"
+  },
+  "stage_sequence": [
+    "INTAKE"
+  ],
+  "gate_parkings": [],
+  "outcome": "waiting",
+  "label_output": "Full checks"
+}

@@ -1,0 +1,23 @@
+{
+  "scenario": "designing-off",
+  "description": "Plan needs no design: DESIGNING is skipped, never entered.",
+  "path": "legacy",
+  "fixture": {
+    "quality_level": "medium",
+    "require_plan_approval": true,
+    "ship_enabled": false,
+    "autonomy_mode": "standard"
+  },
+  "stage_sequence": [
+    "INTAKE",
+    "PLANNING",
+    "VALIDATING",
+    "EXECUTING",
+    "INTEGRATING"
+  ],
+  "gate_parkings": [
+    "AWAITING_APPROVAL"
+  ],
+  "outcome": "DONE",
+  "label_output": "Full checks"
+}
