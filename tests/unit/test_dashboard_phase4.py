@@ -136,11 +136,15 @@ def test_queue_recurring_add_unknown_profile_refused(
 
 def test_cli_run_help_lists_workflow_profile_flag() -> None:
     """Parent-required phase-4 addition: `jev run --workflow-profile` exists
-    and is routed through the existing create_run funnel (see run_cmds)."""
+    and is routed through the existing create_run funnel (see run_cmds).
+    With color forced (FORCE_COLOR=1, as in CI), rich styles the option
+    name in segments, so compare against the visible text, not the raw
+    output (the same pattern as the partial-coverage CLI test)."""
     result = cli.invoke(cli_app, ["run", "--help"])
     assert result.exit_code == 0, result.output
-    assert "--workflow-profile" in result.output
-    assert "preset:efficiency" in result.output
+    visible = re.sub(r"\x1b\[[0-9;]*m", "", result.output)
+    assert "--workflow-profile" in visible
+    assert "preset:efficiency" in visible
 
 
 def test_cli_run_with_workflow_profile_flag(
