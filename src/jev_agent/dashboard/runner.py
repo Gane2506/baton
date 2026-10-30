@@ -117,6 +117,7 @@ def prepare_run(
     quality: str | None = None,
     profile: str | None = None,
     ship_mode: ShipMode | None = None,
+    workflow_profile: str | None = None,
 ) -> str:
     """Create a run exactly as `jev run` would (`cli.run_cmds.create_run` records its flags),
     without advancing it: the caller starts a `start` job so the request stays fast. Returns
@@ -133,6 +134,7 @@ def prepare_run(
             quality=quality,
             profile=profile,
             ship_mode=ship_mode,
+            workflow_profile=workflow_profile,
         )
     return run.id
 

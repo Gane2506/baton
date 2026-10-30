@@ -53,6 +53,14 @@
         <input type="text" id="profile" name="profile" placeholder="(optional)" maxlength="80">
       </div>
       <div>
+        <label for="workflow_profile">Workflow profile</label>
+        <select id="workflow_profile" name="workflow_profile">
+          <option value="default" selected>Default — no profile (today's pipeline)</option>
+          {% for p in workflow_presets %}{% if p.ref != "default" %}<option value="{{ p.ref }}">{{ p.name }} (preset)</option>{% endif %}{% endfor %}
+          {% for p in workflow_profiles %}<option value="{{ p.id }}">{{ p.display_name }} ({{ p.scope }})</option>{% endfor %}
+        </select>
+      </div>
+      <div>
         <label for="ship_mode">After the plan passes review</label>
         <select id="ship_mode" name="ship_mode">
           <option value="" title="from jev.toml">Use default</option>
@@ -63,6 +71,15 @@
       <div>
         <label class="check"><input type="checkbox" name="plan_only"> Plan only</label>
       </div>
+    </div>
+    <div class="small">
+      <p><strong>Workflow profiles, before you pick:</strong> Default means no profile — the run follows jev.toml exactly and stores no snapshot. A stored profile runs its snapshotted flow even if the profile is edited later.</p>
+      {% for p in workflow_presets %}{% if p.ref != "default" %}
+      <p><strong>{{ p.name }} (preset):</strong> {{ p.description }} Assurance preview: {{ p.assurance_label }}{% if p.priority %} Priority: {{ p.priority }}.{% endif %} A per-run quality or ship choice can change the assurance; the value stored at creation is the one the run page shows.</p>
+      {% endif %}{% endfor %}
+      {% if preset_startup_errors %}
+      <p class="flash error small" role="status">Workflow preset check at dashboard startup failed: {{ preset_startup_errors | join("; ") }}. A stale preset refuses at creation with the setting named; pick another profile until it is fixed.</p>
+      {% endif %}
     </div>
     <div class="actions">
       <button class="btn btn-secondary" type="submit" formaction="/runs/new">{{ icon("i-run", "sm") }}Run now</button>

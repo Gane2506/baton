@@ -94,6 +94,18 @@ ProfileOption = Annotated[
         help="Workspace profile (servers, browser, learning) for the run; `none` for none.",
     ),
 ]
+WorkflowProfileOption = Annotated[
+    str | None,
+    typer.Option(
+        "--workflow-profile",
+        metavar="REF",
+        help="Workflow profile for the run: `preset:efficiency`, `preset:accuracy`, "
+        "a stored `repo:slug` / `user:slug` profile, or `default` for no profile "
+        "(today's pipeline). Resolved through the same run-creation funnel as "
+        "the dashboard picker; a reference that cannot resolve refuses "
+        "instead of falling back.",
+    ),
+]
 
 
 def quality_level(value: str | None) -> QualityLevel | None:
@@ -201,6 +213,14 @@ def print_outcome(
         workspace = None
     if workspace is not None:
         console.print(f"  workspace profile: {escape(workspace.name)}")
+    if run.workflow_profile_id is not None:
+        if run.workflow_profile_version is not None:
+            version = f" v{run.workflow_profile_version}"
+        elif run.workflow_profile_release:
+            version = f" release {run.workflow_profile_release}"
+        else:
+            version = ""
+        console.print(f"  workflow profile: {escape(run.workflow_profile_id)}{version}")
     console.print(f"  spent ${run.spend_usd:.2f}; timeline: `jev log {run.id}`")
     if store is not None and config is not None:
         print_estimate(store, config, run)
@@ -215,6 +235,7 @@ def run(
     no_learning: NoLearningOption = False,
     quality: QualityOption = None,
     profile: ProfileOption = None,
+    workflow_profile: WorkflowProfileOption = None,
     auto_ship: AutoShipOption = False,
     ask_before_ship: AskBeforeShipOption = False,
     repo: RepoOption = Path("."),
@@ -252,6 +273,7 @@ def run(
                     quality=options.quality,
                     profile=profile,
                     ship_mode=mode,
+                    workflow_profile=workflow_profile,
                 )
             )
         except (LearningError, PipelineError, ProfileError, RunInUseError) as exc:

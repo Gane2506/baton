@@ -73,7 +73,7 @@
       </div>
       <div>
         <label for="workflow_profile">Workflow profile</label>
-        <input type="text" id="workflow_profile" name="workflow_profile" placeholder="repo:slug or user:slug (optional)" maxlength="80">
+        <input type="text" id="workflow_profile" name="workflow_profile" placeholder="repo:slug, user:slug, or preset:efficiency / preset:accuracy (optional)" maxlength="80">
       </div>
       <div>
         <label for="ship_mode">After the plan passes review</label>
@@ -110,21 +110,27 @@
         <select id="recurring-priority" name="priority">{% for p in priorities %}<option value="{{ p }}"{% if p == "normal" %} selected{% endif %}>{{ p }}</option>{% endfor %}</select>
       </div>
       <div>
+        <label for="recurring-workflow-profile">Workflow profile</label>
+        <input type="text" id="recurring-workflow-profile" name="workflow_profile" placeholder="repo:slug, user:slug, or preset:efficiency / preset:accuracy (optional)" maxlength="80">
+      </div>
+      <div>
         <label class="check"><input type="checkbox" name="plan_only"> Plan only</label>
       </div>
     </div>
+    <p class="hint">The workflow profile is pinned when each occurrence is enqueued, so every run uses the version current at that time — not the version current when the task was made. A preset is pinned by its release instead.</p>
     <p class="hint">Schedule: <code>hourly</code>, <code>daily</code>, <code>weekly</code>, <code>monthly</code>, <code>daily@HH:MM</code>, <code>weekly@day-HH:MM</code>, or a cron expression like <code>0 9 * * *</code>.</p>
     <button class="btn btn-primary" type="submit">{{ icon("i-plus", "sm") }}Add recurring task</button>
   </form>
   {% if q.recurring %}
   <div class="table-wrap"><table>
-    <thead><tr><th>Brief</th><th>Schedule</th><th>Next run</th><th>Status</th><th>Actions</th></tr></thead>
+    <thead><tr><th>Brief</th><th>Schedule</th><th>Next run</th><th>Workflow profile</th><th>Status</th><th>Actions</th></tr></thead>
     <tbody>
     {% for r in q.recurring %}
       <tr>
         <td class="wrap">{{ r.task.brief }}</td>
         <td class="small">{{ r.schedule_plain }}</td>
         <td class="mono">{{ r.next_due_local.strftime("%Y-%m-%d %H:%M %Z") }}</td>
+        <td class="small">{{ r.task.workflow_profile or "—" }}</td>
         <td>{% if r.task.enabled %}{{ badge("enabled") }}{% else %}{{ badge("paused", "pending") }}{% endif %}</td>
         <td>
           <div class="actions">

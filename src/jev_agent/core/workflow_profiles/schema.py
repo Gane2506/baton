@@ -121,6 +121,17 @@ def parse_profile_id(profile_id: str) -> tuple[str, str] | None:
     return scope, slug
 
 
+def parse_preset_id(profile_id: str) -> str | None:
+    """A built-in preset's id (``preset:<slug>``) as its slug, or None when
+    the id is not that shape. Presets are data, never stored profiles, so
+    they live outside the repo/user scope scheme (design section 6.6:
+    presets carry a release instead of a version)."""
+    if not profile_id.startswith("preset:"):
+        return None
+    slug = profile_id[len("preset:") :]
+    return slug if is_valid_slug(slug) else None
+
+
 def parse_profile_ref(ref: str) -> tuple[str, str, int | None] | None:
     """A creation field value: `<scope>:<slug>` (current version) or
     `<scope>:<slug>@v<n>` (pinned version, as queued). None when malformed."""

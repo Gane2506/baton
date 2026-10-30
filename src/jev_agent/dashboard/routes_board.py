@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any, cast
 
 from starlette.concurrency import run_in_threadpool
@@ -35,6 +36,8 @@ from jev_agent.core.store import (
     QUEUE_PRIORITIES,
     NotFoundError,
 )
+from jev_agent.core.workflow_profiles import ProfileStore
+from jev_agent.core.workflow_profiles.presets import preset_picker_entries
 from jev_agent.dashboard import views
 from jev_agent.dashboard.core import DashboardCore
 from jev_agent.dashboard.errors import friendly_error as _friendly_error
@@ -69,6 +72,17 @@ class BoardRoutes(DashboardCore):
                 "priorities": QUEUE_PRIORITIES,
                 "levels": LEVELS,
                 "profiles": repo.learning.profiles(),
+                # Phase 4 run-creation picker (design section 13.1): preset
+                # entries with their documented behaviour and assurance
+                # preview, plus any stored profiles (archived hidden, as
+                # creation lists hide them). Picker `default` means no
+                # profile (G1), never the `preset:default` file.
+                "workflow_presets": preset_picker_entries(
+                    repo.config,
+                    plan_approval_required=repo.config.plan_approval_required,
+                ),
+                "workflow_profiles": ProfileStore(repo.root, Path.home() / ".jev").list_profiles(),
+                "preset_startup_errors": self.preset_startup_errors,
             },
         )
 
@@ -357,6 +371,13 @@ class BoardRoutes(DashboardCore):
         quality = _text(form, "quality") or None
         profile = _text(form, "profile") or None
         ship_choice = _text(form, "ship_mode")
+        # Phase 4 picker: `default` (or empty) means no profile (G1); any
+        # other value is a preset (`preset:<name>`) or stored-profile ref,
+        # resolved through the one resolver at creation — a failure refuses
+        # with the setting named, never silently falling back.
+        workflow_profile = _text(form, "workflow_profile") or None
+        if workflow_profile == "default":
+            workflow_profile = None
         try:
             options = RunOptions(
                 plan_only=plan_only,
@@ -381,6 +402,7 @@ class BoardRoutes(DashboardCore):
                 quality=options.quality,
                 profile=options.profile,
                 ship_mode=mode,
+                workflow_profile=workflow_profile,
             )
             if not self.launcher.start(run_id, "start"):
                 raise PipelineError(f"run {run_id} is already being worked on here")

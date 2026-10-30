@@ -34,6 +34,7 @@ from .schema import (
     REQUIRED_STAGES,
     ROLES,
     SCOPES,
+    parse_preset_id,
     parse_profile_id,
     pretty_stage,
 )
@@ -96,22 +97,50 @@ def validate_profile(data: object, *, context: ValidationContext | None = None) 
     profile_id = data.get("id")
     scope = data.get("scope")
     if isinstance(profile_id, str):
-        parsed = parse_profile_id(profile_id)
-        if parsed is None:
-            errors.append(
-                f"Unknown profile id {profile_id!r}: ids look like 'repo:<slug>' or "
-                "'user:<slug>', with a slug of letters, digits, '-' and '_' starting "
-                "with a letter or digit, at most 40 characters."
-            )
-        elif isinstance(scope, str) and parsed[0] != scope:
-            errors.append(
-                f"Profile id {profile_id!r} does not match its scope {scope!r}: "
-                "use the id for the scope the profile is saved under."
-            )
+        if profile_id.startswith("preset:"):
+            # Built-in presets (phase 4): id `preset:<slug>`, scope `preset`,
+            # identified by release, never by a version (design section 6.6).
+            if parse_preset_id(profile_id) is None:
+                errors.append(
+                    f"Unknown preset id {profile_id!r}: preset ids look like "
+                    "'preset:<slug>', with a slug of letters, digits, '-' and "
+                    "'_' starting with a letter or digit, at most 40 characters."
+                )
+            elif scope != "preset":
+                errors.append(
+                    f"Preset id {profile_id!r} does not match its scope {scope!r}: "
+                    "a preset's scope is 'preset'."
+                )
+        else:
+            parsed = parse_profile_id(profile_id)
+            if parsed is None:
+                errors.append(
+                    f"Unknown profile id {profile_id!r}: ids look like 'repo:<slug>' or "
+                    "'user:<slug>', with a slug of letters, digits, '-' and '_' starting "
+                    "with a letter or digit, at most 40 characters."
+                )
+            elif isinstance(scope, str) and parsed[0] != scope:
+                errors.append(
+                    f"Profile id {profile_id!r} does not match its scope {scope!r}: "
+                    "use the id for the scope the profile is saved under."
+                )
     elif "id" in data:
         errors.append("Profile id must be a string like 'repo:<slug>' or 'user:<slug>'.")
-    if "scope" in data and not _one_of(scope, SCOPES):
-        errors.append(f"Unknown scope {scope!r}. Pick one of: repo, user.")
+    if "scope" in data and not _one_of(scope, (*SCOPES, "preset")):
+        errors.append(f"Unknown scope {scope!r}. Pick one of: repo, user, preset.")
+    if scope == "preset":
+        # Presets carry a release instead of a version (design section 6.6);
+        # a preset without one cannot be identified by the release that
+        # shipped it, and a version on a preset is a format error, not data
+        # to ignore (design section 14).
+        release = data.get("release")
+        if not (isinstance(release, str) and release.strip()):
+            errors.append(
+                "A preset needs a release: the Baton release that shipped it. "
+                "Add the release, or save the profile under repo or user scope."
+            )
+        if data.get("version") is not None:
+            errors.append("A preset carries a release, not a version. Remove the version field.")
     if "display_name" in data and not (
         isinstance(data["display_name"], str) and data["display_name"].strip()
     ):
