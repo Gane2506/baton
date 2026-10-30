@@ -9,8 +9,9 @@ from __future__ import annotations
 
 import json
 from collections.abc import Iterable, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
+from typing import Any
 
 from pydantic import ValidationError
 
@@ -108,6 +109,19 @@ class Harness:
         if self._cache is None:
             self._cache = Cache(self.store, self.config.cache, self.repo)
         return self._cache
+
+    def snapshot_for_run(self, run_id: str | None) -> dict[str, Any] | None:
+        """A run's flow snapshot (issue #368, design section 6.4), or None
+        for a legacy run or an unknown run id. A lookup failure is not a
+        run failure: callers treat it as no snapshot (legacy behaviour)."""
+        if not run_id:
+            return None
+        try:
+            run = self.store.get_run(run_id)
+        except Exception:
+            return None
+        snapshot = getattr(run, "flow_snapshot", None)
+        return snapshot if isinstance(snapshot, dict) else None
 
     @property
     def budget(self) -> Budget:
@@ -234,7 +248,12 @@ class Harness:
                 config=self.config,
                 run_id=run_id,
             )
-            entry = self.cache.get(key)
+            # Snapshot cache mode (design section 8.1): `exact_off` stops
+            # exact serves only — the lookup is skipped, while semantic
+            # shadow measurement below and cache writes stay untouched.
+            snapshot = self.snapshot_for_run(run_id)
+            exact_off = snapshot is not None and snapshot.get("cache_mode") == "exact_off"
+            entry = None if exact_off else self.cache.get(key)
         shadow: list[tuple[CacheEntry, float]] = []
         served_semantic = False
         if entry is None and key is not None and self.cache.semantic_enabled:
@@ -410,7 +429,19 @@ class Harness:
         served without calling the worker again. `coder` and `learner` are hard-denied
         in code; only `success` results are stored; CLI workers are excluded unless
         `[cache] cli_workers`.
+
+        Snapshot parameters (issue #368, design section 8.1) apply here
+        because this is the one worker-execution path for level workers and
+        task workers alike: a snapshot role-model override replaces the
+        assignment's model for that role, and `exact_off` stops exact
+        serves (writes and shadow measurement are untouched). Legacy runs
+        have no snapshot, so both behaviours are unchanged for them.
         """
+        snapshot = self.snapshot_for_run(run_id)
+        if snapshot is not None:
+            role_models = snapshot.get("role_models")
+            if isinstance(role_models, dict) and role_models.get(role) is not None:
+                assignment = replace(assignment, model=role_models[role])
         path = log_path(self.state_dir, run_id, task_id, log_name)
         try:
             worker = self.workers.get(assignment.worker)
@@ -443,7 +474,14 @@ class Harness:
             tools=tools,
             # Planner under "paid and free, without training" (issue #327): the api
             # worker sends `data_collection: "deny"` on free-model calls.
-            no_training=role == "planner" and planner_no_training(self.config),
+            # A snapshot planner policy wins over configuration here, as for
+            # the other snapshot parameters above.
+            no_training=role == "planner"
+            and (
+                snapshot.get("planner_policy") == "mixed_no_training"
+                if snapshot is not None and snapshot.get("planner_policy") is not None
+                else planner_no_training(self.config)
+            ),
         )
         role_key = None
         role_entry = None
@@ -463,7 +501,10 @@ class Harness:
                 config=self.config,
                 run_id=run_id,
             )
-            role_entry = self.cache.get(role_key)
+            # Snapshot `exact_off` stops exact serves only; shadow
+            # measurement below still runs.
+            exact_off = snapshot is not None and snapshot.get("cache_mode") == "exact_off"
+            role_entry = None if exact_off else self.cache.get(role_key)
             if role_entry is None and self.cache.semantic_enabled:
                 # Roles are shadow-measured only: semantic serving for role outputs
                 # stays off until shadow data proves ≥ 0.99 agreement (issue #10 §6).

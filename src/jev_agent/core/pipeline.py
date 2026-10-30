@@ -136,19 +136,72 @@ def run_autonomy_mode(run: RunRecord) -> AutonomyMode:
     return raw if isinstance(raw, AutonomyMode) else AutonomyMode(raw)
 
 
-def step_gate_target(mode: AutonomyMode, step: RunState) -> RunState:
+def snapshot_for_run(run: RunRecord) -> dict[str, Any] | None:
+    """A run's flow snapshot (issue #368, design section 6.4), or None for a
+    legacy run. The snapshot is the profile path's only parameter source:
+    handlers read snapshot fields for a profiled run, never the run record's
+    legacy duplicates and never repo configuration at run time."""
+    snapshot = getattr(run, "flow_snapshot", None)
+    return snapshot if isinstance(snapshot, dict) else None
+
+
+def _snapshot_gate_policy(snapshot: dict[str, Any] | None, step: RunState) -> str | None:
+    """The snapshot's gate policy for `step` (`inherit` / `require` / `skip`),
+    or None when there is no snapshot or no entry (legacy behaviour)."""
+    if snapshot is None:
+        return None
+    policies = snapshot.get("gate_policies")
+    if not isinstance(policies, dict):
+        return None
+    policy = policies.get(step.name)
+    return policy if isinstance(policy, str) else None
+
+
+def step_gate_target(
+    mode: AutonomyMode, step: RunState, snapshot: dict[str, Any] | None = None
+) -> RunState:
     """The state the pipeline moves to in order to run `step`: the step itself, or its
-    approval gate in ASK_EVERY_STEP mode."""
+    approval gate in ASK_EVERY_STEP mode.
+
+    With a snapshot (design section 7.2), the step's gate policy applies:
+    `require` parks always; `skip` runs the step without parking, except an
+    explicit human gate stands — in ASK_EVERY_STEP mode the parking remains;
+    `inherit` (or no entry) keeps the legacy behaviour. Without a snapshot
+    the legacy path is unchanged: only the signature is extended."""
+    gate = STEP_GATES.get(step, step)
+    if snapshot is not None:
+        policy = _snapshot_gate_policy(snapshot, step)
+        if policy == "require":
+            return gate
+        if policy == "skip":
+            return gate if mode is AutonomyMode.ASK_EVERY_STEP else step
     if mode is AutonomyMode.ASK_EVERY_STEP:
-        return STEP_GATES[step]
+        return gate
     return step
 
 
-def execution_gate_target(mode: AutonomyMode, approval_required: bool) -> RunState:
+def execution_gate_target(
+    mode: AutonomyMode, approval_required: bool, snapshot: dict[str, Any] | None = None
+) -> RunState:
     """The state `_validate` moves to once D3 approves the plan: the approval gate, or
     straight to EXECUTING when no gate applies. AUTONOMOUS skips the gate; otherwise
     `plan_only` or `[approval] require_plan_approval` puts the run behind it, and
-    ASK_EVERY_STEP always does."""
+    ASK_EVERY_STEP always does.
+
+    With a snapshot, the VALIDATING step's gate policy applies (design
+    section 7.2): `require` parks always; `skip` never skips an explicit
+    gate — `approval_required` (a per-run flag or `require_plan_approval`)
+    or ASK_EVERY_STEP parking stands; `inherit` keeps the legacy behaviour.
+    A `require` policy on an AUTONOMOUS run cannot reach here: creation
+    refuses that combination (section 7.2)."""
+    if snapshot is not None:
+        policy = _snapshot_gate_policy(snapshot, RunState.VALIDATING)
+        if policy == "require":
+            return RunState.AWAITING_APPROVAL
+        if policy == "skip":
+            if mode is AutonomyMode.ASK_EVERY_STEP or approval_required:
+                return RunState.AWAITING_APPROVAL
+            return RunState.EXECUTING
     if mode is AutonomyMode.AUTONOMOUS:
         return RunState.EXECUTING
     if mode is AutonomyMode.ASK_EVERY_STEP or approval_required:
@@ -227,12 +280,24 @@ class Pipeline:
         # resumed run reaches the same servers. ProfileError (a ValueError) if unknown.
         copy = None if profile is None else snapshot(self.h.config, profile)
         # Workflow profiles (issue #368): the same resolver as `app.runs`
-        # create_run. None/"default" keeps the legacy path; anything else
-        # refuses with the setting named instead of falling back.
+        # create_run. None/"default" keeps the legacy path, unless
+        # `[workflows] default_via_profile` sends a no-profile run through
+        # the profile path with the `default` preset's parameters (G1);
+        # anything else refuses with the setting named instead of falling
+        # back. Disabled (`[workflows] enabled = false`) blocks profile
+        # selection here exactly as in `app.runs.create_run`.
         resolved = None
         if workflow_profile is not None and workflow_profile != "default":
-            from jev_agent.core.workflow_profiles import resolve_workflow_profile
+            from jev_agent.core.workflow_profiles import (
+                resolve_workflow_profile,
+                workflows_enabled,
+            )
 
+            if not workflows_enabled(self.h.config):
+                raise PipelineError(
+                    "workflow profiles are disabled: set `[workflows] enabled = true` "
+                    "to pick a profile"
+                )
             learning_obj = self.h.learning
             resolved = resolve_workflow_profile(
                 ref=workflow_profile,
@@ -256,6 +321,27 @@ class Pipeline:
             assert resolved is not None
             level = resolved.snapshot["quality_level"]
             ship_mode = resolved.snapshot["after_approval"]
+        else:
+            from jev_agent.core.workflow_profiles import (
+                build_default_snapshot,
+                default_via_profile_enabled,
+                workflows_enabled,
+            )
+
+            if workflows_enabled(self.h.config) and default_via_profile_enabled(self.h.config):
+                resolved = build_default_snapshot(
+                    config=self.h.config,
+                    flags={
+                        "quality_level": quality,
+                        "ship_mode": ship_mode,
+                        "learning_profile": learning_profile,
+                        "learning_profile_is_flag": learning_profile is not None,
+                    },
+                    autonomy_mode=autonomy.mode.value,
+                    plan_approval_required=self.h.config.plan_approval_required,
+                )
+                level = resolved.snapshot["quality_level"]
+                ship_mode = resolved.snapshot["after_approval"]
         run = self._create_run(
             idea,
             learning_profile,
@@ -350,8 +436,22 @@ class Pipeline:
             gates = {gate: step for step, gate in STEP_GATES.items()}
             gates[RunState.AWAITING_SHIP] = RunState.SHIPPING
             self._require_state(run_id, set(gates), "approve")
-            gate = self.store.get_run(run_id).state
+            run = self.store.get_run(run_id)
+            gate = run.state
             nxt = gates[gate]
+            # Snapshot check (design section 8.1): approving the gate of an
+            # omitted step refuses with a named error instead of resuming
+            # into a stage the profile omits.
+            snapshot = snapshot_for_run(run)
+            if snapshot is not None:
+                stages = snapshot.get("stage_list")
+                if isinstance(stages, list) and nxt.name not in stages:
+                    raise PipelineError(
+                        f"cannot approve run {run_id}: its workflow profile omits "
+                        f"the {nxt.name} stage, so the {gate.name} gate has no step "
+                        "to resume into; pick a profile that includes "
+                        f"{nxt.name}"
+                    )
             # Gate wait ends here: attribute it before the state moves, while
             # the gate-entry timestamp is still the run's `updated_at`.
             self._settle_gate(run_id, gate, nxt)
@@ -496,8 +596,39 @@ class Pipeline:
         }
         while True:
             run = self.store.get_run(run_id)
+            snapshot = snapshot_for_run(run)
+            if snapshot is not None:
+                # Snapshot-aware step lookup (design section 8.1): a step
+                # not in the snapshot stage list is never entered. The
+                # legacy path keeps the hardcoded handler map untouched.
+                stages = snapshot.get("stage_list")
+                if isinstance(stages, list):
+                    steps = {
+                        state: handler for state, handler in steps.items() if state.name in stages
+                    }
             step = steps.get(run.state)
             if step is None:
+                if snapshot is not None and run.state in {
+                    RunState.INTAKE,
+                    RunState.PLANNING,
+                    RunState.VALIDATING,
+                    RunState.DESIGNING,
+                    RunState.EXECUTING,
+                    RunState.INTEGRATING,
+                    RunState.SHIPPING,
+                }:
+                    # Loop breakout (design section 8.1): the run landed in
+                    # a work state with no snapshot entry. Halt with a named
+                    # error instead of calling `_finish` — a run never ends
+                    # its learning step early because a stage went missing.
+                    # Gate and stopped states legitimately have no handler
+                    # and break out normally below this branch.
+                    reason = (
+                        f"workflow profile omits the {run.state.name} stage: "
+                        "the run cannot continue under its snapshot"
+                    )
+                    self.store.set_run_state(run_id, RunState.FAILED, reason, unless=KEEP_CANCELLED)
+                    return self.store.get_run(run_id)
                 break
             # Measurement wrapper (issue #368, design section 11.2): one row
             # per handler call, written here and nowhere else. Handler logic
@@ -535,7 +666,14 @@ class Pipeline:
     def _maybe_skipped_designing(self, before: RunRecord, after: RunRecord) -> None:
         """A conditional stage that did not run gets a `skipped` row (design
         section 11.1): VALIDATING moved straight to execution/approval with a
-        plan that needs no design, so DESIGNING never had a handler call."""
+        plan that needs no design, so DESIGNING never had a handler call.
+        Under a snapshot that omits DESIGNING there is no skipped stage to
+        record — the stage is not in the flow at all — so no row is written."""
+        snapshot = snapshot_for_run(after)
+        if snapshot is not None:
+            stages = snapshot.get("stage_list")
+            if isinstance(stages, list) and "DESIGNING" not in stages:
+                return
         if before.state is not RunState.VALIDATING:
             return
         if after.state not in (RunState.EXECUTING, RunState.AWAITING_APPROVAL):
@@ -576,7 +714,10 @@ class Pipeline:
         self._move_to_step(run, RunState.PLANNING)
 
     async def _plan(self, run: RunRecord) -> None:
-        h, max_rounds = self.h, self.h.config.budget.max_plan_rounds
+        h = self.h
+        max_rounds = self._snapshot_int(
+            run, "max_plan_rounds", self.h.config.budget.max_plan_rounds
+        )
         if run.plan_round >= max_rounds:
             raise Halt(RunState.NEEDS_HUMAN, f"no approved plan after {max_rounds} rounds")
         h.check_budget(run.id)
@@ -667,7 +808,9 @@ class Pipeline:
 
     async def _d3_verdict(self, run: RunRecord, validation: ValidationResult) -> str:
         """D3: approve the validated plan, send it back for revision, or escalate."""
-        max_rounds = self.h.config.budget.max_plan_rounds
+        max_rounds = self._snapshot_int(
+            run, "max_plan_rounds", self.h.config.budget.max_plan_rounds
+        )
         req = d3_after_validation(validation, run.plan_round, max_rounds)
         return (await self.h.decide(run.id, None, req)).answers["verdict"]
 
@@ -678,13 +821,26 @@ class Pipeline:
         if verdict == "escalate_human":
             raise Halt(RunState.NEEDS_HUMAN, "D3: plan escalated to a human")
         if verdict == "revise":
-            max_rounds = self.h.config.budget.max_plan_rounds
+            max_rounds = self._snapshot_int(
+                run, "max_plan_rounds", self.h.config.budget.max_plan_rounds
+            )
             if run.plan_round >= max_rounds:
                 raise Halt(RunState.NEEDS_HUMAN, f"plan not approved after {max_rounds} rounds")
             self._move_to_step(run, RunState.PLANNING)
             return
         self.store.upsert_tasks(run.id, plan)
         if plan.needs_design:
+            # Snapshot check (design section 8.1): DESIGNING is entered only
+            # when the snapshot stage list includes it. Otherwise the run
+            # halts with a named error — never stalls, never silently skips.
+            snapshot = snapshot_for_run(run)
+            if snapshot is not None:
+                stages = snapshot.get("stage_list")
+                if isinstance(stages, list) and "DESIGNING" not in stages:
+                    raise Halt(
+                        RunState.FAILED,
+                        "Design was requested but the profile omits design.",
+                    )
             # The design is approved together with the plan at the approval gate below,
             # so the run first passes through DESIGNING (or its ASK_EVERY_STEP gate).
             self._move_to_step(run, RunState.DESIGNING)
@@ -733,6 +889,12 @@ class Pipeline:
             idea=run.idea.text,
             plan_json=plan.model_dump_json(indent=2),
             design_system=design_system,
+            # Phase 3 conformance gate (issue #368): the designer template
+            # renders `{{ brief }}` unconditionally, and the pipeline never
+            # passed it, so every DESIGNING run halted on a prompt error.
+            # The pipeline carries no separate brief artifact; the plan
+            # summary is the run's brief for the UI work.
+            brief=plan.summary,
         )
 
     async def _execute(self, run: RunRecord) -> None:
@@ -750,10 +912,19 @@ class Pipeline:
         """Merge task branches into `jev/<run_id>/result`, run the tests there, then D6."""
         h, order = self.h, self._task_order(run.id)
         if any(t.state is not TaskState.DONE for t in self.store.list_tasks(run.id)):
-            # A fix task was added just before a crash.
+            # A fix task was added just before a crash. EXECUTING is
+            # non-omittable, so this loop-back always targets a listed
+            # stage; no additional snapshot check (design section 8.1).
             self._move_to_step(run, RunState.EXECUTING)
             return
-        rounds, max_rounds = fix_rounds(order), self.settings.max_fix_rounds
+        rounds = fix_rounds(order)
+        max_rounds = self._snapshot_int(run, "max_fix_rounds", self.settings.max_fix_rounds)
+        # Quality level from the snapshot only for a profiled run (section
+        # 8.1): the run record's legacy duplicate is not a second source.
+        snapshot = snapshot_for_run(run)
+        quality_level = run.quality_level
+        if snapshot is not None and snapshot.get("quality_level") is not None:
+            quality_level = snapshot["quality_level"]
         try:
             outcome = await run_integration(
                 h,
@@ -761,7 +932,7 @@ class Pipeline:
                 order,
                 self.settings.integration_test_command,
                 self.settings.test_timeout_s,
-                quality_level=run.quality_level,
+                quality_level=quality_level,
             )
         except WorkspaceError as exc:
             raise Halt(RunState.FAILED, f"integration failed: {exc}") from exc
@@ -770,6 +941,8 @@ class Pipeline:
             await self._ship_after_score_gate(run, outcome, order)
         elif action == "fix_task" and outcome.fixable and rounds < max_rounds:
             self._add_fix_task(run, outcome)
+            # EXECUTING is non-omittable: no additional snapshot check here
+            # either (design section 8.1).
             self._move_to_step(run, RunState.EXECUTING)
         else:
             raise Halt(RunState.NEEDS_HUMAN, _integration_stop_reason(outcome, rounds, max_rounds))
@@ -813,9 +986,16 @@ class Pipeline:
         `[quality] score_max_retries` rounds; then the run stops for a human.
         It never ships silently below the bar."""
         score = outcome.quality.score if outcome.quality is not None else None
+        # Score settings from the snapshot only for a profiled run (section
+        # 8.1). The gate itself already scores against the snapshot
+        # threshold (quality/gate.py reads the snapshot), so the pipeline
+        # only needs the snapshot's retry cap here.
+        max_retries = self._snapshot_int(
+            run, "score_max_retries", self.h.config.quality.score_max_retries
+        )
         decision = ship_gate_outcome(
             score,
-            max_retries=self.h.config.quality.score_max_retries,
+            max_retries=max_retries,
             retry_round=score_fix_rounds(card.title for card in order),
         )
         if decision == "ship":
@@ -826,15 +1006,47 @@ class Pipeline:
             raise Halt(
                 RunState.NEEDS_HUMAN,
                 f"ship score gate: {score.total}/100 is below the threshold "
-                f"{score.threshold} after {self.h.config.quality.score_max_retries} "
+                f"{score.threshold} after {max_retries} "
                 f"rework round(s); see `jev quality show {run.id}` and branch "
                 f"{outcome.result.branch}",
             )
         self._add_score_fix_task(run, outcome, score)
+        # EXECUTING is non-omittable: no additional snapshot check on this
+        # score-gate rework loop-back (design section 8.1).
         self._move_to_step(run, RunState.EXECUTING)
 
     async def _after_ship_vote(self, run: RunRecord, branch: str) -> None:
         """D6 voted "ship": ship and merge, wait for a person, or (shipping off) end DONE."""
+        snapshot = snapshot_for_run(run)
+        if snapshot is not None:
+            # Ship settings from the snapshot only (design section 8.1):
+            # SHIPPING is entered only when the snapshot stage list
+            # includes it; AWAITING_SHIP parks exactly when
+            # `after_approval` is `ask`, independent of any step policy
+            # (section 7.2); shipping off ends the run at DONE. A ship
+            # vote for a snapshot that omits SHIPPING while shipping is on
+            # is refused at creation (section 7.3 incoherence), so the
+            # halt below is a defensive fail-loud, not an expected path.
+            ship_enabled = snapshot.get("ship_enabled")
+            if ship_enabled is not True:
+                self._move(run.id, RunState.DONE, f"result on branch {branch}")
+                await self._cleanup(run.id)
+                return
+            stages = snapshot.get("stage_list")
+            if isinstance(stages, list) and "SHIPPING" not in stages:
+                raise Halt(
+                    RunState.FAILED,
+                    "Shipping was requested but the profile omits shipping.",
+                )
+            if snapshot.get("after_approval") == "merge":
+                self._move_to_step(run, RunState.SHIPPING, f"result on branch {branch}")
+                return
+            reason = (
+                f"result on branch {branch}; ship it with `jev ship approve {run.id}`, ask for "
+                f"changes with `jev ship modify {run.id} --notes ...`, or `jev ship stop {run.id}`"
+            )
+            self._move(run.id, RunState.AWAITING_SHIP, reason)
+            return
         mode = after_approval(self.h.config, run.ship_mode)
         if mode == "merge":
             self._move_to_step(run, RunState.SHIPPING, f"result on branch {branch}")
@@ -964,16 +1176,37 @@ class Pipeline:
         except CycleError as exc:
             raise Halt(RunState.FAILED, f"plan rejected: {exc}") from exc
 
+    def _snapshot_int(self, run: RunRecord, key: str, fallback: int) -> int:
+        """A round cap / score setting from the snapshot only (design section
+        8.1): no run-time fallback to configuration for a profiled run. The
+        snapshot is complete by construction (precedence was applied once at
+        creation), so a missing key falls back only for hand-built snapshots
+        in tests, never for resolver-built ones."""
+        snapshot = snapshot_for_run(run)
+        if snapshot is None:
+            return fallback
+        value = snapshot.get(key)
+        return value if isinstance(value, int) and not isinstance(value, bool) else fallback
+
     def _move_to_step(self, run: RunRecord, step: RunState, reason: str | None = None) -> None:
-        """Move the run to `step`, or its ASK_EVERY_STEP approval gate."""
-        self._move(run.id, step_gate_target(run_autonomy_mode(run), step), reason)
+        """Move the run to `step`, or its ASK_EVERY_STEP approval gate (or its
+        snapshot gate policy's parking for a profiled run)."""
+        self._move(
+            run.id,
+            step_gate_target(run_autonomy_mode(run), step, snapshot_for_run(run)),
+            reason,
+        )
 
     def _move_to_execution(self, run: RunRecord) -> None:
         """Move the run to the execution gate: the approval gate when the plan
         needs one (`plan_only` or `[approval] require_plan_approval`), straight to
-        EXECUTING when AUTONOMOUS skips it."""
+        EXECUTING when AUTONOMOUS skips it. A profiled run applies its
+        VALIDATING gate policy on top (section 7.2)."""
         gate = run.plan_only or self.h.config.plan_approval_required
-        self._move(run.id, execution_gate_target(run_autonomy_mode(run), gate))
+        self._move(
+            run.id,
+            execution_gate_target(run_autonomy_mode(run), gate, snapshot_for_run(run)),
+        )
 
     def _move(self, run_id: str, state: RunState, reason: str | None = None) -> None:
         if not self.store.set_run_state(run_id, state, reason, unless=KEEP_CANCELLED):
@@ -1061,6 +1294,11 @@ def _finalize_plan(plan: Plan) -> Plan:
         summary=plan.summary,
         risks=plan.risks,
         tasks=[card.model_copy(update={"kind": "plan"}) for card in plan.tasks],
+        # Phase 3 conformance gate (issue #368): the planner's UI flag must
+        # survive finalization, or DESIGNING is unreachable from a planner
+        # plan and the designing-on conformance scenario can never run.
+        # Non-UI plans are unaffected (`needs_design` defaults to False).
+        needs_design=plan.needs_design,
     )
     try:
         topological_order(marked.tasks)

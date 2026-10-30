@@ -27,8 +27,11 @@ from jev_agent.core.store import RunRecord
 from jev_agent.core.workflow_profiles import (
     ProfileStoreError,
     ProfileValidationError,
+    build_default_snapshot,
     compute_assurance,
+    default_via_profile_enabled,
     resolve_workflow_profile,
+    workflows_enabled,
 )
 from jev_agent.quality.levels import QualityLevel, parse_level
 
@@ -151,8 +154,29 @@ def create_run(
     )
     copy = None if workspace is None else snapshot(ctx.config, workspace)
     autonomy_mode, autonomous_opt_in, medium_folder = _autonomy_for_new_run(ctx)
+    # One flags dict for both profile paths (stored profile and default
+    # preset): tier-1 values plus tier-3 source markers, per section 9.2.
+    resolver_flags = {
+        "quality_level": parse_level(quality) if quality is not None else None,
+        "quality_repo_value": (
+            parse_level(workspace_quality)
+            if workspace_quality is not None
+            else ctx.config.quality.level
+        ),
+        "quality_source": "workspace" if workspace_quality is not None else "repo",
+        "ship_mode": ship_mode,
+        "learning_profile": learning_profile,
+        "learning_profile_is_flag": learning is not None,
+        "learning_source": ("workspace" if workspace_learning is not None else "repo"),
+    }
     resolved = None
     if workflow_profile is not None and workflow_profile != "default":
+        # Rollback switch (design section 17): disabled blocks profile
+        # selection at creation — it never silently falls back to default.
+        if not workflows_enabled(ctx.config):
+            raise JevError(
+                "workflow profiles are disabled: set `[workflows] enabled = true` to pick a profile"
+            )
         learning_obj = ctx.learning
         try:
             resolved = resolve_workflow_profile(
@@ -160,19 +184,7 @@ def create_run(
                 config=ctx.config,
                 repo_root=ctx.root,
                 user_root=Path.home() / ".jev",
-                flags={
-                    "quality_level": parse_level(quality) if quality is not None else None,
-                    "quality_repo_value": (
-                        parse_level(workspace_quality)
-                        if workspace_quality is not None
-                        else ctx.config.quality.level
-                    ),
-                    "quality_source": "workspace" if workspace_quality is not None else "repo",
-                    "ship_mode": ship_mode,
-                    "learning_profile": learning_profile,
-                    "learning_profile_is_flag": learning is not None,
-                    "learning_source": ("workspace" if workspace_learning is not None else "repo"),
-                },
+                flags=resolver_flags,
                 autonomy_mode=autonomy_mode,
                 plan_approval_required=ctx.config.plan_approval_required,
                 learning_profiles=(
@@ -181,16 +193,38 @@ def create_run(
             )
         except (ProfileStoreError, ProfileValidationError) as exc:
             raise JevError(str(exc)) from exc
-    # Phase 2 records the resolved quality level and ship mode on the run's
-    # existing fields (the gate and the ship decision already read them);
-    # full snapshot-driven execution — gates, caps, models — is phase 3.
-    # Learning enablement is never changed by a profile (design 7.4).
+    elif workflows_enabled(ctx.config) and default_via_profile_enabled(ctx.config):
+        # G1 migration trigger (design section 8.2): a no-profile run
+        # executes via the profile path using the `default` preset's
+        # parameters. Picker `default` still means no profile — only the
+        # execution path changes, and only while the conformance suite is
+        # green (the suite is the guard; the flag does not re-check it at
+        # run time, it is the operator's attestation that it is green).
+        try:
+            resolved = build_default_snapshot(
+                config=ctx.config,
+                flags=resolver_flags,
+                autonomy_mode=autonomy_mode,
+                plan_approval_required=ctx.config.plan_approval_required,
+            )
+        except ProfileValidationError as exc:
+            raise JevError(str(exc)) from exc
+    # Phase 3: the snapshot drives execution (pipeline gates, caps, models,
+    # ship decision); the run's existing quality/ship fields still carry the
+    # resolved values for readers that use them. Learning enablement is
+    # never changed by a profile (design 7.4): when learning is on, the
+    # learning step runs under the snapshot's learning profile setting
+    # (section 8.1), so the stored name is the snapshot's, not the
+    # workspace/config value the profile beat. When learning is off
+    # (`learning_profile` None) the stored name stays None.
     # Assurance is computed at creation for every run: from the snapshot for
     # a profiled run, from the run's effective settings for a legacy run
     # (design 10.3) — so a legacy run using a configuration bypass carries
     # the same reduced label a profiled run would.
     level = resolved.snapshot["quality_level"] if resolved else legacy_level
     run_ship_mode = resolved.snapshot["after_approval"] if resolved else ship_mode
+    if resolved is not None and learning_profile is not None:
+        learning_profile = resolved.snapshot["learning_profile"]
     if resolved is None:
         if autonomy_mode == "autonomous":
             legacy_plan_gate = False

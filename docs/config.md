@@ -378,6 +378,16 @@ run by itself: `after_approval = "merge"` opens the PR ready, waits for its chec
 | `checks_timeout_s` | `3600` | Seconds (> 0) to wait for the checks to finish before stopping for you. |
 | `checks_poll_s` | `30` | Seconds (> 0) between two looks at the PR's checks. |
 
+## `[workflows]`
+
+Workflow profiles (issue #368): named process flows a run can follow instead
+of the hardcoded pipeline. Picker `default` always means no profile.
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `enabled` | `true` | Rollback switch. `false` blocks picking a profile at run creation (it never silently falls back to default); in-flight snapshots finish, and recurring items create default runs. |
+| `default_via_profile` | `false` | Migration trigger (G1). When `true` and the conformance suite is green, a no-profile run executes via the profile path using the default preset's parameters — an execution-path change only, not a picker-meaning change. |
+
 ## `[models]`
 
 Free OpenRouter models for roles that can use the api worker. See [Free models](#free-models)

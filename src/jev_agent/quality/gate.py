@@ -13,7 +13,7 @@ import asyncio
 import logging
 from collections.abc import Collection, Iterable
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 from jev_agent.code_orchestrator import (
     CodeOrchestrator,
@@ -366,7 +366,25 @@ async def run_gate(
     # breakdown are audit-logged with the gate decision. Scoring or persisting must
     # not kill the run with a traceback: a failure here records a blocked gate
     # with the error as the reason (fail-closed, with forensics in the reasons).
+    # Score settings from the snapshot only for a profiled run (issue #368,
+    # design section 8.1): the snapshot's threshold and `score_skip_human`
+    # govern this run's score, not the repo configuration the gate would
+    # otherwise read. A lookup failure (or a harness without a store) falls
+    # back to configuration, so gate tests with fake harnesses keep passing.
+    snapshot: dict[str, Any] | None = None
+    try:
+        run_record = h.store.get_run(run_id)
+        candidate = getattr(run_record, "flow_snapshot", None)
+        snapshot = candidate if isinstance(candidate, dict) else None
+    except Exception:
+        snapshot = None
+    threshold = h.config.quality.score_threshold
     skip_human = h.config.quality.score_skip_human
+    if snapshot is not None:
+        if isinstance(snapshot.get("score_threshold"), int):
+            threshold = snapshot["score_threshold"]
+        if isinstance(snapshot.get("score_skip_human"), bool):
+            skip_human = snapshot["score_skip_human"]
     skip_reason = "human-authored code ([quality] score_skip_human)" if skip_human else ""
     try:
         result = result.model_copy(
@@ -378,7 +396,7 @@ async def run_gate(
                     # `[dispatcher.laya]` is gone, issue #193): `score_gate` defaults
                     # to `DEFAULT_LAYA_WEIGHTS`, as it did for a default config.
                     weights=None,
-                    threshold=h.config.quality.score_threshold,
+                    threshold=threshold,
                     skipped=skip_human,
                     skip_reason=skip_reason,
                 )
