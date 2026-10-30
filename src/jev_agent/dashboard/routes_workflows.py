@@ -307,10 +307,17 @@ def _build_evidence(
     if isinstance(learning_profile, str) and learning_profile:
         try:
             lesson_count = len(repo.learning.lessons(learning_profile))
-        except Exception:
+        except Exception as exc:
             # Lessons are evidence, not a gate: an unreadable lesson
             # database must not block the suggestion request (and a
-            # zero count still changes if lessons later arrive).
+            # zero count still changes if lessons later arrive) — but
+            # the failure is recorded, never silently discarded (P7).
+            log.warning(
+                "suggestion lesson count unreadable for %r: %s: %s",
+                learning_profile,
+                type(exc).__name__,
+                exc,
+            )
             lesson_count = 0
     scope = str(profile.get("scope", "repo"))
     return Evidence(
