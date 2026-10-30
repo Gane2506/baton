@@ -26,6 +26,7 @@ from jev_agent.code_orchestrator import (
     compose_rework_brief,
     gate_code_review,
     ledger_path,
+    record_hint_outcome,
     unavailable_record,
 )
 from jev_agent.code_orchestrator.grades import GateDecision, MergeAction
@@ -188,6 +189,13 @@ async def _record_gate_grade(
     raises and never blocks the gate: the write runs in a thread and every
     failure is swallowed, so a missing grade in the ledger is the worst
     outcome, never a broken run.
+
+    Phase 3 (issue #380): after a graded gate, the gate also resolves
+    the task's open D4 hint offer, if one exists — helped exactly when
+    this gate accepted. No offer, or an already-resolved offer, means
+    nothing is written: a gate without a hint has no hint to judge, and
+    helped is meaningless without a grade, so unavailable/error gates
+    resolve nothing.
     """
     grade = result.code_grade
     if not isinstance(grade, dict):
@@ -196,6 +204,7 @@ async def _record_gate_grade(
     agent = assignment.worker if assignment is not None else ""
     model = assignment.model or "" if assignment is not None and assignment.model else ""
     effort = assignment.effort or "" if assignment is not None and assignment.effort else ""
+    outcome: GateOutcome | None = None
     try:
         if status == "graded":
             gate_d = grade.get("gate")
@@ -252,6 +261,15 @@ async def _record_gate_grade(
         else:
             return
         await asyncio.to_thread(RatingLedger(ledger_path(h.state_dir)).record, record)
+        if outcome is not None:
+            # Phase 3 (issue #380): graded gates only — see the docstring.
+            await asyncio.to_thread(
+                record_hint_outcome,
+                RatingLedger(ledger_path(h.state_dir)),
+                run_id=run_id,
+                task_id=result.task_id or "",
+                gate_decision=outcome.decision,
+            )
     except Exception as exc:
         # Best-effort by design (see the function docstring), but the
         # failure is still recorded at debug level — a silently lost grade

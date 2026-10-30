@@ -39,6 +39,11 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from jev_agent.code_orchestrator import (
+    CodeOrchestrator,
+    CodeOrchestratorError,
+    critique_plan,
+)
 from jev_agent.config.defaults import STATE_DIRNAME
 from jev_agent.config.schema import JevConfig, ShipMode
 from jev_agent.core.assign import Assignment
@@ -762,8 +767,52 @@ class Pipeline:
             # run as FAILED, never escape as AssertionError/500 (issue #201, cf. #174).
             raise Halt(RunState.FAILED, f"internal: run {run.id} reached validation with no plan")
         validation = await self._run_validator(run, plan)
+        validation = await self._critique_plan(plan, validation)
         self.store.set_run_validation(run.id, validation)
         self._apply_d3_verdict(run, plan, await self._d3_verdict(run, validation))
+
+    async def _critique_plan(self, plan: Plan, validation: ValidationResult) -> ValidationResult:
+        """Phase 3 (issue #380): the Coding Decision Agent critiques the
+        plan before execution, at VALIDATING.
+
+        After D2's validator and before D3's verdict, the plan is routed
+        (summary + task titles, capped so the request fits the model's
+        context — `route` does not compact) and the routing grade is
+        turned into critique notes appended to `validation.issues`.
+        The notes inform D3 and, on revise, the revising planner (which
+        already reads `validation.issues`) — advisory only: D3's verdict
+        logic is unchanged, and the critique never approves, revises, or
+        escalates on its own. When the feature is off, the backend is
+        missing, the grade is not confident enough, or routing fails,
+        the validation passes through untouched, exactly like D4
+        proceeding without a hint. Critiques are not ledgered: they are
+        not grades, and writing them would pollute the aggregates.
+        """
+        settings = self.h.config.code_orchestrator
+        if not settings.enabled:
+            return validation
+        try:
+            orchestrator = CodeOrchestrator(
+                model_id=settings.model_id,
+                max_diff_chars=settings.max_diff_chars,
+            )
+            if not orchestrator.available:
+                return validation
+            lines = [plan.summary] + [f"{task.id}: {task.title}" for task in plan.tasks]
+            request = "\n".join(lines)
+            if len(request) > 2000:
+                request = request[:2000] + "\n... [plan truncated for critique]"
+            grade = await asyncio.to_thread(orchestrator.route, request)
+            critique = critique_plan(
+                [(task.title, task.description) for task in plan.tasks],
+                grade=grade,
+                threshold=settings.confidence_threshold,
+            )
+        except (CodeOrchestratorError, ValueError):
+            return validation
+        if critique.notes:
+            validation.issues.extend(critique.notes)
+        return validation
 
     async def _run_validator(self, run: RunRecord, plan: Plan) -> ValidationResult:
         """D2: pick the validator (a different vendor than the planner when configured)

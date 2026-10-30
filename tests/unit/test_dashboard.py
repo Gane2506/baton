@@ -32,6 +32,7 @@ from jev_agent.core.learning import Learning
 from jev_agent.core.models import Idea, RunState
 from jev_agent.core.pipeline import PipelineError
 from jev_agent.core.store import RunRecord, Store
+from jev_agent.core.workflow_profiles.store import ProfileStore
 from jev_agent.dashboard.app import create_app
 from jev_agent.dashboard.render import (
     LABEL_CHAR_PX,
@@ -383,6 +384,61 @@ def test_queue_recurring_add_from_browser(client: TestClient, planned: tuple[Pat
     assert "unknown priority" in client.get("/queue").text
     with _store(repo) as store:
         assert len(store.list_recurring_tasks()) == 1
+
+
+def _repo_profile() -> dict[str, Any]:
+    return {
+        "id": "repo:fast",
+        "display_name": "Fast",
+        "scope": "repo",
+        "stage_list": ["INTAKE", "PLANNING", "VALIDATING", "DESIGNING", "EXECUTING", "INTEGRATING"],
+        "gate_policies": {
+            "PLANNING": "inherit",
+            "VALIDATING": "inherit",
+            "DESIGNING": "inherit",
+            "EXECUTING": "inherit",
+            "INTEGRATING": "inherit",
+        },
+        "designing": "when_needed",
+        "ship_enabled": False,
+    }
+
+
+def test_queue_recurring_add_with_workflow_profile(
+    client: TestClient, planned: tuple[Path, str]
+) -> None:
+    # Partial coverage (issue #368 phases 0-2): the recurring form carries a
+    # workflow-profile field like the one-shot queue form. The task stores
+    # the raw reference, not the pinned one: the scheduler pins at each
+    # creation (see Scheduler, "Recurring snapshot timing").
+    repo, _ = planned
+    ProfileStore(repo, repo / "user").save(_repo_profile())
+    response = _post(
+        client,
+        "/queue/recurring/add",
+        {"brief": "profiled report", "schedule": "daily", "workflow_profile": "repo:fast"},
+    )
+    assert response.status_code == 303
+    with _store(repo) as store:
+        tasks = store.list_recurring_tasks()
+        assert len(tasks) == 1
+        assert tasks[0].workflow_profile == "repo:fast"
+
+
+def test_queue_recurring_add_refuses_unknown_workflow_profile(
+    client: TestClient, planned: tuple[Path, str]
+) -> None:
+    # An unresolvable reference refuses at add time instead of queueing a
+    # task that can never start.
+    repo, _ = planned
+    _post(
+        client,
+        "/queue/recurring/add",
+        {"brief": "nope", "schedule": "daily", "workflow_profile": "repo:nope"},
+    )
+    assert "no longer resolves" in client.get("/queue").text
+    with _store(repo) as store:
+        assert store.list_recurring_tasks() == []
 
 
 def test_queue_search_filters_by_idea(client: TestClient) -> None:
