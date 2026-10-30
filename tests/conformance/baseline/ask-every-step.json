@@ -1,0 +1,26 @@
+{
+  "scenario": "ask-every-step",
+  "description": "ASK_EVERY_STEP: a gate parks before every step.",
+  "path": "legacy",
+  "fixture": {
+    "quality_level": "medium",
+    "require_plan_approval": true,
+    "ship_enabled": false,
+    "autonomy_mode": "standard"
+  },
+  "stage_sequence": [
+    "INTAKE",
+    "PLANNING",
+    "VALIDATING",
+    "EXECUTING",
+    "INTEGRATING"
+  ],
+  "gate_parkings": [
+    "AWAITING_PLANNING",
+    "AWAITING_VALIDATING",
+    "AWAITING_APPROVAL",
+    "AWAITING_INTEGRATING"
+  ],
+  "outcome": "DONE",
+  "label_output": "Full checks"
+}

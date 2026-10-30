@@ -69,8 +69,26 @@ class RunsMixin(StoreBase):
         medium_folder: str | None = None,
         run_id: str | None = None,
         design_system: str | None = None,
+        workflow_profile_id: str | None = None,
+        workflow_profile_version: int | None = None,
+        workflow_profile_release: str | None = None,
+        goal: str | None = None,
+        preset_goal: str | None = None,
+        assurance: str | None = None,
+        assurance_absent: list[str] | None = None,
+        flow_snapshot: dict[str, object] | None = None,
     ) -> RunRecord:
         now = self._clock()
+        workflow: dict[str, object] = {
+            "workflow_profile_id": workflow_profile_id,
+            "workflow_profile_version": workflow_profile_version,
+            "workflow_profile_release": workflow_profile_release,
+            "goal": goal,
+            "preset_goal": preset_goal,
+            "assurance": assurance,
+            "assurance_absent": assurance_absent,
+            "flow_snapshot": flow_snapshot,
+        }
         if run_id is not None:
             # An explicitly chosen id is used as-is: retrying the same id can never
             # succeed, and any other constraint failure is the caller's bug, not a
@@ -88,6 +106,7 @@ class RunsMixin(StoreBase):
                     autonomous_opt_in,
                     medium_folder,
                     design_system,
+                    **workflow,  # type: ignore[arg-type]
                 )
             except sqlite3.IntegrityError as exc:
                 if _is_runs_id_collision(exc):
@@ -108,6 +127,7 @@ class RunsMixin(StoreBase):
                     autonomous_opt_in,
                     medium_folder,
                     design_system,
+                    **workflow,  # type: ignore[arg-type]
                 )
             except sqlite3.IntegrityError as exc:
                 # Only a PK/UNIQUE collision on runs.id is worth retrying; anything
@@ -130,14 +150,24 @@ class RunsMixin(StoreBase):
         autonomous_opt_in: bool,
         medium_folder: str | None,
         design_system: str | None = None,
+        workflow_profile_id: str | None = None,
+        workflow_profile_version: int | None = None,
+        workflow_profile_release: str | None = None,
+        goal: str | None = None,
+        preset_goal: str | None = None,
+        assurance: str | None = None,
+        assurance_absent: list[str] | None = None,
+        flow_snapshot: dict[str, object] | None = None,
     ) -> RunRecord:
         """Insert one run row plus its RUN_CREATED event; raise on any constraint."""
         with self._tx() as db:
             db.execute(
                 "INSERT INTO runs (id, idea_json, state, created_at, updated_at,"
                 " learning_profile, quality_level, plan_only, ship_mode,"
-                " autonomy_mode, autonomous_opt_in, medium_folder, design_system)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                " autonomy_mode, autonomous_opt_in, medium_folder, design_system,"
+                " workflow_profile_id, workflow_profile_version, workflow_profile_release,"
+                " goal, preset_goal, assurance, assurance_absent, flow_snapshot)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     run_id,
                     idea.model_dump_json(),
@@ -152,6 +182,14 @@ class RunsMixin(StoreBase):
                     int(autonomous_opt_in),
                     medium_folder,
                     design_system,
+                    workflow_profile_id,
+                    workflow_profile_version,
+                    workflow_profile_release,
+                    goal,
+                    preset_goal,
+                    assurance,
+                    json.dumps(assurance_absent or []),
+                    None if flow_snapshot is None else json.dumps(flow_snapshot),
                 ),
             )
             self._emit(

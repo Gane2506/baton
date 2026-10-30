@@ -151,11 +151,24 @@ class CacheMixin(StoreBase):
         row = self._conn.execute(f"SELECT COUNT(*) FROM cache_entries{where}", params).fetchone()
         return int(row[0])
 
-    def cache_shadow_log(self, key_hash: str, kind: str, agreed: bool, agreement: float) -> None:
-        """Record one shadow-mode measurement (phase-3 gate, issue #10 §6)."""
+    def cache_shadow_log(
+        self,
+        key_hash: str,
+        kind: str,
+        agreed: bool,
+        agreement: float,
+        *,
+        stage: str | None = None,
+        run_id: str | None = None,
+    ) -> None:
+        """Record one shadow-mode measurement (phase-3 gate, issue #10 §6).
+
+        `stage` is the pipeline stage active at observation time, if any; a
+        shadow observation with no current stage is attributed to no stage row
+        (design section 11.2)."""
         with self._tx() as db:
             db.execute(
-                "INSERT INTO cache_shadow (key_hash, kind, agreed, agreement, created_at)"
-                " VALUES (?, ?, ?, ?, ?)",
-                (key_hash, kind, int(agreed), agreement, self._clock()),
+                "INSERT INTO cache_shadow (key_hash, kind, agreed, agreement, created_at,"
+                " stage, run_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (key_hash, kind, int(agreed), agreement, self._clock(), stage, run_id),
             )

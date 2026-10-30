@@ -35,6 +35,7 @@ class AttemptsMixin(StoreBase):
         effort: str | None = None,
         log_path: Path | None = None,
         lesson_ids: Sequence[str] = (),
+        stage: str | None = None,
     ) -> int:
         """Record that a worker started; returns the attempt id for `finish_attempt`.
 
@@ -46,7 +47,8 @@ class AttemptsMixin(StoreBase):
                 self._require_task(run_id, task_id)
             cur = db.execute(
                 "INSERT INTO attempts (run_id, task_id, attempt_no, role, worker, model, effort,"
-                " log_path, started_at, lesson_ids) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                " log_path, started_at, lesson_ids, stage)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     run_id,
                     task_id,
@@ -58,6 +60,7 @@ class AttemptsMixin(StoreBase):
                     None if log_path is None else str(log_path),
                     self._clock(),
                     json.dumps(list(lesson_ids)) if lesson_ids else None,
+                    stage,
                 ),
             )
             if cur.lastrowid is None:
