@@ -522,6 +522,9 @@ def test_restart_terminates_live_child_and_marks_interrupted(tmp_path: Path, hom
         )
         runner = CdaInstallRunner(tmp_path / "repo", home=home, decision=_decision())
         assert runner.status().state == "interrupted"
+        deadline = time.monotonic() + 5
+        while proc.poll() is None and time.monotonic() < deadline:
+            time.sleep(0.02)
         assert proc.poll() is not None
     finally:
         if proc.poll() is None:

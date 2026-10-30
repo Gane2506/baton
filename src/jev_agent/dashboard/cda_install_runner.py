@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import logging
 import os
 import re
 import shutil
@@ -51,6 +52,8 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+
+log = logging.getLogger(__name__)
 
 __all__ = [
     "CDA_CPU_INDEX",
@@ -751,7 +754,11 @@ class CdaInstallRunner:
         record never breaks dashboard startup."""
         try:
             data = self._read_record()
-        except Exception:
+        except Exception as exc:
+            # Best-effort by design (a broken record never breaks startup),
+            # but the failure is still recorded — a silently lost record
+            # must leave a trace somewhere.
+            log.debug("cda install record read failed: %s: %s", type(exc).__name__, exc)
             return
         if data is None:
             return
@@ -774,7 +781,8 @@ class CdaInstallRunner:
             self._child_pid = None
             self._record_event("interruption", [], "interrupted")
             self._write_record()
-        except Exception:
+        except Exception as exc:
+            log.debug("cda install reconcile failed: %s: %s", type(exc).__name__, exc)
             return
 
     # ---- state -------------------------------------------------------------------
@@ -1203,7 +1211,8 @@ class CdaInstallRunner:
                     code = waited
                 else:
                     code = 0
-        except Exception:
+        except Exception as exc:
+            log.debug("cda install child wait failed: %s: %s", type(exc).__name__, exc)
             code = None
         with self._guard:
             self._proc = None
@@ -1471,11 +1480,13 @@ def _url_reachable(url: str) -> bool:
         request = urllib.request.Request(url, method="HEAD")
         with urllib.request.urlopen(request, timeout=_NETWORK_TIMEOUT_S):
             return True
-    except Exception:
+    except Exception as exc:
+        log.debug("cda install HEAD probe failed for %s: %s: %s", url, type(exc).__name__, exc)
         try:
             request = urllib.request.Request(url, method="GET")
             with urllib.request.urlopen(request, timeout=_NETWORK_TIMEOUT_S) as response:
                 response.read(1)
             return True
-        except Exception:
+        except Exception as exc:
+            log.debug("cda install GET probe failed for %s: %s: %s", url, type(exc).__name__, exc)
             return False
