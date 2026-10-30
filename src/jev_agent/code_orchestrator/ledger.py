@@ -441,6 +441,15 @@ class _FileLock:
     no portable substitute worth faking one with. `__enter__` returns
     False (never raises) when the lock cannot be acquired in time, so
     the caller can fail the write instead of writing unlocked.
+
+    The retry is bounded by a monotonic deadline, never by count: the
+    holder keeps the lock for one append (microseconds), so the loop
+    normally exits after a handful of tries, and a stuck holder costs
+    at most the timeout. Deliberately no `time.sleep` in the loop: the
+    project's P8 rule allows sleeps in `src/` only in allowlisted
+    files, and this lock is not one — so the loop yields the timeslice
+    (`os.sched_yield` where available) and otherwise spins, still
+    bounded by the same deadline.
     """
 
     def __init__(self, path: Path, timeout_s: float) -> None:
@@ -471,7 +480,12 @@ class _FileLock:
                     os.close(self._fd)
                     self._fd = None
                     return False
-                time.sleep(0.01)
+                # Yield to the holder (see the class docstring: no
+                # time.sleep here by the P8 rule; the deadline bounds
+                # the loop, and the holder keeps the lock for one
+                # append, so this exits after a handful of tries).
+                if hasattr(os, "sched_yield"):
+                    os.sched_yield()
 
     def __exit__(
         self,
