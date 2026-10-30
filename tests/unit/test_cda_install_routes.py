@@ -531,8 +531,7 @@ def test_done_install_flash_keeps_link_and_period_together(
         page = client.get(url)
         assert page.status_code == 200, url
         assert (
-            '<a class="nowrap" href="/code-grade/install">see the result</a>.</span>'
-            in page.text
+            '<a class="nowrap" href="/code-grade/install">see the result</a>.</span>' in page.text
         ), url
         # The old broken shape: period outside any span, its own flex item.
         assert "see the result</a>.</p>" not in page.text, url
