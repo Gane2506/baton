@@ -137,7 +137,19 @@ class QueueRoutes(DashboardCore):
         parser's message (it already lists the valid formats) instead of a 500.
 
         Learning/profile/quality/ship options stay CLI-only for recurring
-        tasks; this form covers brief, schedule, priority and plan-only.
+        tasks; this form covers brief, schedule, priority, plan-only and the
+        workflow profile. Unlike the one-shot queue form, which pins at queue
+        time and stores the pinned reference, a recurring task stores the
+        raw reference: the scheduler pins it at each creation (see
+        `Scheduler`, "Recurring snapshot timing"), so each scheduled run
+        executes the version current at its enqueue, not the version from
+        when the task was created. The pin attempt here only proves the
+        reference resolves — an unresolvable reference refuses (ValueError
+        flashes) instead of queueing a task that can never start. The
+        safety floor itself is enforced at each run creation by the single
+        resolver (`create_run`), so a floor-violating profile is refused
+        there, never silently applied, and reductions travel with the
+        assurance label.
         """
 
         def add(repo: views.Repo, form: FormData) -> str:
@@ -148,6 +160,13 @@ class QueueRoutes(DashboardCore):
             if priority not in QUEUE_PRIORITIES:
                 raise JevError(f"unknown priority {priority!r}")
             schedule = parse_schedule(_text(form, "schedule") or "")
+            workflow_profile = _text(form, "workflow_profile") or None
+            if workflow_profile is not None:
+                # Existence check only: the pinned result is discarded so
+                # the stored reference stays raw for per-creation pinning.
+                pin_workflow_profile(
+                    ref=workflow_profile, repo_root=repo.root, user_root=Path.home() / ".jev"
+                )
             tz_name = local_timezone_name()
             tz = ZoneInfo(tz_name)
             task = repo.store.add_recurring_task(
@@ -157,6 +176,7 @@ class QueueRoutes(DashboardCore):
                 next_due(schedule, datetime.now(tz), tz),
                 priority=priority,
                 plan_only=form.get("plan_only") == "on",
+                workflow_profile=workflow_profile,
             )
             return f"recurring task {task.id}: {describe(schedule)}"
 

@@ -2,11 +2,10 @@
 with the environment detection stubbed — no test downloads torch or a
 checkpoint, and no test touches a real interpreter.
 
-Note (design §5.4 fallback): the dedicated-venv branch (branch 2) is
-reserved until the grade runner gains an interpreter override, so an
-unwritable own environment falls to branch 3 (guide) today. The venv argv
-branch itself is still built and tested, so the fallback costs no rework
-when the override lands.
+Note (design §5.4, amended 2026-10-30): the grade runner now has the
+interpreter override, so an unwritable own environment selects the
+dedicated-venv branch (branch 2) instead of falling to branch 3
+(guide). Branch 3 remains for the case the override cannot apply.
 """
 
 from __future__ import annotations
@@ -80,19 +79,21 @@ def test_windows_service_without_driver_is_cpu(
     assert decision.torch_path == "cpu"
 
 
-def test_system_python_pep668_falls_to_branch3_guide(
+def test_system_python_pep668_selects_branch2_venv(
     unwritable: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     decision = _decide(platform="linux", nvidia_ok=False, docker=False, monkeypatch=monkeypatch)
-    assert decision.branch == 3
-    assert "laya" in decision.guide_command
+    assert decision.branch == 2
+    assert decision.venv_path is not None
+    assert "cda-venv" in decision.guide_command
 
 
-def test_vps_service_account_unwritable_falls_to_branch3_guide(
+def test_vps_service_account_unwritable_selects_branch2_venv(
     unwritable: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     decision = _decide(platform="linux", nvidia_ok=False, docker=False, monkeypatch=monkeypatch)
-    assert decision.branch == 3
+    assert decision.branch == 2
+    assert decision.venv_path is not None
 
 
 def test_docker_states_recreate_wipes_install(
@@ -124,12 +125,18 @@ def test_default_guide_has_no_cpu_index(writable: None, monkeypatch: pytest.Monk
     assert "download.pytorch.org" not in decision.guide_command
 
 
-def test_venv_argv_branch_built_but_not_selected() -> None:
+def test_venv_argv_branch_selected_with_system_site_packages() -> None:
     decision = EnvironmentDecision(
         2, "/fake/python", Path("/fake/home/.jev/cda-venv"), "cpu", "", "", False
     )
     steps = build_pip_steps(decision)
-    assert steps[0] == ["/fake/python", "-m", "venv", "/fake/home/.jev/cda-venv"]
+    assert steps[0] == [
+        "/fake/python",
+        "-m",
+        "venv",
+        "--system-site-packages",
+        "/fake/home/.jev/cda-venv",
+    ]
     assert "jev-agent" not in " ".join(" ".join(step) for step in steps)
 
 
