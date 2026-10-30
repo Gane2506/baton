@@ -35,6 +35,7 @@ from jev_agent.core.scheduler import (
     scheduler_lock,
 )
 from jev_agent.core.store import QueueItem, RunRecord
+from jev_agent.core.workflow_profiles import pin_workflow_profile
 from jev_agent.dashboard.runner import RunLauncher
 
 __all__ = ["SchedulerRunner", "SchedulerStatus"]
@@ -149,6 +150,9 @@ class SchedulerRunner:
                     lock=self._lock,
                     sleep=self._sleep,
                     should_stop=self._stop.is_set,
+                    pin_workflow_profile=lambda ref: pin_workflow_profile(
+                        ref=ref, repo_root=self.root, user_root=Path.home() / ".jev"
+                    ),
                 )
                 scheduler.run()
         except Exception as exc:  # the strip shows it; the lock is always released
@@ -182,6 +186,7 @@ class SchedulerRunner:
                 quality=item.quality,
                 profile=item.profile,
                 ship_mode=item.ship_mode,
+                workflow_profile=item.workflow_profile,
             )
             if not self.launcher.start(run.id, "start"):
                 raise PipelineError(f"run {run.id} is already being worked on here")

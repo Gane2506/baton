@@ -23,11 +23,13 @@ class DecisionsMixin(StoreBase):
         fallback_reason: str | None = None,
         *,
         parent_run_seq: int | None = None,
+        stage: str | None = None,
     ) -> int:
         """Store one dispatcher call; returns the decision id.
 
         `parent_run_seq` links the causal parent — normally the `decision.requested`
         event for this same decision, passed by the caller (`harness.decide`).
+        `stage` is the pipeline stage active at the decision write, if any.
         """
         with self._tx() as db:
             self._require_run(run_id)
@@ -35,8 +37,8 @@ class DecisionsMixin(StoreBase):
                 self._require_task(run_id, task_id)
             cur = db.execute(
                 "INSERT INTO decisions (run_id, task_id, point, request_json, decision_json,"
-                " dispatcher, model, cost_usd, latency_ms, fallback_reason, created_at)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                " dispatcher, model, cost_usd, latency_ms, fallback_reason, created_at, stage)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     run_id,
                     task_id,
@@ -49,6 +51,7 @@ class DecisionsMixin(StoreBase):
                     decision.latency_ms,
                     fallback_reason,
                     self._clock(),
+                    stage,
                 ),
             )
             if cur.lastrowid is None:
