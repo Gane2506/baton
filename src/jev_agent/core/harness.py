@@ -112,13 +112,13 @@ class Harness:
 
     def snapshot_for_run(self, run_id: str | None) -> dict[str, Any] | None:
         """A run's flow snapshot (issue #368, design section 6.4), or None
-        for a legacy run or an unknown run id. A lookup failure is not a
+        for a legacy run or an unknown run id. An unknown id is not a
         run failure: callers treat it as no snapshot (legacy behaviour)."""
         if not run_id:
             return None
         try:
             run = self.store.get_run(run_id)
-        except Exception:
+        except NotFoundError:
             return None
         snapshot = getattr(run, "flow_snapshot", None)
         return snapshot if isinstance(snapshot, dict) else None

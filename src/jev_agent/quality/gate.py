@@ -33,6 +33,7 @@ from jev_agent.config.schema import CodeOrchestratorSettings, JevConfig
 from jev_agent.core.assign import Assignment
 from jev_agent.core.harness import Halt, Harness
 from jev_agent.core.models import TaskCard
+from jev_agent.core.store import NotFoundError
 from jev_agent.quality import tools
 from jev_agent.quality.checks import QualityCheck, checks_for
 from jev_agent.quality.levels import QualityLevel, at_least
@@ -376,7 +377,10 @@ async def run_gate(
         run_record = h.store.get_run(run_id)
         candidate = getattr(run_record, "flow_snapshot", None)
         snapshot = candidate if isinstance(candidate, dict) else None
-    except Exception:
+    except (AttributeError, NotFoundError):
+        # AttributeError: a harness without a store (fake harnesses in gate
+        # tests); NotFoundError: an unknown run id. Either way the run is
+        # scored against configuration, as a legacy run would be.
         snapshot = None
     threshold = h.config.quality.score_threshold
     skip_human = h.config.quality.score_skip_human
