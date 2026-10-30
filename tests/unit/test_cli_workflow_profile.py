@@ -7,6 +7,7 @@ with a clean CLI error, never a guessed run.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import pytest
@@ -18,6 +19,11 @@ from jev_agent.core.store import Store
 from jev_agent.core.workflow_profiles import ProfileStore
 
 runner = CliRunner()
+
+# With color forced (FORCE_COLOR=1, as in CI), rich styles the option name
+# in segments (`-`, `-workflow`, `-profile`), so the raw output never
+# contains the contiguous flag. Compare against the visible text instead.
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
 
 PROFILE = {
     "id": "repo:fast",
@@ -52,7 +58,7 @@ def _planned_repo(repo: Path) -> Path:
 def test_run_help_lists_workflow_profile() -> None:
     result = runner.invoke(cli_app, ["run", "--help"])
     assert result.exit_code == 0
-    assert "--workflow-profile" in result.output
+    assert "--workflow-profile" in _ANSI_RE.sub("", result.output)
 
 
 def test_run_with_workflow_profile(fixture_repo: Path) -> None:
