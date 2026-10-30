@@ -10,7 +10,6 @@ stay NULL when unknown — NULL means unknown, never zero — and a row is
 
 from __future__ import annotations
 
-import json
 from datetime import datetime
 
 from .base import StoreBase
@@ -38,44 +37,6 @@ class StagesMixin(StoreBase):
         """The store clock's current timestamp (pipeline gate math uses it so a
         controllable clock in tests measures gate waits deterministically)."""
         return self._clock()
-
-    # ---- run snapshot columns ------------------------------------------------
-
-    def set_run_workflow(
-        self,
-        run_id: str,
-        *,
-        workflow_profile_id: str | None,
-        workflow_profile_version: int | None,
-        workflow_profile_release: str | None,
-        goal: str | None,
-        preset_goal: str | None,
-        assurance: str | None,
-        assurance_absent: list[str],
-        flow_snapshot: dict[str, object] | None,
-    ) -> None:
-        """Store the resolved snapshot on a run (design section 6.4). Called
-        once, at creation, by the profile resolver's funnel."""
-        with self._tx() as db:
-            cur = db.execute(
-                "UPDATE runs SET workflow_profile_id = ?, workflow_profile_version = ?,"
-                " workflow_profile_release = ?, goal = ?, preset_goal = ?, assurance = ?,"
-                " assurance_absent = ?, flow_snapshot = ?, updated_at = ? WHERE id = ?",
-                (
-                    workflow_profile_id,
-                    workflow_profile_version,
-                    workflow_profile_release,
-                    goal,
-                    preset_goal,
-                    assurance,
-                    json.dumps(assurance_absent),
-                    None if flow_snapshot is None else json.dumps(flow_snapshot),
-                    self._clock(),
-                    run_id,
-                ),
-            )
-            if cur.rowcount == 0:
-                raise NotFoundError(f"run {run_id!r} not found")
 
     # ---- stage rows ------------------------------------------------------------
 

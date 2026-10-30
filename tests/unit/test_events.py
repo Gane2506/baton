@@ -624,6 +624,13 @@ SNAPSHOT_ONLY_METHODS: dict[str, str] = {
     "cache_get": "read with hit-count side effect; the served decision is the event",
     "cache_put": "cache write; the stored decision/attempt is the event",
     "cache_shadow_log": "measurement log, not run state",
+    "start_stage_row": "measurement log, not run state",
+    "finish_stage_row": "measurement log, not run state",
+    "write_skipped_stage_row": "measurement log, not run state",
+    "add_gate_wait_to_row": "measurement log, not run state",
+    "add_pending_gate_wait": "pending gate-wait bookkeeping, folded into the stage row",
+    "take_pending_gate_wait": "pending gate-wait bookkeeping, folded into the stage row",
+    "clear_pending_gate_wait": "pending gate-wait bookkeeping, folded into the stage row",
 }
 
 
