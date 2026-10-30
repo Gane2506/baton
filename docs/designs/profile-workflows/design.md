@@ -1,27 +1,15 @@
 # Profile-based process flows (Baton issue #368)
 
 Design phase only. No production code is changed by this document.
-Implementation happens only after the human approval gate in section 16.
+Implementation follows the decided picks in section 16 (Decided picks subsection, 2026-10-29, confirmed by re-audit decisions).
 
 Working term: this document calls the new concept a **workflow profile**
 (a profile of the pipeline). That term collides with three existing
 uses of "profile": learning profiles, workspace/server profiles, and
 the `profile` field on queue items (the workspace-profile name a
-queued run carries). Section 16, option set A, decides the final
-name and route. If the human picks a different name, the document is
-amended by re-audit before implementation; nothing in the mechanism
-depends on the word, but every user-facing string that uses the word
-(routes, directory names, messages, labels) must change with it —
-section 5 lists the strings a rename must touch.
+queued run carries). Section 16's Decided picks adopt A1: the final name is workflow profile and the route is /workflows. Nothing in the mechanism depends on the word, but every user-facing string that uses the word (routes, directory names, messages, labels) uses the A1 names — section 5 lists the strings a rename must touch.
 
-Decided vs. open in sections 6–15. The following points are
-proposed, not decided, and change under the option set named:
-scope (section 6.5; set E), precedence (section 9.2; set F),
-enforcement (sections 7.3, 10.2, 10.3; set B), routes and names
-(section 13.1, phase 5; set A), the default's representation
-(section 8.2, phase 3; set G), and what Accuracy optimizes
-(section 9.1; set H). Everything else in sections 6–15 is stated
-as the design. A section marked "(normative)" states the rule;
+Decided in sections 6–15 (Decided picks subsection at the end of section 16, 2026-10-29, confirmed by the re-audit decisions that follow it): scope is both scopes (section 6.5; set E1), precedence is the explicit order table (section 9.2; set F1), enforcement is the mix of refusals and labels (sections 7.3, 10.2, 10.3; set B1), routes and names are the workflow-profile names (section 13.1, phase 5; set A1), the default stays hardcoded with a conformance guard (section 8.2, phase 3; set G1), and Accuracy optimizes quality first, speed second (section 9.1; set H3). Everything else in sections 6–15 is stated as the design. A section marked "(normative)" states the rule;
 other sections summarise it and point back, so a restatement never
 wins over the normative statement.
 
@@ -605,7 +593,7 @@ already records where the run stopped; the snapshot records what
 flow it runs under). The run page displays the profile id,
 version, goal, and assurance label for the life of the run.
 
-### 6.5 Scope rule (proposed; option set E may narrow it)
+### 6.5 Scope rule (decided: E1, both scopes)
 
 Both scopes exist. A run created in a repo may pick a repo-scope
 profile from that repo or any user-scope profile. A repo-scope
@@ -650,6 +638,7 @@ Profile JSON (one file per version; required fields marked *):
   or absent meaning `ask`).
 * `learning_profile` (string, or absent).
 * `goal` (`efficiency`, `accuracy`, `custom`, or absent).
+* `priority` (string, optional, display only; Accuracy carries "quality first, speed second").
 * `origin` (`user` or `suggested`; suggestions record
   `suggested` here on approval, section 12.4).
 
@@ -950,9 +939,7 @@ legacy path. After the suite passes, the default executes through
 the profile path only when the configuration flag
 `[workflows] default_via_profile` is set to true (default false)
 — that flag is the migration trigger under G1, and the suite must
-stay green while it is set. Whether the default is ever
-re-expressed as a profile, or stays hardcoded with the conformance
-test as its guard, is option set G.
+stay green while it is set. Decided as G1: the default stays hardcoded with the conformance test as its guard. The flag's scope is decided as follows: picker `default` always means no profile (section 13.1); when `[workflows] default_via_profile` is true and the conformance suite is green, no-profile runs execute via the profile path using the default preset's parameters — an execution-path change only, not a picker-meaning change. The flag is distinct from `[workflows] enabled` (default true, section 17), which disables profile selection entirely. The flag's implementation (config definition, run-creation branch, and a test distinct from the `enabled` test) is owned by phase 3.
 
 ### 8.3 In-flight runs and profile edits
 
@@ -990,6 +977,7 @@ propose changing a value with evidence.
 | Autonomy mode | Creation setting | Creation setting (not set by any preset) | Creation setting (not set by any preset) |
 | Learning profile | Run's existing setting | Run's existing setting (naming a profile does not enable learning, section 7.4) | Run's existing setting |
 | Goal label (preset) | `null` | `efficiency` | `accuracy` |
+| Priority (display only) | — | — | quality first, speed second |
 | Assurance | Computed from effective settings | `full` (no floor behaviour is dropped) | `full` (no floor behaviour is dropped) |
 
 Price rule for "cheapest": the price source is `[dispatcher.cost]`
@@ -1017,7 +1005,7 @@ quality floor, and the `accuracy` goal label. If that closeness
 means Accuracy "just renames the default", option set H exists to
 say so and to redefine what Accuracy optimizes.
 
-### 9.2 Precedence (proposed; option set F may reorder it)
+### 9.2 Precedence (decided: F1, explicit order table)
 
 When sources disagree, the winner is decided by this order, applied
 in one place at run creation, and the snapshot records the winning
@@ -1103,7 +1091,7 @@ satisfy every item or fall under section 10.2:
 
 ### 10.2 Enforcement and the existing bypasses
 
-The design's position is a mix, decided finally by option set B.
+The design's position is a mix, decided as B1 (section 16 Decided picks).
 The refusal list is section 7.3 (normative) plus the two
 setting refusals below; this section points at that list and does
 not restate it:
@@ -1428,7 +1416,7 @@ shows the numbers.
 
 ## 13. Dashboard: pages, editor, and validation feedback
 
-### 13.1 Routes and pages (proposed; final names follow option set A)
+### 13.1 Routes and pages (decided: A1 names)
 
 * `/workflows` — list page: built-in presets, repo-scope profiles,
   user-scope profiles, each with scope badge, current version,
@@ -1451,8 +1439,7 @@ shows the numbers.
   the resolved snapshot at creation for the stored value. If the
   two differ (a flag changed between preview and creation), the
   creation value is the stored one, and the run page shows it.
-  `default` in the picker means "no profile" (the legacy path),
-  not a preset that runs.
+  `default` in the picker means "no profile" (the legacy path), not a preset that runs. The Accuracy picker entry shows the priority row "quality first, speed second" before selection.
 * Run page (`/runs/{run_id}`): the snapshot's profile id, version,
   goal, and assurance label next to the stage timeline; a reduced
   run names its absent behaviours there in plain words.
@@ -1701,8 +1688,7 @@ registry for `default`.
   deliberate-difference registry for `default`; a profiled run
   and a legacy run of the same scenario produce identical stage
   sequences, gate parkings, outcomes, and label output except
-  differences named in the registry. This gate covers phase 4:
-  no preset run beyond tests happens before it passes.
+  differences named in the registry. This gate covers phase 4: no preset run beyond tests happens before it passes. Phase 3 also implements the `[workflows] default_via_profile` flag (config definition, run-creation branch, and a test distinct from the `[workflows] enabled` rollback test): when true and the conformance suite is green, no-profile runs execute via the profile path using the default preset's parameters.
 
 ### Phase 4 — Presets as data, plus the run-creation picker
 
@@ -1720,9 +1706,7 @@ runs). Exit: the phase acceptance below passes.
   time.
 * `src/jev_agent/dashboard/` (change): preset picker entries on
   the run-creation form with their documented behaviour shown
-  before selection, including the assurance preview (section
-  13.1) and the unpriced-role notice where it applies (section
-  9.1).
+  before selection, including the assurance preview (section 13.1), the unpriced-role notice where it applies (section 9.1), and the Accuracy priority row (section 9.1).
 * `tests/` (new): preset conformance — each preset validates,
   each preset's setting table matches section 9.1, and a preset
   referencing a removed model fails validation at startup.
@@ -1823,9 +1807,7 @@ not required for the acceptance in section 17.
 
 Each set has at most three options. None is ranked, none is marked
 preferred, none is pre-picked. Each states its mechanism, its
-trade-offs, and the conditions under which it fails. The human picks
-one option per set before implementation. A set left unpicked blocks
-implementation of the parts that depend on it. Sections 6–15 are
+trade-offs, and the conditions under which it fails. All sets are decided in the Decided picks subsection below (2026-10-29), confirmed by the re-audit decisions that follow it; the unpicked-set rule no longer applies to this design. Sections 6–15 are
 written for the design's proposed answers; where a set picks
 otherwise, the document is amended by re-audit before implementation.
 Re-audit, defined: one review pass by fresh reviewers over the
@@ -2115,14 +2097,14 @@ as "recommended" — each is a decision with its rationale stated.
 
 | Set | Pick | Rationale |
 |---|---|---|
-| A. Naming and route | A1 — "workflow profile", route `/workflows` | Sections 6–15 and the section 15 plan already use the A1 names (routes, modules, templates, directories, messages, labels). Renaming now would churn every reference for no user benefit, and A1 keeps the issue's own words. |
-| B. Safety-floor strictness | B1 — mix, as specified in section 10.2 | Refusals for the dangerous cases (omitted non-omittable stages, quality `none` with shipping on, `score_skip_human` with shipping on) and visible labels travelling on the run record, run page, board row, and PR body for the remaining reductions. B2 would remove the issue's "refused or labelled" alternative and force reduced-assurance work through out-of-band configuration; B3 would let a labelled reduced run ship with nothing but a label standing between it and main. B1 is the least surprising shape: hard stops where harm is direct, visibility where the choice is genuinely the user's. |
+| A. Naming and route | A1 — "workflow profile", route `/workflows` | Sections 6–15 and the section 15 plan already use the A1 names (routes, modules, and directories; template filenames follow the workflows_* pattern, fixed in phase 5). Renaming now would churn every reference for no user benefit, and A1 keeps the issue's own words. |
+| B. Safety-floor strictness | B1 — mix, as specified in section 10.2 | Refusals for the dangerous cases (omitted non-omittable stages, a profile that sets quality level `none` while shipping is enabled, a profile that sets `score_skip_human` while shipping is enabled — configuration-inherited `none` is label-only per section 10.2) and visible labels travelling on the run record, run page, board row, and PR body for the remaining reductions. B2 would remove the issue's "refused or labelled" alternative and force reduced-assurance work through out-of-band configuration; B3 would let a labelled reduced run ship with nothing but a label standing between it and main for behaviour reductions (the stage core stays refused under B3). A label alone never blocks a ship; refusals are the blocking mechanism. B1 is the least surprising shape: hard stops where harm is direct, visibility where the choice is genuinely the user's. |
 | C. Phasing | C1 — phased, as specified in section 15 | The phased plan is the design's own order (contract, measurement, storage/selection/assurance, validator + conformance, presets + picker, editor, suggestions), and each phase is shippable and testable on its own. C2 would hide a weak link (usually measurement or the validator) inside one large change; C3 would abandon the editor and suggestions the issue asks for. |
 | D. Editor form | D1 — canvas plus list, as specified in section 13.2 | The issue asks for a flowchart, and browser-first covers mouse-free and narrow-screen users too. Canvas only (D3) excludes users who cannot drag; list only (D2) is a form, not the drawing promised. D1 costs two modes kept identical by one validator, and that cost is the price of serving both groups. |
-| E. Scope and storage | E1 — both scopes, as specified in section 6.5 | Repo-scope profiles are reviewable with the repo and shareable by dashboard export/import; user-scope profiles give one personal library across repos. Repo only (E2) forces five copies of one flow across five repos; user only (E3) means a shipped PR's flow cannot be reproduced from the repo alone. Repo profiles do NOT travel via git (`.jev/` is gitignored) — sharing is dashboard export/import only, as section 6.2 states. |
-| F. Precedence | F1 — explicit order table, as specified in section 9.2 | Per-run flags, then snapshot, then repo configuration and workspace profile, then built-in defaults, with the winning source recorded per setting in the snapshot's `resolved_from` map. F2 would silently ignore a flag typed for one run; F3 would let a forgotten repo config silently override the picked profile so presets stop being promises. The table is learnable and auditable from the run record. |
-| G. Default representation | G1 — default stays hardcoded, guarded by conformance | Zero risk to existing runs is the governing constraint: runs without a profile execute today's code path unchanged, and the `default` preset is proven equivalent by the conformance suite before any run executes through the profile path (and then only behind `[workflows] default_via_profile`, default false). G2 would move every existing run to a new code path at once; G3 pays two-path maintenance for a whole release before the same risk. |
-| H. What Accuracy optimizes | H3 — quality first, speed second | Sections 6–15 already define Accuracy mechanically as a production quality floor plus CDA grading on (section 9.1); H3 keeps those mechanics exactly and adds only the priority row on the picker entry ("quality first, speed second"). H1 alone would ignore the user's stated "performance" reading; H2 (wall-clock speed) would promise parallelism and faster models the pipeline cannot yet deliver. H3 answers both readings in priority order without changing any preset value. |
+| E. Scope and storage | E1 — both scopes, as specified in section 6.5 | Repo-scope profiles are reviewable with the repo and shareable by dashboard export/import; user-scope profiles give one personal library across repos. Repo only (E2) forces five copies of one flow across five repos; user only (E3) means a shipped PR's flow cannot be reproduced from the repo alone. Repo profiles do not travel via git by default (`.jev/` is gitignored) — sharing is dashboard export/import only, as section 6.2 states. |
+| F. Precedence | F1 — explicit order table, as specified in section 9.2 | Per-run flags, then snapshot, then repo configuration and workspace profile, then built-in defaults, with the winning source recorded per setting in the snapshot's `resolved_from` map. A tier-3 win records `repo` or `workspace` per whichever source the existing intra-tier resolution actually resolves — never collapsed. F2 would silently ignore a flag typed for one run; F3 would let a forgotten repo config silently override the picked profile so presets stop being promises. The table is learnable and auditable from the run record. |
+| G. Default representation | G1 — default stays hardcoded, guarded by conformance | Zero risk to existing runs is the governing constraint: runs without a profile execute today's code path unchanged, and the `default` preset is proven equivalent by the conformance suite before any run executes through the profile path (and then only behind `[workflows] default_via_profile`, default false). Picker `default` always means no profile; the flag flips the execution path for no-profile runs only when conformance is green, and it is distinct from `[workflows] enabled` (phase 3 owns its implementation and test). G2 would move every existing run to a new code path at once; G3 pays two-path maintenance for a whole release before the same risk. |
+| H. What Accuracy optimizes | H3 — quality first, speed second | Sections 6–15 already define Accuracy mechanically as a production quality floor, CDA grading on, and the `accuracy` goal label (section 9.1's exactly three differences); H3 keeps those mechanics exactly and adds only the priority row ("quality first, speed second"). H1 alone would ignore the user's stated "performance" reading; H2 (wall-clock speed) would promise parallelism and faster models the pipeline cannot yet deliver. H3 answers both readings in priority order without changing any preset value. |
 
 Escalated questions from resolution, decided here on the same
 principles:
@@ -2150,11 +2132,22 @@ Confirmed readings (not reopened):
 
 Effect on the rest of this document: sections 6–15 already
 assume A1, B1, C1, D1, E1, F1, and G1, so no section text changes
-for those picks. H3 adds one display requirement to phase 4:
-the Accuracy picker entry shows the priority row "quality first,
-speed second" before selection. Phase 0's entry condition (every
-option set picked, document amended by re-audit) is met by this
-amendment plus the re-audit report that follows it.
+for those picks. H3 adds display requirements now normatively homed: a `priority` row in the section 9.1 Accuracy column and in the preset file format (section 6.6, display only), the row shown on the Accuracy picker entry before selection (section 13.1, phase-4 bullet, phase-4 acceptance). The row has no execution effect in phase 4: Accuracy's round caps and models equal the default's, so the speed tie-break is a declared priority, not a mechanism; any future speed mechanism is out of scope. Phase 0's entry condition (every option set picked, document amended by re-audit) is met by this amendment, the three re-audit reports (comprehension, critic, codebase), and the re-audit decisions recorded below. The never-stop direction is a chat direction from 2026-10-29, not a rule stated in this document, and it does not by itself certify entry — the reports and decisions below do.
+
+### Re-audit decisions (2026-10-29)
+
+One review pass by fresh reviewers over the changed sections only (comprehension, critic, codebase reports under `review/re-audit/`). No second re-audit is used; residual conflicts are decided here under the same principles as the picks (browser-first, least surprise, lowest resource use, zero risk to existing runs).
+
+| Re-audit finding | Decision |
+|---|---|
+| Self-certification (Blocker, comprehension + critic): the amendment claimed phase-0 entry was met by itself plus a report that did not yet exist, invoking a never-stop direction found nowhere in the design. | Fixed: the entry sentence now cites the amendment, the three reports, and this subsection. The never-stop direction is recorded as a chat direction, not a design rule. Phase 0 entry is met by the amended document as a whole, not by any single sentence. |
+| H3 priority row homeless and effect-free (Major, all three reports). | Fixed: the row is now in the section 9.1 Accuracy column, the section 6.6 preset format (`priority`, display only), the section 13.1 picker spec, the phase-4 bullet, and phase-4 acceptance. Stated explicitly: no execution effect in phase 4 (caps and models equal the default); the speed reading is a declared priority, not a mechanism. |
+| G1 flag homeless and ambiguous (Major, codebase + critic). | Fixed: scope decided in section 8.2 (picker `default` always means no profile; flag flips execution path for no-profile runs only when conformance is green), distinguished from `[workflows] enabled`, and owned by phase 3 (config definition, run-creation branch, distinct test). |
+| Stale "proposed" status text (Major, all three reports). | Fixed by sweep: front matter, section 6.5/9.2/13.1 headings, section 10.2 wording, section 8.2 G sentence, section 16 intro, and both section 19 bullets now read as decided, with the decisions cited. |
+| Hand-ship scope and circumvention (Major, critic + comprehension). | Decided: label travels on both dashboard and CLI ship paths; a hand ship is a human action with the label visible, not a bypass of save/creation refusals. No extra confirmation step. |
+| B1 shorthand and B3 contrast (Major/Nit, critic + codebase). | Fixed: B1 row now says "sets quality level `none` while shipping is enabled" with the configuration-inherited case labelled per section 10.2, states that a label alone never blocks a ship, and carries the B3 stage-core exception. |
+| Efficiency label accuracy (Major, critic). | Fixed: section 19 now records assurance per section 10.3 (cut to `none` with shipping on refused at save; other level changes are resolved settings). |
+| E1 git-travel qualifier, H third difference, A1 templates, F1 `resolved_from` split, G1 shorthand (Nits). | Fixed in the table rows as noted above; the G1 title is the set's own label and always travels with its flag exception in the rationale. |
 
 ## 17. Acceptance criteria, test matrix, rollback
 
@@ -2369,10 +2362,7 @@ rollback is as G1; after removal, as G2.
 * **Manual ship of a reduced run.** Section 10.2 states the
   label travels on a hand ship and the ship proceeds. Whether a
   hand ship of a reduced run should also require an explicit
-  confirmation is a human-gate question: the resolution chose
-  label-travels (consistent with the mix), but the human may
-  want a confirmation gate, which the re-audit would add to
-  section 10.2.
+  confirmation is a human-gate question: the resolution chose label-travels (consistent with the mix). Decided 2026-10-29: label travels only, no extra confirmation step, on both the dashboard and CLI ship paths (the section 10.3 writer covers both). A hand ship is a human action with the label visible in the PR body, so it is not a bypass of profile-save refusals: refusals apply at save and creation, and the hand ship does not re-decide them.
 * **Goal-label clock.** Stage records exist from phase 1, but
   goal-labelled evidence starts only when presets land (phase
   4), because legacy runs record goal `null` and only a stated
@@ -2383,9 +2373,7 @@ rollback is as G1; after removal, as G2.
   Efficiency preset from quality `basic` to "repo configuration,
   never lowered", because `basic` drops secret scanning, SAST,
   and dependency audit — a security cut, not an efficiency gain.
-  The human gate confirms this change: Efficiency saves tokens
-  through rounds and priced models, not through a lower quality
-  level.
+  Decided 2026-10-29 (confirmed): Efficiency saves tokens through rounds and priced models, not through a lower quality level. A quality cut in a custom profile is recorded through the assurance computation per section 10.3: a cut to `none` with shipping on is refused at save, and other level changes are resolved settings whose assurance follows section 10.3.
 * **No implementation work was started and no Mac verification was
   done.** Both belong to the post-approval phase, after the
   section 16 gate and the reserved re-audit.
