@@ -12,6 +12,7 @@ from pathlib import Path
 import pytest
 from starlette.testclient import TestClient
 
+from jev_agent.config import JevConfig
 from jev_agent.core.ship.pr_body import render_pr_body
 from jev_agent.core.store import Store
 from jev_agent.core.workflow_profiles import ProfileStore
@@ -177,3 +178,53 @@ def test_import_page_lists_repo_profiles(client: TestClient) -> None:
     assert response.status_code == 200
     assert "repo:fast" in response.text
     assert "/workflows/repo:fast/export" in response.text
+
+
+def test_run_page_renders_reduced_label(client: TestClient, fixture_repo: Path) -> None:
+    """Phase 2 acceptance, run-page leg: a reduced run's page carries the
+    same label text as the PR body."""
+    from jev_agent.core.models import Idea
+
+    with Store.open(fixture_repo / ".jev" / "state.db") as store:
+        run = store.create_run(
+            Idea(text="add search", repo_path=fixture_repo),
+            None,
+            "none",
+            assurance="reduced",
+            assurance_absent=["quality gate off"],
+        )
+    response = client.get(f"/runs/{run.id}")
+    assert response.status_code == 200
+    assert assurance_label_text("reduced", ["quality gate off"]) in response.text
+
+
+def test_snapshot_survives_permanent_delete(fixture_repo: Path) -> None:
+    """Phase 2 acceptance: a deleted profile's snapshots still resolve —
+    the stored snapshot stays on the run record, while a NEW run
+    referencing the deleted id refuses."""
+    from jev_agent.core.models import Idea
+    from jev_agent.core.workflow_profiles import resolve_workflow_profile
+
+    store = ProfileStore(fixture_repo, fixture_repo / "home" / ".jev")
+    store.save(PROFILE)
+    with Store.open(fixture_repo / ".jev" / "state.db") as db:
+        run = db.create_run(
+            Idea(text="add search", repo_path=fixture_repo),
+            None,
+            "none",
+            workflow_profile_id="repo:fast",
+            workflow_profile_version=1,
+            flow_snapshot={"quality_level": "medium", "workflow_profile_id": "repo:fast"},
+        )
+    store.delete_permanent("repo:fast", referencing_runs=0)
+    with Store.open(fixture_repo / ".jev" / "state.db") as db:
+        assert db.get_run(run.id).flow_snapshot is not None
+    with pytest.raises(ValueError, match="no longer resolves"):
+        resolve_workflow_profile(
+            ref="repo:fast",
+            config=JevConfig(),
+            repo_root=fixture_repo,
+            user_root=fixture_repo / "home" / ".jev",
+            flags={},
+            cda_available=False,
+        )
