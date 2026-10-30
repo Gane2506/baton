@@ -147,9 +147,11 @@ def discover_grade_interpreter(home: Path | None = None) -> str | None:
     try:
         if importlib.util.find_spec("laya") is not None:
             return None
-    except Exception:
+    except Exception as exc:
         # A broken import system must not break dashboard startup; the
-        # in-process path reports the real error when a grade runs.
+        # failure is still recorded, and the in-process path reports
+        # the real error when a grade runs.
+        log.debug("laya spec check failed: %s: %s", type(exc).__name__, exc)
         return None
     root = home if home is not None else Path.home()
     venv = root / ".jev" / "cda-venv"
@@ -545,6 +547,10 @@ class CodeGradeRunner:
                 if child is not None:
                     try:
                         child.terminate()
-                    except Exception:
-                        log.debug("grade subprocess terminate failed", exc_info=True)
+                    except Exception as exc:
+                        log.debug(
+                            "grade subprocess terminate failed: %s: %s",
+                            type(exc).__name__,
+                            exc,
+                        )
                     thread.join(timeout)
