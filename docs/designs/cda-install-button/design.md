@@ -403,7 +403,7 @@ only. A probe step 1–2 run that exceeds it fails as
 "verification timed out". Step 3 has no wall-clock timeout; its exits are user stop per
 section 6.6 and dashboard shutdown per section 6.11. Pip itself likewise has no
 wall-clock timeout, because a multi-gigabyte download has no honest
-deadline — dashboard shutdown is its only exit (section 6.11).
+deadline — its exits are user stop per section 6.6 and dashboard shutdown per section 6.11.
 Verification failure after a pip exit of 0 is its own failure class
 ("installed but not constructible", section 6.2). It surfaces the
 repair path (section 5.5), not a success state. The panel must not
