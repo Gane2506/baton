@@ -21,6 +21,7 @@ other way is refused by the validator with the section 7.1 dependency.
 from __future__ import annotations
 
 import json
+import logging
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
@@ -54,6 +55,8 @@ from jev_agent.dashboard import views
 from jev_agent.dashboard.core import DashboardCore
 from jev_agent.dashboard.helpers import _text
 from jev_agent.dashboard.security import checked_form
+
+log = logging.getLogger(__name__)
 
 # Live-validation subset (design section 13.2): while editing, the browser
 # shows exactly schema parse, unknown names against current configuration,
@@ -378,7 +381,15 @@ class WorkflowRoutes(DashboardCore):
 
         try:
             messages = await run_in_threadpool(check)
-        except Exception:
+        except Exception as exc:
+            # Live feedback must never fail the editor: fall back to a
+            # context-free validation, but record why the live context
+            # (repo configuration) could not be read — P7, no blind except.
+            log.warning(
+                "workflow live validation fell back to no context: %s: %s",
+                type(exc).__name__,
+                exc,
+            )
             messages = validate_profile(data)
         return JSONResponse({"errors": _live_errors(messages)})
 

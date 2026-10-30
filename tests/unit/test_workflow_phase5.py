@@ -12,6 +12,7 @@ import json
 import re
 from collections.abc import Iterator
 from pathlib import Path
+from typing import Any
 
 import pytest
 from starlette.testclient import TestClient
@@ -63,7 +64,7 @@ def _store(fixture_repo: Path) -> ProfileStore:
     return ProfileStore(fixture_repo, fixture_repo / "home" / ".jev")
 
 
-def _create(client: TestClient, form: dict[str, str], url: str = "/workflows/new"):
+def _create(client: TestClient, form: dict[str, str], url: str = "/workflows/new") -> Any:
     return client.post(url, data={"csrf_token": _csrf(client), **form}, follow_redirects=False)
 
 
@@ -264,14 +265,14 @@ def test_live_validate_returns_only_live_subset(client: TestClient) -> None:
     stage mid-edit is a save-time refusal, not a live error)."""
     csrf = _csrf(client)
 
-    def validate(draft: dict) -> list:
+    def validate(draft: dict[str, Any]) -> list[str]:
         response = client.post(
             "/workflows/validate",
             data={"csrf_token": csrf, "profile_json": json.dumps(draft)},
             follow_redirects=False,
         )
         assert response.status_code == 200
-        return response.json()["errors"]
+        return [str(error) for error in response.json()["errors"]]
 
     base = {
         "id": "repo:fast",
