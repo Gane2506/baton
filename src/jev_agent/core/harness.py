@@ -96,6 +96,11 @@ class Harness:
     catalog: ModelCatalog | None = field(default=None)
     # Lazily-built exact-match cache over the repo's own state DB (issue #10).
     _cache: Cache | None = field(default=None, init=False, repr=False)
+    # Pipeline stage active right now, set by the `_advance` wrapper (issue
+    # #368, design section 11.2): decision and attempt writes carry it, so
+    # reported usage aggregates into that stage's row. None outside a stage
+    # (the learning step, the chat) means no stage row attribution.
+    current_stage: str | None = field(default=None, init=False, repr=False)
 
     @property
     def cache(self) -> Cache:
@@ -283,6 +288,7 @@ class Harness:
             decision,
             fallback_reason,
             parent_run_seq=requested_seq,
+            stage=self.current_stage,
         )
         if (
             entry is None
@@ -298,7 +304,7 @@ class Harness:
                 decision_id=decision_id,
             )
         for candidate, _ in shadow:
-            self._measure_shadow_decision(candidate, decision)
+            self._measure_shadow_decision(candidate, decision, run_id)
         if decision.cost_usd:
             self.store.add_spend(run_id, task_id, decision.cost_usd)
         return decision
@@ -329,11 +335,18 @@ class Harness:
         }
         return decision
 
-    def _measure_shadow_decision(self, candidate: CacheEntry, live: Decision) -> None:
+    def _measure_shadow_decision(self, candidate: CacheEntry, live: Decision, run_id: str) -> None:
         """Shadow mode: compare a would-be semantic hit with the live answer (never serve)."""
         cached = Decision.model_validate_json(candidate.value_json)
         agreed = cached.answers == live.answers
-        self.cache.log_shadow(candidate.key_hash, "decision", agreed, 1.0 if agreed else 0.0)
+        self.cache.log_shadow(
+            candidate.key_hash,
+            "decision",
+            agreed,
+            1.0 if agreed else 0.0,
+            stage=self.current_stage,
+            run_id=run_id,
+        )
 
     def last_answers(self, run_id: str, point: str) -> dict[str, str]:
         for record in reversed(self.store.list_decisions(run_id)):
@@ -414,6 +427,7 @@ class Harness:
             assignment.effort,
             path,
             lesson_ids,
+            stage=self.current_stage,
         )
         job = WorkerJob(
             role=role,
@@ -481,7 +495,7 @@ class Harness:
         output = _require_structured_output(role, output)
         self.store.finish_attempt(attempt_id, output.result)
         for candidate, _ in shadow:
-            self._measure_shadow_role(candidate, output.result)
+            self._measure_shadow_role(candidate, output.result, run_id)
         if role_key is not None and output.result.status == "success":
             self.cache.put(
                 role_key,
@@ -524,14 +538,21 @@ class Harness:
             return list(lesson_ids)
         return [by_id.get(lesson_id, lesson_id) for lesson_id in lesson_ids]
 
-    def _measure_shadow_role(self, candidate: CacheEntry, live: WorkerResult) -> None:
+    def _measure_shadow_role(self, candidate: CacheEntry, live: WorkerResult, run_id: str) -> None:
         """Shadow mode: compare a would-be semantic hit with the live result (never serve)."""
         cached = _role_cache_result(candidate.value_json)
         if cached.status == "success" and live.status == "success":
             agreement = _token_overlap(cached.summary, live.summary)
         else:
             agreement = 0.0
-        self.cache.log_shadow(candidate.key_hash, "role", agreement >= 0.99, agreement)
+        self.cache.log_shadow(
+            candidate.key_hash,
+            "role",
+            agreement >= 0.99,
+            agreement,
+            stage=self.current_stage,
+            run_id=run_id,
+        )
 
     async def run_worker_with_fallback(
         self,

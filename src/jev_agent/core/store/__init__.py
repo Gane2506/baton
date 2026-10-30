@@ -40,10 +40,12 @@ from .records import (
     RunLease,
     RunRecord,
     ShippedPrRecord,
+    StageRecord,
     TaskRecord,
 )
 from .runs import RunsMixin
 from .shipped import ShippedMixin
+from .stages import StagesMixin
 from .tasks import TasksMixin
 
 __all__ = [
@@ -64,6 +66,7 @@ __all__ = [
     "RunRecord",
     "SchemaVersionError",
     "ShippedPrRecord",
+    "StageRecord",
     "Store",
     "StoreError",
     "TaskRecord",
@@ -81,6 +84,7 @@ class Store(
     LeasesMixin,
     QueueMixin,
     CacheMixin,
+    StagesMixin,
     EventsMixin,
 ):
     """Persistent state for runs. Open with `Store.open(path)`; use as a context manager."""

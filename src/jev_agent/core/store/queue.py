@@ -39,6 +39,7 @@ class QueueMixin(StoreBase):
         profile: str | None = None,
         quality: QualityLevel | None = None,
         ship_mode: ShipMode | None = None,
+        workflow_profile: str | None = None,
     ) -> QueueItem:
         """Append an idea to the queue (last within its priority)."""
         if priority not in QUEUE_PRIORITIES:
@@ -50,8 +51,8 @@ class QueueMixin(StoreBase):
             row = db.execute("SELECT COALESCE(MAX(position), -1) + 1 AS p FROM queue").fetchone()
             cur = db.execute(
                 "INSERT INTO queue (idea, priority, position, plan_only, learning_profile,"
-                " no_learning, profile, quality, ship_mode, created_at, updated_at)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                " no_learning, profile, quality, ship_mode, workflow_profile, created_at,"
+                " updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     idea,
                     priority,
@@ -62,6 +63,7 @@ class QueueMixin(StoreBase):
                     profile,
                     quality,
                     ship_mode,
+                    workflow_profile,
                     now,
                     now,
                 ),
@@ -210,6 +212,7 @@ class QueueMixin(StoreBase):
         profile: str | None = None,
         quality: str | None = None,
         ship_mode: str | None = None,
+        workflow_profile: str | None = None,
     ) -> RecurringTask:
         """Register a recurring task: `brief` runs on `schedule` in `timezone`, first due at
         `next_due_at`. The normalized cron goes in `schedule`, the original text in
@@ -220,8 +223,8 @@ class QueueMixin(StoreBase):
             cur = db.execute(
                 "INSERT INTO recurring_tasks (brief, schedule, schedule_source, timezone,"
                 " next_due_at, priority, plan_only, learning_profile, no_learning, profile,"
-                " quality, ship_mode, created_at)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                " quality, ship_mode, workflow_profile, created_at)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     brief,
                     schedule.cron,
@@ -235,6 +238,7 @@ class QueueMixin(StoreBase):
                     profile,
                     quality,
                     ship_mode,
+                    workflow_profile,
                     self._clock(),
                 ),
             )

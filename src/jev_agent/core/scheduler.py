@@ -247,6 +247,7 @@ class Scheduler:
         log: Callable[[str], None] = lambda message: None,
         now: Callable[[], datetime] = lambda: datetime.now(UTC),
         should_stop: Callable[[], bool] | None = None,
+        pin_workflow_profile: Callable[[str], str] | None = None,
     ) -> None:
         self.store = store
         self.start = start
@@ -255,6 +256,12 @@ class Scheduler:
         self.sleep = sleep
         self.log = log
         self.now = now
+        # Recurring snapshot timing (issue #368): when set, a recurring task's
+        # workflow profile is pinned to the version current at enqueue time,
+        # so each scheduled run executes the version current then — not the
+        # version from when the recurring task was created, and not a later
+        # edit. None keeps the task's raw reference (resolved at run creation).
+        self.pin_workflow_profile = pin_workflow_profile
         # Checked at the top of every loop iteration: a graceful exit between items
         # (the dashboard's scheduler sets this; the CLI leaves it None and uses Ctrl-C).
         self.should_stop = should_stop
@@ -326,6 +333,12 @@ class Scheduler:
         """Enqueue one due recurring task; True when a queue item was created."""
         if task.active_item_id is not None and self._previous_still_active(task):
             return False
+        workflow_profile = task.workflow_profile
+        if workflow_profile is not None and self.pin_workflow_profile is not None:
+            # A pin failure (profile deleted since the task was made) raises
+            # into `_pump_recurring`'s per-task handler, which logs it and
+            # moves on — one bad task never stops the pump.
+            workflow_profile = self.pin_workflow_profile(workflow_profile)
         item = self.store.add_queue_item(
             task.brief,
             task.priority,
@@ -335,6 +348,7 @@ class Scheduler:
             profile=task.profile,
             quality=cast(QualityLevel | None, task.quality),
             ship_mode=cast(ShipMode | None, task.ship_mode),
+            workflow_profile=workflow_profile,
         )
         due = next_due(parse_schedule(task.schedule_source), now, ZoneInfo(task.timezone))
         self.store.update_recurring_after_enqueue(

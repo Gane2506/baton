@@ -51,6 +51,7 @@ from jev_agent.dashboard.routes_preview import PreviewRoutes
 from jev_agent.dashboard.routes_queue import QueueRoutes
 from jev_agent.dashboard.routes_settings import SettingsRoutes
 from jev_agent.dashboard.routes_studio import StudioRoutes
+from jev_agent.dashboard.routes_workflows import WorkflowRoutes
 from jev_agent.dashboard.runner import (
     Executor,
     RunLauncher,
@@ -90,6 +91,7 @@ class Dashboard(
     SettingsRoutes,
     PreviewRoutes,
     CodeRoutes,
+    WorkflowRoutes,
 ):
     """The dashboard app: route handlers grouped by area (routes_*.py mixins),
     over DashboardCore (state, render/page/back/act)."""
@@ -170,6 +172,11 @@ def create_app(
         Route("/chats/{chat_id}/work", dash.chat_work),
         Route("/chats/{chat_id}/work/{tab}", dash.chat_work_tab),
         Route("/spend", dash.spend_page),
+        # Workflow profiles, phase 2 slice (issue #368): export/import only.
+        # The /workflows list and editor pages land in phase 5.
+        Route("/workflows/import", dash.workflows_import_page),
+        Route("/workflows/import", dash.workflows_import, methods=["POST"]),
+        Route("/workflows/{profile_id}/export", dash.workflows_export),
         Route("/kpis", dash.kpis_page),
         Route("/kpis/sync", dash.kpis_sync, methods=["POST"]),
         Route("/agents", dash.agents_page),

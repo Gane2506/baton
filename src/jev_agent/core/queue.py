@@ -164,6 +164,7 @@ def add_idea(
     profile: str | None = None,
     quality: str | None = None,
     ship_mode: str | None = None,
+    workflow_profile: str | None = None,
 ) -> QueueItem:
     """Check the options and add an idea to the queue (`jev queue add`, the dashboard).
 
@@ -207,6 +208,7 @@ def add_idea(
         profile=profile,
         quality=level,
         ship_mode=mode,
+        workflow_profile=workflow_profile,
     )
 
 

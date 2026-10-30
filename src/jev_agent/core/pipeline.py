@@ -35,6 +35,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -166,6 +167,9 @@ def cancel_run(store: Store, run_id: str) -> RunRecord:
         run_id, RunState.CANCELLED, "cancelled by user", unless=STOPPED, actor="human"
     ):
         raise PipelineError(f"run {run_id} is already {store.get_run(run_id).state}")
+    # Design section 11.2: a cancel closes open stage rows as halted with
+    # reason `cancelled` (a row kept open across the plan gate included).
+    store.close_open_stage_rows(run_id, reason="cancelled")
     return store.get_run(run_id)
 
 
@@ -197,6 +201,7 @@ class Pipeline:
         autonomy_mode: AutonomyMode = AutonomyMode.STANDARD,
         autonomous_opt_in: bool = False,
         medium_folder: str | None = None,
+        workflow_profile: str | None = None,
     ) -> RunRecord:
         """Create a run for `idea` and advance it as far as it goes.
 
@@ -221,8 +226,44 @@ class Pipeline:
         # Workspace profile (docs/servers.md): copied to .jev/runs/<id>/profile.json, so a
         # resumed run reaches the same servers. ProfileError (a ValueError) if unknown.
         copy = None if profile is None else snapshot(self.h.config, profile)
+        # Workflow profiles (issue #368): the same resolver as `app.runs`
+        # create_run. None/"default" keeps the legacy path; anything else
+        # refuses with the setting named instead of falling back.
+        resolved = None
+        if workflow_profile is not None and workflow_profile != "default":
+            from jev_agent.core.workflow_profiles import resolve_workflow_profile
+
+            learning_obj = self.h.learning
+            resolved = resolve_workflow_profile(
+                ref=workflow_profile,
+                config=self.h.config,
+                repo_root=self.h.repo,
+                user_root=Path.home() / ".jev",
+                flags={
+                    "quality_level": quality,
+                    "ship_mode": ship_mode,
+                    "learning_profile": learning_profile,
+                    "learning_profile_is_flag": learning_profile is not None,
+                },
+                autonomy_mode=autonomy.mode.value,
+                plan_approval_required=self.h.config.plan_approval_required,
+                learning_profiles=(
+                    {p.name for p in learning_obj.profiles()} if learning_obj else None
+                ),
+            )
+            # The resolver raises on any failure for a non-default ref, so
+            # a returned None here is impossible; the assert tells mypy.
+            assert resolved is not None
+            level = resolved.snapshot["quality_level"]
+            ship_mode = resolved.snapshot["after_approval"]
         run = self._create_run(
-            idea, learning_profile, level, autonomy, plan_only=plan_only, ship_mode=ship_mode
+            idea,
+            learning_profile,
+            level,
+            autonomy,
+            plan_only=plan_only,
+            ship_mode=ship_mode,
+            workflow_profile=resolved,
         )
         write_run_profile(self.h.state_dir, run.id, copy)
         if autonomy.mode is AutonomyMode.MANUAL:
@@ -239,13 +280,46 @@ class Pipeline:
         *,
         plan_only: bool,
         ship_mode: ShipMode | None,
+        workflow_profile: Any | None = None,
     ) -> RunRecord:
         """Create the run with its autonomy config recorded on it. The autonomy columns
         land with migration 14 (see the C1 report); until the store accepts them, only
-        the default config is passed, so existing behavior never changes."""
+        the default config is passed, so existing behavior never changes.
+
+        `workflow_profile` is a resolved profile (or None for the legacy path).
+        A legacy run still gets its assurance computed from its effective
+        settings, like `app.runs.create_run` does (design 10.3)."""
+        workflow: dict[str, Any] = {}
+        if workflow_profile is not None:
+            workflow = {
+                "workflow_profile_id": workflow_profile.profile_id,
+                "workflow_profile_version": workflow_profile.version,
+                "workflow_profile_release": workflow_profile.release,
+                "goal": workflow_profile.goal,
+                "preset_goal": workflow_profile.preset_goal,
+                "assurance": workflow_profile.assurance,
+                "assurance_absent": workflow_profile.assurance_absent,
+                "flow_snapshot": workflow_profile.snapshot,
+            }
+        else:
+            from jev_agent.core.workflow_profiles import compute_assurance
+
+            if autonomy.mode is AutonomyMode.AUTONOMOUS:
+                plan_gate = False
+            elif autonomy.mode is AutonomyMode.ASK_EVERY_STEP:
+                plan_gate = True
+            else:
+                plan_gate = self.h.config.plan_approval_required
+            assurance, absent = compute_assurance(
+                quality_level=level,
+                score_skip_human=self.h.config.quality.score_skip_human,
+                autonomy_mode=autonomy.mode.value,
+                plan_gate_present=plan_gate,
+            )
+            workflow = {"assurance": assurance, "assurance_absent": absent}
         if autonomy.is_default():
             return self.store.create_run(
-                idea, learning_profile, level, plan_only=plan_only, ship_mode=ship_mode
+                idea, learning_profile, level, plan_only=plan_only, ship_mode=ship_mode, **workflow
             )
         extra: dict[str, Any] = {
             "autonomy_mode": autonomy.mode,
@@ -254,7 +328,13 @@ class Pipeline:
         }
         try:
             return self.store.create_run(
-                idea, learning_profile, level, plan_only=plan_only, ship_mode=ship_mode, **extra
+                idea,
+                learning_profile,
+                level,
+                plan_only=plan_only,
+                ship_mode=ship_mode,
+                **extra,
+                **workflow,
             )
         except TypeError as exc:
             raise PipelineError(
@@ -272,6 +352,9 @@ class Pipeline:
             self._require_state(run_id, set(gates), "approve")
             gate = self.store.get_run(run_id).state
             nxt = gates[gate]
+            # Gate wait ends here: attribute it before the state moves, while
+            # the gate-entry timestamp is still the run's `updated_at`.
+            self._settle_gate(run_id, gate, nxt)
             if not self.store.set_run_state(run_id, nxt, unless=STOPPED):
                 raise PipelineError(f"cannot approve run {run_id}: it was stopped meanwhile")
             self.store.emit(
@@ -299,6 +382,9 @@ class Pipeline:
                 # 500 from the assert (issue #174).
                 raise PipelineError(f"run {run_id} has no plan; it cannot be modified")
             task = self._apply_changes_task(run, run.plan, notes)
+            # The ship decision is abandoned, not approved: its banked wait
+            # must not land on a later SHIPPING row.
+            self.store.clear_pending_gate_wait(run_id, str(RunState.SHIPPING))
             self.store.emit(
                 run_id,
                 EventType.HUMAN_NOTE,
@@ -316,6 +402,7 @@ class Pipeline:
         branch stays; `jev ship RUN` can still open a PR for it later."""
         async with hold_run_lease(self.store, run_id):
             self._require_state(run_id, {RunState.AWAITING_SHIP}, "stop")
+            self.store.clear_pending_gate_wait(run_id, str(RunState.SHIPPING))
             reason = f"not shipped (stopped by a person); result on branch {result_branch(run_id)}"
             if not self.store.set_run_state(run_id, RunState.DONE, reason, unless=STOPPED):
                 raise PipelineError(f"cannot stop run {run_id}: it was stopped meanwhile")
@@ -358,6 +445,45 @@ class Pipeline:
         async with hold_run_lease(self.store, run_id):
             return await self._advance(run_id)
 
+    def _open_stage_row(self, run: RunRecord) -> int:
+        """Open the stage row for one handler call, consuming any gate wait
+        banked for this step at approval time (design section 11.2)."""
+        gate_wait = self.store.take_pending_gate_wait(run.id, str(run.state))
+        return self.store.start_stage_row(
+            run.id,
+            str(run.state),
+            workflow_profile_id=run.workflow_profile_id,
+            workflow_profile_version=run.workflow_profile_version,
+            workflow_profile_release=run.workflow_profile_release,
+            goal=run.goal,
+            preset_goal=run.preset_goal,
+            gate_wait_seconds=gate_wait,
+        )
+
+    def _gate_wait_since(self, run: RunRecord) -> float:
+        """Seconds parked in the current gate: the run's `updated_at` is the
+        gate-entry write (no other write lands while a run waits in a gate),
+        and the store clock is the same clock stage rows use."""
+        now = datetime.fromisoformat(self.store.now_iso())
+        return max(0.0, (now - run.updated_at).total_seconds())
+
+    def _settle_gate(self, run_id: str, gate: RunState, target: RunState) -> None:
+        """Attribute a gate's wait when a person passes it (design section
+        11.2). The plan gate's wait belongs to the VALIDATING row, which the
+        wrapper kept open across the gate, so it is added there and the row
+        closes; every other gate's wait is banked for the target step's row,
+        which does not exist until the step runs. The ship-decision wait
+        (AWAITING_SHIP) belongs to the SHIPPING row."""
+        run = self.store.get_run(run_id)
+        wait = self._gate_wait_since(run)
+        if gate is RunState.AWAITING_APPROVAL:
+            open_row = self.store.open_stage_row(run_id)
+            if open_row is not None and open_row.stage == str(RunState.VALIDATING):
+                self.store.add_gate_wait_to_row(open_row.id, wait)
+                self.store.finish_stage_row(open_row.id, outcome="success")
+                return
+        self.store.add_pending_gate_wait(run_id, str(target), wait)
+
     async def _advance(self, run_id: str) -> RunRecord:
         steps: Mapping[RunState, Callable[[RunRecord], Awaitable[None]]] = {
             RunState.INTAKE: self._intake,
@@ -373,10 +499,18 @@ class Pipeline:
             step = steps.get(run.state)
             if step is None:
                 break
+            # Measurement wrapper (issue #368, design section 11.2): one row
+            # per handler call, written here and nowhere else. Handler logic
+            # is unchanged; only this wrapper, the gate settlement in
+            # `approve`, and the stage tag on decision/attempt writes are new.
+            row_id = self._open_stage_row(run)
+            self.h.current_stage = str(run.state)
             try:
                 self.h.check_prompts()
                 await step(run)
             except Halt as halt:
+                self.h.current_stage = None
+                self.store.finish_stage_row(row_id, outcome="halted", halt_reason=halt.reason)
                 # Guarded: a run cancelled while this step ran stays CANCELLED.
                 if halt.resumable:
                     reason = f"{halt.reason}; fix it, then run `jev resume {run_id}`"
@@ -386,7 +520,38 @@ class Pipeline:
                 else:
                     self.store.set_run_state(run_id, halt.state, halt.reason, unless=KEEP_CANCELLED)
                 break
+            self.h.current_stage = None
+            after = self.store.get_run(run_id)
+            if run.state is RunState.VALIDATING and after.state is RunState.AWAITING_APPROVAL:
+                # The plan gate: the VALIDATING row stays open across the
+                # gate, so its gate wait lands on it at approval (11.2). The
+                # skipped-DESIGNING row is already known here, so write it now.
+                self._maybe_skipped_designing(run, after)
+                continue
+            self.store.finish_stage_row(row_id, outcome="success")
+            self._maybe_skipped_designing(run, after)
         return await self._finish(run_id)
+
+    def _maybe_skipped_designing(self, before: RunRecord, after: RunRecord) -> None:
+        """A conditional stage that did not run gets a `skipped` row (design
+        section 11.1): VALIDATING moved straight to execution/approval with a
+        plan that needs no design, so DESIGNING never had a handler call."""
+        if before.state is not RunState.VALIDATING:
+            return
+        if after.state not in (RunState.EXECUTING, RunState.AWAITING_APPROVAL):
+            return
+        plan = after.plan
+        if plan is not None and plan.needs_design:
+            return
+        self.store.write_skipped_stage_row(
+            after.id,
+            str(RunState.DESIGNING),
+            workflow_profile_id=after.workflow_profile_id,
+            workflow_profile_version=after.workflow_profile_version,
+            workflow_profile_release=after.workflow_profile_release,
+            goal=after.goal,
+            preset_goal=after.preset_goal,
+        )
 
     async def _finish(self, run_id: str) -> RunRecord:
         """Run the learning step once for a run that ended, if it learns."""
