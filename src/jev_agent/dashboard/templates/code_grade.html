@@ -58,26 +58,39 @@
   {% elif install.state in ("done", "failed", "stopped", "interrupted") and install.kind %}
   <p class="flash" role="status">The last backend {{ install.kind }} {{ install.state }}{% if install.message %}: {{ install.message }}{% endif %} — <a href="/code-grade/install">see the result</a>.</p>
   {% endif %}
-  {% if show_verify %}
-  <form method="post" action="/code-grade/install/verify">
-    {{ csrf_input() }}
-    <button class="btn btn-secondary" type="submit">Verify backend</button>
-  </form>
-  {% endif %}
-  {% if show_repair %}
-  <form method="post" action="/code-grade/install/repair">
-    {{ csrf_input() }}
-    <button class="btn btn-secondary" type="submit">Repair backend</button>
-  </form>
-  <p class="hint">Repair removes laya and reinstalls it, then verifies again.</p>
-  {% endif %}
-  {% if show_uninstall %}
-  <form method="post" action="/code-grade/install/uninstall">
-    {{ csrf_input() }}
-    <button class="btn btn-secondary" type="submit">Uninstall backend</button>
-  </form>
-  <p class="hint">Uninstall removes laya only — never torch, never jev-agent — and the
-  checkpoint cache is kept, so reinstalling is faster.</p>
+  {% if show_verify or show_repair or show_uninstall %}
+  {# Issue #375: these actions are separate POST forms, and bare consecutive
+     forms stack with zero gap. The stack gives each button a token gap, and
+     each hint stays inside its button's group. #}
+  <div class="stack">
+    {% if show_verify %}
+    <div>
+      <form method="post" action="/code-grade/install/verify">
+        {{ csrf_input() }}
+        <button class="btn btn-secondary" type="submit">Verify backend</button>
+      </form>
+    </div>
+    {% endif %}
+    {% if show_repair %}
+    <div>
+      <form method="post" action="/code-grade/install/repair">
+        {{ csrf_input() }}
+        <button class="btn btn-secondary" type="submit">Repair backend</button>
+      </form>
+      <p class="hint">Repair removes laya and reinstalls it, then verifies again.</p>
+    </div>
+    {% endif %}
+    {% if show_uninstall %}
+    <div>
+      <form method="post" action="/code-grade/install/uninstall">
+        {{ csrf_input() }}
+        <button class="btn btn-secondary" type="submit">Uninstall backend</button>
+      </form>
+      <p class="hint">Uninstall removes laya only — never torch, never jev-agent — and the
+      checkpoint cache is kept, so reinstalling is faster.</p>
+    </div>
+    {% endif %}
+  </div>
   {% endif %}
   {% if job.state == "running" %}
   <p class="flash" role="status">A {{ job.kind }} is running — <a href="/code-grade/status">watch its progress</a>.
