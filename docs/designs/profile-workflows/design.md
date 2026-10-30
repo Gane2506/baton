@@ -2102,6 +2102,60 @@ each pick rewrites before picking.
   Fails when: quality and speed conflict on a real run and the
   preset's tie-break row was not shown on the picker entry.
 
+### Decided picks (2026-10-29, never-stop directive)
+
+The user directed on 2026-10-29 that work must never stop at
+approval gates. The option sets below are therefore decided here,
+under these principles in order: browser-first (zero terminal
+use), least surprise, lowest resource use, and zero risk to
+existing runs. A pick the user later overrules gets reworked;
+that is expected, not a failure. Where sections 6–15 already
+assume an answer, that answer is adopted. No pick is presented
+as "recommended" — each is a decision with its rationale stated.
+
+| Set | Pick | Rationale |
+|---|---|---|
+| A. Naming and route | A1 — "workflow profile", route `/workflows` | Sections 6–15 and the section 15 plan already use the A1 names (routes, modules, templates, directories, messages, labels). Renaming now would churn every reference for no user benefit, and A1 keeps the issue's own words. |
+| B. Safety-floor strictness | B1 — mix, as specified in section 10.2 | Refusals for the dangerous cases (omitted non-omittable stages, quality `none` with shipping on, `score_skip_human` with shipping on) and visible labels travelling on the run record, run page, board row, and PR body for the remaining reductions. B2 would remove the issue's "refused or labelled" alternative and force reduced-assurance work through out-of-band configuration; B3 would let a labelled reduced run ship with nothing but a label standing between it and main. B1 is the least surprising shape: hard stops where harm is direct, visibility where the choice is genuinely the user's. |
+| C. Phasing | C1 — phased, as specified in section 15 | The phased plan is the design's own order (contract, measurement, storage/selection/assurance, validator + conformance, presets + picker, editor, suggestions), and each phase is shippable and testable on its own. C2 would hide a weak link (usually measurement or the validator) inside one large change; C3 would abandon the editor and suggestions the issue asks for. |
+| D. Editor form | D1 — canvas plus list, as specified in section 13.2 | The issue asks for a flowchart, and browser-first covers mouse-free and narrow-screen users too. Canvas only (D3) excludes users who cannot drag; list only (D2) is a form, not the drawing promised. D1 costs two modes kept identical by one validator, and that cost is the price of serving both groups. |
+| E. Scope and storage | E1 — both scopes, as specified in section 6.5 | Repo-scope profiles are reviewable with the repo and shareable by dashboard export/import; user-scope profiles give one personal library across repos. Repo only (E2) forces five copies of one flow across five repos; user only (E3) means a shipped PR's flow cannot be reproduced from the repo alone. Repo profiles do NOT travel via git (`.jev/` is gitignored) — sharing is dashboard export/import only, as section 6.2 states. |
+| F. Precedence | F1 — explicit order table, as specified in section 9.2 | Per-run flags, then snapshot, then repo configuration and workspace profile, then built-in defaults, with the winning source recorded per setting in the snapshot's `resolved_from` map. F2 would silently ignore a flag typed for one run; F3 would let a forgotten repo config silently override the picked profile so presets stop being promises. The table is learnable and auditable from the run record. |
+| G. Default representation | G1 — default stays hardcoded, guarded by conformance | Zero risk to existing runs is the governing constraint: runs without a profile execute today's code path unchanged, and the `default` preset is proven equivalent by the conformance suite before any run executes through the profile path (and then only behind `[workflows] default_via_profile`, default false). G2 would move every existing run to a new code path at once; G3 pays two-path maintenance for a whole release before the same risk. |
+| H. What Accuracy optimizes | H3 — quality first, speed second | Sections 6–15 already define Accuracy mechanically as a production quality floor plus CDA grading on (section 9.1); H3 keeps those mechanics exactly and adds only the priority row on the picker entry ("quality first, speed second"). H1 alone would ignore the user's stated "performance" reading; H2 (wall-clock speed) would promise parallelism and faster models the pipeline cannot yet deliver. H3 answers both readings in priority order without changing any preset value. |
+
+Escalated questions from resolution, decided here on the same
+principles:
+
+* Hand ship of a reduced run: the label travels into the PR body
+  and the ship proceeds; no extra confirmation step is added.
+  Rationale: the label is already visible where the ship decision
+  is made, and a second confirmation gate would re-decide a
+  choice the user already made when picking the reduced flow.
+  Overrule reworks this to a confirmation step.
+* Efficiency quality: repo configuration, never lowered (section
+  9.1 as resolved). A quality cut stays a user choice in a custom
+  profile with a visible label, never a preset default.
+
+Confirmed readings (not reopened):
+
+* "Rearrange" means omit stages where allowed and edit
+  parameters; stage reordering is refused by dependency, and the
+  editor offers no reorder control (sections 7.1, 7.3).
+* The default flow stays behavior-identical for existing runs;
+  a profile is opt-in per run, never a silent change to the
+  default (G1, section 8.2). The section 10.3 display exception
+  (assurance label on legacy runs' display surfaces) stands as
+  stated in section 8.2.
+
+Effect on the rest of this document: sections 6–15 already
+assume A1, B1, C1, D1, E1, F1, and G1, so no section text changes
+for those picks. H3 adds one display requirement to phase 4:
+the Accuracy picker entry shows the priority row "quality first,
+speed second" before selection. Phase 0's entry condition (every
+option set picked, document amended by re-audit) is met by this
+amendment plus the re-audit report that follows it.
+
 ## 17. Acceptance criteria, test matrix, rollback
 
 Acceptance criteria (each must be demonstrated with the artefact
