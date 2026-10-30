@@ -171,7 +171,8 @@ def test_code_grade_page_shows_unavailable_guidance(
     page = client.get("/code-grade")
     assert page.status_code == 200
     assert "not installed" in page.text
-    assert "jev-agent[code-orchestrator]" in page.text
+    assert "jev-agent[code-orchestrator]" not in page.text
+    assert "Install backend" in page.text
 
 
 def test_nav_links_code_grade(client: TestClient) -> None:
@@ -218,7 +219,8 @@ def test_grade_unavailable_backend_shows_guidance_not_500(
     assert response.status_code == 303
     live = _live_until(client, "not installed")
     assert "not installed" in live
-    assert "jev-agent[code-orchestrator]" in live
+    assert "jev-agent[code-orchestrator]" not in live
+    assert "Code Grade page" in live
     assert "Traceback" not in live
 
 

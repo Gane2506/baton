@@ -188,6 +188,76 @@ instruction.
 
 ## Install
 
+From the dashboard, no terminal needed: open **Code Grade**
+(`/code-grade`) and use **Install backend**. It asks for confirmation
+first, naming the exact command, the sizes and the persistence note for
+this deployment, then installs in the background with progress, a log
+tail and a verification probe — and warms the model checkpoint, so the
+first grade after install needs no download. The status panel then reads
+**warmed** for that model; another repo whose model was not warmed reads
+**available — checkpoint downloads on first grade**. A **Verify**
+action re-runs the probe, **Repair** reinstalls `laya` when verification
+fails, and **Uninstall** removes `laya` only (never torch, never
+`jev-agent`); the checkpoint cache is kept, so reinstalling is faster.
+While an install, repair or uninstall runs, grades are refused (nothing
+is recorded for a refused grade) and verification waits.
+
+The fixed command the button runs, built server-side from the
+dashboard's own interpreter (never from a request):
+
+```bash
+# Default path (Linux/Windows with an NVIDIA driver present):
+<python> -m pip install "laya>=0.4.15"
+# CPU path (macOS always; Linux/Windows without a working nvidia-smi):
+<python> -m pip install torch --index-url https://download.pytorch.org/whl/cpu
+<python> -m pip install "laya>=0.4.15"
+# Repair: <python> -m pip uninstall -y laya, then the install sequence above.
+# Uninstall: <python> -m pip uninstall -y laya
+```
+
+Sizes, before you click: torch about 2.5 GB (default wheel) or the
+smaller CPU wheel; `laya` plus transformers about 0.5 GB; the checkpoint
+about 842 MB; temp staging at least 1 GB free. Preflight refuses (with a
+retry) when disk, network or cache space is short, and swaps the button
+for the guide command above when the environment cannot be installed
+into (permission denied, PEP 668, no wheel for this Python) — never with
+`--break-system-packages`.
+
+Persistence: an install survives dashboard restarts. On a Mac installed
+via `uv tool install`, reinstalling the tool recreates its environment
+and wipes the extra, so the button is offered again afterwards. **On
+Docker, a container recreate wipes a container-side install** (no volume
+is added for it): after a recreate, run the install from the button
+again. A dashboard started with a small tmpfs (the dev VM's 512M
+`/tmp`) still fails first grades until restarted with a real-disk
+TMPDIR — the diagnostics page warns when temp space is below the 1 GB
+staging need; the install itself always uses a real-disk temp directory.
+
+Manual recovery, for failures the button cannot fix (with `<python>`
+meaning the dashboard's own interpreter):
+
+```bash
+# Remove a broken backend:
+<python> -m pip uninstall -y laya
+# Recover from a broken torch (uninstall-first is intended: a plain
+# reinstall no-ops on satisfied-but-broken torch). CPU path:
+<python> -m pip uninstall -y torch
+<python> -m pip install torch --index-url https://download.pytorch.org/whl/cpu
+<python> -m pip install "laya>=0.4.15"
+# Default path:
+<python> -m pip uninstall -y torch
+<python> -m pip install torch
+<python> -m pip install "laya>=0.4.15"
+# Clear a corrupt pip cache: <python> -m pip cache purge
+# Clear a corrupt checkpoint cache: remove the model directory under the
+# Hugging Face cache (~/.cache/huggingface/hub, or $HF_HOME), so the next
+# grade re-downloads it.
+# Recover from a filled disk: free space, then retry; the button re-runs
+# preflight first.
+```
+
+The terminal equivalent still works:
+
 ```bash
 pip install laya
 # or, with Baton's own extra (same thing, declared in pyproject.toml):

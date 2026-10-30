@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% block title %}Backend install status{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div class="titles">
+    <h1>Backend install status</h1>
+    <p class="lede">Installing the Coding Decision Agent backend runs in the background —
+    this page updates on its own; the result waits here even if you leave the page or
+    close the tab.</p>
+  </div>
+  <div class="actions">
+    <a class="btn btn-secondary" href="/code-grade">Back to Code Grade</a>
+  </div>
+</div>
+
+<div id="code-grade-install-live" data-live="/code-grade/install/live" data-live-every="3000">
+  {% include "_code_grade_install_live.html" %}
+</div>
+{% endblock %}
