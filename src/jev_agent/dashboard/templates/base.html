@@ -73,8 +73,8 @@
   <symbol id="i-sparkles" viewBox="0 0 24 24"><path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z"/><path d="M5 3v4"/><path d="M19 17v4"/><path d="M3 5h4"/><path d="M17 19h4"/></symbol>
 </svg>
 
-{% set icons = {"/": "i-board", "/queue": "i-queue", "/artifacts": "i-log", "/agents": "i-models", "/fleet": "i-fleet", "/chats": "i-chats", "/learning": "i-learning", "/profiles": "i-profiles", "/design-systems": "i-palette", "/design-studio": "i-sparkles", "/tools": "i-terminal", "/code-grade": "i-check", "/connections": "i-external", "/spend": "i-spend", "/kpis": "i-kpis", "/settings": "i-settings", "/diagnostics": "i-diagnostics"} %}
-{% set groups = {"Overview": ["/"], "Work": ["/queue", "/artifacts"], "Agents": ["/agents", "/fleet", "/chats", "/learning", "/profiles"], "Design": ["/design-systems", "/design-studio"], "Integrations": ["/tools", "/code-grade", "/connections"], "Insight": ["/spend", "/kpis"], "System": ["/settings", "/diagnostics"]} %}
+{% set icons = {"/": "i-board", "/queue": "i-queue", "/workflows": "i-branch", "/artifacts": "i-log", "/agents": "i-models", "/fleet": "i-fleet", "/chats": "i-chats", "/learning": "i-learning", "/profiles": "i-profiles", "/design-systems": "i-palette", "/design-studio": "i-sparkles", "/tools": "i-terminal", "/code-grade": "i-check", "/connections": "i-external", "/spend": "i-spend", "/kpis": "i-kpis", "/settings": "i-settings", "/diagnostics": "i-diagnostics"} %}
+{% set groups = {"Overview": ["/"], "Work": ["/queue", "/workflows", "/artifacts"], "Agents": ["/agents", "/fleet", "/chats", "/learning", "/profiles"], "Design": ["/design-systems", "/design-studio"], "Integrations": ["/tools", "/code-grade", "/connections"], "Insight": ["/spend", "/kpis"], "System": ["/settings", "/diagnostics"]} %}
 
 {# Slim top bar with a hamburger: visible only on narrow screens, where the
    sidebar becomes an overlay drawer. The chat page keeps its own header and

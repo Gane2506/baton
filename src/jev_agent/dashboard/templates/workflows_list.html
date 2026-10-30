@@ -1,0 +1,72 @@
+{% extends "base.html" %}
+{% block title %}Workflow profiles{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div class="titles">
+    <h1>Workflow profiles</h1>
+    <p class="lede">A workflow profile is a stage list plus parameters: which stages a run goes through, in canonical order, and how each step behaves. Profiles never reorder stages — the order is fixed by the stages' data dependencies — and the safety floor in the design always applies. The default flow (no profile) is unchanged.</p>
+  </div>
+  <div class="actions">
+    <a class="btn btn-primary" href="/workflows/new">New workflow</a>
+    <a class="btn btn-secondary" href="/workflows/import">Import profile</a>
+  </div>
+</div>
+
+<h2 class="section">Built-in presets</h2>
+<p class="hint">Presets are never edited in place: use one as a template to save a copy under your own id.</p>
+<div class="table-wrap"><table>
+  <thead><tr><th>Preset</th><th>Goal</th><th>Stages</th><th></th></tr></thead>
+  <tbody>
+  {% for p in presets %}
+    <tr>
+      <td><a href="/workflows/{{ p.id }}">{{ p.display_name }}</a>{% if p.priority %} <span class="hint">{{ p.priority }}</span>{% endif %}</td>
+      <td>{{ p.goal | default("—", true) }}</td>
+      <td>{{ p.stage_list | join(" → ") }}</td>
+      <td><a href="/workflows/new?preset={{ p.id }}">Use as template</a></td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table></div>
+
+<h2 class="section">Repo-scope profiles</h2>
+<p class="hint">Stored with this repo checkout under <code>.jev/workflow-profiles/</code>. They do not travel via git — share them by exporting JSON and importing it on another machine.</p>
+{% if repo_profiles %}
+<div class="table-wrap"><table>
+  <thead><tr><th>Profile</th><th class="num">Version</th><th>Goal</th><th>Stages</th><th></th></tr></thead>
+  <tbody>
+  {% for p in repo_profiles %}
+    <tr>
+      <td><a href="/workflows/{{ p.id }}">{{ p.display_name }}</a> <span class="mono">{{ p.id }}</span></td>
+      <td class="num">{{ p.version }}</td>
+      <td>{{ p.goal | default("—", true) }}</td>
+      <td>{{ p.stage_list | join(" → ") }}</td>
+      <td><a href="/workflows/{{ p.id }}/edit">Edit</a> · <a href="/workflows/{{ p.id }}/export">Export JSON</a></td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table></div>
+{% else %}
+<div class="empty"><div class="title">No repo-scope profiles yet</div><p>Create one in the editor, or import one.</p></div>
+{% endif %}
+
+<h2 class="section">User-scope profiles</h2>
+<p class="hint">Stored under <code>~/.jev/workflow-profiles/</code> and visible in every repo on this machine. Re-validated against this repo's configuration at run creation.</p>
+{% if user_profiles %}
+<div class="table-wrap"><table>
+  <thead><tr><th>Profile</th><th class="num">Version</th><th>Goal</th><th>Stages</th><th></th></tr></thead>
+  <tbody>
+  {% for p in user_profiles %}
+    <tr>
+      <td><a href="/workflows/{{ p.id }}">{{ p.display_name }}</a> <span class="mono">{{ p.id }}</span></td>
+      <td class="num">{{ p.version }}</td>
+      <td>{{ p.goal | default("—", true) }}</td>
+      <td>{{ p.stage_list | join(" → ") }}</td>
+      <td><a href="/workflows/{{ p.id }}/edit">Edit</a></td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table></div>
+{% else %}
+<div class="empty"><div class="title">No user-scope profiles yet</div><p>Create one in the editor and pick user scope.</p></div>
+{% endif %}
+{% endblock %}

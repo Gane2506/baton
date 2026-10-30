@@ -55,6 +55,10 @@ SHOTS = [
     Shot("dashboard-board-dark.png", "/", dark=True),
     Shot("dashboard-run.png", "/runs/{run}", height=1400),
     Shot("dashboard-queue.png", "/queue"),
+    Shot("dashboard-workflows.png", "/workflows"),
+    Shot("dashboard-workflows-editor.png", "/workflows/new"),
+    Shot("dashboard-workflows-detail.png", "/workflows/repo:demo-flow"),
+    Shot("dashboard-workflows-import.png", "/workflows/import"),
     Shot("dashboard-learning.png", "/learning"),
     Shot(
         "dashboard-learning-graph.png",
@@ -113,6 +117,31 @@ def seed(demo: Path, env: dict[str, str]) -> None:
     seed_library(demo, env)
     seed_graph_demo(demo, env)
     seed_ratings_demo(demo, env)
+    seed_workflows_demo(demo, env)
+
+
+def seed_workflows_demo(demo: Path, env: dict[str, str]) -> None:
+    """One repo-scope workflow profile, so the Workflows list/detail shots
+    show a stored profile instead of only the empty state (issue #368,
+    phase 5). Saved through the real store, with no validation context —
+    the demo repo's defaults accept this profile."""
+    snippet = (
+        "from pathlib import Path\n"
+        "from jev_agent.core.workflow_profiles import ProfileStore\n"
+        "store = ProfileStore(Path('.'), Path.home() / '.jev')\n"
+        "store.save({\n"
+        "    'id': 'repo:demo-flow', 'display_name': 'Demo flow',\n"
+        "    'scope': 'repo',\n"
+        "    'stage_list': ['INTAKE', 'PLANNING', 'VALIDATING',\n"
+        "        'EXECUTING', 'INTEGRATING', 'SHIPPING'],\n"
+        "    'gate_policies': {'PLANNING': 'inherit', 'VALIDATING': 'inherit',\n"
+        "        'EXECUTING': 'inherit', 'INTEGRATING': 'inherit',\n"
+        "        'SHIPPING': 'inherit'},\n"
+        "    'designing': 'never', 'goal': 'custom',\n"
+        "    'ship_enabled': True, 'after_approval': 'ask',\n"
+        "})\n"
+    )
+    run([sys.executable, "-c", snippet], demo, env)
 
 
 def seed_ratings_demo(demo: Path, env: dict[str, str]) -> None:

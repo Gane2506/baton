@@ -1,0 +1,188 @@
+{% extends "base.html" %}
+{% from "macros.html" import csrf_input with context %}
+{% block title %}{% if editing %}Edit workflow profile{% else %}New workflow profile{% endif %}{% endblock %}
+{% block extra_head %}<link rel="stylesheet" href="/static/workflows_editor.css">{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div class="titles">
+    <h1>{% if editing %}Edit {{ profile.id }}{% else %}New workflow profile{% endif %}</h1>
+    <p class="lede">Canvas and list are two views of the same form: switching mode changes only the layout, never the saved profile. Omit a stage where allowed with its toggle; edit parameters on the stage or below. Stages cannot be reordered — in canvas mode, dragging a node to a new position is refused with the reason, and the order stays canonical. Saving runs the full validation on the server and lists every error.</p>
+  </div>
+</div>
+
+{% if errors %}
+<div class="flash error" role="alert">
+  <strong>Could not save — {{ errors | length }} error{{ "s" if errors | length != 1 else "" }}:</strong>
+  <ul>
+  {% for error in errors %}
+    <li>{{ error }}</li>
+  {% endfor %}
+  </ul>
+</div>
+{% endif %}
+
+<div class="wf-mode" role="group" aria-label="Editor mode">
+  <button type="button" class="btn btn-secondary wf-mode-btn is-active" data-wf-mode="canvas">Canvas</button>
+  <button type="button" class="btn btn-secondary wf-mode-btn" data-wf-mode="list">List</button>
+</div>
+<p class="hint" id="wf-reorder-refusal" hidden role="alert"></p>
+<p class="hint" id="wf-live-errors" hidden role="status"></p>
+
+<form id="wf-form" method="post" action="{% if editing %}/workflows/{{ profile.id }}/edit{% else %}/workflows/new{% endif %}">
+  {{ csrf_input() }}
+  <section class="panel">
+    <div>
+      <label for="wf-display-name">Display name</label>
+      <input type="text" id="wf-display-name" name="display_name" value="{{ profile.display_name | default('', true) }}" required>
+    </div>
+    {% if editing %}
+    <p class="hint">Editing <span class="mono">{{ profile.id }}</span> saves a new version; the current version is never modified.</p>
+    <input type="hidden" name="slug" value="{{ profile.id.split(':')[1] }}">
+    <input type="hidden" name="scope" value="{{ profile.scope }}">
+    {% else %}
+    <div>
+      <label for="wf-slug">Slug (letters, digits, <code>-</code> and <code>_</code>, at most 40 characters)</label>
+      <input type="text" id="wf-slug" name="slug" value="" required>
+    </div>
+    <div>
+      <label for="wf-scope">Scope</label>
+      <select id="wf-scope" name="scope">
+        <option value="repo" {% if profile.scope == "repo" %}selected{% endif %}>Repo — this checkout only</option>
+        <option value="user" {% if profile.scope == "user" %}selected{% endif %}>User — every repo on this machine</option>
+      </select>
+    </div>
+    {% endif %}
+  </section>
+
+  <h2 class="section">Stages, in canonical order</h2>
+  <div id="wf-stages" class="wf-stages wf-mode-canvas">
+    {% for stage in stages %}
+    <article class="wf-stage{% if not stage.included %} wf-omitted{% endif %}" data-wf-stage="{{ stage.code }}" draggable="true">
+      <h3>{{ stage.name | capitalize }}</h3>
+      <label><input type="checkbox" name="stage_{{ stage.code }}" {% if stage.included %}checked{% endif %}> Include {{ stage.name }}</label>
+      {% if stage.code != "INTAKE" %}
+      <label for="wf-gate-{{ stage.code }}">Gate policy</label>
+      <select id="wf-gate-{{ stage.code }}" name="gate_{{ stage.code }}">
+        {% for policy in gate_policies %}
+        <option value="{{ policy }}" {% if stage.gate == policy %}selected{% endif %}>{{ policy }}</option>
+        {% endfor %}
+      </select>
+      {% else %}
+      <p class="hint">Intake has no waiting state, so it carries no gate policy.</p>
+      {% endif %}
+    </article>
+    {% endfor %}
+  </div>
+  <p class="hint">Required stages (intake, planning, validation, execution, integration) cannot be omitted; design may be omitted only when designing is “never”, and shipping only when shipping is off. A save that breaks a rule names the stage and states the fix.</p>
+
+  <h2 class="section">Parameters</h2>
+  <section class="panel">
+    <div>
+      <label for="wf-designing">Designing</label>
+      <select id="wf-designing" name="designing">
+        <option value="when_needed" {% if profile.designing | default("when_needed", true) == "when_needed" %}selected{% endif %}>When needed (design stage included)</option>
+        <option value="never" {% if profile.designing == "never" %}selected{% endif %}>Never (design stage omitted)</option>
+      </select>
+    </div>
+    <div>
+      <label for="wf-quality">Quality level (blank: repo configuration)</label>
+      <select id="wf-quality" name="quality_level">
+        <option value="">Repo configuration</option>
+        {% for level in ["none", "basic", "medium", "production", "scalable"] %}
+        <option value="{{ level }}" {% if profile.quality_level == level %}selected{% endif %}>{{ level }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div>
+      <label for="wf-threshold">Score threshold, 0–100 (blank: repo configuration)</label>
+      <input type="number" id="wf-threshold" name="score_threshold" min="0" max="100" value="{{ profile.score_threshold | default('', true) }}">
+    </div>
+    <div>
+      <label><input type="checkbox" name="score_skip_human" {% if profile.score_skip_human %}checked{% endif %}> Skip the human score gate (refused while shipping is enabled)</label>
+    </div>
+    <div>
+      <label for="wf-plan-rounds">Max plan rounds (blank: repo configuration)</label>
+      <input type="number" id="wf-plan-rounds" name="max_plan_rounds" min="1" value="{{ profile.max_plan_rounds | default('', true) }}">
+    </div>
+    <div>
+      <label for="wf-fix-rounds">Max fix rounds (blank: repo configuration)</label>
+      <input type="number" id="wf-fix-rounds" name="max_fix_rounds" min="1" value="{{ profile.max_fix_rounds | default('', true) }}">
+    </div>
+    <div>
+      <label for="wf-score-retries">Score max retries (blank: repo configuration)</label>
+      <input type="number" id="wf-score-retries" name="score_max_retries" min="1" value="{{ profile.score_max_retries | default('', true) }}">
+    </div>
+    <div>
+      <label for="wf-task-attempts">Max task attempts (blank: repo configuration)</label>
+      <input type="number" id="wf-task-attempts" name="max_task_attempts" min="1" value="{{ profile.max_task_attempts | default('', true) }}">
+    </div>
+    <div>
+      <label for="wf-planner">Planner policy (blank: repo configuration)</label>
+      <select id="wf-planner" name="planner_policy">
+        <option value="">Repo configuration</option>
+        {% for policy in ["free_training_ok", "mixed", "mixed_no_training", "paid_only"] %}
+        <option value="{{ policy }}" {% if profile.planner_policy == policy %}selected{% endif %}>{{ policy }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div>
+      <label for="wf-cache">Cache mode (blank: repo configuration)</label>
+      <select id="wf-cache" name="cache_mode">
+        <option value="">Repo configuration</option>
+        {% for mode in ["exact", "exact_off"] %}
+        <option value="{{ mode }}" {% if profile.cache_mode == mode %}selected{% endif %}>{{ mode }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div>
+      <label for="wf-cda">CDA grading (blank: repo configuration; grading on with no backend refuses at run creation)</label>
+      <select id="wf-cda" name="cda_grading">
+        <option value="">Repo configuration</option>
+        {% for grading in ["off", "on"] %}
+        <option value="{{ grading }}" {% if profile.cda_grading == grading %}selected{% endif %}>{{ grading }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div>
+      <label><input type="checkbox" name="ship_enabled" {% if profile.ship_enabled %}checked{% endif %}> Shipping enabled</label>
+    </div>
+    <div>
+      <label for="wf-after">After approval (blank: ask)</label>
+      <select id="wf-after" name="after_approval">
+        <option value="">Ask</option>
+        {% for mode in ["merge", "ask"] %}
+        <option value="{{ mode }}" {% if profile.after_approval == mode %}selected{% endif %}>{{ mode }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div>
+      <label for="wf-learning">Learning profile (blank: none; an unknown name refuses at save)</label>
+      <input type="text" id="wf-learning" name="learning_profile" value="{{ profile.learning_profile | default('', true) }}">
+    </div>
+    <div>
+      <label for="wf-goal">Goal label (blank: none)</label>
+      <select id="wf-goal" name="goal">
+        <option value="">None</option>
+        {% for goal in ["efficiency", "accuracy", "custom"] %}
+        <option value="{{ goal }}" {% if profile.goal == goal %}selected{% endif %}>{{ goal }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div>
+      <label for="wf-priority">Priority note (display only, blank: none)</label>
+      <input type="text" id="wf-priority" name="priority" value="{{ profile.priority | default('', true) }}">
+    </div>
+    <h3>Role models (blank per role: repo configuration; an unknown model refuses at save)</h3>
+    {% for role in roles %}
+    <div>
+      <label for="wf-role-{{ role }}">{{ role }}</label>
+      <input type="text" id="wf-role-{{ role }}" name="role_{{ role }}" value="{{ (profile.role_models | default({}, true))[role] | default('', true) }}">
+    </div>
+    {% endfor %}
+  </section>
+
+  <button class="btn btn-primary" type="submit">{% if editing %}Save new version{% else %}Create workflow profile{% endif %}</button>
+  <a class="btn btn-secondary" href="/workflows">Cancel</a>
+</form>
+<script src="/static/workflows_editor.js" defer></script>
+{% endblock %}
