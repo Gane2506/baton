@@ -49,6 +49,12 @@ Rules the rest of the code must not break:
   evidence to a routing hint Jev already has; Jev still chooses among its
   allowed answers at D4, and the 0.7 threshold rule still gates the hint
   itself.
+- Hint usage (issue #380, Phase 3) is ledgered, not graded: a D4 hint
+  offer and its gate outcome are `kind="hint_usage"` records, excluded
+  from the agent/tier/skill aggregates (they are not grades — counting
+  them would inflate tier `n`), and summarized separately via
+  `summarize_hints`. `total` still counts every ledger line, hints
+  included, because it counts lines, not grades.
 """
 
 from __future__ import annotations
@@ -92,13 +98,19 @@ __all__ = [
     "GradeKind",
     "GradeRecord",
     "GradeStatus",
+    "HintAggregate",
+    "HintSummary",
     "LedgerRatings",
     "RatingLedger",
     "code_review_record",
     "enrich_hint",
+    "hint_offer_record",
+    "hint_outcome_record",
     "ledger_path",
     "ledger_path_for_repo",
+    "record_hint_outcome",
     "routing_record",
+    "summarize_hints",
     "trace_record",
     "unavailable_record",
 ]
@@ -112,8 +124,10 @@ MIN_GRADES_FOR_BEST_TIER = 3
 
 log = logging.getLogger(__name__)
 
-GradeKind = str  # "code_review" | "routing" | "trace" | "tool_call"
-GradeStatus = str  # "graded" | "unavailable" | "error"
+GradeKind = str  # "code_review" | "routing" | "trace" | "tool_call" | "hint_usage"
+# Grades use "graded" | "unavailable" | "error"; hint usage (issue #380)
+# uses "offered" (a D4 hint was given) | "outcome" (the gate judged it).
+GradeStatus = str
 
 
 def ledger_path(state_dir: Path) -> Path:
@@ -153,6 +167,12 @@ class GradeRecord:
     trace_outcome: str = ""
     risk: int | None = None  # 0-3
     urgency: int | None = None  # 0-3
+    # Hint usage only (`kind="hint_usage"`, issue #380): whether D4's
+    # assignment followed the hint, and whether the hint helped.
+    # `hint_helped=None` means no gate grade ever landed — unknown,
+    # not failure. Both are None on every other kind.
+    hint_followed: bool | None = None
+    hint_helped: bool | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -178,14 +198,16 @@ class GradeRecord:
             "trace_outcome": self.trace_outcome,
             "risk": self.risk,
             "urgency": self.urgency,
+            "hint_followed": self.hint_followed,
+            "hint_helped": self.hint_helped,
         }
 
     @classmethod
     def from_dict(cls, raw: dict[str, Any]) -> GradeRecord:
         """A stored line back into a record; raises on a bad line (the caller skips it)."""
-        if raw.get("kind") not in ("code_review", "routing", "trace", "tool_call"):
+        if raw.get("kind") not in ("code_review", "routing", "trace", "tool_call", "hint_usage"):
             raise ValueError(f"unknown grade kind {raw.get('kind')!r}")
-        if raw.get("status") not in ("graded", "unavailable", "error"):
+        if raw.get("status") not in ("graded", "unavailable", "error", "offered", "outcome"):
             raise ValueError(f"unknown grade status {raw.get('status')!r}")
         quality = raw.get("code_quality")
         if quality is not None and (
@@ -230,6 +252,8 @@ class GradeRecord:
             trace_outcome=str(raw.get("trace_outcome") or ""),
             risk=risk,
             urgency=urgency,
+            hint_followed=raw.get("hint_followed"),
+            hint_helped=raw.get("hint_helped"),
         )
 
 
@@ -346,6 +370,66 @@ def unavailable_record(
     )
 
 
+def hint_offer_record(
+    *,
+    run_id: str = "",
+    task_id: str = "",
+    tier: str = "",
+    skill: str = "",
+    suggested_effort: str = "",
+    assigned_effort: str = "",
+    source: str = "d4",
+) -> GradeRecord:
+    """A D4 hint offer (issue #380): the hint was given, and D4's
+    assignment either matched its suggested effort or did not.
+
+    `followed` is effort-match only: D4 chooses worker/model/effort,
+    not skill, so skill-following cannot be observed at D4. The
+    suggested effort rides in `detail`; `effort` carries the assigned
+    effort, so the offer says what actually happened. `hint_helped`
+    stays None until the gate grades the run — unknown, not failure.
+    """
+    return GradeRecord(
+        kind="hint_usage",
+        status="offered",
+        source=source,
+        run_id=run_id,
+        task_id=task_id,
+        tier=tier,
+        skill=skill,
+        effort=assigned_effort,
+        detail=f"suggested_effort={suggested_effort}" if suggested_effort else "",
+        hint_followed=(bool(suggested_effort) and assigned_effort == suggested_effort),
+        hint_helped=None,
+    )
+
+
+def hint_outcome_record(
+    offer: GradeRecord,
+    *,
+    gate_decision: str,
+    source: str = "gate",
+) -> GradeRecord:
+    """A hint offer's outcome: helped exactly when the gate accepted.
+
+    Tier/skill/effort/followed are copied from the offer, so the
+    outcome aggregates under the same keys as the offer it resolves.
+    """
+    return GradeRecord(
+        kind="hint_usage",
+        status="outcome",
+        source=source,
+        run_id=offer.run_id,
+        task_id=offer.task_id,
+        tier=offer.tier,
+        skill=offer.skill,
+        effort=offer.effort,
+        detail=f"gate_decision={gate_decision}",
+        hint_followed=offer.hint_followed,
+        hint_helped=(gate_decision == "accept"),
+    )
+
+
 @dataclass(frozen=True)
 class Aggregate:
     """One key's grades, aggregated. Quality/accept rates count graded diff
@@ -395,6 +479,73 @@ def _aggregate(records: list[GradeRecord]) -> Aggregate:
 
 
 @dataclass(frozen=True)
+class HintAggregate:
+    """One key's hint usage: offers, follows, and gate outcomes.
+
+    `offered` counts offers; `followed` counts offers whose assigned
+    effort matched the hint's suggested effort; `resolved` counts
+    outcomes; `helped` counts outcomes where the gate accepted. Rates
+    are None when their denominator is zero — unknown, not zero.
+    """
+
+    offered: int = 0
+    followed: int = 0
+    resolved: int = 0
+    helped: int = 0
+
+    @property
+    def followed_rate(self) -> float | None:
+        return (self.followed / self.offered) if self.offered else None
+
+    @property
+    def helped_rate(self) -> float | None:
+        return (self.helped / self.resolved) if self.resolved else None
+
+
+@dataclass(frozen=True)
+class HintSummary:
+    """Hint usage across the ledger: totals plus per-tier/per-skill splits."""
+
+    total: HintAggregate = field(default_factory=HintAggregate)
+    by_tier: dict[str, HintAggregate] = field(default_factory=dict)
+    by_skill: dict[str, HintAggregate] = field(default_factory=dict)
+
+
+def summarize_hints(records: list[GradeRecord]) -> HintSummary:
+    """Summarize `kind="hint_usage"` records; every other kind is ignored.
+
+    Offers and outcomes are counted separately: an offer with no outcome
+    yet counts in `offered` but not in `resolved` — the hint's
+    helpfulness is still unknown, not a failure. Outcomes aggregate
+    under the tier/skill copied from their offer.
+    """
+    hints = [r for r in records if r.kind == "hint_usage"]
+
+    def _agg(group: list[GradeRecord]) -> HintAggregate:
+        offers = [r for r in group if r.status == "offered"]
+        outcomes = [r for r in group if r.status == "outcome"]
+        return HintAggregate(
+            offered=len(offers),
+            followed=sum(1 for r in offers if r.hint_followed is True),
+            resolved=len(outcomes),
+            helped=sum(1 for r in outcomes if r.hint_helped is True),
+        )
+
+    by_tier: dict[str, list[GradeRecord]] = defaultdict(list)
+    by_skill: dict[str, list[GradeRecord]] = defaultdict(list)
+    for entry in hints:
+        if entry.tier:
+            by_tier[entry.tier].append(entry)
+        if entry.skill:
+            by_skill[entry.skill].append(entry)
+    return HintSummary(
+        total=_agg(hints),
+        by_tier={key: _agg(group) for key, group in sorted(by_tier.items())},
+        by_skill={key: _agg(group) for key, group in sorted(by_skill.items())},
+    )
+
+
+@dataclass(frozen=True)
 class LedgerRatings:
     """The ledger, aggregated: what the dashboard and D4 read."""
 
@@ -405,6 +556,7 @@ class LedgerRatings:
     by_tier: dict[str, Aggregate] = field(default_factory=dict)
     by_skill: dict[str, Aggregate] = field(default_factory=dict)
     recent: tuple[GradeRecord, ...] = ()
+    hints: HintSummary = field(default_factory=HintSummary)
 
     def best_tier(self) -> str:
         """The best-rated tier by mean diff quality, or "" when no tier has
@@ -568,6 +720,11 @@ class RatingLedger:
         by_tier: dict[str, list[GradeRecord]] = defaultdict(list)
         by_skill: dict[str, list[GradeRecord]] = defaultdict(list)
         for entry in entries:
+            # Hint usage is not a grade: it never joins the aggregates
+            # (counting it would inflate tier `n`); it is summarized
+            # separately in `hints` below.
+            if entry.kind == "hint_usage":
+                continue
             if entry.agent:
                 by_agent[entry.agent].append(entry)
             if entry.tier:
@@ -582,7 +739,12 @@ class RatingLedger:
             by_tier={key: _aggregate(group) for key, group in sorted(by_tier.items())},
             by_skill={key: _aggregate(group) for key, group in sorted(by_skill.items())},
             recent=tuple(entries[-recent_limit:][::-1]) if recent_limit > 0 else (),
+            hints=summarize_hints(entries),
         )
+
+    def hint_summary(self) -> HintSummary:
+        """Hint usage in this ledger, without loading the aggregates."""
+        return summarize_hints(self.records())
 
 
 def enrich_hint(hint: dict[str, str], ratings: LedgerRatings) -> dict[str, str]:
@@ -620,3 +782,46 @@ def enrich_hint(hint: dict[str, str], ratings: LedgerRatings) -> dict[str, str]:
     if best and best != tier:
         enriched["ledger_best_tier"] = best
     return enriched
+
+
+def _open_offers(records: list[GradeRecord], *, run_id: str, task_id: str) -> list[GradeRecord]:
+    """The still-open hint offers for (run_id, task_id), oldest first.
+
+    The ledger is append-only and offers are immutable, so an offer is
+    never marked resolved in place: openness is replayed from order.
+    Scanning oldest to newest, an offer opens and an outcome closes the
+    latest still-open offer — exactly the rule `record_hint_outcome`
+    writes by. What remains open at the end is what a new outcome may
+    resolve.
+    """
+    stack: list[GradeRecord] = []
+    for entry in records:
+        if entry.kind != "hint_usage" or entry.run_id != run_id or entry.task_id != task_id:
+            continue
+        if entry.status == "offered":
+            stack.append(entry)
+        elif entry.status == "outcome" and stack:
+            stack.pop()
+    return stack
+
+
+def record_hint_outcome(
+    ledger: RatingLedger,
+    *,
+    run_id: str,
+    task_id: str,
+    gate_decision: str,
+) -> bool:
+    """Resolve the latest open hint offer for (run_id, task_id) (issue #380).
+
+    The latest still-open offer (see `_open_offers`) gets an outcome
+    record: helped exactly when the gate accepted. Returns False when
+    no open offer exists — no hint was given, or every offer was already
+    resolved. A gate without a hint is not an error; it just has no hint
+    to judge. Best-effort like every ledger write: this function returns
+    False on a failed write, and the caller swallows failures.
+    """
+    open_offers = _open_offers(ledger.records(), run_id=run_id, task_id=task_id)
+    if not open_offers:
+        return False
+    return ledger.record(hint_outcome_record(open_offers[-1], gate_decision=gate_decision))
