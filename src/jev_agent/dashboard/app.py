@@ -172,10 +172,11 @@ def create_app(
         Route("/chats/{chat_id}/work", dash.chat_work),
         Route("/chats/{chat_id}/work/{tab}", dash.chat_work_tab),
         Route("/spend", dash.spend_page),
-        # Workflow profiles (issue #368): phase 2 export/import plus the
-        # phase 5 list, editor and detail pages. Specific paths come before
-        # the {profile_id} captures so "new"/"import"/"validate" are never
-        # read as a profile id. Suggestion routes are phase 6, not here.
+        # Workflow profiles (issue #368): phase 2 export/import, the
+        # phase 5 list, editor and detail pages, and the phase 6
+        # suggestion request/result and approve/discard routes. Specific
+        # paths come before the {profile_id} captures so "new"/"import"/
+        # "validate" are never read as a profile id.
         Route("/workflows", dash.workflows_list_page),
         Route("/workflows/new", dash.workflows_new_page),
         Route("/workflows/new", dash.workflows_create, methods=["POST"]),
@@ -185,6 +186,22 @@ def create_app(
         Route("/workflows/{profile_id}", dash.workflows_detail_page),
         Route("/workflows/{profile_id}/edit", dash.workflows_edit_page),
         Route("/workflows/{profile_id}/edit", dash.workflows_save_edit, methods=["POST"]),
+        Route("/workflows/{profile_id}/suggest", dash.workflows_suggest_page),
+        Route("/workflows/{profile_id}/suggest", dash.workflows_suggest, methods=["POST"]),
+        Route(
+            "/workflows/{profile_id}/suggestions/{suggestion_id}",
+            dash.workflows_suggestion_page,
+        ),
+        Route(
+            "/workflows/{profile_id}/suggestions/{suggestion_id}/approve",
+            dash.workflows_suggestion_approve,
+            methods=["POST"],
+        ),
+        Route(
+            "/workflows/{profile_id}/suggestions/{suggestion_id}/discard",
+            dash.workflows_suggestion_discard,
+            methods=["POST"],
+        ),
         Route("/workflows/{profile_id}/export", dash.workflows_export),
         Route("/kpis", dash.kpis_page),
         Route("/kpis/sync", dash.kpis_sync, methods=["POST"]),

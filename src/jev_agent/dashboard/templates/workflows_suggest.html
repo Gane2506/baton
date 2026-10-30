@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+{% from "macros.html" import csrf_input with context %}
+{% block title %}Suggest a flow · {{ profile.display_name }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div class="titles">
+    <h1>Suggest a flow for {{ profile.display_name }}</h1>
+    <p class="lede">Ask for a suggested flow for a stated goal, from <span class="mono">{{ profile.id }}</span> version {{ profile.version }}. A suggestion is a draft: it changes no run and appears in no picker until you approve it. A suggestion with no measured evidence behind a change never makes that change — below the usage threshold you get a preset proposal, labelled as such, or a plain statement that no change beats your current flow.</p>
+  </div>
+  <div class="actions">
+    <a class="btn btn-secondary" href="/workflows/{{ profile.id }}">Back to profile</a>
+  </div>
+</div>
+
+<h2 class="section">Labelled-run volume</h2>
+<p class="hint">Completed runs with stage records in the last 90 days, per stated goal. A usage-based suggestion needs at least 10 for the goal you pick; below that, the engine runs in preset-only mode. Runs with no stated goal never count as goal evidence.</p>
+<div class="table-wrap"><table>
+  <thead><tr><th>Stated goal</th><th class="num">Completed runs with stage records</th><th>Usage-based threshold</th></tr></thead>
+  <tbody>
+    {% for goal in ("efficiency", "accuracy", "custom") %}
+    <tr>
+      <td>{{ goal }}</td>
+      <td class="num">{{ volumes[goal] }}</td>
+      <td>{% if volumes[goal] >= 10 %}met{% else %}not met — preset-only mode{% endif %}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table></div>
+
+<h2 class="section">Ask for a suggestion</h2>
+<form method="post" action="/workflows/{{ profile.id }}/suggest">
+  {{ csrf_input() }}
+  <div>
+    <label for="suggest-goal">Stated goal</label>
+    <select id="suggest-goal" name="goal" required>
+      <option value="efficiency">efficiency</option>
+      <option value="accuracy">accuracy</option>
+      <option value="custom">custom</option>
+    </select>
+  </div>
+  {% if profile.scope == "user" %}
+  <div>
+    <label><input type="checkbox" name="cross_repo"> Cross-repo suggestion: aggregate runs across your repos</label>
+    <p class="hint">Only user-scope profiles may aggregate across repos, and only when you ask for it here. A cross-repo suggestion is labelled "cross-repo" on its result page, with the repos that contributed named.</p>
+  </div>
+  {% else %}
+  <p class="hint">Repo-scope suggestions read this repo's runs only — another repo's runs are never read for a repo-scope suggestion. For a cross-repo suggestion, use a user-scope profile.</p>
+  {% endif %}
+  <div class="actions">
+    <button class="btn btn-primary" type="submit">Ask for a suggestion</button>
+  </div>
+</form>
+{% endblock %}

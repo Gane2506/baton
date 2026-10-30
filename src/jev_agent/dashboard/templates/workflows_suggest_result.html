@@ -1,0 +1,110 @@
+{% extends "base.html" %}
+{% from "macros.html" import csrf_input with context %}
+{% block title %}Suggestion · {{ profile.display_name }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div class="titles">
+    <h1>Suggestion for {{ profile.display_name }}</h1>
+    <p class="lede">Suggested from <span class="mono">{{ profile.id }}</span>{% if record %} · suggestion {{ record.id }} · status {{ record.status }}{% endif %}. Approve and discard are the only actions: an unapproved suggestion appears in no picker and changes no run.</p>
+  </div>
+  <div class="actions">
+    <a class="btn btn-secondary" href="/workflows/{{ profile.id }}">Back to profile</a>
+  </div>
+</div>
+
+{% if record and record.cross_repo %}
+<p class="hint"><strong>cross-repo</strong> — this suggestion aggregates runs across your repos. Contributing repos: {{ record.repos | join(", ") }}.</p>
+{% endif %}
+{% if record and record.mode == "preset-only" %}
+<p class="hint"><strong>preset, not measured for your history</strong> — the labelled-run volume is below the usage threshold, so no measured recommendation is made from your history. Evidence: {{ record.evidence_window.completed_runs }} completed {{ record.goal }}-goal runs with stage records in the window {{ record.evidence_window.window_start }} to {{ record.evidence_window.window_end }}; a usage-based suggestion needs at least 10. The proposal below is a preset, with the preset's documented behaviour as its reason.</p>
+{% endif %}
+{% if record and record.status == "discarded" %}
+<p class="hint">This suggestion was discarded. It stays visible here for audit and is not re-offered unless new evidence arrives: a threshold crossed by new runs, or a new lesson in the window.</p>
+{% endif %}
+{% if not record and outcome %}
+<p>{{ outcome.message }}</p>
+{% endif %}
+
+{% if record %}
+<h2 class="section">Draft flow</h2>
+<p>{{ record.draft.stage_list | join(" → ") }}</p>
+{% if from_profile.stage_list != record.draft.stage_list %}
+<p class="hint">Changed against version {{ from_profile.version }}: was {{ from_profile.stage_list | join(" → ") }}.</p>
+{% endif %}
+<div class="table-wrap"><table>
+  <thead><tr><th>Changed field</th><th>Was</th><th>Draft</th></tr></thead>
+  <tbody>
+  {% for change in changes %}
+    <tr>
+      <td>{{ change.field }}</td>
+      <td>{{ change.before }}</td>
+      <td>{{ change.after }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table></div>
+
+<h2 class="section">Reasoning</h2>
+<p class="hint">One line per change: what changes, the evidence with its sample size and window, and what would prove it wrong. A reason line without evidence is refused by the engine and never displayed.</p>
+<div class="table-wrap"><table>
+  <thead><tr><th>Change</th><th>Evidence</th><th class="num">Sample</th><th>Window</th><th>Completeness</th><th>What would prove it wrong</th></tr></thead>
+  <tbody>
+  {% for line in record.reasoning_lines %}
+    <tr>
+      <td>{{ line.change }}</td>
+      <td>{{ line.evidence }}</td>
+      <td class="num">{{ line.sample_size }}</td>
+      <td>{{ line.window }}</td>
+      <td>{{ line.completeness }}</td>
+      <td>{{ line.falsifier }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table></div>
+
+<h2 class="section">Evidence thresholds</h2>
+<div class="table-wrap"><table>
+  <thead><tr><th>Threshold</th><th>Met</th></tr></thead>
+  <tbody>
+  {% for name, met in record.thresholds_met.items() %}
+    <tr>
+      <td>{{ name }}</td>
+      <td>{% if met %}met{% else %}not met{% endif %}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table></div>
+
+<h2 class="section">Assurance</h2>
+<p>{{ assurance_note }}</p>
+
+{% if record.status == "pending" %}
+<h2 class="section">Decide</h2>
+<p class="hint">Approving saves the draft as a new profile version with "suggested" provenance (or records approval of the existing version when the draft is identical to it). Approval covers that version only: it changes no existing run and no default. Discarding changes only this record's status.</p>
+<form method="post" action="/workflows/{{ profile.id }}/suggestions/{{ record.id }}/approve">
+  {{ csrf_input() }}
+  <button class="btn btn-primary" type="submit">Approve suggestion</button>
+</form>
+<form method="post" action="/workflows/{{ profile.id }}/suggestions/{{ record.id }}/discard">
+  {{ csrf_input() }}
+  <button class="btn btn-secondary" type="submit">Discard suggestion</button>
+</form>
+{% endif %}
+{% endif %}
+
+{% if not record and outcome %}
+<h2 class="section">Evidence thresholds</h2>
+<div class="table-wrap"><table>
+  <thead><tr><th>Threshold</th><th>Met</th></tr></thead>
+  <tbody>
+  {% for name, met in outcome.thresholds_met.items() %}
+    <tr>
+      <td>{{ name }}</td>
+      <td>{% if met %}met{% else %}not met{% endif %}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table></div>
+<p class="hint">Nothing to approve: no draft was stored, so no picker entry and no run can change from this request.</p>
+{% endif %}
+{% endblock %}
