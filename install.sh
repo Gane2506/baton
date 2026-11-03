@@ -12,7 +12,7 @@
 #   -h, --help        show this help
 #
 # Examples:
-#   curl -fsSL https://raw.githubusercontent.com/Gane2506/baton/main/install.sh | bash -s -- --ref v0.3.0
+#   curl -fsSL https://raw.githubusercontent.com/Gane2506/baton/main/install.sh | bash -s -- --ref v0.5.0
 #   JEV_NO_DASHBOARD=1 curl -fsSL https://raw.githubusercontent.com/Gane2506/baton/main/install.sh | bash
 #
 # Safe to re-run: installs when missing, upgrades when present. Installs from

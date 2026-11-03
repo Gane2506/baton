@@ -146,7 +146,7 @@ to paste. It is the fastest way to check whether a `jev` command has a dashboard
   what each role gets from the selected profile, and **Make default** / **Clear default**.
 - **Diagnostics** (`/diagnostics`): the `jev doctor` checks (local checks only — no SSH) as a
   read-only matrix. Key values are never shown, only whether each one is set.
-- **Chats** (`/chats`): saved `jev chat` sessions and their transcripts, read-only.
+- **Chats** (`/chats`): saved `jev chat` sessions and their transcripts, plus a New chat form — chats are fully interactive (talk an idea through, then plan, run or queue it).
 - **Spend** (`/spend`): spend per day for the last 30 days and the costliest runs, as
   server-rendered SVG bar charts, plus every run's spend.
 - **KPIs** (`/kpis`, `?last=N`, default 20): PRs opened by `jev ship` with their KPIs (cost,
@@ -392,7 +392,7 @@ model runs. The seed script also sets the demo's `jev.toml` up for the pictures 
 dispatcher, free models for the planner, example MCP servers and a skill, variable names only),
 caches a model list from the test fixtures and saves one chat.
 
-Every image in `docs/images/` except the logos comes from the running app on your checkout.
+Every image in `docs/images/` except the brand assets (`logo*.svg`) and `social-preview.png` comes from the running app on your checkout, via `examples/demo/screenshots.py`.
 One command regenerates all of them:
 
 ```bash
