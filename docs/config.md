@@ -80,15 +80,13 @@ A repository's `jev.toml` cannot contain `[trust]`.
 
 | Key | Default | Meaning |
 | --- | --- | --- |
-| `primary` | `"consensus"` | Dispatcher asked first: `"consensus"`, `"jev"` or `"rules"`. |
+| `primary` | `"jev"` | Dispatcher asked first: `"jev"` or `"rules"`. |
 
-With `primary = "consensus"` (the default), Jev — the main orchestrator — makes every
-decision. For code work, the Coding Decision Agent ([`[code_orchestrator]`](#code_orchestrator))
+With `primary = "jev"` (the default), Jev — the main orchestrator — makes every
+decision, with the rules dispatcher as fallback. For code work, the Coding Decision Agent ([`[code_orchestrator]`](#code_orchestrator))
 grades diffs and routes coding tasks; it never merges, ships, or approves a plan on its own.
 A question Jev cannot settle confidently stops the run in `NEEDS_HUMAN` and `jev resume`
-continues it once you have looked. The consensus dispatcher never falls back to rules, so a
-missing key, a network error or an answer outside the allowed values also stops the run
-instead of being decided without Jev. The saved decision records Jev's vote and the reason
+continues it once you have looked. The saved decision records Jev's vote and the reason
 of every unsettled round. Questions with a single allowed value are not asked.
 
 > The former second vote is removed (issue #193): there is no `[dispatcher.laya]` table
@@ -202,11 +200,9 @@ failed commit stops the run in NEEDS_HUMAN: fix the cause, then `jev resume`.
 
 | Key | Default | Meaning |
 | --- | --- | --- |
-| `require_plan_approval` | unset | Stop for human approval after the plan is validated. Unset follows the dispatcher: off with `primary = "consensus"`, on with `"jev"` and `"rules"`. `true` or `false` always wins. |
+| `require_plan_approval` | unset | Stop for human approval after the plan is validated. Unset: on. `true` or `false` always wins. |
 
-Under `consensus`, Jev's D3 verdict is the gate: a plan Jev approves goes straight to
-execution, and a plan Jev cannot settle stops the run in `NEEDS_HUMAN`. Set `require_plan_approval = true` to also stop for yourself after every
-validated plan. `--plan-only` always stops at the plan, whatever the setting.
+With the default (`require_plan_approval` unset, so on), a plan D3 approves stops for your approval before execution, and a plan Jev cannot settle stops the run in `NEEDS_HUMAN`. Set `require_plan_approval = false` to let an approved plan go straight to execution. `--plan-only` always stops at the plan, whatever the setting.
 
 ## `[autonomy]`
 
@@ -228,7 +224,7 @@ Three "medium"s, not one: `[autonomy].mode = "medium"` is the folder-scoped run 
 
 | Key | Default | Meaning |
 | --- | --- | --- |
-| `enabled` | unset | After a task's tests pass (and the quality gate, if on), have the reviewer check its diff. A `revise` verdict counts as a failed attempt (retry, escalate, ...). Unset follows the dispatcher: on with `primary = "consensus"`, off with `"jev"` and `"rules"`. `true` or `false` always wins. |
+| `enabled` | unset | After a task's tests pass (and the quality gate, if on), have the reviewer check its diff. A `revise` verdict counts as a failed attempt (retry, escalate, ...). Unset: off. `true` or `false` always wins. |
 
 Before each review, decision point D8 picks the reviewer's worker, model and effort from
 `[roles.reviewer]`, seeing the task card, the attempt number, the test and quality results, the
@@ -237,7 +233,7 @@ first worker and model and the middle effort. Set `[roles.reviewer]
 prefer_different_vendor_than = "coder"` to have D8 prefer a different vendor than the attempt's
 coder, as D2 does for the validator.
 
-Under `consensus` the review's verdict is part of the D5 state, so a task is done only when Jev
+When the reviewer is enabled, the review's verdict is part of the D5 state, so a task is done only when Jev
 accepts an attempt the reviewer has checked. Each review adds one decision and one reviewer
 call per attempt; set `enabled = false` to skip both.
 
@@ -371,7 +367,7 @@ run by itself: `after_approval = "merge"` opens the PR ready, waits for its chec
 | `draft` | `true` | Open the PR as a draft. |
 | `labels` | `[]` | Labels to add (`gh pr create --label`); they must already exist in the repo. |
 | `require_quality_pass` | `true` | Refuse a run whose latest quality gate (any task or the integration) blocked. |
-| `after_approval` | unset | What a run does when D6 votes "ship": `"merge"` ships and merges without asking, `"ask"` waits in `AWAITING_SHIP` for `jev ship approve RUN`, `jev ship modify RUN` or `jev ship stop RUN` (or the dashboard). Unset: `"merge"` when `[dispatcher] primary = "consensus"`, else `"ask"`. `jev run --auto-ship` / `--ask-before-ship` (and the queue's) override it per run. Needs `enabled = true`; otherwise D6 ends the run DONE as before. |
+| `after_approval` | unset | What a run does when D6 votes "ship": `"merge"` ships and merges without asking, `"ask"` waits in `AWAITING_SHIP` for `jev ship approve RUN`, `jev ship modify RUN` or `jev ship stop RUN` (or the dashboard). Unset: `"ask"`. `jev run --auto-ship` / `--ask-before-ship` (and the queue's) override it per run. Needs `enabled = true`; otherwise D6 ends the run DONE as before. |
 | `merge_method` | `"squash"` | How the PR is merged: `"squash"`, `"merge"` or `"rebase"` (`gh pr merge --squash` etc.). |
 | `require_checks` | `true` | A PR that still reports no checks after `checks_grace_s` stops for you; `false` merges it without CI. |
 | `checks_grace_s` | `120` | Seconds (>= 0) to wait for a new PR's checks to appear. |

@@ -405,6 +405,30 @@ def shoot_submenu(browser: Browser, base: str, out_dir: Path) -> None:
     restore.context.close()
 
 
+def shoot_styles(browser: Browser, base: str, out_dir: Path) -> None:
+    """Board page in four non-default styles, one shot each.
+
+    The style picker applies instantly and persists via a background POST, so
+    each style is selected on the board page and the shot is taken on a fresh
+    board page afterwards, mirroring `shoot_submenu`. The style is restored
+    to Bento afterwards so later shots are unaffected. These are the
+    `dashboard-style-*.png` shots linked from `docs/dashboard.md`; unlike the
+    submenu shots they show the full board, not the collapsed chats panel."""
+    for slug in ("brutalism", "cyberpunk", "skeuomorphism", "y2k"):
+        picker = open_page(browser, base + "/", 900, dark=False)
+        with picker.expect_response("**/ui-style"):
+            picker.select_option("#ui-style", slug)
+        picker.context.close()
+        page = open_page(browser, base + "/", 900, dark=False)
+        page.screenshot(path=out_dir / f"dashboard-style-{slug}.png")
+        page.context.close()
+        print(f"dashboard-style-{slug}.png: / (board, style {slug})")
+    restore = open_page(browser, base + "/", 900, dark=False)
+    with restore.expect_response("**/ui-style"):
+        restore.select_option("#ui-style", "bento")
+    restore.context.close()
+
+
 def shoot_no_backend_chat(base: str, out_dir: Path, chrome: Path | None) -> None:
     """The /chats New chat form with no backend ready: the guiding empty state.
 
@@ -439,6 +463,7 @@ def shoot_dashboard(base: str, run_id: str, out_dir: Path, chrome: Path | None) 
             shoot_studio_direction(browser, base, out_dir / "design-studio-direction.png")
             print("design-studio-direction.png: /design-studio/new (walked to the Direction step)")
             shoot_submenu(browser, base, out_dir)
+            shoot_styles(browser, base, out_dir)
             shoot_quality(browser, f"{base}/runs/{run_id}", out_dir / QUALITY)
             print(f"{QUALITY}: /runs/{run_id} (quality review)")
             shoot_events(browser, f"{base}/runs/{run_id}", out_dir / EVENTS)

@@ -62,8 +62,9 @@ nothing is pushed unless you turn shipping on.
 ## Features
 
 Every image below is real `jev` output on illustrative demo data
-([examples/demo](examples/demo): `seed_demo.py` writes the data, `capture.py` regenerates the
-terminal images; see [docs/dashboard.md](docs/dashboard.md#screenshots)).
+([examples/demo](examples/demo): `seed_demo.py` writes the data, `screenshots.py` regenerates
+every image (dashboard shots with headless Chrome, then `capture.py` for the terminal images);
+see [docs/dashboard.md](docs/dashboard.md#screenshots)).
 
 <table>
   <tr><td colspan="2"><b>Plan → validate → design → code → test → integrate</b><br>A planner splits the idea into tasks, a validator from another vendor checks the plan, and when the plan involves UI work a designer turns it into a design grounded in the repo's stored design system — plan and design are approved together. Coders work in their own worktrees, tests run after each task and on the merged result branch. <a href="#how-it-works">How it works</a> · <a href="docs/roles.md">Roles</a></td></tr>
@@ -71,7 +72,7 @@ terminal images; see [docs/dashboard.md](docs/dashboard.md#screenshots)).
     <td width="50%"><img alt="Dashboard run page: plan, tasks, decisions and attempts" src="docs/images/dashboard-run.png"></td>
     <td width="50%"><img alt="jev status RUN: plan summary, validation verdict, tasks with worker, model and spend" src="docs/images/cli-status-run.svg"></td>
   </tr>
-  <tr><td colspan="2"><b>Jev decides; the Coding Decision Agent grades code</b><br>Jev picks agent, model and effort at every decision point; if a decision cannot be made confidently, the run stops for a human. The validator challenges every plan choice, a voted reviewer checks each task, and for code work the Coding Decision Agent grades diffs and routes coding tasks. With <code>primary = "jev"</code>, Jev answers alone with the rules dispatcher as fallback, and <code>jev log</code> says why. <a href="#how-it-works">The dispatcher</a></td></tr>
+  <tr><td colspan="2"><b>Jev decides; the Coding Decision Agent grades code</b><br>Jev picks agent, model and effort at every decision point; if a decision cannot be made confidently, the run stops for a human. The validator challenges every plan choice, an optional reviewer checks each task (off by default), and for code work the Coding Decision Agent grades diffs and routes coding tasks. With <code>primary = "jev"</code>, Jev answers alone with the rules dispatcher as fallback, and <code>jev log</code> says why. <a href="#how-it-works">The dispatcher</a></td></tr>
   <tr><td colspan="2"><img alt="jev log RUN: decision timeline with Jev confidences and one rules fallback after a timeout" src="docs/images/cli-log.svg"></td></tr>
   <tr><td colspan="2"><b>Chat before you run</b><br><code>jev chat</code> asks which lessons to use, talks the idea through, writes a brief, then plans, runs or queues it. <a href="docs/chat.md">Chat</a></td></tr>
   <tr><td colspan="2"><img alt="jev chat session: learning choice, two exchanges, /brief and /plan" src="docs/images/cli-chat.svg" width="760"></td></tr>
@@ -112,6 +113,8 @@ terminal images; see [docs/dashboard.md](docs/dashboard.md#screenshots)).
   </tr>
   <tr><td colspan="2"><b>Servers, virtual browser and workspace profiles</b><br>Let agents check (<code>basic</code>, read-only) or maintain (<code>medium</code>: writes inside allowed paths, package installs, service restarts) your servers over SSH through jev's own policy-checked, audited MCP tools; give roles a pinned headless Playwright browser; pick servers, access and browser per run with <code>--profile</code>. <a href="#servers-browser-and-profiles">Servers</a></td></tr>
   <tr><td colspan="2"><b>Design systems</b><br><code>jev design new</code> walks you through six questions (purpose, app type, stack, brand) and saves a complete system — type-aware tokens, component docs, logo mark, favicons — into your library; <code>jev design reverse</code> extracts one from a URL or screenshots. <code>jev design list/use/clone/export/delete</code> manage the library, and the designer grounds UI work in the repo's stored system. <a href="docs/design.md">Design</a></td></tr>
+  <tr><td colspan="2"><b>Workflow profiles</b><br>Save a process flow once as a workflow profile — omit stages where allowed, edit parameters, or start from a goal preset (Efficiency or Accuracy) — then reuse it from the dashboard run picker, <code>jev run --workflow-profile</code>, or the recurring-add form (pinned at each creation). The flowchart editor (canvas + list) refuses stage reordering, and usage-based suggestions unlock once 10 goal-labelled runs with stage records exist in 90 days. <a href="docs/dashboard.md">Dashboard</a></td></tr>
+  <tr><td colspan="2"><b>Coding Decision Agent: install, supervise, critique, hints</b><br>The backend installs from the dashboard (Code Grade → Install backend, confirm first), with a dedicated-venv install when the dashboard's own environment is not writable. <code>jev code supervise</code> grades running traces into continue / observe / human_review / stop, plans get a pre-flight critique at VALIDATING, and hint usage is tracked in the rating ledger. <a href="docs/code-orchestrator.md">Coding Decision Agent</a></td></tr>
 </table>
 
 ## How it works
@@ -140,6 +143,12 @@ flowchart LR
 ```
 
 Any state can also end in `NEEDS_HUMAN`, `FAILED`, `BUDGET_EXCEEDED` or `CANCELLED`.
+
+Standard flow only: with `ASK_EVERY_STEP` autonomy the run instead waits in an explicit
+gate before each step (`AWAITING_PLANNING`, `AWAITING_VALIDATING`, `AWAITING_DESIGNING`,
+`AWAITING_INTEGRATING`, `AWAITING_SHIPPING`), approved with `jev approve`; with
+`AUTONOMOUS` autonomy the approval gate above is skipped. At the end of a run, D7 learns
+from it when the run has a learning profile.
 
 1. **Planning.** A planner agent splits the idea into small tasks (`T1`, `T2`, ...) with
    dependencies, acceptance criteria and a test command each.
@@ -548,14 +557,21 @@ jev dashboard              # http://127.0.0.1:8765/, opens a browser (--no-open 
 - **Run**: plan, validation, tasks, the decision timeline (with Jev's confidences and fallback
   reasons), attempts, learning, the quality review and log files; **Approve**, **Resume** and
   **Cancel** buttons (runs execute in the background, one at a time per run).
-- **Queue** (add, reorder, remove; scheduler status), **Learning** (profiles and lessons),
-  **Chats** (read-only transcripts), **Spend** (per run and per day), **KPIs** (shipped PRs and
-  trends) and **Settings** (effective config, env var names, `jev doctor`).
+- **Queue** (add, reorder, remove; scheduler status), **Workflows** (profiles, presets, the
+  flowchart editor, suggestions), **Artifacts** (plans, designs, diffs, test reports),
+  **Agents** (agent settings), **Fleet** (the six-role roster and every agent working now),
+  **Chats** (talk an idea through, then plan, run or queue it), **Learning** (profiles and
+  lessons), **Profiles** (workspace profiles), **Spend** (per run and per day), **KPIs**
+  (shipped PRs and trends), **Design Systems** (the library) and **Design Studio** (the
+  system builder), **Tools** (MCP servers, skills, models, cache, quality checks),
+  **Code Grade** (grade a diff, install the Coding Decision Agent backend),
+  **Connections** (servers, browser, provider logins), **Diagnostics** (`jev doctor` checks)
+  and **Settings** (effective config, env var names, `jev doctor`).
 
-Screenshots of every page are in [Features](#features) above and in
+Page screenshots are in [Features](#features) above and in
 [docs/dashboard.md](docs/dashboard.md#screenshots).
 
-It listens on 127.0.0.1 only. On a VPS keep it that way and use an SSH tunnel
+It listens on 127.0.0.1 by default. On a VPS keep it that way and use an SSH tunnel
 (`ssh -L 8765:127.0.0.1:8765 host`). Any other `--host` requires a token, which jev generates
 and prints. Details: [docs/dashboard.md](docs/dashboard.md).
 
@@ -566,15 +582,14 @@ logged in):
 
 ```bash
 jev ship RUN_ID --dry-run   # the PR body and the exact commands, nothing run
-jev ship RUN_ID             # push jev/RUN/result to jev/RUN, gh pr create (draft); asks first
+jev ship RUN_ID             # push jev/RUN/result to jev/RUN (default prefix), gh pr create (draft); asks first
 jev ship sync --all         # read state, reviews, CI and merges back from GitHub
 jev kpi --last 10           # per-PR KPIs, medians and regression flags (--json for scripts)
 ```
 
-Only DONE runs whose quality gate passed are shipped. jev never force-pushes and never enables
+Only DONE runs whose quality gate did not block are shipped. jev never force-pushes and never enables
 auto-merge; branch protection still applies. With shipping on, a run Jev approves at D6
-ships by itself: it is merged once its checks pass (`[ship] after_approval = "merge"`, the
-default under consensus), or waits for `jev ship approve | modify | stop RUN` ("ask"). The dashboard run page has a
+ships by itself: it is merged once its checks pass (`[ship] after_approval = "merge"`), or waits for `jev ship approve | modify | stop RUN` (`"ask"`, the default when unset). The dashboard run page has a
 **Ship as PR** button and the **KPIs** page charts each KPI against its rolling median.
 Details: [docs/ship.md](docs/ship.md).
 
@@ -603,7 +618,7 @@ Agents never get raw SSH: they call `list_servers`, `run_command`, `read_file` (
 `write_file`, `upload`) on jev's MCP server, which checks every command against the access
 level and an always-blocked list (reboots, disk formatting, user/firewall changes,
 `rm -rf /`, `curl | sh`, `git push --force`, ...) and logs it to `.jev/audit/servers.log`.
-Every role but the coder is capped at `basic`. `access = "full"` is not available yet.
+Every role but the coder is capped at `basic`; `unrestricted` access is coder-only.
 Details, including the allow/deny tables and a VPS browser setup: [docs/servers.md](docs/servers.md).
 
 ## Safety defaults
