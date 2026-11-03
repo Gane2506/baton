@@ -122,7 +122,7 @@ see [docs/dashboard.md](docs/dashboard.md#screenshots)).
 One idea is one **run**. The CLI is `jev`. The run moves through these states:
 
 ```mermaid
-flowchart LR
+flowchart TB
     I[INTAKE] -->|D1| P[PLANNING]
     P -->|D2| V[VALIDATING]
     V -->|"D3: revise"| P
