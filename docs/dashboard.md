@@ -134,6 +134,27 @@ to paste. It is the fastest way to check whether a `jev` command has a dashboard
   real money) and starts the dashboard's own scheduler, which stops when the dashboard stops;
   **Stop scheduler** finishes the current item first. A scheduler started in a terminal
   (`jev scheduler start`) keeps running independently and can only be stopped there.
+- **Workflows** (`/workflows`): built-in presets and repo- and user-scope profiles, each with
+  its scope badge, current version, goal label and stage chain. **New workflow** and
+  **Import profile** create profiles; the editor (canvas or list layout, same fields) omits
+  stages where allowed and edits parameters, refuses reordered stages, and validates live.
+  A profile's detail page shows its versions and suggestion records. Suggestions can be
+  requested once enough evidence exists (10 completed goal-labelled runs with stage records
+  in 90 days), then approved into a new version or discarded; an unapproved suggestion
+  appears in no picker and changes no run.
+- **Artifacts** (`/artifacts`): every work product across all runs, newest first — plans
+  from runs with a validated plan, diffs from runs that reached the integration states, test
+  reports from the quality-gate table, and designs from runs that went through DESIGNING.
+  Filter by kind, by chat, or search titles.
+- **Agents** (`/agents`): who does the work — Claude Code, Codex and the API worker, the
+  roles they serve (planner, validator, coder, reviewer, code reviewer, learner), and Jev,
+  who dispatches. This is the settings editor scoped to the agent sections: dispatcher and
+  Jev dispatch settings, each worker's configuration, and each role's workers and models.
+  Roles pick their MCP servers, skills and plugins by name here.
+- **Fleet** (`/fleet`): the six-role roster plus every agent working right now, with the
+  fleet table polling live. Each role's card takes additional prompt instructions (saved
+  through the settings path; clearing the field removes the key so the role falls back to
+  its default).
 - **Learning** (`/learning`): the repo switch and active profile, profiles (scope, enabled,
   active, lesson count) and each profile's lessons. Actions: create (repo or shared), use,
   enable / disable (the repo or one profile), forget a lesson, flush a profile (asks for
@@ -144,6 +165,13 @@ to paste. It is the fastest way to check whether a `jev` command has a dashboard
 - **Profiles** (`/profiles`): the workspace profiles (`jev profile list` / `show` / `use`):
   servers, browser access, learning and quality per profile, which one is the repo default,
   what each role gets from the selected profile, and **Make default** / **Clear default**.
+- **Design Systems** (`/design-systems`): the library of generated design systems. Each
+  system's page shows its detail and a live showcase (refreshable), offers its code for
+  download, and has a Figma page for binding, export and sync from Figma.
+- **Design Studio** (`/design-studio`): the standalone studio. A guided multi-step wizard
+  (purpose through brand to generate) produces a new design system, and the reverse flow
+  rebuilds one from an existing design or a Figma import, with a status page while the
+  background job runs.
 - **Diagnostics** (`/diagnostics`): the `jev doctor` checks (local checks only — no SSH) as a
   read-only matrix. Key values are never shown, only whether each one is set.
 - **Chats** (`/chats`): saved `jev chat` sessions and their transcripts, plus a New chat form — chats are fully interactive (talk an idea through, then plan, run or queue it).
