@@ -17,7 +17,7 @@ import statistics
 from collections import Counter
 from collections.abc import Iterator
 from contextlib import contextmanager
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -82,6 +82,25 @@ from jev_agent.core.queue import effective_status, queue_counts, run_states
 from jev_agent.core.recurrence import describe, local_timezone_name, parse_schedule
 from jev_agent.core.scheduler import LockInfo, scheduler_lock, spent_today
 from jev_agent.core.ship import ShipPreview, after_approval, ship_preview
+from jev_agent.core.usage import (
+    MAX_AGES,
+    REASON_DISABLED_BY_CONFIG,
+    REASON_NOT_CHECKED_YET,
+    WINDOW_LABELS,
+    UsageSnapshot,
+    UsageUnavailable,
+    UsageWindow,
+    Wording,
+    compact_line,
+    derive_display_state,
+    format_relative,
+    format_reset,
+    fresh_windows,
+    iso_z,
+    left_percent,
+)
+from jev_agent.core.usage.cache import UsageCache, UsageCacheRecord
+from jev_agent.core.usage.codex import WORDING as CODEX_WORDING
 from jev_agent.core.store import (
     AttemptRecord,
     NotFoundError,
@@ -1613,14 +1632,305 @@ def env_vars(config: JevConfig) -> list[EnvVar]:
     ]
 
 
-def cli_providers(config: JevConfig) -> list[ProviderAuth]:
-    """Claude Code + Codex auth status for the Connections page (names only)."""
+def _cached_usage(
+    provider: str, config: JevConfig, cache: UsageCache
+) -> tuple[UsageSnapshot | UsageUnavailable | None, bool | None]:
+    """The cached usage snapshot for one provider (cache read only, never a
+    fetch), plus the opt-in flag (None when no record exists).
+
+    Kill-switched (`[usage] <provider>` false) renders as `UsageUnavailable`
+    with reason `disabled_by_config` (§6.9). Opted-out (record `enabled`
+    false) returns the never state. A failure returns the last reason with
+    the last-good snapshot, if any; a still-fresh last-good keeps showing
+    with the "last check failed" sub-line (§6.4).
+    """
+    record = cache.read(provider)
+    enabled = record.enabled if record is not None else None
+    if not getattr(config.usage, provider):
+        return (
+            UsageUnavailable(
+                provider=provider,
+                reason=REASON_DISABLED_BY_CONFIG,
+                fetched_at=None,
+                last_good=None,
+            ),
+            enabled,
+        )
+    if record is None or not record.enabled:
+        return None, enabled
+    if record.last_status == "ok" and record.fetched_at is not None:
+        return (
+            UsageSnapshot(
+                provider=provider,
+                windows=list(record.windows),
+                plan=record.plan,
+                fetched_at=record.fetched_at,
+                source_version=record.source_version or "unknown",
+                account_hash=record.account_hash,
+                spend_limit_reached=record.spend_limit_reached,
+            ),
+            enabled,
+        )
+    if record.last_status is not None and record.last_status != "ok":
+        last_good = None
+        if record.windows and record.fetched_at is not None:
+            last_good = UsageSnapshot(
+                provider=provider,
+                windows=list(record.windows),
+                plan=record.plan,
+                fetched_at=record.fetched_at,
+                source_version=record.source_version or "unknown",
+                account_hash=record.account_hash,
+                spend_limit_reached=record.spend_limit_reached,
+            )
+        return (
+            UsageUnavailable(
+                provider=provider,
+                reason=record.last_status,
+                fetched_at=record.fetched_at,
+                last_good=last_good,
+            ),
+            enabled,
+        )
+    return None, enabled
+
+
+def cli_providers(
+    config: JevConfig, usage_cache: UsageCache | None = None
+) -> list[ProviderAuth]:
+    """Claude Code + Codex auth status for the Connections page (names only).
+
+    Each entry also carries the cached usage snapshot (cache read only,
+    never a fetch) and the detection metadata (`source_path`, `present`)
+    on the `ProviderAuth` fields. The default cache is
+    `UsageCache(home=Path.home())`; tests pass a cache over a temp home.
+    """
     claude = config.workers.claude_code
     codex = config.workers.codex
-    return [
+    cache = usage_cache or UsageCache(home=Path.home())
+    providers = [
         claude_code_auth(command=claude.command, bare=claude.bare),
         codex_auth(command=codex.command),
     ]
+    attached = []
+    for provider in providers:
+        usage, enabled = _cached_usage(provider.provider, config, cache)
+        attached.append(replace(provider, usage=usage, usage_enabled=enabled))
+    return attached
+
+
+# ---- provider usage view model (issue #396) ------------------------------------
+# The Connections template and the live poll share one derivation: the route
+# builds a `UsageView` per provider with a registered adapter (Codex in
+# Phase A; Claude joins in Phase B) and the template renders it, while
+# `conn.js` updates the same block from the poll JSON.
+
+_WORDING_BY_PROVIDER: dict[str, Wording] = {"codex": CODEX_WORDING}
+
+
+@dataclass(frozen=True)
+class UsageWindowView:
+    """One fresh window, ready to render (bar + line)."""
+
+    kind: str
+    label: str  # "Session" | "Weekly" | "Monthly" | "Weekly (Opus)" | ...
+    left: int  # left percent, integer, nearest, half up (D14)
+    bar: int  # bar width, clamped 0–100
+    reset_text: str  # "resets in …" | "resetting…" | "no reset reported"
+    resets_at: datetime | None
+
+
+@dataclass(frozen=True)
+class UsageView:
+    """Everything one provider card's usage block needs (cache only)."""
+
+    provider: str
+    state: str  # "never" | "collecting" | "ready" | "failed" | "stale"
+    enabled: bool | None  # the opt-in flag (None when no record exists)
+    windows: list[UsageWindowView]  # fresh windows only
+    line: str  # the compact line ("" when no fresh windows)
+    updated_text: str  # "updated … ago" ("" when never fetched)
+    fetched_at: datetime | None
+    reason: str | None  # the reason code (None for a clean snapshot)
+    reason_text: str  # UI wording for the reason ("" when none)
+    next_step: str  # the next step for the reason ("" when none)
+    plan: str | None
+    note: str  # the single-window copy (weekly-only / monthly-only) or ""
+    spend_text: str  # "Spend limit reached" or ""
+    last_check_failed_text: str  # "last check failed — <reason>" or ""
+    stale_text: str  # "last seen … — check again before a long run" or ""
+    button_label: str  # "Check usage" | "Refresh usage" | "Checking…"
+    show_button: bool  # whether the Check/Refresh button renders at all
+
+
+def _record_for_state(usage: UsageSnapshot | UsageUnavailable | None) -> UsageCacheRecord | None:
+    """Rebuild the cache record a usage value came from, so the display
+    state derives through the one `derive_display_state` function (§6.4)."""
+    if usage is None:
+        return None
+    if isinstance(usage, UsageSnapshot):
+        return UsageCacheRecord(
+            enabled=True,
+            fetched_at=usage.fetched_at,
+            last_status="ok",
+            windows=list(usage.windows),
+        )
+    if usage.last_good is not None:
+        return UsageCacheRecord(
+            enabled=True,
+            fetched_at=usage.last_good.fetched_at,
+            last_status=usage.reason,
+            windows=list(usage.last_good.windows),
+        )
+    return UsageCacheRecord(
+        enabled=True, fetched_at=usage.fetched_at, last_status=usage.reason, windows=[]
+    )
+
+
+def usage_view(
+    provider: ProviderAuth, *, fetch_running: bool, now: datetime | None = None
+) -> UsageView:
+    """The usage view model for one provider card (cache only, never a fetch).
+
+    Only called for providers with a registered adapter. The display state
+    comes from `derive_display_state`; the compact line lists only fresh
+    windows; the value is hidden once stale (D19).
+    """
+    moment = now or datetime.now(UTC)
+    max_ages = MAX_AGES[provider.provider]
+    wording = _WORDING_BY_PROVIDER.get(provider.provider, {})
+    usage = provider.usage
+    if (
+        isinstance(usage, UsageUnavailable)
+        and usage.reason == REASON_DISABLED_BY_CONFIG
+    ):
+        state = "never"  # turned off is not a failure; the card names it
+    else:
+        state = derive_display_state(
+            record=_record_for_state(usage),
+            fetch_running=fetch_running,
+            now=moment,
+            session_max_age=max_ages["session"],
+            weekly_max_age=max_ages["weekly"],
+            monthly_max_age=max_ages["monthly"],
+        )
+    snapshot: UsageSnapshot | None = None
+    reason: str | None = None
+    if isinstance(usage, UsageSnapshot):
+        snapshot = usage
+    elif isinstance(usage, UsageUnavailable):
+        snapshot = usage.last_good
+        reason = usage.reason
+    else:
+        reason = REASON_NOT_CHECKED_YET
+    fresh: list[UsageWindow] = []
+    if snapshot is not None and snapshot.fetched_at is not None:
+        record = _record_for_state(snapshot)
+        if record is not None:
+            fresh = fresh_windows(
+                record,
+                moment,
+                max_ages["session"],
+                max_ages["weekly"],
+                max_ages["monthly"],
+            )
+    windows = [
+        UsageWindowView(
+            kind=w.kind,
+            label=WINDOW_LABELS.get(w.kind, w.kind),
+            left=left_percent(w.used_percent),
+            bar=max(0, min(100, left_percent(w.used_percent))),
+            reset_text=format_reset(w.resets_at, moment),
+            resets_at=w.resets_at,
+        )
+        for w in fresh
+    ]
+    line = compact_line(fresh, moment)
+    if fetch_running and fresh:
+        line = f"{line} · Checking…" if line else "Checking…"
+    elif fetch_running and not fresh:
+        line = "Checking…"
+    updated_text = ""
+    if snapshot is not None and snapshot.fetched_at is not None:
+        age = moment - snapshot.fetched_at
+        updated_text = (
+            "updated just now"
+            if age < timedelta(seconds=60)
+            else f"updated {format_relative(age)} ago"
+        )
+    reason_text, next_step = wording.get(reason, ("", "")) if reason else ("", "")
+    note = ""
+    if snapshot is not None and len(snapshot.windows) == 1:
+        only = snapshot.windows[0].kind
+        if only == "weekly":
+            note = "Your plan has no separate 5-hour limit — weekly only"
+        elif only == "monthly":
+            note = "Your plan has no separate 5-hour or weekly limit — monthly only"
+    spend_text = "Spend limit reached" if snapshot is not None and snapshot.spend_limit_reached else ""
+    last_check_failed_text = ""
+    if reason and snapshot is not None and fresh and reason_text:
+        last_check_failed_text = f"last check failed — {reason_text}"
+    stale_text = ""
+    if state == "stale" and snapshot is not None and snapshot.fetched_at is not None:
+        stale_text = (
+            f"last seen {format_relative(moment - snapshot.fetched_at)}"
+            " — check again before a long run"
+        )
+    if fetch_running:
+        button_label = "Checking…"
+    elif snapshot is not None:
+        button_label = "Refresh usage"
+    else:
+        button_label = "Check usage"
+    # The button renders only when usage is measurable against a login:
+    # Codex measures against the `tokens` login (auth "oauth_token"); an
+    # API key hides the section (D12) and no login has nothing to check.
+    # A kill-switched provider never fetches, so it never offers the button.
+    show_button = provider.auth == "oauth_token" and (
+        not isinstance(usage, UsageUnavailable)
+        or usage.reason != REASON_DISABLED_BY_CONFIG
+    )
+    return UsageView(
+        provider=provider.provider,
+        state=state,
+        enabled=provider.usage_enabled,
+        windows=windows,
+        line=line,
+        updated_text=updated_text,
+        fetched_at=snapshot.fetched_at if snapshot is not None else None,
+        reason=reason,
+        reason_text=reason_text,
+        next_step=next_step,
+        plan=snapshot.plan if snapshot is not None else None,
+        note=note,
+        spend_text=spend_text,
+        last_check_failed_text=last_check_failed_text,
+        stale_text=stale_text,
+        button_label=button_label,
+        show_button=show_button,
+    )
+
+
+def usage_poll(provider: ProviderAuth, *, fetch_running: bool, now: datetime | None = None) -> dict[str, Any]:
+    """The additive `usage` key nested inside one `providers[]` poll entry
+    (§6.4): `{state, windows: [{kind, left_percent, resets_at}],
+    fetched_at, reason, plan}`. `left_percent` is 100 − used, integer,
+    nearest, half up; timestamps are ISO-8601 UTC with a Z suffix."""
+    view = usage_view(provider, fetch_running=fetch_running, now=now)
+    return {
+        "state": view.state,
+        "windows": [
+            {
+                "kind": w.kind,
+                "left_percent": w.left,
+                "resets_at": iso_z(w.resets_at),
+            }
+            for w in view.windows
+        ],
+        "fetched_at": iso_z(view.fetched_at),
+        "reason": view.reason,
+        "plan": view.plan,
+    }
 
 
 # ---- tools: APIs ---------------------------------------------------------------------------
