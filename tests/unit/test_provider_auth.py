@@ -29,7 +29,7 @@ FAKE_OPENAI_KEY = "sk-fake-openai-key-for-tests"
 
 def _home(tmp_path: Path) -> Path:
     home = tmp_path / "home"
-    home.mkdir()
+    home.mkdir(exist_ok=True)
     return home
 
 
@@ -62,7 +62,9 @@ def test_claude_oauth_token(tmp_path: Path) -> None:
     assert auth.warning is None
 
 
-def test_claude_oauth_token_bare_mode_warns(tmp_path: Path) -> None:
+def test_claude_oauth_token_bare_mode_no_warning(tmp_path: Path) -> None:
+    """Issue #396, §6.2 row 4: a saved token is the working path in bare mode,
+    so it does not warn — only a CLI login is unusable there (D11)."""
     auth = pa.claude_code_auth(
         env={pa.CLAUDE_OAUTH_TOKEN_ENV: FAKE_OAUTH},
         home=_home(tmp_path),
@@ -70,8 +72,7 @@ def test_claude_oauth_token_bare_mode_warns(tmp_path: Path) -> None:
         which=_which(True),
     )
     assert auth.auth == "oauth_token"
-    assert auth.warning is not None
-    assert pa.ANTHROPIC_API_KEY_ENV in auth.warning
+    assert auth.warning is None
 
 
 def test_claude_cli_login(tmp_path: Path) -> None:
@@ -84,10 +85,16 @@ def test_claude_cli_login(tmp_path: Path) -> None:
     )
     auth = pa.claude_code_auth(env={}, home=home, which=_which(True))
     assert auth.auth == "cli_login"
-    assert auth.label == "Subscription login (OAuth)"
+    # D1 wording, verbatim: a CLI login is "Detected on this device".
+    assert auth.label == "Detected on this device — the `claude` CLI is signed in"
+    assert ".credentials.json" in auth.detail  # the path comes from the accessor
+    assert auth.source_path == str(home / ".claude" / ".credentials.json")
+    assert auth.present == ("cli_login",)
 
 
 def test_claude_cli_login_bare_mode_warns(tmp_path: Path) -> None:
+    """Issue #396, §6.2 row 6: in bare mode a CLI login is not usable, so the
+    effective credential is none — but the login is still detected and named."""
     home = _home(tmp_path)
     creds = home / ".claude"
     creds.mkdir()
@@ -95,8 +102,11 @@ def test_claude_cli_login_bare_mode_warns(tmp_path: Path) -> None:
         json.dumps({"claudeAiOauth": {"accessToken": "fake"}}), encoding="utf-8"
     )
     auth = pa.claude_code_auth(env={}, home=home, bare=True, which=_which(True))
-    assert auth.auth == "cli_login"
+    assert auth.auth == "none"
     assert auth.warning is not None
+    assert pa.ANTHROPIC_API_KEY_ENV in auth.warning
+    assert "signed in" in auth.detail  # the detected login is still named
+    assert auth.present == ("cli_login",)
 
 
 def test_claude_nothing(tmp_path: Path) -> None:
@@ -141,8 +151,11 @@ def test_codex_chatgpt_oauth(tmp_path: Path) -> None:
     home = _codex_home(tmp_path, {"tokens": {"access_token": "fake"}})
     auth = pa.codex_auth(env={}, home=home, which=_which(True))
     assert auth.auth == "oauth_token"
-    assert auth.label == "Subscription login (OAuth)"
+    # D1 wording, verbatim.
+    assert auth.label == "Detected on this device — the `codex` CLI is signed in with ChatGPT"
     assert "ChatGPT" in auth.detail
+    assert auth.source_path == str(home / ".codex" / "auth.json")
+    assert auth.present == ("cli_login",)
 
 
 def test_codex_stored_api_key(tmp_path: Path) -> None:
@@ -165,6 +178,200 @@ def test_codex_malformed_auth_json_is_nothing(tmp_path: Path) -> None:
     codex.mkdir()
     (codex / "auth.json").write_text("not json", encoding="utf-8")
     assert pa.codex_auth(env={}, home=home, which=_which(True)).auth == "none"
+
+
+# --- issue #396: credential resolution (§6.2 precedence tables) ----------------
+# One case per table row (7 non-Keychain Claude rows, 5 Codex rows). The two
+# Keychain Claude rows are Phase B (§9.2): Phase A detection is file-only.
+
+
+def _claude_home(tmp_path: Path, *, credentials: bool = False) -> Path:
+    home = _home(tmp_path)
+    if credentials:
+        creds = home / ".claude"
+        creds.mkdir()
+        (creds / ".credentials.json").write_text(
+            json.dumps({"claudeAiOauth": {"accessToken": "fake"}}), encoding="utf-8"
+        )
+    return home
+
+
+def _kinds(resolution: pa.CredentialResolution) -> tuple[str, ...]:
+    return tuple(s.kind for s in resolution.present)
+
+
+def test_resolve_claude_api_key(tmp_path: Path) -> None:
+    home = _claude_home(tmp_path, credentials=True)
+    res = pa.resolve_credentials(
+        "claude_code",
+        env={pa.ANTHROPIC_API_KEY_ENV: FAKE_API_KEY},
+        home=home,
+        which=_which(True),
+    )
+    assert res.effective.kind == "env_api_key"
+    assert _kinds(res) == ("env_api_key", "cli_login")
+    assert res.usage_source is None  # D12: usage hidden for an API key
+
+
+def test_resolve_claude_api_key_bare(tmp_path: Path) -> None:
+    res = pa.resolve_credentials(
+        "claude_code",
+        env={pa.ANTHROPIC_API_KEY_ENV: FAKE_API_KEY},
+        home=_home(tmp_path),
+        bare=True,
+        which=_which(True),
+    )
+    assert res.effective.kind == "env_api_key"
+    assert res.usage_source is None
+
+
+def test_resolve_claude_saved_token(tmp_path: Path) -> None:
+    res = pa.resolve_credentials(
+        "claude_code",
+        env={pa.CLAUDE_OAUTH_TOKEN_ENV: FAKE_OAUTH},
+        home=_home(tmp_path),
+        which=_which(True),
+    )
+    # Env-provided (not from the secrets file): "env_oauth_token".
+    assert res.effective.kind == "env_oauth_token"
+    assert res.usage_source is not None and res.usage_source.kind == "env_oauth_token"
+
+
+def test_resolve_claude_saved_token_is_saved_by_baton(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A token injected from the secrets file is the "saved by Baton" kind."""
+    from jev_agent.core import secrets
+
+    secrets._loaded.add(pa.CLAUDE_OAUTH_TOKEN_ENV)
+    try:
+        res = pa.resolve_credentials(
+            "claude_code",
+            env={pa.CLAUDE_OAUTH_TOKEN_ENV: FAKE_OAUTH},
+            home=_home(tmp_path),
+            which=_which(True),
+        )
+        assert res.effective.kind == "saved_oauth_token"
+        assert res.usage_source is not None
+        assert res.usage_source.kind == "saved_oauth_token"
+        auth = pa.claude_code_auth(
+            env={pa.CLAUDE_OAUTH_TOKEN_ENV: FAKE_OAUTH},
+            home=_home(tmp_path),
+            which=_which(True),
+        )
+        assert auth.label == "Signed in with your Claude subscription (saved by Baton)"
+    finally:
+        secrets._loaded.discard(pa.CLAUDE_OAUTH_TOKEN_ENV)
+
+
+def test_resolve_claude_saved_token_bare(tmp_path: Path) -> None:
+    """§6.2 row 4: the saved token is the working path in bare mode."""
+    res = pa.resolve_credentials(
+        "claude_code",
+        env={pa.CLAUDE_OAUTH_TOKEN_ENV: FAKE_OAUTH},
+        home=_home(tmp_path),
+        bare=True,
+        which=_which(True),
+    )
+    assert res.effective.kind == "env_oauth_token"
+    assert res.usage_source is not None and res.usage_source.kind == "env_oauth_token"
+
+
+def test_resolve_claude_cli_login(tmp_path: Path) -> None:
+    home = _claude_home(tmp_path, credentials=True)
+    res = pa.resolve_credentials("claude_code", env={}, home=home, which=_which(True))
+    assert res.effective.kind == "cli_login"
+    assert res.usage_source is not None and res.usage_source.kind == "cli_login"
+
+
+def test_resolve_claude_cli_login_bare(tmp_path: Path) -> None:
+    """§6.2 row 6: a CLI login is not usable in bare mode — effective none,
+    usage suppressed, but the login stays present and named."""
+    home = _claude_home(tmp_path, credentials=True)
+    res = pa.resolve_credentials(
+        "claude_code", env={}, home=home, bare=True, which=_which(True)
+    )
+    assert res.effective.kind == "none"
+    assert _kinds(res) == ("cli_login",)
+    assert res.usage_source is None
+
+
+def test_resolve_claude_nothing(tmp_path: Path) -> None:
+    res = pa.resolve_credentials("claude_code", env={}, home=_home(tmp_path), which=_which(True))
+    assert res.effective.kind == "none"
+    assert _kinds(res) == ()
+    assert res.usage_source is None
+
+
+def test_resolve_codex_env_api_key(tmp_path: Path) -> None:
+    home = _codex_home(tmp_path, {"tokens": {"access_token": "fake"}})
+    res = pa.resolve_credentials(
+        "codex",
+        env={pa.OPENAI_API_KEY_ENV: FAKE_OPENAI_KEY},
+        home=home,
+        which=_which(True),
+    )
+    assert res.effective.kind == "env_api_key"
+    assert _kinds(res) == ("env_api_key", "cli_login")
+    assert res.usage_source is None
+
+
+def test_resolve_codex_tokens_only(tmp_path: Path) -> None:
+    home = _codex_home(tmp_path, {"tokens": {"access_token": "fake"}})
+    res = pa.resolve_credentials("codex", env={}, home=home, which=_which(True))
+    assert res.effective.kind == "cli_login"
+    assert res.usage_source is not None and res.usage_source.kind == "cli_login"
+
+
+def test_resolve_codex_tokens_win_over_api_key(tmp_path: Path) -> None:
+    """Both present in auth.json: `tokens` wins (matching existing detection)."""
+    home = _codex_home(tmp_path, {"tokens": {"access_token": "fake"}, "api_key": "fake"})
+    res = pa.resolve_credentials("codex", env={}, home=home, which=_which(True))
+    assert res.effective.kind == "cli_login"
+    assert _kinds(res) == ("cli_login", "api_key_file")
+    assert res.usage_source is not None and res.usage_source.kind == "cli_login"
+
+
+def test_resolve_codex_stored_api_key_only(tmp_path: Path) -> None:
+    home = _codex_home(tmp_path, {"api_key": "fake"})
+    res = pa.resolve_credentials("codex", env={}, home=home, which=_which(True))
+    assert res.effective.kind == "api_key_file"
+    assert res.usage_source is None  # D12
+
+
+def test_resolve_codex_nothing(tmp_path: Path) -> None:
+    home = _codex_home(tmp_path, None)
+    res = pa.resolve_credentials("codex", env={}, home=home, which=_which(True))
+    assert res.effective.kind == "none"
+    assert _kinds(res) == ()
+    assert res.usage_source is None
+
+
+def test_get_login_source_shape(tmp_path: Path) -> None:
+    home = _codex_home(tmp_path, {"tokens": {"access_token": "fake"}})
+    source = pa.get_login_source("codex", env={}, home=home, which=_which(True))
+    assert source.kind == "cli_login"
+    assert source.source_path == str(home / ".codex" / "auth.json")
+    assert source.cli_version is None  # the fake `which` points at a missing binary
+    empty = tmp_path / "empty-home"
+    empty.mkdir()
+    assert pa.get_login_source(
+        "codex", env={}, home=empty, which=_which(True)
+    ).kind == "none"
+
+
+def test_read_credential_file(tmp_path: Path) -> None:
+    home = _home(tmp_path)
+    assert pa.read_credential_file(home / "missing.json") is None
+    bad = home / "bad.json"
+    bad.write_text("not json", encoding="utf-8")
+    assert pa.read_credential_file(bad) is None
+    lst = home / "list.json"
+    lst.write_text("[1, 2]", encoding="utf-8")
+    assert pa.read_credential_file(lst) is None  # not an object
+    ok = home / "ok.json"
+    ok.write_text(json.dumps({"claudeAiOauth": {"accessToken": "fake"}}), encoding="utf-8")
+    assert pa.read_credential_file(ok) == {"claudeAiOauth": {"accessToken": "fake"}}
 
 
 # --- token validation + device output parsing ----------------------------------
