@@ -243,7 +243,12 @@ class CodexUsageSource:
             outcome.append(self._exchange(proc))
         except _FetchFailed as exc:
             outcome.append(self._unavailable(exc.reason))
-        except Exception:
+        except Exception as exc:
+            log.warning(
+                "codex usage fetch failed unexpectedly: %s: %s",
+                type(exc).__name__,
+                exc,
+            )
             outcome.append(self._unavailable(REASON_APP_SERVER_FAILED))
         finally:
             self._terminate(proc)
