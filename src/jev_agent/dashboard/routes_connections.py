@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import timedelta
 from typing import Any
 
 from starlette.concurrency import run_in_threadpool
@@ -24,6 +25,7 @@ from jev_agent.core.provider_auth import (
 from jev_agent.core.store import (
     NotFoundError,
 )
+from jev_agent.core.usage import format_relative
 from jev_agent.dashboard import views
 from jev_agent.dashboard.browser_install import (
     BrowserInstallBusy,
@@ -193,12 +195,24 @@ class ConnectionsRoutes(DashboardCore):
                         self.server_stats.refresh(s.name, cfg, repo.state_dir, ssh_runner)
                         st = "collecting"
                 server_stats[s.name] = {"stats": stats, "state": st}
+            providers = views.cli_providers(repo.config, usage_cache=self.usage_fetcher.cache)
+            # Issue #396: fetch-on-view (D6) — the render may start a
+            # background fetch; it never waits for one.
+            usage_views: dict[str, views.UsageView] = {}
+            for provider in providers:
+                if provider.provider in self.usage_fetcher.adapters:
+                    self.usage_fetcher.maybe_fetch(provider.provider, repo.config)
+                    usage_views[provider.provider] = views.usage_view(
+                        provider,
+                        fetch_running=self.usage_fetcher.is_running(provider.provider),
+                    )
             return {
                 "servers": servers,
                 "agg_state": state,
                 "agg_label": label,
                 "route": _dispatcher_route(repo.config),
-                "providers": views.cli_providers(repo.config),
+                "providers": providers,
+                "usage_views": usage_views,
                 "codex_flow": self.codex_flow.status(),
                 "claude_flow": self.claude_flow.status(),
                 "env_vars": views.env_vars(repo.config),
@@ -243,9 +257,20 @@ class ConnectionsRoutes(DashboardCore):
                         "provider": p.provider,
                         "auth": p.auth,
                         "label": p.label,
+                        # Short head-badge text (§10 gate fix): the poll
+                        # must not put the long D1 label back in the badge.
+                        "badge_label": p.badge_label,
                         "installed": p.installed,
+                        # Issue #396, §6.4: the additive usage key, nested
+                        # inside each providers[] entry. Codex carries the
+                        # live state; Claude (no adapter in Phase A) reads
+                        # as never checked — its card has no usage block yet.
+                        "usage": views.usage_poll(
+                            p,
+                            fetch_running=self.usage_fetcher.is_running(p.provider),
+                        ),
                     }
-                    for p in views.cli_providers(repo.config)
+                    for p in views.cli_providers(repo.config, usage_cache=self.usage_fetcher.cache)
                 ],
                 # The device flow's URL/code are single-use and already shown on
                 # the page; only the state travels here so the card can update.
@@ -262,6 +287,69 @@ class ConnectionsRoutes(DashboardCore):
                 ],
             }
         )
+
+    async def usage_refresh(self, request: Request) -> Response:
+        """Check / refresh one provider's usage (POST, issue #396).
+
+        The first click opts in and starts a fetch; later clicks are subject
+        to the cadence floor. An unregistered provider 404s — in Phase A
+        `claude_code` has no adapter, so it 404s until Phase B."""
+        provider = request.path_params.get("provider", "")
+        if provider not in self.usage_fetcher.adapters:
+            return self.render(
+                request,
+                "error.html",
+                404,
+                title="Not found",
+                message=f"no usage checks for {provider!r}",
+            )
+
+        def refresh(repo: views.Repo, form: FormData) -> str:
+            result = self.usage_fetcher.refresh(provider, repo.config, manual=True)
+            if result.outcome == "started":
+                return "Checking usage — the numbers will appear when the check finishes."
+            if result.outcome == "already_running":
+                return "Already checking usage — the numbers will appear when the check finishes."
+            if result.outcome == "too_soon":
+                wait = result.wait_seconds or 0
+                wait_text = (
+                    "less than a minute" if wait < 60 else format_relative(timedelta(seconds=wait))
+                )
+                return f"Already checked recently — try again in {wait_text}."
+            if result.outcome == "disabled":
+                return "Usage is turned off for this provider."
+            if result.outcome == "no_login":
+                return "No login found for this provider — sign in first."
+            if result.outcome == "auth_stopped":
+                return (
+                    "Usage checks stopped after repeated sign-in failures"
+                    " — sign in again, then try Refresh."
+                )
+            return "Usage checks are not enabled for this provider."
+
+        return await self.act(request, "/connections", refresh)
+
+    async def usage_disable(self, request: Request) -> Response:
+        """Turn off usage checks for one provider (POST, issue #396, D3
+        off-ramp). The cached snapshot is kept; the card returns to the
+        never state with a note that checks are off. An unregistered
+        provider 404s, as for `usage_refresh`."""
+        provider = request.path_params.get("provider", "")
+        if provider not in self.usage_fetcher.adapters:
+            return self.render(
+                request,
+                "error.html",
+                404,
+                title="Not found",
+                message=f"no usage checks for {provider!r}",
+            )
+        title = {"codex": "Codex", "claude_code": "Claude Code"}.get(provider, provider)
+
+        def disable(repo: views.Repo, form: FormData) -> str:
+            self.usage_fetcher.cache.set_enabled(provider, False)
+            return f"Usage checks turned off for {title}."
+
+        return await self.act(request, "/connections", disable)
 
     async def connections_refresh(self, request: Request) -> Response:
         """Explicit re-check (POST): one real `ssh HOST true` per server, then back to the

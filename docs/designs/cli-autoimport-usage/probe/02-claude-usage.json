@@ -1,0 +1,4 @@
+{
+  "attempted": false,
+  "outcome": "no file-stored Claude token on device; login exists (oauthAccount populated) — token in macOS Keychain, not readable by this probe (scheduling block)"
+}

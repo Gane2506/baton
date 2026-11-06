@@ -142,6 +142,14 @@
 #                                  # with the default preset's parameters (only while the
 #                                  # conformance suite is green)
 
+# CLI usage checks (issue #396, docs/config.md "[usage]"): per-provider kill
+# switches for the Connections page's usage numbers. Flipping one needs a
+# dashboard restart. Turning a source off renders it as "Usage is turned
+# off for this provider" and stops fetch attempts for that provider.
+[usage]
+# claude_code = true
+# codex = true
+
 # Free OpenRouter models (docs/config.md "Free models"): no cost, but rate-limited (OpenRouter
 # documents 20 requests/minute and 50/day, or 1000/day once you bought 10 credits), and free
 # providers may log or train on prompts (check https://openrouter.ai/settings/privacy). They

@@ -295,6 +295,19 @@ def create_app(
             dash.codex_device_cancel,
             methods=["POST"],
         ),
+        # Issue #396: provider usage checks. `{provider}` is the usage
+        # adapter's slug ("codex" in Phase A); an unregistered provider
+        # 404s — `claude_code` joins the mapping in Phase B.
+        Route(
+            "/connections/providers/{provider}/usage/refresh",
+            dash.usage_refresh,
+            methods=["POST"],
+        ),
+        Route(
+            "/connections/providers/{provider}/usage/disable",
+            dash.usage_disable,
+            methods=["POST"],
+        ),
         Route("/connections/browser/install", dash.browser_install, methods=["GET", "POST"]),
         Route("/connections/browser/install/stop", dash.browser_install_stop, methods=["POST"]),
         Route("/preview/live", dash.preview_live),

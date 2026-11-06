@@ -4,9 +4,12 @@ only state the GET endpoints read."""
 
 from __future__ import annotations
 
+import json
 import re
 from collections.abc import Iterator, Sequence
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any, cast
 
 import pytest
 
@@ -14,6 +17,10 @@ pytest.importorskip("starlette", reason="dashboard extra not installed")
 
 from starlette.testclient import TestClient
 
+from jev_agent.core import provider_auth as pa
+from jev_agent.core.usage import UsageWindow
+from jev_agent.core.usage.cache import UsageCacheRecord
+from jev_agent.core.usage.fetcher import UsageFetcher
 from jev_agent.dashboard import app as dashboard_app
 from jev_agent.dashboard.app import create_app
 from jev_agent.dashboard.security import DashboardSettings
@@ -221,3 +228,89 @@ def test_audit5_polish_css_rules(client: TestClient) -> None:
     assert ".provider form > span.hint" in css
     # Inline-form labels keep their natural width (run page bisect finder).
     assert "form.inline label" in css
+
+
+# --- provider usage in the live poll (issue #396 Phase A) ------------------------
+#
+# The poll JSON gains the additive `usage` key nested inside each
+# `providers[]` entry. The dashboard's fetcher is replaced with a temp-home
+# fetcher (fake adapter, planted Codex `tokens` login); no real CLI.
+
+
+class _UsageAdapter:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def fetch(self) -> Any:
+        self.calls += 1
+        return None
+
+    def shutdown(self) -> None:
+        pass
+
+
+def test_live_endpoint_carries_provider_usage(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = tmp_path / "usage-home"
+    auth = home / ".codex" / "auth.json"
+    auth.parent.mkdir(parents=True, exist_ok=True)
+    auth.write_text(
+        json.dumps({"tokens": {"access_token": "fake", "refresh_token": "fake"}}),
+        encoding="utf-8",
+    )
+    for name in (
+        pa.OPENAI_API_KEY_ENV,
+        pa.ANTHROPIC_API_KEY_ENV,
+        pa.CLAUDE_OAUTH_TOKEN_ENV,
+    ):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("HOME", str(home))
+    adapter = _UsageAdapter()
+    fetcher = UsageFetcher(home=home, env={}, adapters={"codex": adapter})
+    cast(Any, client.app).state.dashboard.usage_fetcher = fetcher
+    now = datetime.now(UTC)
+    fetcher.cache.write(
+        "codex",
+        UsageCacheRecord(
+            enabled=True,
+            fetched_at=now,
+            last_attempt_at=now,
+            last_status="ok",
+            source_version="cli/0.167.0 parser/1",
+            account_hash="aaa",
+            plan="free",
+            windows=[
+                UsageWindow(kind="monthly", used_percent=48.0, resets_at=now + timedelta(days=20))
+            ],
+        ),
+    )
+    body = client.get("/connections/live").json()
+    assert body["ok"] is True
+    by_name = {p["provider"]: p for p in body["providers"]}
+    codex = by_name["codex"]["usage"]
+    # The additive usage key: state, windows (left percent integer,
+    # half up), timestamps ISO-8601 UTC with a Z suffix, reason, plan.
+    assert codex["state"] == "ready"
+    assert len(codex["windows"]) == 1
+    window = codex["windows"][0]
+    assert window["kind"] == "monthly"
+    assert window["left_percent"] == 52  # 100 - 48 used, integer, half up
+    assert isinstance(window["left_percent"], int)
+    assert window["resets_at"].endswith("Z")
+    reset = datetime.fromisoformat(window["resets_at"].replace("Z", "+00:00"))
+    assert abs((reset - (now + timedelta(days=20))).total_seconds()) < 5
+    assert codex["fetched_at"].endswith("Z")
+    fetched = datetime.fromisoformat(codex["fetched_at"].replace("Z", "+00:00"))
+    assert abs((fetched - now).total_seconds()) < 5
+    assert codex["reason"] is None
+    assert codex["plan"] == "free"
+    # Claude (no adapter in Phase A, no login here) reads as never checked.
+    claude = by_name["claude_code"]["usage"]
+    assert claude["state"] == "never"
+    assert claude["windows"] == []
+    assert claude["fetched_at"] is None
+    assert claude["reason"] == "no_login"
+    assert claude["plan"] is None
+    # The poll never triggers a fetch: the fresh cache means zero calls.
+    assert adapter.calls == 0

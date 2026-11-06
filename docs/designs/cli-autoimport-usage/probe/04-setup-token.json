@@ -1,0 +1,7 @@
+{
+  "note": "No separate setup-token storage exists on the device. The stored OAuth token is the only sk-ant- credential present.",
+  "outcome": "unresolved: no distinct setup token on device to test; per \u00a79.0 Phase B defaults to rejected (setup_token_rejected, never tried).",
+  "separate_setup_token_found": false,
+  "stored_token_is_sk_ant_oat01": false,
+  "stored_token_prefix": null
+}

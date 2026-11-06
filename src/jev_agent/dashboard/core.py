@@ -12,6 +12,7 @@ import threading
 import time
 from collections.abc import Callable
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 from starlette.concurrency import run_in_threadpool
@@ -30,6 +31,8 @@ from jev_agent.core.provider_auth import ClaudeSetupTokenFlow, CodexDeviceFlow
 from jev_agent.core.queue import QueueError
 from jev_agent.core.ship import ShipError
 from jev_agent.core.store import NotFoundError
+from jev_agent.core.usage.codex import CodexUsageSource
+from jev_agent.core.usage.fetcher import UsageFetcher
 from jev_agent.core.workflow_profiles import validate_presets
 from jev_agent.core.workflow_profiles.resolver import build_validation_context
 from jev_agent.dashboard import ui_styles, views
@@ -111,6 +114,11 @@ class DashboardCore:
         self.codex_flow = CodexDeviceFlow()
         self.claude_flow = ClaudeSetupTokenFlow()
         self.server_stats = ServerStatsCache()
+        # Issue #396: the one background-fetch owner for provider usage.
+        # Only the Codex adapter is registered in Phase A; the Claude
+        # adapter joins the mapping in Phase B. Construction starts no
+        # fetch (D6: dashboard start triggers nothing).
+        self.usage_fetcher = UsageFetcher(home=Path.home(), adapters={"codex": CodexUsageSource()})
         self.api_tests: dict[str, tuple[str, str]] = {}  # Tools → APIs: last Test per server
         self.figma_validation: tuple[str, str] | None = None  # Tools → Figma: last /v1/me
         self.started_at = datetime.now(UTC)  # the About panel's uptime
@@ -232,6 +240,9 @@ class DashboardCore:
         self.cda_install_runner.shutdown(timeout)
         self.codex_flow.shutdown()
         self.claude_flow.shutdown()
+        # Issue #396, §6.4: the fetcher's own 5-second bound, inside the
+        # 30-second lifespan budget — after which daemon threads are abandoned.
+        self.usage_fetcher.shutdown(5.0)
         return [
             *self.launcher.shutdown(timeout),
             *self.chat_runner.shutdown(timeout),

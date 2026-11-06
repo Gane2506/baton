@@ -1,0 +1,79 @@
+{
+  "attempted": true,
+  "jev_version": "0.5.0",
+  "label": "with-listen-flag",
+  "outcome": "success",
+  "pass": true,
+  "planType": null,
+  "primary_present": true,
+  "resetsAt": {
+    "primary": 1795687699,
+    "secondary": null
+  },
+  "result_redacted": {
+    "accountId": "sha256:c4fd660163c4134ee093117dbda6dbed5c0ce77d33b214143e0d12912aa6f0fe",
+    "ordinaryUsageAllowed": true,
+    "rateLimitResetCredits": {
+      "availableCount": 1,
+      "credits": [
+        {
+          "description": "Thanks for using Codex! You've been granted one free rate limit reset.",
+          "expiresAt": 1794006652,
+          "grantedAt": 1791414652,
+          "id": "RateLimitResetCredit_d65c7f5bda288191b353800da9e4c4b9",
+          "resetType": "codexRateLimits",
+          "status": "available",
+          "title": "Full reset (Monthly)"
+        }
+      ]
+    },
+    "rateLimitUpsell": null,
+    "rateLimits": {
+      "credits": {
+        "balance": null,
+        "hasCredits": false,
+        "unlimited": false
+      },
+      "individualLimit": null,
+      "limitId": "codex",
+      "limitName": null,
+      "normalModelSlug": null,
+      "planType": "free",
+      "primary": {
+        "resetsAt": 1795687699,
+        "usedPercent": 48,
+        "windowDurationMins": 43200
+      },
+      "rateLimitReachedType": null,
+      "secondary": null,
+      "spendControlReached": false
+    },
+    "rateLimitsByLimitId": {
+      "codex": {
+        "credits": {
+          "balance": null,
+          "hasCredits": false,
+          "unlimited": false
+        },
+        "individualLimit": null,
+        "limitId": "codex",
+        "limitName": null,
+        "normalModelSlug": null,
+        "planType": "free",
+        "primary": {
+          "resetsAt": 1795687699,
+          "usedPercent": 48,
+          "windowDurationMins": 43200
+        },
+        "rateLimitReachedType": null,
+        "secondary": null,
+        "spendControlReached": false
+      }
+    }
+  },
+  "usedPercent_present": true,
+  "windowDurationMins": {
+    "primary": 43200,
+    "secondary": null
+  }
+}

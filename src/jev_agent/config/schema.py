@@ -1483,6 +1483,22 @@ class WorkflowsConfig(_Strict):
     )
 
 
+class UsageConfig(_Strict):
+    """`[usage]`: the per-provider kill switches for CLI usage checks
+    (issue #396, §6.9). A broken source becomes `UsageUnavailable` with
+    reason `disabled_by_config`, with no code change. Flipping a switch
+    needs a dashboard restart (config is read at start)."""
+
+    claude_code: bool = Field(
+        default=True,
+        description="Whether Claude usage checks may run.",
+    )
+    codex: bool = Field(
+        default=True,
+        description="Whether Codex usage checks may run.",
+    )
+
+
 class JevConfig(_Strict):
     dispatcher: DispatcherConfig = Field(
         default_factory=DispatcherConfig, description="Who makes the decisions."
@@ -1559,6 +1575,10 @@ class JevConfig(_Strict):
     workflows: WorkflowsConfig = Field(
         default_factory=WorkflowsConfig,
         description="Workflow profiles: selection switch and the default-path trigger.",
+    )
+    usage: UsageConfig = Field(
+        default_factory=UsageConfig,
+        description="Per-provider kill switches for CLI usage checks (issue #396).",
     )
 
     @property

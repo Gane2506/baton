@@ -384,6 +384,26 @@ of the hardcoded pipeline. Picker `default` always means no profile.
 | `enabled` | `true` | Rollback switch. `false` blocks picking a profile at run creation (it never silently falls back to default); in-flight snapshots finish, and recurring items create default runs. |
 | `default_via_profile` | `false` | Migration trigger (G1). When `true` and the conformance suite is green, a no-profile run executes via the profile path using the default preset's parameters — an execution-path change only, not a picker-meaning change. |
 
+## `[usage]`
+
+Provider usage checks (issue #396): how much of each CLI subscription is
+left, read from the CLIs on this device. Nothing is fetched until you click
+"Check usage" on a provider card once (opt-in); after that the card refreshes
+whenever you open the Connections page, subject to a cadence floor (Codex
+5 minutes, Claude 15 minutes). A failed check never overwrites the last good
+numbers. Phase A covers Codex only; Claude usage arrives in Phase B.
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `claude_code` | `true` | Kill switch for Claude usage checks. `false` turns them off entirely (the card names it); flipping it needs a dashboard restart. |
+| `codex` | `true` | Kill switch for Codex usage checks. Same as above. |
+
+The per-provider opt-in lives in the usage cache (`~/.jev/usage-cache-<provider>.json`,
+mode 600), not in config: "Turn off usage checks" on a card sets it, and the
+next "Check usage" click turns it back on. The cache holds one snapshot per
+provider (windows, plan, account hash) plus the last attempt — no token values,
+no usage history.
+
 ## `[models]`
 
 Free OpenRouter models for roles that can use the api worker. See [Free models](#free-models)

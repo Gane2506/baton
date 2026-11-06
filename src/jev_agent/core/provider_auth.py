@@ -26,6 +26,14 @@ dashboard/CLI inject `~/.jev/secrets.env` into it at startup, so anything saved
 through the Connections page is visible to the next worker run with no extra
 wiring. The integration point this module provides is detection + the sign-in
 flow runners the dashboard drives.
+
+Issue #396 adds one resolution function, `resolve_credentials`, that decides
+for every combination of credentials which one workers use, which are
+present, and which one usage is measured against (design §6.2 tables are its
+test list). `get_login_source` is the single credential-source accessor both
+detection and the usage adapters use. Labels follow D1: a dashboard-saved
+OAuth token is "Signed in with your Claude subscription (saved by Baton)";
+a CLI login is "Detected on this device".
 """
 
 from __future__ import annotations
@@ -39,10 +47,13 @@ import threading
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from jev_agent.app.errors import JevError
 from jev_agent.core.executables import resolve_executable
+
+if TYPE_CHECKING:
+    from jev_agent.core.usage import UsageSnapshot, UsageUnavailable
 
 __all__ = [
     "ANTHROPIC_API_KEY_ENV",
@@ -52,16 +63,22 @@ __all__ = [
     "OPENAI_API_KEY_ENV",
     "ClaudeSetupTokenFlow",
     "CodexDeviceFlow",
+    "CredentialResolution",
     "DeviceFlowBusy",
     "DeviceFlowError",
     "DeviceFlowStatus",
+    "LoginSource",
     "ProviderAuth",
     "check_claude_oauth_token",
     "claude_code_auth",
+    "cli_version",
     "codex_auth",
     "extract_setup_token",
+    "get_login_source",
     "parse_device_output",
     "parse_setup_token_output",
+    "read_credential_file",
+    "resolve_credentials",
 ]
 
 CLAUDE_OAUTH_TOKEN_ENV = "CLAUDE_CODE_OAUTH_TOKEN"
@@ -94,9 +111,109 @@ class ProviderAuth:
     command: str  # the CLI executable from config
     installed: bool  # the CLI is on PATH
     auth: str  # "oauth_token" | "api_key" | "cli_login" | "none"
-    label: str  # short badge text, e.g. "Subscription login (OAuth)"
+    label: str  # design-verbatim auth description (D1), e.g. the long
+    # "Detected on this device — the `codex` CLI is signed in with ChatGPT"
     detail: str  # one line on where it was found, names only
     warning: str | None = None  # config/auth mismatch worth surfacing
+    # Issue #396: the detected login's source (set by `resolve_credentials`),
+    # the cached usage snapshot for the card (set by `views.cli_providers`),
+    # and whether usage checks are opted in for this provider (the cache
+    # record's `enabled` flag; None when no record exists). All additive
+    # with defaults, so existing constructions do not break.
+    cli_version: str | None = None
+    usage: UsageSnapshot | UsageUnavailable | None = None
+    present: tuple[str, ...] = ()  # every present credential kind, precedence order
+    source_path: str | None = None  # credential file path, when the login comes from a file
+    usage_enabled: bool | None = None
+
+    @property
+    def badge_label(self) -> str:
+        """Short auth-state text for the panel-head badge (§10 gate fix).
+
+        The D1 `label` is design-verbatim and can be a full sentence
+        ("Detected on this device — ..."); a non-wrapping `.badge` pill
+        renders it 417px wide and overflows the card at 390px. The badge
+        carries the short state; the full label still renders verbatim
+        as plain text in the card body (the "Set" line), so nothing is
+        lost. Short labels pass through unchanged.
+        """
+        if self.auth in (_AUTH_OAUTH_TOKEN, _AUTH_CLI_LOGIN):
+            return "Signed in"
+        return self.label
+
+
+@dataclass(frozen=True)
+class LoginSource:
+    """One credential a CLI worker could use, and where it came from.
+
+    `kind` is one of "env_api_key" | "env_oauth_token" | "saved_oauth_token" |
+    "cli_login" | "api_key_file" | "none" ("keychain_login" arrives in Phase B).
+    `source_path` is the credential file path when the login comes from a file
+    (None for environment kinds and "none"). `cli_version` is the provider
+    CLI's version (one `<cmd> --version` run per dashboard process start,
+    cached; None on failure) — the same value on every source for a provider.
+    """
+
+    kind: str
+    source_path: str | None
+    cli_version: str | None
+
+
+@dataclass(frozen=True)
+class CredentialResolution:
+    """Which credential workers use, which are present, and what usage is
+    measured against — always the effective credential (design §6.2)."""
+
+    effective: LoginSource  # the credential workers use
+    present: tuple[LoginSource, ...]  # every kind present, top-to-bottom precedence order
+    # None when usage is hidden (API key in effect, bare-mode CLI login, or no login).
+    usage_source: LoginSource | None
+
+
+_VERSION = re.compile(r"\d+\.\d+\.\d+(?:[-+._A-Za-z0-9]*)?")
+_CLI_VERSION_CACHE: dict[str, str | None] = {}  # command -> version (None = lookup failed)
+
+
+def cli_version(
+    command: str, *, which: Callable[[str], str | None] = resolve_executable
+) -> str | None:
+    """The CLI's version string ("0.167.0", "2.1.318"), or None.
+
+    One `<cmd> --version` run per dashboard process start per command (5 s
+    timeout), cached in memory; None when the binary is missing, the run
+    fails, or no version-like token appears. Never raises.
+    """
+    if command in _CLI_VERSION_CACHE:
+        return _CLI_VERSION_CACHE[command]
+    version: str | None = None
+    resolved = which(command)
+    if resolved is not None:
+        try:
+            result = subprocess.run(
+                [resolved, "--version"],
+                capture_output=True,
+                text=True,
+                timeout=5.0,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            version = None
+        else:
+            match = _VERSION.search(result.stdout or "")
+            version = match.group(0) if match else None
+    _CLI_VERSION_CACHE[command] = version
+    return version
+
+
+def read_credential_file(path: Path) -> dict[str, Any] | None:
+    """Parse a CLI credential JSON file. Returns the parsed object, or None
+    when the file is missing, unreadable, invalid JSON, or not an object.
+    Never raises. This is the one shared credential-file reader (§6.1):
+    detection and the usage adapters both go through it."""
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return data if isinstance(data, dict) else None
 
 
 def _strip_ansi(text: str) -> str:
@@ -105,26 +222,106 @@ def _strip_ansi(text: str) -> str:
 
 def _credentials_login(home: Path) -> bool:
     """The `claude` CLI's own interactive subscription login is present."""
-    try:
-        data = json.loads((home / ".claude" / ".credentials.json").read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return False
-    return isinstance(data, dict) and bool(data.get("claudeAiOauth"))
+    data = read_credential_file(home / ".claude" / ".credentials.json")
+    return data is not None and bool(data.get("claudeAiOauth"))
 
 
-def _codex_auth_file(home: Path) -> str:
-    """`~/.codex/auth.json` contents: "oauth_token" | "api_key" | "none"."""
-    try:
-        data = json.loads((home / ".codex" / "auth.json").read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return _AUTH_NONE
-    if not isinstance(data, dict):
-        return _AUTH_NONE
-    if data.get("tokens"):
-        return _AUTH_OAUTH_TOKEN
-    if data.get("api_key"):
-        return _AUTH_API_KEY
-    return _AUTH_NONE
+def _present_sources(
+    provider: str, env: Mapping[str, str], home: Path, version: str | None
+) -> list[LoginSource]:
+    """Every credential kind present for `provider`, top-to-bottom precedence
+    order (design §6.2). Bare mode does not change presence — only which
+    credential is effective (see `resolve_credentials`)."""
+    if provider == "claude_code":
+        from jev_agent.core.secrets import default_path, loaded_names
+
+        sources: list[LoginSource] = []
+        if env.get(ANTHROPIC_API_KEY_ENV, "").strip():
+            sources.append(LoginSource("env_api_key", None, version))
+        if env.get(CLAUDE_OAUTH_TOKEN_ENV, "").strip():
+            if CLAUDE_OAUTH_TOKEN_ENV in loaded_names():
+                sources.append(LoginSource("saved_oauth_token", str(default_path()), version))
+            else:
+                sources.append(LoginSource("env_oauth_token", None, version))
+        if _credentials_login(home):
+            sources.append(
+                LoginSource("cli_login", str(home / ".claude" / ".credentials.json"), version)
+            )
+        return sources
+    if provider == "codex":
+        sources = []
+        if env.get(OPENAI_API_KEY_ENV, "").strip():
+            sources.append(LoginSource("env_api_key", None, version))
+        data = read_credential_file(home / ".codex" / "auth.json")
+        if data is not None:
+            path = str(home / ".codex" / "auth.json")
+            if data.get("tokens"):
+                sources.append(LoginSource("cli_login", path, version))
+            if data.get("api_key"):
+                sources.append(LoginSource("api_key_file", path, version))
+        return sources
+    raise ValueError(f"unknown provider {provider!r}")
+
+
+def get_login_source(
+    provider: str,
+    *,
+    env: Mapping[str, str] | None = None,
+    home: Path | None = None,
+    command: str | None = None,
+    which: Callable[[str], str | None] = resolve_executable,
+) -> LoginSource:
+    """The highest-precedence credential present for `provider` (§6.1).
+
+    The single place a storage move is fixed. `env` defaults to
+    `os.environ`, `home` to `Path.home()`; tests pass fakes for both.
+    Bare mode is not considered here — this is presence, not
+    effectiveness (see `resolve_credentials`). Phase A is file-only for
+    Claude: a login that lives only in the Mac's Keychain is not detected
+    yet (the `keychain_login` kind lands in Phase B).
+    """
+    environ: Mapping[str, str] = os.environ if env is None else env
+    home = home or Path.home()
+    cmd = command or ("claude" if provider == "claude_code" else "codex")
+    version = cli_version(cmd, which=which)
+    sources = _present_sources(provider, environ, home, version)
+    if sources:
+        return sources[0]
+    return LoginSource("none", None, version)
+
+
+def resolve_credentials(
+    provider: str,
+    *,
+    env: Mapping[str, str],
+    home: Path,
+    bare: bool = False,
+    command: str | None = None,
+    which: Callable[[str], str | None] = resolve_executable,
+) -> CredentialResolution:
+    """Decide, for every combination of credentials, which credential workers
+    use, which are present, and which credential usage is measured against —
+    always the effective credential (design §6.2 tables are the test list).
+
+    Precedence, top to bottom: API key > saved/env OAuth token > CLI login
+    (Claude); API key > `tokens` > `api_key` (Codex, within `auth.json`
+    `tokens` wins over `api_key`). In bare mode a CLI login is not usable
+    by workers, so the effective credential is "none" and usage is
+    suppressed; a saved token or API key is the working path in bare mode
+    and usage is shown against it (D11). Usage is hidden (None) when an
+    API key is in effect, for a bare-mode CLI login, or when there is no
+    login (D12).
+    """
+    cmd = command or ("claude" if provider == "claude_code" else "codex")
+    version = cli_version(cmd, which=which)
+    present = _present_sources(provider, env, home, version)
+    effective = present[0] if present else LoginSource("none", None, version)
+    if provider == "claude_code" and bare and effective.kind == "cli_login":
+        effective = LoginSource("none", None, version)
+    usage_source = None if effective.kind in ("env_api_key", "api_key_file", "none") else effective
+    return CredentialResolution(
+        effective=effective, present=tuple(present), usage_source=usage_source
+    )
 
 
 def claude_code_auth(
@@ -135,33 +332,57 @@ def claude_code_auth(
     home: Path | None = None,
     which: Callable[[str], str | None] = resolve_executable,
 ) -> ProviderAuth:
-    """Which auth the `claude` CLI worker will use, in Claude Code's precedence."""
+    """Which auth the `claude` CLI worker will use, in Claude Code's precedence.
+
+    Labels are the D1 wording (issue #396): a dashboard-saved OAuth token is
+    "Signed in with your Claude subscription (saved by Baton)", a CLI login is
+    "Detected on this device". A saved token is the working path in bare mode
+    (D11, §6.2 row 4) — only a CLI login is unusable there, so only that
+    combination warns.
+    """
     environ: Mapping[str, str] = os.environ if env is None else env
     home = home or Path.home()
     installed = which(command) is not None
+    resolution = resolve_credentials(
+        "claude_code", env=environ, home=home, bare=bare, command=command, which=which
+    )
+    effective = resolution.effective
+    present_kinds = {s.kind for s in resolution.present}
     warning = None
-    if environ.get(ANTHROPIC_API_KEY_ENV, "").strip():
+    if effective.kind == "env_api_key":
         auth, label = _AUTH_API_KEY, "API key"
         detail = f"{ANTHROPIC_API_KEY_ENV} is set (outranks the subscription login)"
-    elif environ.get(CLAUDE_OAUTH_TOKEN_ENV, "").strip():
+        if "cli_login" in present_kinds:
+            detail += "; a subscription login is also present"
+    elif effective.kind == "saved_oauth_token":
+        auth, label = _AUTH_OAUTH_TOKEN, "Signed in with your Claude subscription (saved by Baton)"
+        detail = f"{CLAUDE_OAUTH_TOKEN_ENV} is set (long-lived token from `claude setup-token`)"
+    elif effective.kind == "env_oauth_token":
         auth, label = _AUTH_OAUTH_TOKEN, "Subscription login (OAuth)"
         detail = f"{CLAUDE_OAUTH_TOKEN_ENV} is set (long-lived token from `claude setup-token`)"
-        if bare:
-            warning = (
-                "`--bare` mode does not read the OAuth token; "
-                f"set {ANTHROPIC_API_KEY_ENV} for bare mode"
+    elif effective.kind == "cli_login":
+        auth, label = _AUTH_CLI_LOGIN, "Detected on this device — the `claude` CLI is signed in"
+        detail = (
+            "the `claude` CLI is signed in with your subscription "
+            f"(credentials in {effective.source_path})"
+        )
+    else:
+        auth, label = _AUTH_NONE, "Not connected"
+        if bare and "cli_login" in present_kinds:
+            login = next(s for s in resolution.present if s.kind == "cli_login")
+            detail = (
+                "the `claude` CLI is signed in "
+                f"(credentials in {login.source_path}), but `--bare` mode "
+                "does not read the CLI subscription login"
             )
-    elif _credentials_login(home):
-        auth, label = _AUTH_CLI_LOGIN, "Subscription login (OAuth)"
-        detail = "the `claude` CLI is signed in with your subscription"
-        if bare:
             warning = (
                 "`--bare` mode does not read the CLI subscription login; "
                 f"set {ANTHROPIC_API_KEY_ENV} for bare mode"
             )
-    else:
-        auth, label = _AUTH_NONE, "Not connected"
-        detail = "run `claude setup-token` and paste the token, or sign in with the `claude` CLI"
+        else:
+            detail = (
+                "run `claude setup-token` and paste the token, or sign in with the `claude` CLI"
+            )
     if not installed:
         detail += f"; `{command}` is not on PATH"
     return ProviderAuth(
@@ -173,6 +394,9 @@ def claude_code_auth(
         label=label,
         detail=detail,
         warning=warning,
+        cli_version=effective.cli_version,
+        present=tuple(s.kind for s in resolution.present),
+        source_path=effective.source_path,
     )
 
 
@@ -187,20 +411,29 @@ def codex_auth(
     environ: Mapping[str, str] = os.environ if env is None else env
     home = home or Path.home()
     installed = which(command) is not None
-    if environ.get(OPENAI_API_KEY_ENV, "").strip():
+    resolution = resolve_credentials("codex", env=environ, home=home, command=command, which=which)
+    effective = resolution.effective
+    present_kinds = {s.kind for s in resolution.present}
+    if effective.kind == "env_api_key":
         auth, label = _AUTH_API_KEY, "API key"
         detail = f"{OPENAI_API_KEY_ENV} is set"
+        if "cli_login" in present_kinds:
+            detail += "; a subscription login is also present"
+    elif effective.kind == "cli_login":
+        auth, label = (
+            _AUTH_OAUTH_TOKEN,
+            ("Detected on this device — the `codex` CLI is signed in with ChatGPT"),
+        )
+        detail = f"signed in with ChatGPT (`codex login`; credentials in {effective.source_path})"
+    elif effective.kind == "api_key_file":
+        auth, label = _AUTH_API_KEY, "API key"
+        detail = (
+            "API key stored by `codex login --with-api-key` "
+            f"(credentials in {effective.source_path})"
+        )
     else:
-        file_auth = _codex_auth_file(home)
-        if file_auth == _AUTH_OAUTH_TOKEN:
-            auth, label = _AUTH_OAUTH_TOKEN, "Subscription login (OAuth)"
-            detail = "signed in with ChatGPT (`codex login`)"
-        elif file_auth == _AUTH_API_KEY:
-            auth, label = _AUTH_API_KEY, "API key"
-            detail = "API key stored by `codex login --with-api-key`"
-        else:
-            auth, label = _AUTH_NONE, "Not connected"
-            detail = "sign in with ChatGPT (`codex login --device-auth`)"
+        auth, label = _AUTH_NONE, "Not connected"
+        detail = "sign in with ChatGPT (`codex login --device-auth`)"
     if not installed:
         detail += f"; `{command}` is not on PATH"
     return ProviderAuth(
@@ -211,6 +444,9 @@ def codex_auth(
         auth=auth,
         label=label,
         detail=detail,
+        cli_version=effective.cli_version,
+        present=tuple(s.kind for s in resolution.present),
+        source_path=effective.source_path,
     )
 
 

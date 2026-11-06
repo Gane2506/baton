@@ -395,6 +395,54 @@ token); the card says which one is active. Workers inherit the dashboard/CLI pro
 environment, so anything saved here is visible to the next worker run — verified by
 `tests/unit/test_provider_auth.py` ("auth present → the worker's env has it").
 
+### Provider usage (what is left of your subscription)
+
+Each provider card also shows how much of that subscription is left — read
+from the CLI on this device, never from local session files. Nothing is
+checked until you click **Check usage** on a card once (opt-in); after that
+the card refreshes whenever you open the Connections page, at most once per
+cadence floor (Codex 5 minutes, Claude 15 minutes). The numbers are the
+subscription's windows — session (5 hours), weekly, monthly — each with what
+is left and when it resets; a plan with only one window says so ("Your plan
+has no separate 5-hour or weekly limit — monthly only"). A check that fails
+keeps showing the last good numbers with "last check failed — …", and a stale
+value is hidden ("last seen … — check again before a long run").
+
+Phase A covers Codex only. The Claude card shows login state only, plus the
+note that this phase detects file-stored logins only — a login in the Mac's
+Keychain is not detected yet (Phase B).
+
+The card's states, in the words it shows:
+
+| State | What the card shows | Next step |
+| --- | --- | --- |
+| Not checked yet | "Usage not checked yet" | Check usage |
+| Checking | "Checking…" (with the last fetched value, if any) | Wait — the numbers appear when the check finishes |
+| Ready | "Session 62% left · resets in 2 h 14 min · Weekly 81% left · resets in 3 d" | Refresh usage |
+| Stale | "last seen … — check again before a long run" | Refresh usage |
+| Failed | One of the reasons below | As named on the card |
+| Turned off | "Usage is turned off for this provider" | Enable it in `jev.toml` and restart the dashboard |
+| API key | "Billed per token — no subscription windows apply to an API key." | None — an API key has no subscription windows, so the section is hidden |
+| No login | "No CLI login found in `~/.codex/auth.json`" | Sign in in the CLI, or use the dashboard sign-in flow. |
+
+Failure reasons the card can show (Codex; the 401/429 paths are Claude-only
+and arrive with Phase B):
+
+| Reason | What the card shows | Next step |
+| --- | --- | --- |
+| Check timed out | "The usage check timed out" | Refresh usage |
+| Response changed | "Usage couldn't be read — the provider changed its response" | None — maintainer action; logged once per dashboard process start with a redacted diagnostic |
+| CLI could not be asked | "Couldn't ask the Codex CLI for usage" | Refresh usage — and check the CLI is installed |
+| Usage blocked | "Usage is blocked for this account" | Check your ChatGPT plan. |
+
+**Turn off usage checks** on a card stops the checks for that provider (the
+card returns to "not checked yet" with a note); **Check usage** turns them
+back on. The `[usage]` kill switches in `jev.toml` turn a provider's checks
+off entirely (a restart is needed after flipping one). Two 401/403 sign-in
+failures in a row stop the checks until you sign in again, change the login,
+or click Refresh. No token value ever appears on the page, in the poll, or
+in the cache file — only the account hash.
+
 ### On a VPS: use an SSH tunnel
 
 Keep the default bind address and tunnel the port over SSH:
