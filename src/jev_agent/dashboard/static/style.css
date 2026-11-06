@@ -1768,6 +1768,11 @@ button.studio-card {
   transition: width 300ms ease;
 }
 .statbar-val { font-size: var(--text-xs); min-width: 38px; text-align: right; }
+/* Issue #396: usage windows reuse .statbar; the window label ("Session —
+   52% left") is wider than the CPU/RAM/Disk labels, so it sizes to its
+   content and the reset text is not squeezed. */
+.usage-window .statbar-label { width: auto; }
+.usage-window .statbar-val { min-width: 0; }
 .server-more { margin-top: var(--s2); }
 .server-more-grid {
   display: grid; grid-template-columns: 1fr 1fr; gap: var(--s4);

@@ -85,6 +85,8 @@ from jev_agent.core.ship import ShipPreview, after_approval, ship_preview
 from jev_agent.core.usage import (
     MAX_AGES,
     REASON_DISABLED_BY_CONFIG,
+    REASON_NO_LOGIN,
+    REASON_NOT_APPLICABLE_API_KEY,
     REASON_NOT_CHECKED_YET,
     WINDOW_LABELS,
     UsageSnapshot,
@@ -1800,6 +1802,14 @@ def usage_view(
     max_ages = MAX_AGES[provider.provider]
     wording = _WORDING_BY_PROVIDER.get(provider.provider, {})
     usage = provider.usage
+    if provider.auth == "api_key":
+        # D12: an API key hides the usage section — a cached snapshot from a
+        # previous tokens login is not shown against it (it reappears if the
+        # API key is removed and the tokens login is effective again).
+        usage = None
+        api_key = True
+    else:
+        api_key = False
     if (
         isinstance(usage, UsageUnavailable)
         and usage.reason == REASON_DISABLED_BY_CONFIG
@@ -1823,6 +1833,12 @@ def usage_view(
         reason = usage.reason
     else:
         reason = REASON_NOT_CHECKED_YET
+    if api_key:
+        reason = REASON_NOT_APPLICABLE_API_KEY
+    elif reason == REASON_NOT_CHECKED_YET and provider.auth == "none":
+        # No login to measure against — the card names it (§6.5 `no_login`),
+        # rather than implying a check is merely pending.
+        reason = REASON_NO_LOGIN
     fresh: list[UsageWindow] = []
     if snapshot is not None and snapshot.fetched_at is not None:
         record = _record_for_state(snapshot)

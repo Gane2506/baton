@@ -248,6 +248,12 @@
         <div class="flash warn" role="note">{{ icon("i-alert", "sm") }}<span>Sign-in {{ claude_flow.state }}: {{ claude_flow.detail }}</span></div>
         {% endif %}
         {% if p.auth == "none" or claude_flow.state in ("failed", "cancelled") %}
+        {% if p.auth == "none" %}
+        {# Phase A stopgap (issue #396): file-stored logins only. The Claude
+           adapter (Phase B) replaces this with the Keychain wording from
+           the adapter's WORDING table (§6.5 `no_login`). #}
+        <p class="hint">This phase detects file-stored logins only — a login in the Mac's Keychain is not detected yet.</p>
+        {% endif %}
         {% if p.installed %}
         <form method="post" action="/connections/providers/claude/setup-token/start">
           {{ csrf_input() }}
@@ -274,9 +280,9 @@
           </form>
         </details>
         {% elif p.auth == "oauth_token" %}
-        <p>{{ badge("Set", "ok") }} <span class="small">Signed in with your Claude subscription.</span></p>
+        <p>{{ badge("Set", "ok") }} <span class="small">Signed in with your Claude subscription{% if "saved_oauth_token" in p.present %} (saved by Baton){% endif %}.</span></p>
       {% else %}
-      <p>{{ badge("Set", "ok") }} <span class="small">The <code>claude</code> CLI is signed in — workers reuse that login.</span></p>
+      <p>{{ badge("Set", "ok") }} <span class="small">{{ p.label }}</span></p>
       {% endif %}
       {% endif %}
       <p class="hint">Saved to <code>~/.jev/secrets.env</code> (mode 600) and in effect immediately.
@@ -284,7 +290,7 @@
       subscription login and is billed per token.</p>
     {% else %}
       {% if p.auth == "oauth_token" %}
-      <p>{{ badge("Set", "ok") }} <span class="small">Signed in with ChatGPT.</span></p>
+      <p>{{ badge("Set", "ok") }} <span class="small">{{ p.label }}</span></p>
       {% elif codex_flow.state in ("starting", "waiting") %}
       <div id="codex-flow-waiting">
         <p>{{ badge("waiting for browser approval", "info", live=true) }}</p>
@@ -312,6 +318,61 @@
         {% endif %}
       {% endif %}
       <p class="hint">Fallback: add <code>OPENAI_API_KEY</code> under Keys below.</p>
+    {% endif %}
+    {# Issue #396: provider usage. `usage_views` holds one UsageView per
+       provider with a registered adapter (Codex in Phase A; Claude joins
+       in Phase B) — the Claude card has no usage block yet. The block is
+       cache-only: the page never waits for a fetch, and `conn.js` updates
+       it from the live poll. #}
+    {% set u = usage_views.get(p.provider) if usage_views is defined else none %}
+    {% if u and u.reason == "not_applicable_api_key" %}
+    <p class="small">{{ u.reason_text }}</p>
+    {% elif u %}
+    <div class="usage" data-provider-usage="{{ p.provider }}">
+      <p class="small" data-usage-line>
+        {%- if u.state == "stale" %}{{ u.stale_text }}
+        {%- elif u.line %}{{ u.line }}
+        {%- else %}{{ u.reason_text }}{% endif -%}
+      </p>
+      {% if u.windows %}
+      <details class="disclosure">
+        <summary>Usage details</summary>
+        {% for w in u.windows %}
+        <div class="usage-window" data-window-bar data-window-kind="{{ w.kind }}">
+          <div class="statbar">
+            <span class="statbar-label" data-window-label>{{ w.label }} {{ w.left }}% left</span>
+            <span class="statbar-track"><span class="statbar-fill" data-window-fill data-bar-pct="{{ w.bar }}"></span></span>
+            <span class="statbar-val" data-window-reset>{{ w.reset_text }}</span>
+          </div>
+        </div>
+        {% endfor %}
+        {% if u.plan %}<p class="small muted">Plan: {{ u.plan }}</p>{% endif %}
+      </details>
+      {% endif %}
+      {% if u.updated_text %}<p class="hint" data-usage-updated>{{ u.updated_text }}</p>{% endif %}
+      {% if u.note %}<p class="small">{{ u.note }}</p>{% endif %}
+      {% if u.spend_text %}<p class="small">{{ u.spend_text }}</p>{% endif %}
+      {% if u.last_check_failed_text %}<p class="small">{{ u.last_check_failed_text }}</p>{% endif %}
+      {% if u.next_step and (u.state in ("failed", "disabled") or (u.state == "never" and u.reason == "no_login")) %}
+      <p class="small">{{ u.next_step }}</p>
+      {% endif %}
+      {% if u.enabled is false %}
+      <p class="small">Usage checks are off for this provider.</p>
+      {% endif %}
+      <p class="small">Clicking "Check usage" lets Baton check usage with the provider whenever you open this page, until you turn it off. Baton sends your sign-in to {{ "Claude" if p.provider == "claude_code" else "Codex" }} for each check. It does not write the sign-in to disk or share it. To stop Baton using it, turn off usage checks on this card or sign out in the CLI.{% if "saved_oauth_token" in p.present %} If a token saved by Baton is also present, that token stays in effect until you delete it in the dashboard.{% endif %}</p>
+      {% if u.show_button %}
+      <form method="post" action="/connections/providers/{{ p.provider }}/usage/refresh" class="inline">
+        {{ csrf_input() }}
+        <button type="submit" class="btn btn-secondary btn-sm" data-usage-button{% if u.state == "collecting" %} disabled{% endif %}>{{ u.button_label }}</button>
+      </form>
+      {% endif %}
+      {% if u.enabled %}
+      <form method="post" action="/connections/providers/{{ p.provider }}/usage/disable" class="inline">
+        {{ csrf_input() }}
+        <button type="submit" class="btn btn-sm btn-secondary">Turn off usage checks</button>
+      </form>
+      {% endif %}
+    </div>
     {% endif %}
   </div>
   {% endfor %}
