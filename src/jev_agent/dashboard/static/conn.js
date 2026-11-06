@@ -110,7 +110,9 @@
         if (!p || !badgeEl) {
           return;
         }
-        badgeEl.textContent = p.label;
+        // Short head-badge text (§10 gate fix): the long D1 label renders
+        // as plain text in the card body, never inside the badge.
+        badgeEl.textContent = p.badge_label || p.label;
         var cls =
           p.auth === "none" ? "s-warn" : p.auth === "api_key" ? "s-info" : "s-ok";
         badgeEl.className = "badge " + cls;

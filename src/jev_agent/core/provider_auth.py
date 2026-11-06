@@ -111,7 +111,8 @@ class ProviderAuth:
     command: str  # the CLI executable from config
     installed: bool  # the CLI is on PATH
     auth: str  # "oauth_token" | "api_key" | "cli_login" | "none"
-    label: str  # short badge text, e.g. "Subscription login (OAuth)"
+    label: str  # design-verbatim auth description (D1), e.g. the long
+    # "Detected on this device — the `codex` CLI is signed in with ChatGPT"
     detail: str  # one line on where it was found, names only
     warning: str | None = None  # config/auth mismatch worth surfacing
     # Issue #396: the detected login's source (set by `resolve_credentials`),
@@ -124,6 +125,21 @@ class ProviderAuth:
     present: tuple[str, ...] = ()  # every present credential kind, precedence order
     source_path: str | None = None  # credential file path, when the login comes from a file
     usage_enabled: bool | None = None
+
+    @property
+    def badge_label(self) -> str:
+        """Short auth-state text for the panel-head badge (§10 gate fix).
+
+        The D1 `label` is design-verbatim and can be a full sentence
+        ("Detected on this device — ..."); a non-wrapping `.badge` pill
+        renders it 417px wide and overflows the card at 390px. The badge
+        carries the short state; the full label still renders verbatim
+        as plain text in the card body (the "Set" line), so nothing is
+        lost. Short labels pass through unchanged.
+        """
+        if self.auth in (_AUTH_OAUTH_TOKEN, _AUTH_CLI_LOGIN):
+            return "Signed in"
+        return self.label
 
 
 @dataclass(frozen=True)

@@ -301,6 +301,35 @@ def test_live_endpoint_includes_providers_without_values(
     assert body["codex_flow"]["state"] == "idle"
 
 
+def test_head_badge_is_short_and_d1_label_appears_once_as_plain_text(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """§10 gate fix: with a Codex CLI login, the panel-head badge is the
+    short "Signed in" — the long D1 label renders exactly once, as plain
+    text beside the "Set" badge, never inside a non-wrapping `.badge`
+    (417px wide, overflowed the card at 390px)."""
+    adapter = _UsageAdapter(_snapshot_now())
+    _usage_fetcher(client, tmp_path, monkeypatch, adapter)
+    html = client.get("/connections").text
+    label = "Detected on this device — the `codex` CLI is signed in with ChatGPT"
+    assert html.count(label) == 1
+    assert '<span class="badge s-ok">Signed in</span>' in html
+
+
+def test_live_endpoint_carries_short_badge_label(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """§10 gate fix: the poll carries `badge_label` so `conn.js` never puts
+    the long D1 label back in the head badge on the next poll."""
+    adapter = _UsageAdapter(_snapshot_now())
+    _usage_fetcher(client, tmp_path, monkeypatch, adapter)
+    body = client.get("/connections/live").json()
+    by_name = {p["provider"]: p for p in body["providers"]}
+    assert by_name["codex"]["badge_label"] == "Signed in"
+    assert by_name["codex"]["label"].startswith("Detected on this device")
+    assert by_name["claude_code"]["badge_label"] == "Not connected"
+
+
 # --- provider usage (issue #396 Phase A) ---------------------------------------------
 #
 # The dashboard's own fetcher is replaced with a temp-home fetcher whose

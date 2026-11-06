@@ -257,6 +257,9 @@ class ConnectionsRoutes(DashboardCore):
                         "provider": p.provider,
                         "auth": p.auth,
                         "label": p.label,
+                        # Short head-badge text (§10 gate fix): the poll
+                        # must not put the long D1 label back in the badge.
+                        "badge_label": p.badge_label,
                         "installed": p.installed,
                         # Issue #396, §6.4: the additive usage key, nested
                         # inside each providers[] entry. Codex carries the

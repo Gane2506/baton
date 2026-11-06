@@ -158,6 +158,25 @@ def test_codex_chatgpt_oauth(tmp_path: Path) -> None:
     assert auth.present == ("cli_login",)
 
 
+def test_badge_label_is_short_for_long_d1_labels(tmp_path: Path) -> None:
+    """§10 gate fix: the panel-head badge carries the short state, never the
+    long D1 label — a non-wrapping `.badge` renders it 417px wide and
+    overflows the card at 390px. The full label still renders verbatim as
+    plain text in the card body (the "Set" line)."""
+    home = _codex_home(tmp_path, {"tokens": {"access_token": "fake"}})
+    auth = pa.codex_auth(env={}, home=home, which=_which(True))
+    assert auth.label == "Detected on this device — the `codex` CLI is signed in with ChatGPT"
+    assert auth.badge_label == "Signed in"
+    # Short labels pass through unchanged.
+    api_key = pa.codex_auth(
+        env={pa.OPENAI_API_KEY_ENV: FAKE_OPENAI_KEY}, home=home, which=_which(True)
+    )
+    assert api_key.badge_label == "API key"
+    (tmp_path / "empty").mkdir()
+    no_login = pa.codex_auth(env={}, home=_codex_home(tmp_path / "empty", None), which=_which(True))
+    assert no_login.badge_label == "Not connected"
+
+
 def test_codex_stored_api_key(tmp_path: Path) -> None:
     home = _codex_home(tmp_path, {"api_key": "fake"})
     auth = pa.codex_auth(env={}, home=home, which=_which(True))

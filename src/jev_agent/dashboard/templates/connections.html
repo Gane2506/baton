@@ -211,7 +211,7 @@
     <div class="panel-head">
       <h3>{{ p.title }}</h3>
       {{ badge("CLI installed", "ok") if p.installed else badge("CLI not on PATH", "warn") }}
-      <span data-provider-auth="{{ p.provider }}">{{ badge(p.label, "ok" if p.auth == "oauth_token" or p.auth == "cli_login" else ("info" if p.auth == "api_key" else "warn")) }}</span>
+      <span data-provider-auth="{{ p.provider }}">{{ badge(p.badge_label, "ok" if p.auth == "oauth_token" or p.auth == "cli_login" else ("info" if p.auth == "api_key" else "warn")) }}</span>
     </div>
     <p class="small">{{ p.detail }}</p>
     {% if p.warning %}
