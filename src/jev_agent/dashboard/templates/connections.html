@@ -353,7 +353,7 @@
       {% if u.note %}<p class="small">{{ u.note }}</p>{% endif %}
       {% if u.spend_text %}<p class="small">{{ u.spend_text }}</p>{% endif %}
       {% if u.last_check_failed_text %}<p class="small">{{ u.last_check_failed_text }}</p>{% endif %}
-      {% if u.next_step and (u.state in ("failed", "disabled") or (u.state == "never" and u.reason == "no_login")) %}
+      {% if u.next_step and (u.state == "failed" or (u.state == "never" and u.reason in ("no_login", "disabled_by_config"))) %}
       <p class="small">{{ u.next_step }}</p>
       {% endif %}
       {% if u.enabled is false %}

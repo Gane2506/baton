@@ -347,7 +347,11 @@ def test_resolve_codex_nothing(tmp_path: Path) -> None:
     assert res.usage_source is None
 
 
-def test_get_login_source_shape(tmp_path: Path) -> None:
+def test_get_login_source_shape(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # The CLI version is cached per dashboard process per command: clear it
+    # so this test is hermetic (another test may have resolved the real
+    # `codex` first).
+    monkeypatch.setattr(pa, "_CLI_VERSION_CACHE", {})
     home = _codex_home(tmp_path, {"tokens": {"access_token": "fake"}})
     source = pa.get_login_source("codex", env={}, home=home, which=_which(True))
     assert source.kind == "cli_login"

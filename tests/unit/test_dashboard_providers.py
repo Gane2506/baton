@@ -5,9 +5,12 @@ class level, the secrets file is isolated, and tokens are obviously-fake."""
 
 from __future__ import annotations
 
+import json
 import os
 import re
+import time
 from collections.abc import Iterator
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import cast
 
@@ -21,6 +24,9 @@ from starlette.testclient import TestClient
 from jev_agent.core import provider_auth as pa
 from jev_agent.core import secrets
 from jev_agent.core.provider_auth import CodexDeviceFlow, DeviceFlowStatus
+from jev_agent.core.usage import UsageSnapshot, UsageWindow
+from jev_agent.core.usage.cache import UsageCacheRecord
+from jev_agent.core.usage.fetcher import UsageFetcher
 from jev_agent.dashboard.app import create_app
 from jev_agent.dashboard.security import DashboardSettings
 
@@ -86,7 +92,9 @@ def test_save_claude_oauth_token(client: TestClient, sfile: Path) -> None:
     response = _post(client, "/connections/providers/claude/oauth-token", {"value": FAKE_TOKEN})
     assert response.status_code == 303
     page = client.get("/connections").text
-    assert "Subscription login (OAuth)" in page
+    # Issue #396 (D1): a token saved by Baton names itself, distinct from
+    # an env-provided token ("Subscription login (OAuth)").
+    assert "Signed in with your Claude subscription (saved by Baton)" in page
     assert FAKE_TOKEN not in page  # the value is never rendered back
     assert FAKE_TOKEN not in client.get("/connections/live").text
     assert sfile.read_text(encoding="utf-8") == f"{pa.CLAUDE_OAUTH_TOKEN_ENV}={FAKE_TOKEN}\n"
@@ -291,3 +299,254 @@ def test_live_endpoint_includes_providers_without_values(
     assert by_name["codex"]["auth"] == "none"
     assert FAKE_TOKEN not in client.get("/connections/live").text
     assert body["codex_flow"]["state"] == "idle"
+
+
+# --- provider usage (issue #396 Phase A) ---------------------------------------------
+#
+# The dashboard's own fetcher is replaced with a temp-home fetcher whose
+# adapter is fake; the card detection sees a planted Codex `tokens` login
+# via a temp HOME. No real CLI, no network, no token values anywhere.
+
+FAKE_ACCESS_TOKEN = "fake-access-token-value"
+FAKE_REFRESH_TOKEN = "fake-refresh-token-value"
+
+
+class _UsageAdapter:
+    """A fake usage source: returns a fixed outcome, records its calls."""
+
+    def __init__(self, outcome) -> None:
+        self.outcome = outcome
+        self.calls = 0
+
+    def fetch(self):
+        self.calls += 1
+        return self.outcome
+
+    def shutdown(self) -> None:
+        pass
+
+
+def _plant_codex_login(home: Path) -> None:
+    auth = home / ".codex" / "auth.json"
+    auth.parent.mkdir(parents=True, exist_ok=True)
+    auth.write_text(
+        json.dumps(
+            {
+                "tokens": {
+                    "access_token": FAKE_ACCESS_TOKEN,
+                    "refresh_token": FAKE_REFRESH_TOKEN,
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+def _snapshot_now() -> UsageSnapshot:
+    now = datetime.now(UTC)
+    return UsageSnapshot(
+        provider="codex",
+        windows=[
+            UsageWindow(kind="monthly", used_percent=48.0, resets_at=now + timedelta(days=20))
+        ],
+        plan="free",
+        fetched_at=now,
+        source_version="cli/0.167.0 parser/1",
+        account_hash="aaa",
+        spend_limit_reached=False,
+    )
+
+
+def _usage_fetcher(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, adapter: _UsageAdapter
+) -> UsageFetcher:
+    """Point the dashboard at a temp home with a planted Codex login and a
+    fake adapter; return the replacement fetcher (its cache is the test's)."""
+    home = tmp_path / "usage-home"
+    _plant_codex_login(home)
+    for name in (
+        pa.OPENAI_API_KEY_ENV,
+        pa.ANTHROPIC_API_KEY_ENV,
+        pa.CLAUDE_OAUTH_TOKEN_ENV,
+    ):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("HOME", str(home))
+    fetcher = UsageFetcher(home=home, env={}, adapters={"codex": adapter})
+    client.app.state.dashboard.usage_fetcher = fetcher
+    return fetcher
+
+
+def _wait_for(predicate, timeout: float = 5.0) -> bool:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if predicate():
+            return True
+        time.sleep(0.01)
+    return predicate()
+
+
+def test_dashboard_creates_usage_fetcher(client: TestClient) -> None:
+    fetcher = client.app.state.dashboard.usage_fetcher
+    assert isinstance(fetcher, UsageFetcher)
+    assert "codex" in fetcher.adapters  # Phase A: Codex only
+    assert "claude_code" not in fetcher.adapters  # Phase B
+    assert fetcher.is_running("codex") is False
+
+
+def test_usage_block_renders_cached_snapshot_and_no_fetch_on_render(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    adapter = _UsageAdapter(_snapshot_now())
+    fetcher = _usage_fetcher(client, tmp_path, monkeypatch, adapter)
+    now = datetime.now(UTC)
+    fetcher.cache.write(
+        "codex",
+        UsageCacheRecord(
+            enabled=True,
+            fetched_at=now,
+            last_attempt_at=now,
+            last_status="ok",
+            source_version="cli/0.167.0 parser/1",
+            account_hash="aaa",
+            plan="free",
+            windows=[
+                UsageWindow(kind="monthly", used_percent=48.0, resets_at=now + timedelta(days=20))
+            ],
+        ),
+    )
+    html = client.get("/connections").text
+    # The cached snapshot renders (the render never waits for a fetch, and
+    # the fresh cache means the render starts none either).
+    assert 'data-provider-usage="codex"' in html
+    assert "Monthly 52% left" in html  # the line shows what is LEFT, not used
+    assert "Plan: free" in html
+    assert "Your plan has no separate 5-hour or weekly limit — monthly only" in html
+    assert "Refresh usage" in html
+    assert adapter.calls == 0
+    assert FAKE_ACCESS_TOKEN not in html
+    assert FAKE_REFRESH_TOKEN not in html
+
+
+def test_usage_first_run_not_checked_yet(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    adapter = _UsageAdapter(_snapshot_now())
+    _usage_fetcher(client, tmp_path, monkeypatch, adapter)
+    html = client.get("/connections").text
+    assert 'data-provider-usage="codex"' in html
+    assert "Usage not checked yet" in html
+    assert "Check usage" in html
+    assert adapter.calls == 0  # not opted in: the render starts no fetch
+
+
+def test_usage_refresh_route_starts_fetch_then_too_soon(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    adapter = _UsageAdapter(_snapshot_now())
+    fetcher = _usage_fetcher(client, tmp_path, monkeypatch, adapter)
+    response = _post(client, "/connections/providers/codex/usage/refresh", {})
+    assert response.status_code == 303
+    page = client.get("/connections").text
+    assert "Checking usage — the numbers will appear when the check finishes." in page
+    assert _wait_for(lambda: adapter.calls == 1)
+    assert _wait_for(
+        lambda: (fetcher.cache.read("codex") or UsageCacheRecord()).last_status == "ok"
+    )
+    # Inside the 5-minute floor a second click is too soon, with the wait.
+    response = _post(client, "/connections/providers/codex/usage/refresh", {})
+    assert response.status_code == 303
+    page = client.get("/connections").text
+    assert "Already checked recently — try again in " in page
+    assert "min" in page
+    assert adapter.calls == 1
+
+
+def test_usage_disable_route(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    adapter = _UsageAdapter(_snapshot_now())
+    fetcher = _usage_fetcher(client, tmp_path, monkeypatch, adapter)
+    response = _post(client, "/connections/providers/codex/usage/disable", {})
+    assert response.status_code == 303
+    page = client.get("/connections").text
+    assert "Usage checks turned off for Codex." in page
+    assert "Usage checks are off for this provider." in page
+    assert fetcher.cache.read("codex").enabled is False  # type: ignore[union-attr]
+
+
+def test_usage_refresh_and_disable_404_for_claude_code(
+    client: TestClient,
+) -> None:
+    # Phase A: `claude_code` has no registered adapter, so both routes 404
+    # until Phase B.
+    for url in (
+        "/connections/providers/claude_code/usage/refresh",
+        "/connections/providers/claude_code/usage/disable",
+    ):
+        response = client.post(
+            url, data={"csrf_token": _csrf(client)}, follow_redirects=False
+        )
+        assert response.status_code == 404
+
+
+def test_claude_card_has_no_usage_block_and_file_only_sentence(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv(pa.CLAUDE_OAUTH_TOKEN_ENV, raising=False)
+    monkeypatch.delenv(pa.ANTHROPIC_API_KEY_ENV, raising=False)
+    html = client.get("/connections").text
+    assert 'data-provider-usage="claude_code"' not in html
+    # Phase A stopgap (§6.5 `no_login`): a Keychain-only login is not
+    # detected yet, and the card says so.
+    assert (
+        "This phase detects file-stored logins only — a login in the Mac's "
+        "Keychain is not detected yet." in html
+    )
+
+
+def test_usage_kill_switch(
+    client: TestClient,
+    fixture_repo: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter = _UsageAdapter(_snapshot_now())
+    _usage_fetcher(client, tmp_path, monkeypatch, adapter)
+    (fixture_repo / "jev.toml").write_text("[usage]\ncodex = false\n")
+    html = client.get("/connections").text
+    assert "Usage is turned off for this provider" in html
+    assert "Enable it in `jev.toml` and restart the dashboard" in html
+    assert adapter.calls == 0  # the kill switch stops every fetch
+    # The login state itself is unchanged by the kill switch.
+    assert "Detected on this device" in html
+
+
+def test_usage_api_key_hides_section(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    adapter = _UsageAdapter(_snapshot_now())
+    _usage_fetcher(client, tmp_path, monkeypatch, adapter)
+    monkeypatch.setenv(pa.OPENAI_API_KEY_ENV, "sk-decoy")
+    html = client.get("/connections").text
+    # D12: an API key hides the usage section.
+    assert 'data-provider-usage="codex"' not in html
+    assert "Billed per token — no subscription windows apply to an API key." in html
+    assert adapter.calls == 0
+
+
+def test_usage_no_token_value_in_cache_file(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    adapter = _UsageAdapter(_snapshot_now())
+    fetcher = _usage_fetcher(client, tmp_path, monkeypatch, adapter)
+    _post(client, "/connections/providers/codex/usage/refresh", {})
+    assert _wait_for(lambda: adapter.calls == 1)
+    assert _wait_for(
+        lambda: (fetcher.cache.read("codex") or UsageCacheRecord()).last_status == "ok"
+    )
+    cache_file = tmp_path / "usage-home" / ".jev" / "usage-cache-codex.json"
+    content = cache_file.read_text(encoding="utf-8")
+    assert FAKE_ACCESS_TOKEN not in content
+    assert FAKE_REFRESH_TOKEN not in content
+    # Only the account hash (never the token) is stored.
+    assert "aaa" in content

@@ -59,6 +59,7 @@ _KILL_GRACE_S = 5.0  # SIGTERM, then SIGKILL after this grace
 # Preserved environment for the spawned app-server: HOME, PATH, TMPDIR, LANG,
 # LC_ALL only. No `*_API_KEY` / `*_TOKEN` variable ever leaks into the child.
 _PRESERVED_ENV = ("HOME", "PATH", "TMPDIR", "LANG", "LC_ALL")
+_READ_SLICE = 65536  # one readline slice; the 4 MiB cap is enforced per slice
 
 # Reason code -> (UI wording, next step). The §6.5 table is the
 # specification of this mapping's contents; the template holds no reason
@@ -70,8 +71,8 @@ WORDING: Wording = {
         "Sign in in the CLI, or use the dashboard sign-in flow.",
     ),
     REASON_NOT_APPLICABLE_API_KEY: (
-        "",
         "Billed per token — no subscription windows apply to an API key.",
+        "",
     ),
     REASON_TIMEOUT: ("The usage check timed out", "Refresh usage"),
     REASON_UNEXPECTED_RESPONSE: (
@@ -253,6 +254,23 @@ class CodexUsageSource:
         stdin.write(json.dumps(message) + "\n")
         stdin.flush()
 
+    def _read_line(self, stdout: Any, byte_count: list[int]) -> str | None:
+        """One newline-terminated line, read in 64 KiB slices so the 4 MiB
+        cap is enforced incrementally (a single unbounded line cannot grow
+        memory past one slice). Returns None on EOF before any bytes; a
+        partial line at EOF is returned as-is for the caller to parse."""
+        parts: list[str] = []
+        while True:
+            chunk = stdout.readline(_READ_SLICE)
+            if chunk == "":
+                return None if not parts else "".join(parts)
+            byte_count[0] += len(chunk.encode("utf-8"))
+            if byte_count[0] > _MAX_OUTPUT_BYTES:
+                raise _FetchFailed(REASON_APP_SERVER_FAILED)
+            parts.append(chunk)
+            if chunk.endswith("\n"):
+                return "".join(parts)
+
     def _read_until_id(
         self, stdout: Any, wanted_id: int, byte_count: list[int]
     ) -> dict[str, Any] | None:
@@ -261,12 +279,9 @@ class CodexUsageSource:
         skipped. Returns None on EOF. Raises `_FetchFailed` when the 4 MiB
         output cap is exceeded."""
         while True:
-            line = stdout.readline()
-            if line == "":
+            line = self._read_line(stdout, byte_count)
+            if line is None:
                 return None
-            byte_count[0] += len(line.encode("utf-8"))
-            if byte_count[0] > _MAX_OUTPUT_BYTES:
-                raise _FetchFailed(REASON_APP_SERVER_FAILED)
             try:
                 message = json.loads(line)
             except ValueError:
@@ -401,7 +416,14 @@ class CodexUsageSource:
         account_id = result.get("accountId")
         if isinstance(account_id, str):
             account_hash = hashlib.sha256(account_id.encode("utf-8")).hexdigest()
-        spend_limit_reached = rate_limits.get("spendControlReached") is True
+        # `spendControlReached` true → the snapshot is shown as reported,
+        # with the sub-line "Spend limit reached". The probe record carries
+        # it on `result` (top level); a True in either place counts, as
+        # for `ordinaryUsageAllowed` above.
+        spend_limit_reached = (
+            rate_limits.get("spendControlReached") is True
+            or result.get("spendControlReached") is True
+        )
         return UsageSnapshot(
             provider="codex",
             windows=windows,
