@@ -288,9 +288,7 @@ def test_resolve_claude_cli_login_bare(tmp_path: Path) -> None:
     """§6.2 row 6: a CLI login is not usable in bare mode — effective none,
     usage suppressed, but the login stays present and named."""
     home = _claude_home(tmp_path, credentials=True)
-    res = pa.resolve_credentials(
-        "claude_code", env={}, home=home, bare=True, which=_which(True)
-    )
+    res = pa.resolve_credentials("claude_code", env={}, home=home, bare=True, which=_which(True))
     assert res.effective.kind == "none"
     assert _kinds(res) == ("cli_login",)
     assert res.usage_source is None
@@ -359,9 +357,7 @@ def test_get_login_source_shape(tmp_path: Path, monkeypatch: pytest.MonkeyPatch)
     assert source.cli_version is None  # the fake `which` points at a missing binary
     empty = tmp_path / "empty-home"
     empty.mkdir()
-    assert pa.get_login_source(
-        "codex", env={}, home=empty, which=_which(True)
-    ).kind == "none"
+    assert pa.get_login_source("codex", env={}, home=empty, which=_which(True)).kind == "none"
 
 
 def test_read_credential_file(tmp_path: Path) -> None:

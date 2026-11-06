@@ -9,6 +9,7 @@ import re
 from collections.abc import Iterator, Sequence
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any, cast
 
 import pytest
 
@@ -240,7 +241,7 @@ class _UsageAdapter:
     def __init__(self) -> None:
         self.calls = 0
 
-    def fetch(self):
+    def fetch(self) -> Any:
         self.calls += 1
         return None
 
@@ -267,7 +268,7 @@ def test_live_endpoint_carries_provider_usage(
     monkeypatch.setenv("HOME", str(home))
     adapter = _UsageAdapter()
     fetcher = UsageFetcher(home=home, env={}, adapters={"codex": adapter})
-    client.app.state.dashboard.usage_fetcher = fetcher
+    cast(Any, client.app).state.dashboard.usage_fetcher = fetcher
     now = datetime.now(UTC)
     fetcher.cache.write(
         "codex",
@@ -280,9 +281,7 @@ def test_live_endpoint_carries_provider_usage(
             account_hash="aaa",
             plan="free",
             windows=[
-                UsageWindow(
-                    kind="monthly", used_percent=48.0, resets_at=now + timedelta(days=20)
-                )
+                UsageWindow(kind="monthly", used_percent=48.0, resets_at=now + timedelta(days=20))
             ],
         ),
     )

@@ -195,9 +195,7 @@ class ConnectionsRoutes(DashboardCore):
                         self.server_stats.refresh(s.name, cfg, repo.state_dir, ssh_runner)
                         st = "collecting"
                 server_stats[s.name] = {"stats": stats, "state": st}
-            providers = views.cli_providers(
-                repo.config, usage_cache=self.usage_fetcher.cache
-            )
+            providers = views.cli_providers(repo.config, usage_cache=self.usage_fetcher.cache)
             # Issue #396: fetch-on-view (D6) — the render may start a
             # background fetch; it never waits for one.
             usage_views: dict[str, views.UsageView] = {}
@@ -206,9 +204,7 @@ class ConnectionsRoutes(DashboardCore):
                     self.usage_fetcher.maybe_fetch(provider.provider, repo.config)
                     usage_views[provider.provider] = views.usage_view(
                         provider,
-                        fetch_running=self.usage_fetcher.is_running(
-                            provider.provider
-                        ),
+                        fetch_running=self.usage_fetcher.is_running(provider.provider),
                     )
             return {
                 "servers": servers,
@@ -268,14 +264,10 @@ class ConnectionsRoutes(DashboardCore):
                         # as never checked — its card has no usage block yet.
                         "usage": views.usage_poll(
                             p,
-                            fetch_running=self.usage_fetcher.is_running(
-                                p.provider
-                            ),
+                            fetch_running=self.usage_fetcher.is_running(p.provider),
                         ),
                     }
-                    for p in views.cli_providers(
-                        repo.config, usage_cache=self.usage_fetcher.cache
-                    )
+                    for p in views.cli_providers(repo.config, usage_cache=self.usage_fetcher.cache)
                 ],
                 # The device flow's URL/code are single-use and already shown on
                 # the page; only the state travels here so the card can update.
@@ -318,9 +310,7 @@ class ConnectionsRoutes(DashboardCore):
             if result.outcome == "too_soon":
                 wait = result.wait_seconds or 0
                 wait_text = (
-                    "less than a minute"
-                    if wait < 60
-                    else format_relative(timedelta(seconds=wait))
+                    "less than a minute" if wait < 60 else format_relative(timedelta(seconds=wait))
                 )
                 return f"Already checked recently — try again in {wait_text}."
             if result.outcome == "disabled":

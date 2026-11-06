@@ -82,6 +82,19 @@ from jev_agent.core.queue import effective_status, queue_counts, run_states
 from jev_agent.core.recurrence import describe, local_timezone_name, parse_schedule
 from jev_agent.core.scheduler import LockInfo, scheduler_lock, spent_today
 from jev_agent.core.ship import ShipPreview, after_approval, ship_preview
+from jev_agent.core.store import (
+    AttemptRecord,
+    NotFoundError,
+    QualityReportRecord,
+    QueueItem,
+    QueueStatus,
+    RecurringTask,
+    RunRecord,
+    ShippedPrRecord,
+    StageRecord,
+    Store,
+    TaskRecord,
+)
 from jev_agent.core.usage import (
     MAX_AGES,
     REASON_DISABLED_BY_CONFIG,
@@ -103,19 +116,6 @@ from jev_agent.core.usage import (
 )
 from jev_agent.core.usage.cache import UsageCache, UsageCacheRecord
 from jev_agent.core.usage.codex import WORDING as CODEX_WORDING
-from jev_agent.core.store import (
-    AttemptRecord,
-    NotFoundError,
-    QualityReportRecord,
-    QueueItem,
-    QueueStatus,
-    RecurringTask,
-    RunRecord,
-    ShippedPrRecord,
-    StageRecord,
-    Store,
-    TaskRecord,
-)
 from jev_agent.core.workflow_profiles import assurance_label_text
 from jev_agent.core.workspace import result_branch
 from jev_agent.dashboard.render import render_markdown
@@ -1697,9 +1697,7 @@ def _cached_usage(
     return None, enabled
 
 
-def cli_providers(
-    config: JevConfig, usage_cache: UsageCache | None = None
-) -> list[ProviderAuth]:
+def cli_providers(config: JevConfig, usage_cache: UsageCache | None = None) -> list[ProviderAuth]:
     """Claude Code + Codex auth status for the Connections page (names only).
 
     Each entry also carries the cached usage snapshot (cache read only,
@@ -1737,7 +1735,7 @@ class UsageWindowView:
     kind: str
     label: str  # "Session" | "Weekly" | "Monthly" | "Weekly (Opus)" | ...
     left: int  # left percent, integer, nearest, half up (D14)
-    bar: int  # bar width, clamped 0–100
+    bar: int  # bar width, clamped 0-100
     reset_text: str  # "resets in …" | "resetting…" | "no reset reported"
     resets_at: datetime | None
 
@@ -1810,10 +1808,7 @@ def usage_view(
         api_key = True
     else:
         api_key = False
-    if (
-        isinstance(usage, UsageUnavailable)
-        and usage.reason == REASON_DISABLED_BY_CONFIG
-    ):
+    if isinstance(usage, UsageUnavailable) and usage.reason == REASON_DISABLED_BY_CONFIG:
         state = "never"  # turned off is not a failure; the card names it
     else:
         state = derive_display_state(
@@ -1882,7 +1877,9 @@ def usage_view(
             note = "Your plan has no separate 5-hour limit — weekly only"
         elif only == "monthly":
             note = "Your plan has no separate 5-hour or weekly limit — monthly only"
-    spend_text = "Spend limit reached" if snapshot is not None and snapshot.spend_limit_reached else ""
+    spend_text = ""
+    if snapshot is not None and snapshot.spend_limit_reached:
+        spend_text = "Spend limit reached"
     last_check_failed_text = ""
     if reason and snapshot is not None and fresh and reason_text:
         last_check_failed_text = f"last check failed — {reason_text}"
@@ -1903,8 +1900,7 @@ def usage_view(
     # API key hides the section (D12) and no login has nothing to check.
     # A kill-switched provider never fetches, so it never offers the button.
     show_button = provider.auth == "oauth_token" and (
-        not isinstance(usage, UsageUnavailable)
-        or usage.reason != REASON_DISABLED_BY_CONFIG
+        not isinstance(usage, UsageUnavailable) or usage.reason != REASON_DISABLED_BY_CONFIG
     )
     return UsageView(
         provider=provider.provider,
@@ -1927,10 +1923,12 @@ def usage_view(
     )
 
 
-def usage_poll(provider: ProviderAuth, *, fetch_running: bool, now: datetime | None = None) -> dict[str, Any]:
+def usage_poll(
+    provider: ProviderAuth, *, fetch_running: bool, now: datetime | None = None
+) -> dict[str, Any]:
     """The additive `usage` key nested inside one `providers[]` poll entry
     (§6.4): `{state, windows: [{kind, left_percent, resets_at}],
-    fetched_at, reason, plan}`. `left_percent` is 100 − used, integer,
+    fetched_at, reason, plan}`. `left_percent` is 100 - used, integer,
     nearest, half up; timestamps are ISO-8601 UTC with a Z suffix."""
     view = usage_view(provider, fetch_running=fetch_running, now=now)
     return {

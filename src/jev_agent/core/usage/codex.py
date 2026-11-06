@@ -27,6 +27,7 @@ from typing import Any
 
 from jev_agent import __version__ as _PACKAGE_VERSION
 from jev_agent.core.executables import _platform_search_dirs, resolve_executable
+from jev_agent.core.provider_auth import cli_version
 from jev_agent.core.usage import (
     REASON_APP_SERVER_FAILED,
     REASON_DISABLED_BY_CONFIG,
@@ -42,7 +43,6 @@ from jev_agent.core.usage import (
     Wording,
     _utcnow,
 )
-from jev_agent.core.provider_auth import cli_version
 
 log = logging.getLogger(__name__)
 
@@ -161,7 +161,9 @@ class CodexUsageSource:
                 self._current_proc = proc
             outcome: list[UsageSnapshot | UsageUnavailable] = []
             thread = threading.Thread(
-                target=self._conversation, args=(proc, outcome), name="codex-usage-fetch",
+                target=self._conversation,
+                args=(proc, outcome),
+                name="codex-usage-fetch",
                 daemon=True,
             )
             thread.start()
@@ -191,9 +193,7 @@ class CodexUsageSource:
     def _unavailable(self, reason: str) -> UsageUnavailable:
         # The adapter never knows the last-good snapshot; the fetcher fills
         # it in from the cache when it records the failure.
-        return UsageUnavailable(
-            provider="codex", reason=reason, fetched_at=None, last_good=None
-        )
+        return UsageUnavailable(provider="codex", reason=reason, fetched_at=None, last_good=None)
 
     def _source_version(self) -> str:
         version = self._cli_version
@@ -236,9 +236,7 @@ class CodexUsageSource:
         except OSError:
             pass
 
-    def _conversation(
-        self, proc: Any, outcome: list[UsageSnapshot | UsageUnavailable]
-    ) -> None:
+    def _conversation(self, proc: Any, outcome: list[UsageSnapshot | UsageUnavailable]) -> None:
         """The JSON-RPC exchange on a worker thread (the main thread owns
         the timeout). Terminates the app-server when done, however it ends."""
         try:
@@ -396,11 +394,7 @@ class CodexUsageSource:
                 except (OSError, OverflowError, ValueError):
                     self._log_unexpected("resetsAt-out-of-range", result)
                     raise _FetchFailed(REASON_UNEXPECTED_RESPONSE) from None
-            windows.append(
-                UsageWindow(
-                    kind=kind, used_percent=float(used), resets_at=resets_at
-                )
-            )
+            windows.append(UsageWindow(kind=kind, used_percent=float(used), resets_at=resets_at))
         if not windows:
             self._log_unexpected("all-windows-unknown", result)
             raise _FetchFailed(REASON_UNEXPECTED_RESPONSE)

@@ -259,7 +259,7 @@ def derive_display_state(
 
 
 def left_percent(used_percent: float) -> int:
-    """100 − used, integer, nearest, half up (D14: 62.5 → 63)."""
+    """100 - used, integer, nearest, half up (D14: 62.5 → 63)."""
     value = (Decimal(100) - Decimal(str(used_percent))).quantize(
         Decimal("1"), rounding=ROUND_HALF_UP
     )

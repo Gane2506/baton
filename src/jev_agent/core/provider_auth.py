@@ -152,6 +152,8 @@ class CredentialResolution:
     present: tuple[LoginSource, ...]  # every kind present, top-to-bottom precedence order
     # None when usage is hidden (API key in effect, bare-mode CLI login, or no login).
     usage_source: LoginSource | None
+
+
 _VERSION = re.compile(r"\d+\.\d+\.\d+(?:[-+._A-Za-z0-9]*)?")
 _CLI_VERSION_CACHE: dict[str, str | None] = {}  # command -> version (None = lookup failed)
 
@@ -186,7 +188,7 @@ def cli_version(
     return version
 
 
-def read_credential_file(path: Path) -> dict | None:
+def read_credential_file(path: Path) -> dict[str, Any] | None:
     """Parse a CLI credential JSON file. Returns the parsed object, or None
     when the file is missing, unreadable, invalid JSON, or not an object.
     Never raises. This is the one shared credential-file reader (§6.1):
@@ -222,18 +224,12 @@ def _present_sources(
             sources.append(LoginSource("env_api_key", None, version))
         if env.get(CLAUDE_OAUTH_TOKEN_ENV, "").strip():
             if CLAUDE_OAUTH_TOKEN_ENV in loaded_names():
-                sources.append(
-                    LoginSource(
-                        "saved_oauth_token", str(default_path()), version
-                    )
-                )
+                sources.append(LoginSource("saved_oauth_token", str(default_path()), version))
             else:
                 sources.append(LoginSource("env_oauth_token", None, version))
         if _credentials_login(home):
             sources.append(
-                LoginSource(
-                    "cli_login", str(home / ".claude" / ".credentials.json"), version
-                )
+                LoginSource("cli_login", str(home / ".claude" / ".credentials.json"), version)
             )
         return sources
     if provider == "codex":
@@ -306,10 +302,7 @@ def resolve_credentials(
     effective = present[0] if present else LoginSource("none", None, version)
     if provider == "claude_code" and bare and effective.kind == "cli_login":
         effective = LoginSource("none", None, version)
-    if effective.kind in ("env_api_key", "api_key_file", "none"):
-        usage_source = None
-    else:
-        usage_source = effective
+    usage_source = None if effective.kind in ("env_api_key", "api_key_file", "none") else effective
     return CredentialResolution(
         effective=effective, present=tuple(present), usage_source=usage_source
     )
@@ -371,7 +364,9 @@ def claude_code_auth(
                 f"set {ANTHROPIC_API_KEY_ENV} for bare mode"
             )
         else:
-            detail = "run `claude setup-token` and paste the token, or sign in with the `claude` CLI"
+            detail = (
+                "run `claude setup-token` and paste the token, or sign in with the `claude` CLI"
+            )
     if not installed:
         detail += f"; `{command}` is not on PATH"
     return ProviderAuth(
@@ -400,9 +395,7 @@ def codex_auth(
     environ: Mapping[str, str] = os.environ if env is None else env
     home = home or Path.home()
     installed = which(command) is not None
-    resolution = resolve_credentials(
-        "codex", env=environ, home=home, command=command, which=which
-    )
+    resolution = resolve_credentials("codex", env=environ, home=home, command=command, which=which)
     effective = resolution.effective
     present_kinds = {s.kind for s in resolution.present}
     if effective.kind == "env_api_key":
@@ -411,8 +404,9 @@ def codex_auth(
         if "cli_login" in present_kinds:
             detail += "; a subscription login is also present"
     elif effective.kind == "cli_login":
-        auth, label = _AUTH_OAUTH_TOKEN, (
-            "Detected on this device — the `codex` CLI is signed in with ChatGPT"
+        auth, label = (
+            _AUTH_OAUTH_TOKEN,
+            ("Detected on this device — the `codex` CLI is signed in with ChatGPT"),
         )
         detail = f"signed in with ChatGPT (`codex login`; credentials in {effective.source_path})"
     elif effective.kind == "api_key_file":

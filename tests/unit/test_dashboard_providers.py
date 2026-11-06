@@ -9,10 +9,10 @@ import json
 import os
 import re
 import time
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 import httpx
 import pytest
@@ -314,11 +314,11 @@ FAKE_REFRESH_TOKEN = "fake-refresh-token-value"
 class _UsageAdapter:
     """A fake usage source: returns a fixed outcome, records its calls."""
 
-    def __init__(self, outcome) -> None:
+    def __init__(self, outcome: UsageSnapshot) -> None:
         self.outcome = outcome
         self.calls = 0
 
-    def fetch(self):
+    def fetch(self) -> UsageSnapshot:
         self.calls += 1
         return self.outcome
 
@@ -357,6 +357,11 @@ def _snapshot_now() -> UsageSnapshot:
     )
 
 
+def _dashboard(client: TestClient) -> Any:
+    """The app's DashboardCore (TestClient.app is an untyped ASGI callable)."""
+    return cast(Any, client.app).state.dashboard
+
+
 def _usage_fetcher(
     client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, adapter: _UsageAdapter
 ) -> UsageFetcher:
@@ -372,11 +377,11 @@ def _usage_fetcher(
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("HOME", str(home))
     fetcher = UsageFetcher(home=home, env={}, adapters={"codex": adapter})
-    client.app.state.dashboard.usage_fetcher = fetcher
+    _dashboard(client).usage_fetcher = fetcher
     return fetcher
 
 
-def _wait_for(predicate, timeout: float = 5.0) -> bool:
+def _wait_for(predicate: Callable[[], bool], timeout: float = 5.0) -> bool:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         if predicate():
@@ -386,7 +391,7 @@ def _wait_for(predicate, timeout: float = 5.0) -> bool:
 
 
 def test_dashboard_creates_usage_fetcher(client: TestClient) -> None:
-    fetcher = client.app.state.dashboard.usage_fetcher
+    fetcher = _dashboard(client).usage_fetcher
     assert isinstance(fetcher, UsageFetcher)
     assert "codex" in fetcher.adapters  # Phase A: Codex only
     assert "claude_code" not in fetcher.adapters  # Phase B
@@ -483,9 +488,7 @@ def test_usage_refresh_and_disable_404_for_claude_code(
         "/connections/providers/claude_code/usage/refresh",
         "/connections/providers/claude_code/usage/disable",
     ):
-        response = client.post(
-            url, data={"csrf_token": _csrf(client)}, follow_redirects=False
-        )
+        response = client.post(url, data={"csrf_token": _csrf(client)}, follow_redirects=False)
         assert response.status_code == 404
 
 

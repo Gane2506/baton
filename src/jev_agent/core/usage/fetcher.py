@@ -178,9 +178,7 @@ class UsageFetcher:
         wait = max(candidates)
         return wait if wait > 0 else None
 
-    def _start_if_allowed(
-        self, provider: str, config: JevConfig, *, manual: bool
-    ) -> RefreshResult:
+    def _start_if_allowed(self, provider: str, config: JevConfig, *, manual: bool) -> RefreshResult:
         if not getattr(config.usage, provider):
             return RefreshResult("disabled")
         self._rearm_check(provider, config)
@@ -290,9 +288,7 @@ class UsageFetcher:
                     source_version=existing.source_version if existing else None,
                     account_hash=existing.account_hash if existing else None,
                     plan=existing.plan if existing else None,
-                    spend_limit_reached=(
-                        existing.spend_limit_reached if existing else False
-                    ),
+                    spend_limit_reached=(existing.spend_limit_reached if existing else False),
                     windows=list(existing.windows) if existing else [],
                 )
             self._cache.write(provider, record)

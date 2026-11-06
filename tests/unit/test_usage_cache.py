@@ -6,10 +6,10 @@ Fake clock + temp home; no network, no real CLI.
 
 from __future__ import annotations
 
-import json
 import os
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -29,7 +29,7 @@ class _Clock:
         return self.now
 
 
-def _record(**overrides) -> UsageCacheRecord:
+def _record(**overrides: Any) -> UsageCacheRecord:
     record = UsageCacheRecord(
         enabled=True,
         fetched_at=T2,
@@ -85,11 +85,14 @@ def test_interrupted_write_leaves_previous_file_intact(
     cache.write("codex", first)
     real_replace = os.replace
 
-    def failing_replace(src, dst):
+    def failing_replace(src: Any, dst: Any) -> None:
         raise OSError("simulated crash mid-rename")
 
     monkeypatch.setattr(os, "replace", failing_replace)
-    cache.write("codex", _record(windows=[UsageWindow(kind="session", used_percent=1.0, resets_at=None)]))
+    cache.write(
+        "codex",
+        _record(windows=[UsageWindow(kind="session", used_percent=1.0, resets_at=None)]),
+    )
     monkeypatch.setattr(os, "replace", real_replace)
     assert cache.read("codex") == first
     leftovers = [p for p in (home / ".jev").iterdir() if p.name.startswith(".usage-cache-")]

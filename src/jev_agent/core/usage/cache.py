@@ -92,8 +92,10 @@ class UsageCache:
                     return None
                 kind = item.get("kind")
                 used = item.get("used_percent")
-                if not isinstance(kind, str) or isinstance(used, bool) or not isinstance(
-                    used, (int, float)
+                if (
+                    not isinstance(kind, str)
+                    or isinstance(used, bool)
+                    or not isinstance(used, (int, float))
                 ):
                     return None
                 resets_at = parse_iso_z(item.get("resets_at"))

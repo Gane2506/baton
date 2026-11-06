@@ -659,22 +659,24 @@ template ever see):
 ```python
 @dataclass(frozen=True)
 class UsageWindow:
-    kind: str            # "session" | "weekly" | "monthly" | "weekly_opus" | "weekly_sonnet" — derived by the adapter
+    kind: str  # "session" | "weekly" | "monthly" | "weekly_opus" | "weekly_sonnet" — derived by the adapter
     used_percent: float  # 0-100, as reported
     resets_at: datetime | None  # as reported; None → bar with "no reset reported"
+
 
 @dataclass(frozen=True)
 class UsageSnapshot:
     provider: str
-    windows: list[UsageWindow]   # derived from the response, never hardcoded as two fields
-    plan: str | None             # Codex planType, verbatim; Claude: None
-    fetched_at: datetime         # last successful fetch
-    source_version: str          # "cli/<cli_version> parser/<PARSER_VERSION>", e.g. "cli/0.164.0-alpha.9 parser/1"; "unknown" when the CLI version is unavailable
+    windows: list[UsageWindow]  # derived from the response, never hardcoded as two fields
+    plan: str | None  # Codex planType, verbatim; Claude: None
+    fetched_at: datetime  # last successful fetch
+    source_version: str  # "cli/<cli_version> parser/<PARSER_VERSION>", e.g. "cli/0.164.0-alpha.9 parser/1"; "unknown" when the CLI version is unavailable
+
 
 @dataclass(frozen=True)
 class UsageUnavailable:
     provider: str
-    reason: str                  # reason code, section 6.5
+    reason: str  # reason code, section 6.5
     fetched_at: datetime | None  # last successful fetch, if any
     last_good: UsageSnapshot | None  # last-good windows, if any
 ```
@@ -711,9 +713,13 @@ accessor used by both detection and the usage adapter:
 ```python
 @dataclass(frozen=True)
 class LoginSource:
-    kind: str            # "env_api_key" | "env_oauth_token" | "saved_oauth_token" | "cli_login" | "keychain_login" | "api_key_file" | "none"
-    source_path: str | None   # credential file path, when the login comes from a file; None for "keychain_login" (the card renders the fixed Keychain service name from the adapter's constant, D10)
-    cli_version: str | None   # one "<cmd> --version" run per dashboard process start, 5 s timeout, cached in memory, None on failure
+    kind: str  # "env_api_key" | "env_oauth_token" | "saved_oauth_token" | "cli_login" | "keychain_login" | "api_key_file" | "none"
+    source_path: (
+        str | None
+    )  # credential file path, when the login comes from a file; None for "keychain_login" (the card renders the fixed Keychain service name from the adapter's constant, D10)
+    cli_version: (
+        str | None
+    )  # one "<cmd> --version" run per dashboard process start, 5 s timeout, cached in memory, None on failure
 ```
 
 `get_login_source(provider, *, env=None, home=None) -> LoginSource`
@@ -729,9 +735,14 @@ measured against — always the effective credential. The function is:
 ```python
 @dataclass(frozen=True)
 class CredentialResolution:
-    effective: LoginSource            # the credential workers use
-    present: tuple[LoginSource, ...]  # every credential kind present, top-to-bottom precedence order
-    usage_source: LoginSource | None  # the credential usage is measured against; None when usage is hidden (API key in effect, bare-mode CLI login, or no login)
+    effective: LoginSource  # the credential workers use
+    present: tuple[
+        LoginSource, ...
+    ]  # every credential kind present, top-to-bottom precedence order
+    usage_source: (
+        LoginSource | None
+    )  # the credential usage is measured against; None when usage is hidden (API key in effect, bare-mode CLI login, or no login)
+
 
 def resolve_credentials(
     provider: str, *, env: Mapping[str, str], home: Path, bare: bool = False
@@ -764,8 +775,9 @@ D10) — the only other credential reader in the codebase:
 ```python
 @dataclass(frozen=True)
 class KeychainResult:
-    outcome: str         # "ok" | "denied" | "unavailable" | "missing"
-    payload: dict | None # the stored JSON object on "ok", else None
+    outcome: str  # "ok" | "denied" | "unavailable" | "missing"
+    payload: dict | None  # the stored JSON object on "ok", else None
+
 
 def read_keychain_item(
     service: str, *, popen: PopenFn = subprocess.Popen, timeout_s: float = 120.0
@@ -809,8 +821,8 @@ defaults, so existing constructions do not break:
 ```python
 cli_version: str | None = None
 usage: UsageSnapshot | UsageUnavailable | None = None
-present: tuple[str, ...] = ()        # all present credential kinds, from LoginSource.kind vocabulary
-source_path: str | None = None       # credential file path, when the login comes from a file
+present: tuple[str, ...] = ()  # all present credential kinds, from LoginSource.kind vocabulary
+source_path: str | None = None  # credential file path, when the login comes from a file
 ```
 
 ### 6.2 Detected-login state and the precedence table

@@ -23,6 +23,7 @@ from typing import Any
 
 import pytest
 
+from jev_agent import __version__ as _PACKAGE_VERSION
 from jev_agent.core.executables import resolve_executable
 from jev_agent.core.usage import (
     REASON_APP_SERVER_FAILED,
@@ -31,7 +32,7 @@ from jev_agent.core.usage import (
     UsageSnapshot,
     UsageUnavailable,
 )
-from jev_agent.core.usage.codex import CodexUsageSource, _PACKAGE_VERSION
+from jev_agent.core.usage.codex import CodexUsageSource
 
 NOW = datetime(2026, 11, 6, 12, 0, tzinfo=UTC)
 RESETS = 1795687699  # 2026-11-26 10:08:19 UTC (the probe's monthly reset)
@@ -45,7 +46,7 @@ def _result(
     *,
     primary: dict[str, Any] | None = None,
     secondary: dict[str, Any] | None = None,
-    plan: str | None = "free",
+    plan: Any = "free",
     account: str | None = "acct-1",
     ordinary: bool | None = True,
     spend: bool | None = False,
@@ -75,9 +76,7 @@ def _lines(
     if result is not None:
         out.append(json.dumps({"jsonrpc": "2.0", "id": 2, "result": result}) + "\n")
     elif answer_error is not None:
-        out.append(
-            json.dumps({"jsonrpc": "2.0", "id": 2, "error": answer_error}) + "\n"
-        )
+        out.append(json.dumps({"jsonrpc": "2.0", "id": 2, "error": answer_error}) + "\n")
     return out
 
 
@@ -143,7 +142,7 @@ class _FakeProc:
     def wait(self, timeout: float | None = None) -> int:
         self.wait_calls += 1
         if self._refuse_to_die and not self.killed:
-            raise subprocess.TimeoutExpired("codex", timeout)
+            raise subprocess.TimeoutExpired("codex", timeout if timeout is not None else 0.0)
         if self.returncode is None:
             self.returncode = 0
         return self.returncode
@@ -262,9 +261,7 @@ def test_notifications_and_non_json_lines_skipped() -> None:
 
 
 def test_spawn_argv_env_and_cwd() -> None:
-    outcome, popen = _fetch(
-        _lines(_result(primary=_window(300, 10), secondary=None))
-    )
+    outcome, popen = _fetch(_lines(_result(primary=_window(300, 10), secondary=None)))
     assert isinstance(outcome, UsageSnapshot)
     call = popen.calls[0]
     assert call["argv"] == ["/fake/bin/codex", "app-server", "--listen", "stdio://"]
@@ -282,9 +279,7 @@ def test_env_scrubbed_of_tokens(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("SOME_TOKEN", "decoy")
     monkeypatch.setenv("HOME", "/fake/home")
     monkeypatch.setenv("PATH", "/usr/bin")
-    outcome, popen = _fetch(
-        _lines(_result(primary=_window(300, 10), secondary=None))
-    )
+    outcome, popen = _fetch(_lines(_result(primary=_window(300, 10), secondary=None)))
     assert isinstance(outcome, UsageSnapshot)
     env = popen.calls[0]["kwargs"]["env"]
     assert "OPENAI_API_KEY" not in env
@@ -366,9 +361,7 @@ def test_spawn_timeout_terminates() -> None:
 
 
 def test_spawn_timeout_kills_after_grace() -> None:
-    source, popen = _source(
-        [], block=True, refuse_to_die=True, timeout_s=0.2, kill_grace_s=0.1
-    )
+    source, popen = _source([], block=True, refuse_to_die=True, timeout_s=0.2, kill_grace_s=0.1)
     outcome = source.fetch()
     assert isinstance(outcome, UsageUnavailable)
     assert outcome.reason == REASON_APP_SERVER_FAILED
@@ -436,7 +429,7 @@ def test_primary_null_is_unexpected_response() -> None:
 
 def test_missing_or_mistyped_used_percent_is_unexpected_response() -> None:
     for bad in (None, "48", True):
-        window = {"windowDurationMins": 43200, "resetsAt": RESETS}
+        window: dict[str, Any] = {"windowDurationMins": 43200, "resetsAt": RESETS}
         if bad is not None:
             window["usedPercent"] = bad
         outcome, _ = _fetch(_lines(_result(primary=window, secondary=None)))
@@ -445,9 +438,7 @@ def test_missing_or_mistyped_used_percent_is_unexpected_response() -> None:
 
 
 def test_null_resets_at_is_no_reset_reported() -> None:
-    outcome, _ = _fetch(
-        _lines(_result(primary=_window(43200, 48, None), secondary=None))
-    )
+    outcome, _ = _fetch(_lines(_result(primary=_window(43200, 48, None), secondary=None)))
     assert isinstance(outcome, UsageSnapshot)
     assert outcome.windows[0].resets_at is None
 
@@ -499,9 +490,7 @@ def test_rate_limit_reached_type_needs_no_special_handling() -> None:
 
 
 def test_plan_type_missing_is_none_mistyped_is_unexpected() -> None:
-    outcome, _ = _fetch(
-        _lines(_result(primary=_window(300, 10), secondary=None, plan=None))
-    )
+    outcome, _ = _fetch(_lines(_result(primary=_window(300, 10), secondary=None, plan=None)))
     assert isinstance(outcome, UsageSnapshot)
     assert outcome.plan is None
     result = _result(primary=_window(300, 10), secondary=None, plan=42)
@@ -526,8 +515,6 @@ def test_session_files_never_drive_the_snapshot(
         encoding="utf-8",
     )
     monkeypatch.setenv("HOME", str(home))
-    outcome, _ = _fetch(
-        _lines(_result(primary=_window(43200, 48, 1795687699), secondary=None))
-    )
+    outcome, _ = _fetch(_lines(_result(primary=_window(43200, 48, 1795687699), secondary=None)))
     assert isinstance(outcome, UsageSnapshot)
     assert [(w.kind, w.used_percent) for w in outcome.windows] == [("monthly", 48.0)]

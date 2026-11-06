@@ -118,9 +118,7 @@ class DashboardCore:
         # Only the Codex adapter is registered in Phase A; the Claude
         # adapter joins the mapping in Phase B. Construction starts no
         # fetch (D6: dashboard start triggers nothing).
-        self.usage_fetcher = UsageFetcher(
-            home=Path.home(), adapters={"codex": CodexUsageSource()}
-        )
+        self.usage_fetcher = UsageFetcher(home=Path.home(), adapters={"codex": CodexUsageSource()})
         self.api_tests: dict[str, tuple[str, str]] = {}  # Tools → APIs: last Test per server
         self.figma_validation: tuple[str, str] | None = None  # Tools → Figma: last /v1/me
         self.started_at = datetime.now(UTC)  # the About panel's uptime
