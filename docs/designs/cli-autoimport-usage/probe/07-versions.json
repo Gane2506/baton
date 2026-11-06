@@ -1,0 +1,12 @@
+{
+  "claude": {
+    "exit": 0,
+    "path": "/Users/ganesh/.local/bin/claude",
+    "version": "2.1.318 (Claude Code)"
+  },
+  "codex": {
+    "exit": 0,
+    "path": "/Users/ganesh/.npm-global/bin/codex",
+    "version": "codex-cli 0.167.0"
+  }
+}

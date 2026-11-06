@@ -1,0 +1,13 @@
+{
+  "accessToken_prefix": null,
+  "accessToken_present": false,
+  "claude_json_has_oauthAccount": true,
+  "credentials_file_exists": false,
+  "expired": null,
+  "expiresAt": null,
+  "note": "No OAuth token in any file on this device; tokens live in the macOS Keychain (service Claude Code-credentials per design D10), which this probe does not read.",
+  "oauth_file": null,
+  "refreshToken_present": false,
+  "scopes": null,
+  "token_in_file": false
+}
